@@ -1,0 +1,1 @@
+ALTER TABLE `orders` MODIFY COLUMN `source` enum('easyorder','shopify','whatsapp','manual','facebook') NOT NULL DEFAULT 'manual';

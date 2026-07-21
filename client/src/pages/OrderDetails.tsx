@@ -1,0 +1,434 @@
+import { useState, useEffect } from "react";
+import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { useRoute, useLocation } from "wouter";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ArrowRight, Save, Edit2, X, Package, User, MapPin, Phone, FileText, Calendar, Hash, Truck, RefreshCw, CheckCircle, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
+
+const STATUS_LABELS: Record<string, string> = {
+  new: "جديد",
+  confirmed: "مؤكد",
+  postponed: "مؤجل",
+  cancelled: "ملغي",
+  preparing: "قيد التجهيز",
+  shipped: "تم الشحن",
+  delivered: "تم التسليم",
+  no_answer: "لم يرد",
+  returned: "مرتجع",
+  printed: "مطبوع",
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  new: "bg-blue-100 text-blue-800",
+  confirmed: "bg-green-100 text-green-800",
+  postponed: "bg-yellow-100 text-yellow-800",
+  cancelled: "bg-red-100 text-red-800",
+  preparing: "bg-purple-100 text-purple-800",
+  shipped: "bg-indigo-100 text-indigo-800",
+  delivered: "bg-emerald-100 text-emerald-800",
+  no_answer: "bg-orange-100 text-orange-800",
+  returned: "bg-gray-100 text-gray-800",
+  printed: "bg-teal-100 text-teal-800",
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  easyorder: "Easy Order",
+  easyorder_ataba: "Easy Order عتبة",
+  easyorder_farhat: "Easy Order فرحات",
+  shopify: "Shopify",
+  whatsapp: "واتساب",
+  manual: "يدوي",
+  facebook: "فيسبوك",
+};
+
+export default function OrderDetails() {
+  const [, params] = useRoute("/order/:id");
+  const [, setLocation] = useLocation();
+  const { user } = useAuth();
+
+  const isAdmin = user?.role === "admin";
+
+  const orderId = params?.id ? parseInt(params.id) : 0;
+  const [isEditing, setIsEditing] = useState(false);
+  const [editData, setEditData] = useState<any>({});
+
+  const { data: order, isLoading, refetch } = trpc.orders.get.useQuery(
+    { id: orderId },
+    { enabled: orderId > 0 }
+  );
+
+  const { data: products } = trpc.products.list.useQuery();
+
+  const sendToBostaMutation = trpc.orders.sendToBosta.useMutation({
+    onSuccess: (result) => {
+      if (result.success) {
+        toast.success(`تم الإرسال لـ Bosta! رقم التتبع: ${result.trackingNumber || result.shipmentId}`);
+        refetch();
+      } else {
+        toast.error(`فشل الإرسال: ${result.error}`);
+      }
+    },
+    onError: (err) => {
+      toast.error(err.message || "حدث خطأ أثناء الإرسال لـ Bosta");
+    },
+  });
+
+  const editMutation = trpc.orders.editOrder.useMutation({
+    onSuccess: () => {
+      toast.success("تم تعديل بيانات الأوردر بنجاح");
+      setIsEditing(false);
+      refetch();
+    },
+    onError: (err) => {
+      toast.error(err.message || "حدث خطأ أثناء التعديل");
+    },
+  });
+
+  useEffect(() => {
+    if (order) {
+      setEditData({
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        customerAddress: order.customerAddress,
+        governorate: order.governorate,
+        productId: order.productId,
+        productName: order.productName,
+        quantity: order.quantity,
+        totalAmount: Number(order.totalAmount),
+        notes: order.notes || "",
+      });
+    }
+  }, [order]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-muted-foreground">جاري التحميل...</div>
+      </div>
+    );
+  }
+
+  if (!order) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <p className="text-muted-foreground">الأوردر غير موجود</p>
+        <Button variant="outline" onClick={() => setLocation("/orders")}>
+          <ArrowRight className="h-4 w-4 ml-1" /> العودة للأوردرات
+        </Button>
+      </div>
+    );
+  }
+
+  const handleSave = () => {
+    const updates: any = { orderId };
+    if (editData.customerName !== order.customerName) updates.customerName = editData.customerName;
+    if (editData.customerPhone !== order.customerPhone) updates.customerPhone = editData.customerPhone;
+    if (editData.customerAddress !== order.customerAddress) updates.customerAddress = editData.customerAddress;
+    if (editData.governorate !== order.governorate) updates.governorate = editData.governorate;
+    if (editData.productId !== order.productId) {
+      updates.productId = editData.productId;
+      updates.productName = editData.productName;
+    }
+    if (editData.quantity !== order.quantity) updates.quantity = editData.quantity;
+    if (Number(editData.totalAmount) !== Number(order.totalAmount)) updates.totalAmount = Number(editData.totalAmount);
+    if (editData.notes !== (order.notes || "")) updates.notes = editData.notes;
+
+    if (Object.keys(updates).length <= 1) {
+      toast.info("لم يتم تعديل أي بيانات");
+      setIsEditing(false);
+      return;
+    }
+    editMutation.mutate(updates);
+  };
+
+  const formatDate = (date: any) => {
+    if (!date) return "-";
+    return new Date(date).toLocaleString("ar-EG", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={() => setLocation("/orders")}>
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold">أوردر #{order.orderNumber}</h1>
+            <div className="flex items-center gap-2 mt-1">
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status]}`}>
+                {STATUS_LABELS[order.status]}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                {SOURCE_LABELS[order.source] || order.source}
+              </span>
+            </div>
+          </div>
+        </div>
+        {isAdmin && !isEditing && (
+          <div className="flex gap-2">
+            {/* زر Bosta - يظهر فقط للأوردرات المؤكدة */}
+            {(order.status === 'confirmed' || order.status === 'printed' || order.status === 'preparing' || order.status === 'shipped') && (
+              order.bostaShipmentId ? (
+                <Button variant="outline" size="sm" className="text-green-700 border-green-300" disabled>
+                  <CheckCircle className="h-4 w-4 ml-1" /> مرسل لـ Bosta
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={order.bostaLastError ? "text-red-600 border-red-300" : "text-blue-600 border-blue-300"}
+                  onClick={() => sendToBostaMutation.mutate({ orderId: order.id })}
+                  disabled={sendToBostaMutation.isPending}
+                >
+                  {sendToBostaMutation.isPending ? (
+                    <RefreshCw className="h-4 w-4 ml-1 animate-spin" />
+                  ) : (
+                    <Truck className="h-4 w-4 ml-1" />
+                  )}
+                  {order.bostaLastError ? "إعادة إرسال Bosta" : "إرسال لـ Bosta"}
+                </Button>
+              )
+            )}
+            <Button onClick={() => setIsEditing(true)} variant="outline">
+              <Edit2 className="h-4 w-4 ml-1" /> تعديل
+            </Button>
+          </div>
+        )}
+        {isEditing && (
+          <div className="flex gap-2">
+            <Button onClick={handleSave} disabled={editMutation.isPending}>
+              <Save className="h-4 w-4 ml-1" /> حفظ
+            </Button>
+            <Button variant="outline" onClick={() => { setIsEditing(false); setEditData({ customerName: order.customerName, customerPhone: order.customerPhone, customerAddress: order.customerAddress, governorate: order.governorate, productId: order.productId, productName: order.productName, quantity: order.quantity, totalAmount: Number(order.totalAmount), notes: order.notes || "" }); }}>
+              <X className="h-4 w-4 ml-1" /> إلغاء
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* بيانات العميل */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <User className="h-5 w-5 text-amber-600" /> بيانات العميل
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label className="text-muted-foreground text-xs">اسم العميل</Label>
+              {isEditing ? (
+                <Input value={editData.customerName} onChange={e => setEditData({ ...editData, customerName: e.target.value })} />
+              ) : (
+                <p className="font-medium">{order.customerName}</p>
+              )}
+            </div>
+            <div>
+              <Label className="text-muted-foreground text-xs flex items-center gap-1"><Phone className="h-3 w-3" /> رقم الهاتف</Label>
+              {isEditing ? (
+                <Input value={editData.customerPhone} onChange={e => setEditData({ ...editData, customerPhone: e.target.value })} dir="ltr" />
+              ) : (
+                <p className="font-medium" dir="ltr">{order.customerPhone}</p>
+              )}
+            </div>
+            <div>
+              <Label className="text-muted-foreground text-xs flex items-center gap-1"><MapPin className="h-3 w-3" /> المحافظة</Label>
+              {isEditing ? (
+                <Input value={editData.governorate} onChange={e => setEditData({ ...editData, governorate: e.target.value })} />
+              ) : (
+                <p className="font-medium">{order.governorate}</p>
+              )}
+            </div>
+            <div>
+              <Label className="text-muted-foreground text-xs flex items-center gap-1"><MapPin className="h-3 w-3" /> العنوان</Label>
+              {isEditing ? (
+                <Textarea value={editData.customerAddress} onChange={e => setEditData({ ...editData, customerAddress: e.target.value })} rows={3} />
+              ) : (
+                <p className="font-medium">{order.customerAddress}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* بيانات المنتج */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Package className="h-5 w-5 text-amber-600" /> بيانات المنتج
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label className="text-muted-foreground text-xs">المنتج</Label>
+              {isEditing ? (
+                <Select
+                  value={String(editData.productId)}
+                  onValueChange={(val) => {
+                    const prod = products?.find((p: any) => p.id === Number(val));
+                    setEditData({ ...editData, productId: Number(val), productName: prod?.name || editData.productName });
+                  }}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {products?.map((p: any) => (
+                      <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="font-medium">{order.productName}</p>
+              )}
+            </div>
+            {Array.isArray((order as any).items) && (order as any).items.length > 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                <Label className="text-amber-800 text-xs font-semibold">تفصيل الأصناف / الحفر</Label>
+                <div className="mt-2 space-y-1">
+                  {(order as any).items.map((it: any) => (
+                    <div key={it.id} className="flex items-center justify-between text-sm">
+                      <span className="text-gray-700">{it.productName}</span>
+                      <span className="font-semibold text-amber-900">× {it.quantity}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between border-t border-amber-200 pt-1 mt-1">
+                    <span className="text-xs font-semibold text-amber-800">إجمالي القطع</span>
+                    <span className="text-xs font-bold text-amber-900">{(order as any).items.reduce((s: number, it: any) => s + (it.quantity || 0), 0)} قطعة</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-muted-foreground text-xs">الكمية</Label>
+                {isEditing ? (
+                  <Input type="number" min={1} value={editData.quantity} onChange={e => setEditData({ ...editData, quantity: parseInt(e.target.value) || 1 })} />
+                ) : (
+                  <p className="font-medium">{order.quantity}</p>
+                )}
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">المبلغ الإجمالي</Label>
+                {isEditing ? (
+                  <Input type="number" min={0} value={editData.totalAmount} onChange={e => setEditData({ ...editData, totalAmount: parseFloat(e.target.value) || 0 })} />
+                ) : (
+                  <p className="font-medium text-green-700">{Number(order.totalAmount)} ج.م</p>
+                )}
+              </div>
+            </div>
+            <div>
+              <Label className="text-muted-foreground text-xs flex items-center gap-1"><FileText className="h-3 w-3" /> ملاحظات</Label>
+              {isEditing ? (
+                <Textarea value={editData.notes} onChange={e => setEditData({ ...editData, notes: e.target.value })} rows={3} placeholder="ملاحظات إضافية..." />
+              ) : (
+                <p className="font-medium text-muted-foreground">{order.notes || "لا توجد ملاحظات"}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* معلومات النظام */}
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Calendar className="h-5 w-5 text-amber-600" /> معلومات النظام
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <Label className="text-muted-foreground text-xs flex items-center gap-1"><Hash className="h-3 w-3" /> رقم الأوردر</Label>
+                <p className="font-medium">{order.orderNumber}</p>
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">المصدر</Label>
+                <p className="font-medium">{SOURCE_LABELS[order.source] || order.source}</p>
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">اسم الإعلان</Label>
+                <p className="font-medium">{order.adName || "-"}</p>
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">اسم الصفحة</Label>
+                <p className="font-medium">{order.pageName || "-"}</p>
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">تاريخ الإنشاء</Label>
+                <p className="font-medium text-sm">{formatDate(order.createdAt)}</p>
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">تاريخ التأكيد</Label>
+                <p className="font-medium text-sm">{formatDate(order.confirmedAt)}</p>
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">تاريخ الطباعة</Label>
+                <p className="font-medium text-sm">{formatDate(order.printedAt)}</p>
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">تاريخ التوزيع</Label>
+                <p className="font-medium text-sm">{formatDate(order.assignedAt)}</p>
+              </div>
+              {order.postponedTo && (
+                <div>
+                  <Label className="text-muted-foreground text-xs">مؤجل إلى</Label>
+                  <p className="font-medium text-sm">{formatDate(order.postponedTo)}</p>
+                </div>
+              )}
+              {order.cancelReason && (
+                <div>
+                  <Label className="text-muted-foreground text-xs">سبب الإلغاء</Label>
+                  <p className="font-medium text-sm text-red-600">{order.cancelReason}</p>
+                </div>
+              )}
+              {/* Bosta fields */}
+              {order.bostaShipmentId && (
+                <div>
+                  <Label className="text-muted-foreground text-xs flex items-center gap-1"><CheckCircle className="h-3 w-3 text-green-600" /> Bosta Shipment ID</Label>
+                  <p className="font-medium text-sm text-green-700">{order.bostaShipmentId}</p>
+                </div>
+              )}
+              {order.bostaTrackingNumber && (
+                <div>
+                  <Label className="text-muted-foreground text-xs flex items-center gap-1"><Truck className="h-3 w-3" /> رقم التتبع</Label>
+                  <p className="font-medium text-sm">{order.bostaTrackingNumber}</p>
+                </div>
+              )}
+              {order.bostaSentAt && (
+                <div>
+                  <Label className="text-muted-foreground text-xs">تاريخ الإرسال لـ Bosta</Label>
+                  <p className="font-medium text-sm">{formatDate(order.bostaSentAt)}</p>
+                </div>
+              )}
+              {order.bostaLastError && !order.bostaShipmentId && (
+                <div className="col-span-2">
+                  <Label className="text-muted-foreground text-xs flex items-center gap-1"><AlertCircle className="h-3 w-3 text-red-500" /> خطأ Bosta</Label>
+                  <p className="text-sm text-red-600">{order.bostaLastError}</p>
+                </div>
+              )}
+              <div>
+                <Label className="text-muted-foreground text-xs">مكرر</Label>
+                <p className="font-medium text-sm">{order.isDuplicate ? "نعم" : "لا"}</p>
+              </div>
+              <div>
+                <Label className="text-muted-foreground text-xs">الموظف المسؤول</Label>
+                <p className="font-medium text-sm">{order.assignedEmployeeId ? `#${order.assignedEmployeeId}` : "غير موزع"}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

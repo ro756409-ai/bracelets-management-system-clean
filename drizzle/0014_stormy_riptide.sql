@@ -1,0 +1,2 @@
+ALTER TABLE `orders` MODIFY COLUMN `status` enum('new','confirmed','postponed','cancelled','preparing','shipped','delivered','no_answer','returned','printed') NOT NULL DEFAULT 'new';--> statement-breakpoint
+ALTER TABLE `orders` ADD `printedAt` timestamp;

@@ -1,0 +1,1 @@
+ALTER TABLE `orders` ADD `pageName` varchar(255);

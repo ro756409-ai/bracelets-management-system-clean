@@ -1,0 +1,1 @@
+ALTER TABLE `orders` ADD `adName` varchar(255);
