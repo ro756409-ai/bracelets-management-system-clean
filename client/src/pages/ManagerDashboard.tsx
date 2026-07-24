@@ -13,6 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { BrandMark } from "@/components/BrandMark";
 import { toast } from "sonner";
 import {
   LayoutDashboard, ShoppingCart, Package, BarChart3, Users,
@@ -21,8 +22,6 @@ import {
   UserPlus, Key, ArrowRight, ArrowLeft, Menu, X, Eye, EyeOff,
   Briefcase, FileText, Hash, Calendar, User, Lock
 } from "lucide-react";
-
-const LOGO_URL = "https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/farahat-logo_f7ceef8f.png";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new:       { label: "جديد",    color: "text-blue-700",   bg: "bg-blue-50 border-blue-200" },
@@ -108,15 +107,13 @@ export default function ManagerDashboard() {
   return (
     <div className="min-h-screen bg-gray-50 flex" dir="rtl">
       {/* Sidebar - Desktop */}
-      <aside className="hidden md:flex flex-col w-64 bg-[#1a1008] text-white min-h-screen sticky top-0">
-        <div className="p-4 border-b border-amber-900/30">
+      <aside className="hidden md:flex flex-col w-64 bg-sidebar text-sidebar-foreground min-h-screen sticky top-0">
+        <div className="p-4 border-b border-sidebar-border">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center">
-              <img src={LOGO_URL} alt="فرحات" className="w-7 h-7 object-contain rounded-full" />
-            </div>
+            <BrandMark className="w-10 h-10" />
             <div>
-              <p className="font-bold text-sm">فرحات للنحاس</p>
-              <p className="text-amber-300/70 text-xs">لوحة تحكم المدير</p>
+              <p className="font-bold text-sm">متجرك</p>
+              <p className="text-sidebar-foreground/70 text-xs">لوحة تحكم المدير</p>
             </div>
           </div>
         </div>
@@ -130,8 +127,8 @@ export default function ManagerDashboard() {
                 onClick={() => setActiveTab(tab.key)}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                   isActive
-                    ? "bg-amber-700/30 text-amber-300"
-                    : "text-white/60 hover:bg-white/5 hover:text-white/90"
+                    ? "bg-sidebar-accent text-sidebar-primary"
+                    : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/90"
                 }`}
               >
                 <tab.icon className="h-4 w-4" />
@@ -141,16 +138,16 @@ export default function ManagerDashboard() {
           })}
         </nav>
 
-        <div className="p-3 border-t border-amber-900/30">
+        <div className="p-3 border-t border-sidebar-border">
           <div className="flex items-center gap-3 px-3 py-2">
-            <div className="w-8 h-8 rounded-full bg-amber-700/30 flex items-center justify-center text-amber-300 text-sm font-bold">
+            <div className="w-8 h-8 rounded-full bg-sidebar-accent flex items-center justify-center text-sidebar-primary text-sm font-bold">
               {managerName.charAt(0)}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white truncate">{managerName}</p>
-              <p className="text-xs text-amber-300/50">مدير</p>
+              <p className="text-sm font-medium text-sidebar-foreground truncate">{managerName}</p>
+              <p className="text-xs text-sidebar-foreground/50">مدير</p>
             </div>
-            <button onClick={handleLogout} className="text-white/40 hover:text-red-400 transition-colors" title="تسجيل الخروج">
+            <button onClick={handleLogout} className="text-sidebar-foreground/40 hover:text-red-400 transition-colors" title="تسجيل الخروج">
               <LogOut className="h-4 w-4" />
             </button>
           </div>
@@ -161,13 +158,13 @@ export default function ManagerDashboard() {
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/50" onClick={() => setSidebarOpen(false)} />
-          <aside className="absolute right-0 top-0 bottom-0 w-64 bg-[#1a1008] text-white flex flex-col">
-            <div className="p-4 border-b border-amber-900/30 flex items-center justify-between">
+          <aside className="absolute right-0 top-0 bottom-0 w-64 bg-sidebar text-sidebar-foreground flex flex-col">
+            <div className="p-4 border-b border-sidebar-border flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <img src={LOGO_URL} alt="فرحات" className="w-7 h-7 object-contain rounded-full" />
-                <p className="font-bold text-sm">فرحات للنحاس</p>
+                <BrandMark className="w-7 h-7" />
+                <p className="font-bold text-sm">متجرك</p>
               </div>
-              <button onClick={() => setSidebarOpen(false)} className="text-white/60 hover:text-white">
+              <button onClick={() => setSidebarOpen(false)} className="text-sidebar-foreground/60 hover:text-sidebar-foreground">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -179,7 +176,7 @@ export default function ManagerDashboard() {
                     key={tab.key}
                     onClick={() => { setActiveTab(tab.key); setSidebarOpen(false); }}
                     className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                      isActive ? "bg-amber-700/30 text-amber-300" : "text-white/60 hover:bg-white/5"
+                      isActive ? "bg-sidebar-accent text-sidebar-primary" : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50"
                     }`}
                   >
                     <tab.icon className="h-4 w-4" />
@@ -188,7 +185,7 @@ export default function ManagerDashboard() {
                 );
               })}
             </nav>
-            <div className="p-3 border-t border-amber-900/30">
+            <div className="p-3 border-t border-sidebar-border">
               <button onClick={handleLogout} className="w-full flex items-center gap-2 px-3 py-2 text-red-400 hover:bg-red-500/10 rounded-lg text-sm">
                 <LogOut className="h-4 w-4" />
                 تسجيل الخروج
@@ -201,7 +198,7 @@ export default function ManagerDashboard() {
       {/* Main Content */}
       <div className="flex-1 min-w-0">
         {/* Mobile Header */}
-        <header className="md:hidden sticky top-0 z-40 shadow-md" style={{ background: "linear-gradient(135deg, #1a1008 0%, #2d1f0a 100%)" }}>
+        <header className="md:hidden sticky top-0 z-40 shadow-md" style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}>
           <div className="flex items-center justify-between px-4 py-3">
             <div className="flex items-center gap-3">
               <button onClick={() => setSidebarOpen(true)} className="text-white">
@@ -209,7 +206,7 @@ export default function ManagerDashboard() {
               </button>
               <p className="text-white font-bold text-sm">{tabs.find(t => t.key === activeTab)?.label}</p>
             </div>
-            <p className="text-amber-300 text-xs">أهلاً، {managerName}</p>
+            <p className="text-white/70 text-xs">أهلاً، {managerName}</p>
           </div>
         </header>
 

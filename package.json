@@ -1,6 +1,7 @@
 {
-  "name": "bracelets_management_system",
+  "name": "matjarak",
   "version": "1.0.0",
+  "description": "متجرك (Matjarak) — منصة لإدارة الطلبات والمخزون والشحن والتحصيل لتجار الأونلاين",
   "type": "module",
   "license": "MIT",
   "scripts": {

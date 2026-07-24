@@ -20,8 +20,7 @@ import {
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import jsQR from "jsqr";
-
-const LOGO_URL = "https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/farahat-logo_f7ceef8f.png";
+import { BrandMark } from "@/components/BrandMark";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new:       { label: "جديد",    color: "text-blue-700",   bg: "bg-blue-50 border-blue-200" },
@@ -516,20 +515,14 @@ export default function EmployeeDashboard() {
       {/* Header */}
       <header
         className="sticky top-0 z-40 shadow-md"
-        style={{ background: "linear-gradient(135deg, #1a1008 0%, #2d1f0a 100%)" }}
+        style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}
       >
         <div className="flex items-center justify-between px-4 py-3 max-w-2xl mx-auto">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center">
-              <img
-                src={LOGO_URL}
-                alt="فرحات للنحاس"
-                className="w-6 h-6 object-contain rounded-full"
-              />
-            </div>
+            <BrandMark className="w-9 h-9" />
             <div>
-              <p className="text-white font-bold text-sm leading-tight">فرحات للنحاس</p>
-              <p className="text-amber-300 text-xs">أهلاً، {employeeName}</p>
+              <p className="text-white font-bold text-sm leading-tight">متجرك</p>
+              <p className="text-white/70 text-xs">أهلاً، {employeeName}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">

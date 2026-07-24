@@ -1,6 +1,6 @@
 # ROADMAP.md
 
-**Project:** Bracelets Management System (bracelets_management_system)
+**Project:** متجرك (Matjarak) — formerly "Bracelets Management System" (bracelets_management_system). Renamed as of the Matjarak rebrand phase; see BRAND_MIGRATION_NOTES.md.
 **Status:** Planning only — no code has been changed to produce this document.
 **Owner going forward:** Claude Code, acting as lead architect / senior engineer.
 **Prior platform:** Manus (WebDev template). Manus will be phased out per Milestone Group 4.

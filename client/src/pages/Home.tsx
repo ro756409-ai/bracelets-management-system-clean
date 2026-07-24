@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/components/BrandMark";
 import { getLoginUrl } from "@/const";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
@@ -17,18 +18,18 @@ export default function Home() {
   if (loading) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="max-w-md w-full">
         {/* Logo & Title */}
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-amber-600 to-orange-700 shadow-xl mb-6">
-            <span className="text-4xl">⚜️</span>
+          <div className="inline-flex mb-6 shadow-xl rounded-3xl">
+            <BrandMark className="w-20 h-20 rounded-3xl" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            نظام إدارة الأساور
+          <h1 className="text-3xl font-bold text-foreground mb-2">
+            متجرك
           </h1>
-          <p className="text-gray-600 text-lg">
-            الأساور النحاسية الطبية
+          <p className="text-muted-foreground text-lg">
+            من أول الأوردر لحد التحصيل
           </p>
         </div>
 
@@ -42,10 +43,10 @@ export default function Home() {
           ].map((f) => (
             <div
               key={f.label}
-              className="bg-white/80 backdrop-blur rounded-xl p-4 flex items-center gap-3 shadow-sm border border-amber-100"
+              className="bg-card/80 backdrop-blur rounded-xl p-4 flex items-center gap-3 shadow-sm border border-border"
             >
               <span className="text-2xl">{f.icon}</span>
-              <span className="text-sm font-medium text-gray-700">{f.label}</span>
+              <span className="text-sm font-medium text-foreground">{f.label}</span>
             </div>
           ))}
         </div>
@@ -56,11 +57,11 @@ export default function Home() {
           size="lg"
           className="w-full h-12 text-base font-semibold shadow-lg"
         >
-          تسجيل الدخول للنظام
+          تسجيل الدخول للمنصة
         </Button>
 
-        <p className="text-center text-xs text-gray-500 mt-4">
-          نظام متكامل لإدارة 300-1000 أوردر يومياً
+        <p className="text-center text-xs text-muted-foreground mt-4">
+          منصة لإدارة الطلبات والمخزون والشحن والتحصيل لتجار الأونلاين
         </p>
       </div>
     </div>

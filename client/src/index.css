@@ -8,6 +8,7 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-brand);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -16,6 +17,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-dark: var(--primary-dark);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -24,6 +26,12 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-error: var(--error);
+  --color-error-foreground: var(--error-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -44,76 +52,92 @@
 
 :root {
   --radius: 0.75rem;
-  /* Copper/Black/Gold brand identity - فرحات للنحاس */
-  --background: oklch(0.97 0.006 55);
-  --foreground: oklch(0.12 0.02 30);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.12 0.02 30);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.12 0.02 30);
-  --primary: oklch(0.50 0.12 55);
-  --primary-foreground: oklch(0.98 0.005 55);
-  --secondary: oklch(0.93 0.02 50);
-  --secondary-foreground: oklch(0.20 0.04 35);
-  --muted: oklch(0.94 0.01 55);
-  --muted-foreground: oklch(0.50 0.03 45);
-  --accent: oklch(0.91 0.04 50);
-  --accent-foreground: oklch(0.20 0.04 35);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.98 0 0);
-  --border: oklch(0.87 0.02 50);
-  --input: oklch(0.87 0.02 50);
-  --ring: oklch(0.50 0.12 55);
-  --chart-1: oklch(0.50 0.12 55);
-  --chart-2: oklch(0.60 0.14 45);
-  --chart-3: oklch(0.55 0.22 25);
-  --chart-4: oklch(0.55 0.12 250);
-  --chart-5: oklch(0.65 0.10 140);
-  /* Sidebar: deep black with copper accents */
-  --sidebar: oklch(0.14 0.02 30);
-  --sidebar-foreground: oklch(0.92 0.02 50);
-  --sidebar-primary: oklch(0.70 0.13 55);
-  --sidebar-primary-foreground: oklch(0.12 0.02 30);
-  --sidebar-accent: oklch(0.22 0.04 35);
-  --sidebar-accent-foreground: oklch(0.92 0.02 50);
-  --sidebar-border: oklch(0.25 0.03 35);
-  --sidebar-ring: oklch(0.70 0.13 55);
+  --font-brand: 'Cairo', 'Tajawal', sans-serif;
+
+  /* ==================== Matjarak (متجرك) brand identity ==================== */
+  --background: #F7F7FB;
+  --foreground: #18181B;
+  --card: #FFFFFF;
+  --card-foreground: #18181B;
+  --popover: #FFFFFF;
+  --popover-foreground: #18181B;
+  --primary: #6C4CF1;
+  --primary-foreground: #FFFFFF;
+  --primary-dark: #24134F;
+  --secondary: #14B8A6;
+  --secondary-foreground: #FFFFFF;
+  --muted: #EDEDF5;
+  --muted-foreground: #6B7280;
+  --accent: #EFEBFC;
+  --accent-foreground: #24134F;
+  --destructive: #DC2626;
+  --destructive-foreground: #FFFFFF;
+  --success: #16A34A;
+  --success-foreground: #FFFFFF;
+  --warning: #F59E0B;
+  --warning-foreground: #18181B;
+  --error: #DC2626;
+  --error-foreground: #FFFFFF;
+  --border: #E4E4EE;
+  --input: #E4E4EE;
+  --ring: #6C4CF1;
+  --chart-1: #6C4CF1;
+  --chart-2: #14B8A6;
+  --chart-3: #16A34A;
+  --chart-4: #F59E0B;
+  --chart-5: #DC2626;
+  /* Sidebar: Matjarak primary-dark base */
+  --sidebar: #24134F;
+  --sidebar-foreground: #F1EEFB;
+  --sidebar-primary: #6C4CF1;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #341A66;
+  --sidebar-accent-foreground: #F1EEFB;
+  --sidebar-border: #3A1F73;
+  --sidebar-ring: #6C4CF1;
 }
 
 .dark {
-  /* Dark mode: black base with copper/gold highlights */
-  --background: oklch(0.11 0.015 30);
-  --foreground: oklch(0.94 0.01 50);
-  --card: oklch(0.15 0.02 30);
-  --card-foreground: oklch(0.94 0.01 50);
-  --popover: oklch(0.15 0.02 30);
-  --popover-foreground: oklch(0.94 0.01 50);
-  --primary: oklch(0.70 0.13 55);
-  --primary-foreground: oklch(0.11 0.015 30);
-  --secondary: oklch(0.20 0.03 35);
-  --secondary-foreground: oklch(0.90 0.02 50);
-  --muted: oklch(0.20 0.02 35);
-  --muted-foreground: oklch(0.62 0.04 50);
-  --accent: oklch(0.22 0.04 35);
-  --accent-foreground: oklch(0.90 0.02 50);
-  --destructive: oklch(0.60 0.22 25);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.23 0.03 35);
-  --input: oklch(0.23 0.03 35);
-  --ring: oklch(0.70 0.13 55);
-  --chart-1: oklch(0.70 0.13 55);
-  --chart-2: oklch(0.65 0.12 140);
-  --chart-3: oklch(0.60 0.20 25);
-  --chart-4: oklch(0.68 0.10 200);
-  --chart-5: oklch(0.65 0.15 300);
-  --sidebar: oklch(0.10 0.015 30);
-  --sidebar-foreground: oklch(0.92 0.02 50);
-  --sidebar-primary: oklch(0.70 0.13 55);
-  --sidebar-primary-foreground: oklch(0.10 0.015 30);
-  --sidebar-accent: oklch(0.18 0.03 35);
-  --sidebar-accent-foreground: oklch(0.92 0.02 50);
-  --sidebar-border: oklch(0.20 0.03 35);
-  --sidebar-ring: oklch(0.70 0.13 55);
+  /* Matjarak dark mode: same brand hues on dark neutral surfaces */
+  --background: #18181B;
+  --foreground: #F7F7FB;
+  --card: #212126;
+  --card-foreground: #F7F7FB;
+  --popover: #212126;
+  --popover-foreground: #F7F7FB;
+  --primary: #8267F4;
+  --primary-foreground: #FFFFFF;
+  --primary-dark: #24134F;
+  --secondary: #2DD4BF;
+  --secondary-foreground: #0B1A18;
+  --muted: #27272E;
+  --muted-foreground: #9CA3AF;
+  --accent: #2E1F5E;
+  --accent-foreground: #EDE9FE;
+  --destructive: #EF4444;
+  --destructive-foreground: #FFFFFF;
+  --success: #22C55E;
+  --success-foreground: #06210F;
+  --warning: #FBBF24;
+  --warning-foreground: #221604;
+  --error: #EF4444;
+  --error-foreground: #FFFFFF;
+  --border: #2E2E36;
+  --input: #2E2E36;
+  --ring: #8267F4;
+  --chart-1: #8267F4;
+  --chart-2: #2DD4BF;
+  --chart-3: #22C55E;
+  --chart-4: #FBBF24;
+  --chart-5: #EF4444;
+  --sidebar: #180C38;
+  --sidebar-foreground: #F1EEFB;
+  --sidebar-primary: #8267F4;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #2E1B5C;
+  --sidebar-accent-foreground: #F1EEFB;
+  --sidebar-border: #2E1B5C;
+  --sidebar-ring: #8267F4;
 }
 
 @layer base {
@@ -122,7 +146,7 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: 'Cairo', 'Tajawal', sans-serif;
+    font-family: var(--font-brand);
     direction: rtl;
   }
   button:not(:disabled),

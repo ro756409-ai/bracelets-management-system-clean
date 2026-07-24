@@ -4,10 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { BrandMark } from "@/components/BrandMark";
 import { Eye, EyeOff, Lock, User } from "lucide-react";
 import { toast } from "sonner";
-
-const LOGO_URL = "https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/farahat-logo_f7ceef8f.png";
 
 export default function EmployeeLogin() {
   const [, setLocation] = useLocation();
@@ -67,7 +66,7 @@ export default function EmployeeLogin() {
     <div
       className="min-h-screen flex items-center justify-center p-4"
       style={{
-        background: "linear-gradient(135deg, #1a1008 0%, #2d1f0a 40%, #1a1008 100%)",
+        background: "linear-gradient(135deg, var(--primary-dark) 0%, #180C38 40%, var(--primary-dark) 100%)",
       }}
     >
       {/* Background pattern */}
@@ -78,8 +77,8 @@ export default function EmployeeLogin() {
             45deg,
             transparent,
             transparent 20px,
-            rgba(212,163,76,0.3) 20px,
-            rgba(212,163,76,0.3) 21px
+            rgba(108,76,241,0.3) 20px,
+            rgba(108,76,241,0.3) 21px
           )`,
         }}
       />
@@ -89,15 +88,9 @@ export default function EmployeeLogin() {
           <CardHeader className="pb-4 pt-8 text-center">
             {/* Logo */}
             <div className="flex justify-center mb-4">
-              <div className="w-20 h-20 rounded-2xl bg-[#2d1f0a] flex items-center justify-center shadow-lg border border-amber-900/30">
-                <img
-                  src={LOGO_URL}
-                  alt="فرحات للنحاس"
-                  className="w-14 h-14 object-contain rounded-full"
-                />
-              </div>
+              <BrandMark className="w-20 h-20 rounded-2xl shadow-lg" />
             </div>
-            <h1 className="text-xl font-bold text-foreground">فرحات للنحاس</h1>
+            <h1 className="text-xl font-bold text-foreground">متجرك</h1>
             <p className="text-sm text-muted-foreground mt-1">تسجيل دخول الموظف</p>
           </CardHeader>
 
@@ -155,7 +148,7 @@ export default function EmployeeLogin() {
               <Button
                 type="submit"
                 className="w-full h-11 text-base font-semibold mt-2"
-                style={{ background: "linear-gradient(135deg, #b8860b, #d4a017)" }}
+                style={{ background: "linear-gradient(135deg, var(--primary), var(--secondary))" }}
                 disabled={isLoading}
               >
                 {isLoading ? (

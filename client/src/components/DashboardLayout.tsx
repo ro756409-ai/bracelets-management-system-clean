@@ -28,6 +28,7 @@ import {
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
+import { BrandMark } from './BrandMark';
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { trpc } from "@/lib/trpc";
@@ -94,14 +95,12 @@ export default function DashboardLayout({
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
           <div className="flex flex-col items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
-              <span className="text-3xl">⚜️</span>
-            </div>
+            <BrandMark className="w-16 h-16" />
             <h1 className="text-2xl font-bold text-center text-foreground">
-              نظام إدارة الأساور النحاسية
+              متجرك
             </h1>
             <p className="text-sm text-muted-foreground text-center">
-              يرجى تسجيل الدخول للوصول إلى النظام
+              يرجى تسجيل الدخول للوصول إلى المنصة
             </p>
           </div>
           <Button
@@ -192,14 +191,10 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
               </button>
               {!isCollapsed && (
                 <div className="flex items-center gap-2 min-w-0">
-                  <img
-                    src="https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/farahat-logo_f7ceef8f.png"
-                    alt="فرحات للنحاس"
-                    className="h-8 w-8 object-contain shrink-0 rounded-full"
-                  />
+                  <BrandMark className="h-8 w-8" />
                   <div className="min-w-0">
-                    <p className="text-sm font-bold text-sidebar-foreground truncate">فرحات للنحاس</p>
-                    <p className="text-xs text-sidebar-foreground/50 truncate">نظام الإدارة</p>
+                    <p className="text-sm font-bold text-sidebar-foreground truncate">متجرك</p>
+                    <p className="text-xs text-sidebar-foreground/50 truncate">Matjarak</p>
                   </div>
                 </div>
               )}

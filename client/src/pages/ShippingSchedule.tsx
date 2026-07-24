@@ -2,9 +2,9 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/components/BrandMark";
 import { ArrowRight, Printer } from "lucide-react";
 
-const LOGO_URL = "https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/farahat-logo_f7ceef8f.png";
 const SCHEDULE_IMAGE_URL = "https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/shipping-schedule_19917bee.jpeg";
 
 // بيانات جدول توزيع المحافظات (مطابقة للصورة)
@@ -86,11 +86,11 @@ export default function ShippingSchedule() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-amber-50 to-white" dir="rtl">
+    <div className="min-h-screen bg-background" dir="rtl">
       {/* Header */}
       <header
         className="sticky top-0 z-40 shadow-md print:hidden"
-        style={{ background: "linear-gradient(135deg, #1a1008 0%, #2d1f0a 100%)" }}
+        style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}
       >
         <div className="flex items-center justify-between px-4 py-3 max-w-4xl mx-auto">
           <div className="flex items-center gap-3">
@@ -100,12 +100,10 @@ export default function ShippingSchedule() {
             >
               <ArrowRight className="h-4 w-4" />
             </button>
-            <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center">
-              <img src={LOGO_URL} alt="فرحات للنحاس" className="w-5 h-5 object-contain rounded-full" />
-            </div>
+            <BrandMark className="w-8 h-8" />
             <div>
               <p className="text-white font-bold text-sm leading-tight">جدول توزيع المحافظات</p>
-              <p className="text-amber-300 text-xs">مواعيد الشحن والاستلام</p>
+              <p className="text-white/70 text-xs">مواعيد الشحن والاستلام</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -208,7 +206,7 @@ export default function ShippingSchedule() {
 
         {/* Footer */}
         <div className="text-center text-xs text-muted-foreground pb-4 print:hidden">
-          <p>إدارة — فرحات للنحاس</p>
+          <p>إدارة — متجرك</p>
         </div>
       </div>
 

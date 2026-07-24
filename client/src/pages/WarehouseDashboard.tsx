@@ -12,12 +12,11 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { BrandMark } from "@/components/BrandMark";
 import {
   Package, Plus, Minus, AlertTriangle, LogOut, RefreshCw,
   ArrowDownCircle, ArrowUpCircle, History, Box
 } from "lucide-react";
-
-const LOGO_URL = "https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/farahat-logo_f7ceef8f.png";
 
 const IN_REASONS = [
   "استلام بضاعة جديدة من المورد",
@@ -112,21 +111,24 @@ export default function WarehouseDashboard() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-amber-50 to-white">
-        <div className="animate-spin h-8 w-8 border-4 border-amber-600 border-t-transparent rounded-full" />
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-amber-50 to-white" dir="rtl">
+    <div className="min-h-screen bg-background" dir="rtl">
       {/* Header */}
-      <header className="bg-[#3d2b1f] text-white px-4 py-3 flex items-center justify-between sticky top-0 z-50 shadow-md">
+      <header
+        className="text-white px-4 py-3 flex items-center justify-between sticky top-0 z-50 shadow-md"
+        style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}
+      >
         <div className="flex items-center gap-3">
-          <img src={LOGO_URL} alt="Logo" className="h-9 w-9 rounded-full object-cover" />
+          <BrandMark className="h-9 w-9" />
           <div>
-            <h1 className="font-bold text-sm">فرحات للنحاس</h1>
-            <p className="text-xs text-amber-200">أهلاً، {empSession?.name || "موظف المخزن"}</p>
+            <h1 className="font-bold text-sm">متجرك</h1>
+            <p className="text-xs text-white/70">أهلاً، {empSession?.name || "موظف المخزن"}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">

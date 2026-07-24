@@ -10,8 +10,7 @@ import {
   ArrowRight, Calendar, RefreshCw, Printer, LogOut, Search,
   Box, Hash, User, DollarSign, FileText,
 } from "lucide-react";
-
-const LOGO_URL = "https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/farahat-logo_f7ceef8f.png";
+import { BrandMark } from "@/components/BrandMark";
 
 const AGENT_COLORS: Record<string, { bg: string; border: string; text: string; badge: string; headerBg: string }> = {
   "الشبح": {
@@ -156,15 +155,18 @@ export default function TodayShipments() {
   const isToday = selectedDate === new Date().toISOString().split("T")[0];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-stone-50 to-amber-50/30" dir="rtl">
+    <div className="min-h-screen bg-background" dir="rtl">
       {/* Header */}
-      <header className="bg-gradient-to-r from-amber-800 via-amber-700 to-amber-600 text-white shadow-lg print:hidden">
+      <header
+        className="text-white shadow-lg print:hidden"
+        style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}
+      >
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src={LOGO_URL} alt="Logo" className="h-10 w-10 rounded-full border-2 border-amber-300" />
+            <BrandMark className="h-10 w-10" />
             <div>
               <h1 className="text-lg font-bold">شحنات اليوم</h1>
-              {meData && <p className="text-amber-200 text-xs">{meData.name}</p>}
+              {meData && <p className="text-white/70 text-xs">{meData.name}</p>}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -172,7 +174,7 @@ export default function TodayShipments() {
               variant="ghost"
               size="sm"
               onClick={() => refetch()}
-              className="text-white hover:bg-amber-600"
+              className="text-white hover:bg-white/10"
             >
               <RefreshCw className="h-4 w-4" />
             </Button>
@@ -180,7 +182,7 @@ export default function TodayShipments() {
               variant="ghost"
               size="sm"
               onClick={handlePrint}
-              className="text-white hover:bg-amber-600"
+              className="text-white hover:bg-white/10"
             >
               <Printer className="h-4 w-4" />
             </Button>
@@ -188,7 +190,7 @@ export default function TodayShipments() {
               variant="ghost"
               size="sm"
               onClick={() => setLocation("/employee-dashboard")}
-              className="text-white hover:bg-amber-600"
+              className="text-white hover:bg-white/10"
             >
               <ArrowRight className="h-4 w-4" />
             </Button>
@@ -196,7 +198,7 @@ export default function TodayShipments() {
               variant="ghost"
               size="sm"
               onClick={handleLogout}
-              className="text-white hover:bg-amber-600"
+              className="text-white hover:bg-white/10"
             >
               <LogOut className="h-4 w-4" />
             </Button>
@@ -256,7 +258,7 @@ export default function TodayShipments() {
       <main className="max-w-7xl mx-auto px-4 pb-8">
         {isLoading ? (
           <div className="flex items-center justify-center py-20">
-            <div className="animate-spin rounded-full h-10 w-10 border-4 border-amber-600 border-t-transparent" />
+            <div className="animate-spin rounded-full h-10 w-10 border-4 border-primary border-t-transparent" />
           </div>
         ) : filteredAgents.length === 0 ? (
           <div className="text-center py-20 text-stone-500">
