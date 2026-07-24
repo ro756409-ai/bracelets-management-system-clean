@@ -16,6 +16,7 @@ import { getDb } from "./db";
 import { getSalesChannelByWebhookSecret, getSalesChannelByPlatformAndBusiness } from "./db";
 import { webhookLogs } from "../drizzle/schema";
 import { desc } from "drizzle-orm";
+import { normalizeEgyptianPhone } from "../shared/phone";
 
 // ==================== Types ====================
 
@@ -394,7 +395,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     const products = await db.getAllProducts();
 
     const governorate = normalizeGov(payload.government || "");
-    const phone = (payload.phone || "").replace(/\s+/g, "");
+    const phone = normalizeEgyptianPhone(payload.phone) || (payload.phone || "").replace(/\s+/g, "");
 
     // ============================================================
     // ONE REQUEST = ONE ORDER

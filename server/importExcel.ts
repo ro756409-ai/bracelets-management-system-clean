@@ -3,6 +3,8 @@ import { requireAdminOrManager } from "./authMiddleware";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import * as db from "./db";
+import { normalizeEgyptianPhone } from "../shared/phone";
+import { findPotentialDuplicates, type ExistingOrderForDuplicateCheck } from "./duplicateDetection";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -281,45 +283,8 @@ function normalizeGov(raw: string): string {
   return trimmed.length > 30 ? "غير محدد" : trimmed;
 }
 
-/**
- * Normalize phone numbers: handles multiple numbers, symbols (*, /, -, .), country codes.
- * Extracts the first valid Egyptian mobile number (01xxxxxxxxx).
- * If no valid number found, returns empty string.
- */
 function normalizePhone(raw: string): string {
-  if (!raw) return "";
-  // Remove all non-digit characters except + (for country code)
-  // First, split by common separators that indicate multiple numbers
-  const parts = raw.split(/[*\/\-,،\n\r|]+/);
-  
-  for (const part of parts) {
-    // Strip everything except digits and +
-    let cleaned = part.replace(/[^0-9+]/g, "");
-    
-    // Handle country code +20 or 0020
-    if (cleaned.startsWith("+20")) cleaned = "0" + cleaned.slice(3);
-    if (cleaned.startsWith("0020")) cleaned = "0" + cleaned.slice(4);
-    if (cleaned.startsWith("20") && cleaned.length === 12) cleaned = "0" + cleaned.slice(2);
-    
-    // Validate: must be 11 digits starting with 01
-    if (/^01[0-9]{9}$/.test(cleaned)) return cleaned;
-    
-    // Try extracting 11-digit number from longer string
-    const match = cleaned.match(/(01[0-9]{9})/);
-    if (match) return match[1];
-  }
-  
-  // Fallback: try the whole raw string
-  const allDigits = raw.replace(/[^0-9]/g, "");
-  if (allDigits.startsWith("20") && allDigits.length === 12) {
-    return "0" + allDigits.slice(2);
-  }
-  const fallbackMatch = allDigits.match(/(01[0-9]{9})/);
-  if (fallbackMatch) return fallbackMatch[1];
-  
-  // If nothing valid, return cleaned digits (might be landline or international)
-  const stripped = raw.replace(/[^0-9]/g, "");
-  return stripped.length >= 7 ? stripped : "";
+  return normalizeEgyptianPhone(raw);
 }
 
 function parseExcelRows(buffer: Buffer): {
@@ -486,25 +451,17 @@ export function registerImportRoutes(app: Express) {
 
         // جلب كل الأوردرات الموجودة لكشف التكرار
         const existingOrders = await db.getOrders({ limit: 100000 });
-        // UUID هو المعرف الفريد العالمي — الـ orderNumber الرقمي ممكن يتكرر بين ستورين
-        const existingExternalIds = new Set(
-          existingOrders.orders
-            .map((o: any) => o.externalOrderId)
-            .filter(Boolean)
-        );
+        const existingOrdersById = new Map(existingOrders.orders.map((o: any) => [o.id, o]));
+        // ملاحظة: productId غير مُمرَّر عمدًا هنا — المطابقة تتم بالاسم مثل السلوك السابق تمامًا
+        const existingForDuplicateCheck: ExistingOrderForDuplicateCheck[] = existingOrders.orders.map((o: any) => ({
+          id: o.id,
+          customerPhone: o.customerPhone,
+          productName: o.productName,
+          externalOrderId: o.externalOrderId,
+        }));
 
-        // كشف التكرار بالهاتف + المنتج + نفس اليوم (بدل الهاتف فقط)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const existingPhoneProductKeys = new Set(
-          existingOrders.orders
-            .filter((o: any) => {
-              const orderDate = new Date(o.createdAt);
-              orderDate.setHours(0, 0, 0, 0);
-              return orderDate.getTime() === today.getTime();
-            })
-            .map((o: any) => `${o.customerPhone}|${o.productName}`)
-        );
 
         // كشف التكرار داخل الملف نفسه
         const fileUUIDs = new Set<string>();
@@ -517,7 +474,15 @@ export function registerImportRoutes(app: Express) {
             // كشف التكرار بالـ UUID (Order ID) فقط — فريد عالمياً بين كل الستورات
             // الـ ID الرقمي (externalId) ممكن يتكرر بين ستورين مختلفين فلا يصلح لكشف التكرار
             const uuid = row.orderId || '';
-            const isDuplicateByUUID = uuid && (existingExternalIds.has(uuid) || fileUUIDs.has(uuid));
+
+            const dbMatches = findPotentialDuplicates(
+              { customerPhone: row.customerPhone, productName: row.productName, externalOrderId: uuid || undefined },
+              existingForDuplicateCheck
+            );
+
+            const isDuplicateByUUID =
+              Boolean(uuid) &&
+              (dbMatches.some(m => m.signals.includes("sameExternalOrderId")) || fileUUIDs.has(uuid));
 
             if (isDuplicateByUUID) {
               duplicates++;
@@ -527,7 +492,15 @@ export function registerImportRoutes(app: Express) {
 
             // كشف التكرار بالهاتف + المنتج + نفس اليوم
             const phoneProductKey = `${phone}|${row.productName}`;
-            const isDuplicateByPhoneProduct = existingPhoneProductKeys.has(phoneProductKey) || filePhoneProductKeys.has(phoneProductKey);
+            const isDuplicateByPhoneProductToday = dbMatches.some(m => {
+              if (!m.signals.includes("samePhoneAndProduct")) return false;
+              const existingOrder = existingOrdersById.get(m.orderId) as any;
+              if (!existingOrder) return false;
+              const orderDate = new Date(existingOrder.createdAt);
+              orderDate.setHours(0, 0, 0, 0);
+              return orderDate.getTime() === today.getTime();
+            });
+            const isDuplicateByPhoneProduct = isDuplicateByPhoneProductToday || filePhoneProductKeys.has(phoneProductKey);
             if (isDuplicateByPhoneProduct) {
               duplicates++;
               importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر (نفس الهاتف + المنتج اليوم)`);
@@ -671,13 +644,13 @@ function parseWhatsAppBlock(text: string, rowIndex: number): {
     const anyPhoneMatch = fullText.match(/(01[0-9]{9})/);
     if (anyPhoneMatch) phone1Raw = anyPhoneMatch[1];
   }
-  const customerPhone = (phone1Raw || "").replace(/\s+/g, "");
+  const customerPhone = normalizeEgyptianPhone(phone1Raw);
 
   // Phone 2 (optional)
   const phone2Raw = extract([
     /رقم\s*الفون\s*\(2\)\s*[:\-]\s*([0-9\s]+)/,
   ]);
-  const customerPhone2 = phone2Raw.replace(/\s+/g, "") || undefined;
+  const customerPhone2 = normalizeEgyptianPhone(phone2Raw) || undefined;
 
   // Product + quantity — format: "نوع المنتج : xxx عدد القطع: N"
   const productMatch = fullText.match(

@@ -12,6 +12,7 @@ import { markOrderAsReturned, getReturnsList, getReturnsStats, createPrintLog, g
 import { employees } from "../drizzle/schema";
 import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
 import { orders as ordersTable } from "../drizzle/schema";
+import { normalizeEgyptianPhone } from "../shared/phone";
 
 const EMP_JWT_SECRET = process.env.JWT_SECRET;
 const EMP_COOKIE = "employee_token";
@@ -1509,10 +1510,11 @@ export const appRouter = router({
         .map(p => p.quantity > 1 ? `${p.productName} ×${p.quantity}` : p.productName)
         .join(' + ');
       const firstProductId = itemsWithQty[0].productId;
+      const normalizedCustomerPhone = normalizeEgyptianPhone(input.customerPhone) || input.customerPhone;
       const [res] = await db.insert(orders).values({
         orderNumber,
         customerName: input.customerName,
-        customerPhone: input.customerPhone,
+        customerPhone: normalizedCustomerPhone,
         governorate: input.governorate,
         customerAddress: input.customerAddress,
         productId: firstProductId,

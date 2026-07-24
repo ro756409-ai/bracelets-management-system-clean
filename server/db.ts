@@ -20,6 +20,7 @@ import {
   orderItems, InsertOrderItem, OrderItem,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { normalizeEgyptianPhone, toAsciiDigits } from "../shared/phone";
 
 // ==================== CAIRO TIMEZONE HELPERS ====================
 const CAIRO_OFFSET_MS = 2 * 60 * 60 * 1000; // UTC+2 (EET) - Egypt doesn't observe DST since 2014
@@ -451,10 +452,21 @@ export function generateSerialNumber(orderId: number, createdAt?: Date): string 
   return `ORD-${year}-${String(orderId).padStart(6, '0')}`;
 }
 
+function withNormalizedPhoneFields<T extends { customerPhone?: unknown; customerPhone2?: unknown }>(data: T): T {
+  const normalized = { ...data };
+  if (typeof normalized.customerPhone === 'string' && normalized.customerPhone) {
+    normalized.customerPhone = normalizeEgyptianPhone(normalized.customerPhone) as any;
+  }
+  if (typeof normalized.customerPhone2 === 'string' && normalized.customerPhone2) {
+    normalized.customerPhone2 = normalizeEgyptianPhone(normalized.customerPhone2) as any;
+  }
+  return normalized;
+}
+
 export async function createOrder(data: InsertOrder): Promise<number | undefined> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [result] = await db.insert(orders).values(data);
+  const [result] = await db.insert(orders).values(withNormalizedPhoneFields(data));
   // Generate serialNumber using the new auto-increment id
   const insertId = (result as any).insertId;
   if (insertId) {
@@ -467,7 +479,7 @@ export async function createOrder(data: InsertOrder): Promise<number | undefined
 export async function updateOrder(id: number, data: Partial<InsertOrder>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(orders).set(data).where(eq(orders.id, id));
+  await db.update(orders).set(withNormalizedPhoneFields(data)).where(eq(orders.id, id));
 }
 
 export async function deleteOrder(id: number) {
@@ -516,8 +528,10 @@ export async function scanOrderBySerial(serialNumber: string, scannedBy: number,
       .limit(1);
   }
   // Try searching by customer phone if the scanned value looks like a phone number
-  if (!orderRows.length && /^\+?[0-9]{10,15}$/.test(searchValue.replace(/\s/g, ''))) {
-    const phone = searchValue.replace(/\s/g, '').replace(/^\+2/, '');
+  // (converted to ASCII digits first so Arabic-Indic phone numbers are recognized too)
+  const asciiSearchValue = toAsciiDigits(searchValue).replace(/\s/g, '');
+  if (!orderRows.length && /^\+?[0-9]{10,15}$/.test(asciiSearchValue)) {
+    const phone = normalizeEgyptianPhone(searchValue) || asciiSearchValue.replace(/^\+2/, '');
     orderRows = await db.select().from(orders)
       .where(and(
         sql`${orders.customerPhone} LIKE ${`%${phone}%`}`,
@@ -1406,6 +1420,8 @@ export async function editOrderFull(
   // Get current order
   const [currentOrder] = await db.select().from(orders).where(eq(orders.id, orderId));
   if (!currentOrder) return null;
+
+  updates = withNormalizedPhoneFields(updates);
 
   // Track changes
   const editLogEntries: InsertOrderEditLog[] = [];
