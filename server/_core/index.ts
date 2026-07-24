@@ -3,7 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "./oauth";
+import { registerLocalAuthRoutes } from "../localAuth";
 import { registerImportRoutes, registerWhatsAppImportRoutes } from "../importExcel";
 import { registerExportRoutes } from "../exportExcel";
 import { registerWebhookRoutes } from "../easyorderWebhook";
@@ -41,8 +41,8 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Cookie parser for employee sessions
   app.use(cookieParser());
-  // OAuth callback under /api/oauth/callback
-  registerOAuthRoutes(app);
+  // Local owner/admin auth (POST /api/auth/login)
+  registerLocalAuthRoutes(app);
   // Excel import routes
   registerImportRoutes(app);
   registerWhatsAppImportRoutes(app);

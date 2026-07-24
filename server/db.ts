@@ -19,7 +19,6 @@ import {
   scanLogs, InsertScanLog,
   orderItems, InsertOrderItem, OrderItem,
 } from "../drizzle/schema";
-import { ENV } from './_core/env';
 import { normalizeEgyptianPhone, toAsciiDigits } from "../shared/phone";
 
 // ==================== CAIRO TIMEZONE HELPERS ====================
@@ -206,7 +205,6 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     textFields.forEach(assignNullable);
     if (user.lastSignedIn !== undefined) { values.lastSignedIn = user.lastSignedIn; updateSet.lastSignedIn = user.lastSignedIn; }
     if (user.role !== undefined) { values.role = user.role; updateSet.role = user.role; }
-    else if (user.openId === ENV.ownerOpenId) { values.role = 'admin'; updateSet.role = 'admin'; }
     if (!values.lastSignedIn) values.lastSignedIn = new Date();
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
     await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
@@ -245,6 +243,15 @@ export async function getEmployeeById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
+  return result[0];
+}
+
+export async function getEmployeeByUsernameOrEmail(identifier: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(employees)
+    .where(or(eq(employees.username, identifier), eq(employees.email, identifier)))
+    .limit(1);
   return result[0];
 }
 

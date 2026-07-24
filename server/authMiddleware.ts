@@ -1,37 +1,50 @@
 /**
  * Express middleware to protect import/export routes.
- * Only allows admin (OAuth owner) or manager (employee with role=manager).
+ * Only allows the owner/admin (local /login session) or a manager employee
+ * (employee_token session with role=manager).
  */
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { getDb } from "./db";
 import { employees } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
-import { sdk } from "./_core/sdk";
+import { COOKIE_NAME } from "@shared/const";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const EMP_COOKIE = "employee_token";
+
+async function isActiveManagerSession(req: Request, cookieName: string): Promise<boolean> {
+  if (!JWT_SECRET) return false;
+  const token = req.cookies?.[cookieName];
+  if (!token) return false;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    if (!payload?.employeeId) return false;
+    const db = await getDb();
+    if (!db) return false;
+    const [emp] = await db.select().from(employees).where(eq(employees.id, payload.employeeId)).limit(1);
+    return Boolean(emp && emp.isActive && emp.role === "manager");
+  } catch {
+    return false;
+  }
+}
 
 export async function requireAdminOrManager(
   req: Request,
   res: Response,
   next: NextFunction
 ) {
-  // 1. Try OAuth (admin/owner)
-  try {
-    const user = await sdk.authenticateRequest(req);
-    if (user && user.role === "admin") {
-      return next();
-    }
-  } catch {
-    // Not OAuth authenticated, continue to check employee token
+  if (!JWT_SECRET) {
+    return res.status(500).json({ error: "Server misconfigured: JWT_SECRET missing" });
   }
 
-  // 2. Try employee manager token
+  // 1. Local owner/admin session (from /api/auth/login)
+  if (await isActiveManagerSession(req, COOKIE_NAME)) {
+    return next();
+  }
+
+  // 2. Employee manager token (from /api/employee/login)
   try {
-    if (!JWT_SECRET) {
-      return res.status(500).json({ error: "Server misconfigured: JWT_SECRET missing" });
-    }
     const token = req.cookies?.[EMP_COOKIE];
     if (!token) {
       return res.status(401).json({ error: "غير مصرح — يرجى تسجيل الدخول" });

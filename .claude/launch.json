@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "matjarak-dev",
+      "runtimeExecutable": "corepack",
+      "runtimeArgs": ["pnpm", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}

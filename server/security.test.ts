@@ -344,7 +344,7 @@ describe("Auth middleware module", () => {
     const fs = await import("fs");
     const content = fs.readFileSync("server/authMiddleware.ts", "utf-8");
     expect(content).toContain("export async function requireAdminOrManager");
-    expect(content).toContain("sdk.authenticateRequest");
+    expect(content).toContain("isActiveManagerSession");
     expect(content).toContain('role !== "manager"');
   });
 
