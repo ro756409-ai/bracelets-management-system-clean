@@ -148,6 +148,31 @@ Script: [scripts/import-legacy-orders.ts](scripts/import-legacy-orders.ts). Impo
 
 Full command reference is in RELEASE_CHECKLIST.md.
 
+## 5b. Structured orders CSV importer
+
+Script: [scripts/import-orders-csv.ts](scripts/import-orders-csv.ts). A separate,
+simpler importer for well-formed order exports (one row per order, one column per
+field — e.g. `orders_data.csv`), as opposed to §5's wrapped/split-row Excel format.
+Same dry-run/commit/rollback shape and `import_batches` tracking as §5, but no
+row-reconstruction step — each CSV row maps directly to one order.
+
+- **Source CSV files are never committed to git** — they contain real customer PII
+  (name, phone, address) and must be uploaded to the server directly, not via the repo.
+  See RELEASE_CHECKLIST.md for the upload method and target path.
+- **Status mapping**: the source has three separate status columns (confirmation /
+  preparation / shipping) collapsed into the single `orders.status` field — highest
+  stage reached wins (shipping status > preparation status > confirmation status). See
+  the script's header comment for the exact value table.
+- **Duplicate detection / idempotency**: identical mechanism to §5 — before any insert,
+  it reads every existing `orders.externalOrderId` from the database and excludes any
+  CSV row whose `رقم الأوردر` value already matches one. This is an **application-level**
+  check (re-read from the DB on every run), not a database `UNIQUE` constraint — safe for
+  sequential manual runs, so running the same command twice imports 0 new rows the second
+  time. It does not update/upsert existing orders; a matched row is skipped entirely, not
+  touched.
+- Dry-run mode also performs product-name matching against the live `products` table (not
+  just at commit time), so unmatched-product risk is visible before any write happens.
+
 ## 6. Deployment
 
 - Build: `pnpm build` → Vite build to `dist/public` + esbuild bundle of the server to
