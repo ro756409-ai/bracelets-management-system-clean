@@ -9,6 +9,10 @@
  *   Dry run (safe, default, no writes):
  *     tsx scripts/import-legacy-orders.ts --file "/path/to/كل_الأوردرات.xlsx"
  *
+ *   Optional: override sheet auto-detection (defaults to a sheet named "الأوردرات",
+ *   falling back to the first sheet in the workbook, if not given):
+ *     tsx scripts/import-legacy-orders.ts --file "..." --sheet "الأوردرات"
+ *
  *   Commit (writes to DB — requires the 0022 migration to be applied first,
  *   since it adds the import_batches table and the easyorder_flashbox/roles enum values):
  *     tsx scripts/import-legacy-orders.ts --file "..." --commit --business-id=1 --performed-by=<employeeId>
@@ -52,6 +56,7 @@ function argValue(name: string, def?: string): string | undefined {
   return def;
 }
 const FILE = argValue("file", "/Users/apple/Downloads/كل_الأوردرات.xlsx")!;
+const SHEET_NAME_ARG = argValue("sheet");
 const COMMIT = args.includes("--commit");
 const BUSINESS_ID = Number(argValue("business-id", "1"));
 const PERFORMED_BY = argValue("performed-by");
@@ -386,7 +391,17 @@ async function main() {
 
   const buf = fs.readFileSync(FILE);
   const wb = XLSX.read(buf, { type: "buffer", cellDates: true });
-  const sheetName = wb.SheetNames.includes("الأوردرات") ? "الأوردرات" : wb.SheetNames[0];
+
+  let sheetName: string;
+  if (SHEET_NAME_ARG) {
+    if (!wb.SheetNames.includes(SHEET_NAME_ARG)) {
+      throw new Error(`الشيت "${SHEET_NAME_ARG}" غير موجود في الملف. الشيتات المتاحة: ${wb.SheetNames.join(", ")}`);
+    }
+    sheetName = SHEET_NAME_ARG;
+  } else {
+    sheetName = wb.SheetNames.includes("الأوردرات") ? "الأوردرات" : wb.SheetNames[0];
+  }
+  console.log(`[import-legacy-orders] Sheet: "${sheetName}" (متاح: ${wb.SheetNames.join(", ")})`);
   const sheet = wb.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false, blankrows: true }) as any[][];
   const dataRows = rows.slice(1);
