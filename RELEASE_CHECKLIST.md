@@ -19,17 +19,18 @@ for the "why" behind each system referenced here.
   ```
 - [ ] Verify the backup file is non-empty and store it somewhere outside the app server.
 
-## 2. Apply the migration
+## 2. Apply the migrations
 
-Migration `drizzle/0022_giant_slapstick.sql` is already generated (offline, checked
-into git) — it does **not** need to be regenerated. Only apply it:
+Migrations `drizzle/0022_giant_slapstick.sql` **and** `drizzle/0023_magenta_warbound.sql`
+are already generated (offline, checked into git) — they do **not** need to be regenerated.
+`drizzle-kit migrate` applies every pending migration in order in one run:
 
 ```bash
 corepack pnpm exec drizzle-kit migrate
 ```
 
 - [ ] Run the command above with the real `DATABASE_URL` loaded.
-- [ ] Verify success: `import_batches` table exists, `employees.role` and
+- [ ] Verify 0022 success: `import_batches` table exists, `employees.role` and
       `orders.source` enums include the new values, `employees.lastLoginAt` and
       `orders.importBatchId` columns exist.
   ```sql
@@ -37,11 +38,25 @@ corepack pnpm exec drizzle-kit migrate
   SHOW COLUMNS FROM orders LIKE 'importBatchId';
   SHOW TABLES LIKE 'import_batches';
   ```
-- [ ] Confirm no data loss: row counts on `employees` and `orders` unchanged from
+- [ ] Verify 0023 success: `product_variants.name` and `products.description` columns exist,
+      `products.sku`/`products.price` are nullable.
+  ```sql
+  SHOW COLUMNS FROM product_variants LIKE 'name';
+  SHOW COLUMNS FROM products LIKE 'description';
+  SHOW COLUMNS FROM products LIKE 'sku';   -- Null column should say YES
+  ```
+- [ ] Confirm no data loss: row counts on `employees`, `orders`, `products` unchanged from
       before the migration.
 
-**Rollback (manual — no down-migration file exists)**, only if something is wrong:
+**Rollback (manual — no down-migration files exist)**, only if something is wrong:
 ```sql
+-- 0023 rollback
+ALTER TABLE product_variants DROP COLUMN name;
+ALTER TABLE products DROP COLUMN description;
+ALTER TABLE products MODIFY COLUMN sku varchar(50) NOT NULL;     -- fails if any row has sku IS NULL
+ALTER TABLE products MODIFY COLUMN price decimal(10,2) NOT NULL; -- fails if any row has price IS NULL
+
+-- 0022 rollback
 DROP TABLE import_batches;
 ALTER TABLE orders DROP COLUMN importBatchId;
 ALTER TABLE employees DROP COLUMN lastLoginAt;
@@ -51,6 +66,20 @@ ALTER TABLE orders MODIFY COLUMN source
   ENUM('easyorder','easyorder_ataba','easyorder_farhat','shopify','whatsapp','manual','facebook')
   NOT NULL DEFAULT 'manual';
 ```
+
+## 2b. Bootstrap business/products (only if `businesses`/`products` are empty)
+
+If this is a fresh environment with employees already seeded but no business/product catalog
+yet, run [scripts/bootstrap-production.ts](scripts/bootstrap-production.ts) — it refuses to
+run at all if `businesses`, `products`, or `product_variants` already have any row:
+```bash
+corepack pnpm exec tsx scripts/bootstrap-production.ts --owner-employee-id=<id>
+# review the dry-run output, then:
+corepack pnpm exec tsx scripts/bootstrap-production.ts --owner-employee-id=<id> --confirm
+```
+Creates one business, links the given employee to it, creates the `أسورة نحاس` parent product
+with 9 engraving-type variants, and 3 standalone products (مسند سيارة, كفر مرتبة ووتر بروف,
+مسن سكاكين). See PROJECT_CONTEXT.md §4b for the full product model.
 (The enum-narrowing statements will fail if any row already uses a new role/source value —
 that's the safety check confirming nothing depends on the new schema yet.)
 
@@ -98,6 +127,13 @@ corepack pnpm seed:admin
 - [ ] Orders page loads and existing order workflows (create/confirm/cancel/assign) are
       unaffected.
 - [ ] Sidebar renders correctly on desktop and on mobile width (~375px).
+- [ ] `/inventory` shows the "أسورة نحاس" product card expandable to its 9 variants, and the
+      3 standalone products with no expand toggle.
+- [ ] Add a product, edit its name/description, archive it (confirm dialog appears), then
+      re-activate it — all via the "الأصناف" tab.
+- [ ] Add a variant under an existing product, try adding a duplicate variant name — confirm
+      it's rejected with a clear error.
+- [ ] Try creating a product or variant with an SKU already in use — confirm it's rejected.
 
 ## 6. Legacy orders import (only when ready to bring in historical data)
 

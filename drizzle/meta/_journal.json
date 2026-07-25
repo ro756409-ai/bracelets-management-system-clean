@@ -162,6 +162,13 @@
       "when": 1784923621891,
       "tag": "0022_giant_slapstick",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1784994627588,
+      "tag": "0023_magenta_warbound",
+      "breakpoints": true
     }
   ]
 }

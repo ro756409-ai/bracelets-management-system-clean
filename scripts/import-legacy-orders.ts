@@ -41,10 +41,96 @@ import "dotenv/config";
 import * as XLSX from "xlsx";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { normalizeEgyptianPhone } from "../shared/phone";
-import { getDb, createOrder } from "../server/db";
-import { orders, products, importBatches } from "../drizzle/schema";
-import { eq, sql as drizzleSql } from "drizzle-orm";
+import { getDb, createOrder, replaceOrderItems } from "../server/db";
+import { orders, products, productVariants, importBatches } from "../drizzle/schema";
+import { eq, and, sql as drizzleSql } from "drizzle-orm";
+
+// ==================== Parent product / variant matching (2026-07-25 refactor) ====================
+// "أسورة نحاس" is one product with engraving-type variants (آية الكرسي, عين حورس, ...) — NOT
+// separate products. Other lines (مسند سيارة, كفر مرتبة ووتر بروف, ...) remain standalone
+// products with no variant. See PROJECT_CONTEXT.md for the full model.
+const PARENT_PRODUCT_NAME = "أسورة نحاس";
+const BRACELET_PREFIX_RE = /^(أسورة|اسورة|آسورة|آسوره)\s*/;
+
+export function isBraceletItem(text: string): boolean {
+  return /أسورة|اسورة|آسورة|آسوره/.test(text);
+}
+
+/** Splits "X + Y ×2 + Z" into [{text, qty}] — one entry per order item. */
+export function splitCompoundProduct(raw: string): { text: string; qty: number }[] {
+  return raw
+    .split("+")
+    .map(seg => {
+      const t = seg.trim();
+      const m = t.match(/^(.*?)\s*[×xX]\s*(\d+)$/);
+      if (m) return { text: m[1].trim(), qty: Math.max(1, parseInt(m[2], 10)) };
+      return { text: t, qty: 1 };
+    })
+    .filter(s => s.text.length > 0);
+}
+
+export type CatalogProduct = { id: number; name: string; price: string | null };
+export type CatalogVariant = { id: number; name: string | null; price: string | null };
+
+/** Exact match first, then single-candidate substring containment — never guesses. */
+export function matchByName<T extends { name: string | null }>(target: string, candidates: T[]): T | null {
+  const norm = (s: string) => s.trim().toLowerCase();
+  const t = norm(target);
+  if (!t) return null;
+  const exact = candidates.filter(c => c.name && norm(c.name) === t);
+  if (exact.length === 1) return exact[0];
+  const contains = candidates.filter(c => c.name && (t.includes(norm(c.name!)) || norm(c.name!).includes(t)));
+  if (contains.length === 1) return contains[0];
+  return null;
+}
+
+export interface SegmentResolution {
+  ok: boolean;
+  reason?: string;
+  productId?: number;
+  productName?: string;
+  variantId?: number;
+  variantLabel?: string;
+  unitPrice?: string | null;
+}
+
+/** Resolves one split-out item description to a (product, variant?) pair — or a rejection reason. */
+export function resolveSegment(
+  text: string,
+  standaloneProducts: CatalogProduct[],
+  parentProduct: CatalogProduct | undefined,
+  parentVariants: CatalogVariant[]
+): SegmentResolution {
+  if (isBraceletItem(text)) {
+    if (!parentProduct) {
+      return { ok: false, reason: `لا يوجد منتج أب "${PARENT_PRODUCT_NAME}" في الكتالوج` };
+    }
+    const variantName = text.replace(BRACELET_PREFIX_RE, "").trim();
+    if (!variantName) {
+      return { ok: false, reason: `تعذّر استخراج اسم النوع من "${text}"` };
+    }
+    const match = matchByName(variantName, parentVariants);
+    if (!match) {
+      return { ok: false, reason: `لا يوجد نوع مطابق لـ "${variantName}" تحت "${PARENT_PRODUCT_NAME}"` };
+    }
+    return {
+      ok: true,
+      productId: parentProduct.id,
+      productName: parentProduct.name,
+      variantId: match.id,
+      variantLabel: match.name ?? undefined,
+      unitPrice: match.price,
+    };
+  }
+
+  const match = matchByName(text, standaloneProducts);
+  if (!match) {
+    return { ok: false, reason: `لا يوجد منتج مطابق لـ "${text}"` };
+  }
+  return { ok: true, productId: match.id, productName: match.name, unitPrice: match.price };
+}
 
 // ==================== CLI args ====================
 const args = process.argv.slice(2);
@@ -461,6 +547,34 @@ async function main() {
   const badTotals = validated.filter(v => v.total === null);
   const missingProduct = validated.filter(v => !v.productRaw);
 
+  // ==================== Product/variant match preview (runs in dry-run too, when DB is live) ====================
+  let standaloneProducts: CatalogProduct[] = [];
+  let parentProduct: CatalogProduct | undefined;
+  let parentVariants: CatalogVariant[] = [];
+  let unresolvableOrders: { legacyOrderNumber: string; productRaw: string; reasons: string[] }[] = [];
+  if (dbAvailable) {
+    const db = await getDb();
+    if (db) {
+      const allProducts = await db.select().from(products).where(eq(products.businessId, BUSINESS_ID));
+      parentProduct = allProducts.find(p => p.name.trim() === PARENT_PRODUCT_NAME);
+      standaloneProducts = allProducts.filter(p => p.id !== parentProduct?.id);
+      if (parentProduct) {
+        parentVariants = await db.select().from(productVariants)
+          .where(and(eq(productVariants.productId, parentProduct.id), eq(productVariants.isActive, true)));
+      }
+      for (const v of importable) {
+        const segments = splitCompoundProduct(v.productRaw);
+        const failures = segments
+          .map(s => resolveSegment(s.text, standaloneProducts, parentProduct, parentVariants))
+          .filter(r => !r.ok)
+          .map(r => r.reason!);
+        if (failures.length > 0) {
+          unresolvableOrders.push({ legacyOrderNumber: v.legacyOrderNumber, productRaw: v.productRaw, reasons: failures });
+        }
+      }
+    }
+  }
+
   console.log("\n" + "=".repeat(70));
   console.log("تقرير الـ Dry-Run (بعد تحسين خوارزمية إعادة البناء) — استيراد الأوردرات القديمة");
   console.log("=".repeat(70));
@@ -476,7 +590,11 @@ async function main() {
   console.log(`أوردرات مرفوضة (حقول أساسية مفقودة — لا يمكن استيرادها تلقائيًا): ${rejected.length}`);
   console.log(`أرقام أوردر مكررة داخل الملف نفسه (بعد إعادة البناء): ${duplicatesInFile.length}`);
   console.log(`اتصال بقاعدة البيانات متاح؟ ${dbAvailable ? "نعم" : "لا (تم تخطي فحص التكرار مقابل القاعدة الحية)"}`);
-  if (dbAvailable) console.log(`أوردرات موجودة بالفعل في القاعدة (externalOrderId مطابق): ${alreadyInDb.length}`);
+  if (dbAvailable) {
+    console.log(`أوردرات موجودة بالفعل في القاعدة (externalOrderId مطابق): ${alreadyInDb.length}`);
+    console.log(`منتج أب "${PARENT_PRODUCT_NAME}" موجود في الكتالوج؟ ${parentProduct ? `نعم (#${parentProduct.id}، ${parentVariants.length} نوع نشط)` : "لا"}`);
+    console.log(`أوردرات (من الصالحة تمامًا) لن تُستورد تلقائيًا بسبب عدم تطابق منتج/نوع: ${unresolvableOrders.length}`);
+  }
   console.log(`منتج مفقود: ${missingProduct.length}`);
   console.log(`حالات (status) غير معروفة: ${unknownStatuses.length}`);
   console.log(`مصادر (source) غير معروفة: ${unknownSources.length}`);
@@ -534,6 +652,16 @@ async function main() {
   console.log(`\nتقرير كامل بكل الأوردرات المُعاد بناؤها: ${allCsvPath}`);
   console.log(`تقرير الأوردرات المرفوضة + التي بها ملاحظات: ${issuesCsvPath}`);
 
+  if (unresolvableOrders.length) {
+    const unresolvedCsvPath = path.join(REPORT_DIR, `legacy-import-unmatched-products-${stamp}.csv`);
+    const lines = ["legacyOrderNumber,productRaw,reasons"];
+    for (const u of unresolvableOrders) {
+      lines.push(`${u.legacyOrderNumber},"${u.productRaw.replace(/"/g, '""')}","${u.reasons.join(" | ").replace(/"/g, '""')}"`);
+    }
+    fs.writeFileSync(unresolvedCsvPath, lines.join("\n"), "utf-8");
+    console.log(`تقرير الأوردرات التي لن تُستورد لعدم تطابق منتج/نوع: ${unresolvedCsvPath}`);
+  }
+
   if (!COMMIT) {
     console.log("\n[import-legacy-orders] وضع Dry-Run — لم يتم أي كتابة لقاعدة البيانات.");
     return;
@@ -550,18 +678,16 @@ async function main() {
   console.log(`مرشح للاستيراد الفعلي: ${toImport.length} أوردر (صالح تمامًا وغير موجود بالفعل).`);
   console.log(`سيُتخطى تلقائيًا: ${rejected.length} مرفوض، ${skippedAsWarning} به ملاحظات، ${alreadyInDb.length} موجود بالفعل.`);
 
-  // مطابقة المنتج: تطابق تام أولاً، ثم احتواء نصي في اتجاه واحد فقط لو كانت النتيجة مطابقة وحيدة.
-  // أي حالة غامضة (صفر أو أكثر من نتيجة) تُستبعد من الاستيراد التلقائي ولا تُخمَّن أبدًا.
+  // مطابقة المنتج/النوع: "أسورة نحاس" منتج أب واحد بأنواع نقش مختلفة (variants) — أي وصف
+  // يحتوي "أسورة"/"اسورة" يُطابَق مقابل أنواع هذا المنتج فقط. أي وصف آخر (مسند سيارة، إلخ)
+  // يُطابَق كمنتج مستقل كالسابق. تطابق تام أولاً، ثم احتواء نصي وحيد فقط — لا تخمين أبدًا.
   const allProducts = await db.select().from(products).where(eq(products.businessId, BUSINESS_ID));
-  function matchProduct(productRaw: string) {
-    const norm = (s: string) => s.trim().toLowerCase();
-    const target = norm(productRaw);
-    const exact = allProducts.filter(p => norm(p.name) === target);
-    if (exact.length === 1) return exact[0];
-    const contains = allProducts.filter(p => target.includes(norm(p.name)) || norm(p.name).includes(target));
-    if (contains.length === 1) return contains[0];
-    return null;
-  }
+  const commitParentProduct = allProducts.find(p => p.name.trim() === PARENT_PRODUCT_NAME);
+  const commitStandaloneProducts = allProducts.filter(p => p.id !== commitParentProduct?.id);
+  const commitParentVariants = commitParentProduct
+    ? await db.select().from(productVariants)
+        .where(and(eq(productVariants.productId, commitParentProduct.id), eq(productVariants.isActive, true)))
+    : [];
 
   const [batchInsertResult] = await db.insert(importBatches).values({
     label: `استيراد الأوردرات القديمة — ${path.basename(FILE)} — ${new Date().toISOString()}`,
@@ -582,24 +708,33 @@ async function main() {
   const importErrors: { legacyOrderNumber: string; error: string }[] = [];
 
   for (const v of toImport) {
-    const product = matchProduct(v.productRaw);
-    if (!product) {
+    // Split "X + Y ×2" into one or more order items, and resolve each independently.
+    // All-or-nothing per order: if ANY item can't be resolved confidently, the whole order
+    // is skipped and logged — never import a partial order or guess a variant.
+    const segments = splitCompoundProduct(v.productRaw);
+    const resolved = segments.map(s => ({ ...s, resolution: resolveSegment(s.text, commitStandaloneProducts, commitParentProduct, commitParentVariants) }));
+    const failed = resolved.filter(r => !r.resolution.ok);
+    if (failed.length > 0) {
       skippedNoProductMatch++;
       unmatchedProducts.push({ legacyOrderNumber: v.legacyOrderNumber, productRaw: v.productRaw });
       continue;
     }
+
     try {
       const orderNumber = String(nextOrderNumber);
-      await createOrder({
+      const first = resolved[0].resolution;
+      const totalQuantity = resolved.reduce((s, r) => s + r.qty, 0);
+      const orderId = await createOrder({
         businessId: BUSINESS_ID,
         orderNumber,
         customerName: v.customerName,
         customerPhone: v.customerPhone,
         customerAddress: v.customerAddress,
         governorate: v.governorate,
-        productId: product.id,
-        productName: product.name,
-        quantity: v.quantity,
+        productId: first.productId!,
+        productName: first.variantLabel ? `${first.productName} - ${first.variantLabel}` : first.productName!,
+        variantId: first.variantId,
+        quantity: totalQuantity,
         totalAmount: String(v.total ?? 0),
         status: v.status as any,
         source: v.source as any,
@@ -610,6 +745,15 @@ async function main() {
         externalOrderId: v.legacyOrderNumber,
         importBatchId: batchId,
       } as any);
+      if (orderId) {
+        await replaceOrderItems(orderId, resolved.map(r => ({
+          productId: r.resolution.productId,
+          productName: r.resolution.variantLabel ? `${r.resolution.productName} - ${r.resolution.variantLabel}` : r.resolution.productName!,
+          quantity: r.qty,
+          unitPrice: r.resolution.unitPrice != null ? Number(r.resolution.unitPrice) : undefined,
+          variantId: r.resolution.variantId,
+        })));
+      }
       nextOrderNumber++;
       importedCount++;
     } catch (err: any) {
@@ -692,7 +836,12 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error("[import-legacy-orders] فشل:", err);
-  process.exit(1);
-});
+// Only run when executed directly (tsx scripts/import-legacy-orders.ts) — not when imported
+// as a module (e.g. by import-legacy-orders.test.ts for its pure matching-logic functions).
+const isMainModule = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isMainModule) {
+  main().catch(err => {
+    console.error("[import-legacy-orders] فشل:", err);
+    process.exit(1);
+  });
+}

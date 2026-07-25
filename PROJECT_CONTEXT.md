@@ -110,10 +110,50 @@ middleware; they can still do everything through the main dashboard login.
     (there is no down-migration file — MySQL DDL rollback is manual, see
     RELEASE_CHECKLIST.md).
 
+## 4b. Product / variant model (2026-07-25 refactor)
+
+`أسورة نحاس` (medical copper bracelet) is **one product** with engraving-type **variants**
+(آية الكرسي, عين حورس, ذكر التحصين, ...) — not separate products. Other lines (مسند سيارة,
+كفر مرتبة ووتر بروف, مسن سكاكين) remain standalone products with no variants.
+
+- The `product_variants` table already existed (originally for color/size variants) —
+  migration **`drizzle/0023_magenta_warbound.sql`** extends it rather than replacing it:
+  adds `product_variants.name` (generic variant label, used instead of/alongside color/size),
+  adds `products.description`, and relaxes `products.sku`/`products.price` from `NOT NULL` to
+  nullable (a parent product with variants carries neither — its variants do). Purely
+  additive/widening, no data loss possible. Not yet applied to any database.
+- Backend: `server/routers.ts`'s `products`/`variants` routers accept `name`/`description`
+  and enforce **duplicate-SKU** (checked across both `products.sku` and `product_variants.sku`)
+  and **duplicate-variant-name-per-product** validation (`server/db.ts`: `isSkuTaken`,
+  `isVariantNameTaken`). Both product and variant "archive" already existed as soft-delete
+  (`isActive: false`) before this refactor — reused as-is, including the confirmation dialogs
+  already present in the UI.
+- Frontend: `client/src/pages/Inventory.tsx` — merged the previously-separate "variants" tab
+  into "products": each product card is expandable to show its variants inline. Added
+  add/edit/archive for products (previously only stock/price editing existed at the product
+  level, with no create/archive flow at all).
+- See §5 for how the legacy importer maps free-text engraving descriptions onto this model.
+
 ## 5. Legacy orders importer
 
 Script: [scripts/import-legacy-orders.ts](scripts/import-legacy-orders.ts). Imports
-`كل_الأوردرات.xlsx` (historical export with wrapped/split rows) into `orders`.
+`كل_الأوردرات.xlsx` (historical export with wrapped/split rows) into `orders` (+ `order_items`
+for multi-item orders, see below).
+
+- **Product/variant matching (2026-07-25)**: each reconstructed order's free-text product
+  description is split on `+` into one segment per item (e.g. `"أسورة عين حورس + أسورة منقوش"`
+  → two items), with an optional trailing `×N` as that item's quantity. Each segment is then
+  resolved independently: if it contains "أسورة"/"اسورة" it's matched as a **variant** of the
+  `أسورة نحاس` parent product (exact name match first, then single-candidate substring); other
+  descriptions are matched as **standalone products** the same way. This is all-or-nothing per
+  order — if any single item in a multi-item order can't be resolved, the *entire* order is
+  skipped and logged for review, never partially imported or guessed. Orders whose items all
+  resolve get one `orders` row (first item's product/variant as the primary reference) plus one
+  `order_items` row per item via `replaceOrderItems()`.
+- Pure functions (`splitCompoundProduct`, `matchByName`, `resolveSegment`, `isBraceletItem`) are
+  exported and unit-tested in `scripts/import-legacy-orders.test.ts` — the script guards its
+  `main()` call behind an `isMainModule` check so importing it for tests doesn't trigger a real
+  run.
 
 - **Reconstruction**: the source file skips empty cells and re-flows remaining values,
   sometimes across multiple physical rows, with no fixed column-shift pattern. The

@@ -51,6 +51,7 @@ import {
   createEmployee, updateEmployee, deleteEmployee,
   searchEmployees, countActiveAdminTierEmployees,
   getAllProducts, getProductById, createProduct, updateProduct,
+  isSkuTaken, isVariantNameTaken,
   getLowStockProducts, addInventoryMovement, getInventoryMovements,
   getOrders, getOrderById, getOrdersByIds, createOrder, updateOrder,
   assignOrderToEmployee, bulkAssignOrders,
@@ -268,25 +269,36 @@ export const appRouter = router({
     }),
     create: adminProcedure.input(z.object({
       name: z.string().min(2),
-      sku: z.string().min(2),
-      price: z.string(),
+      description: z.string().optional(),
+      // sku/price are optional: a parent product with variants (e.g. "أسورة نحاس") carries
+      // neither — those live on its variants. Standalone products without variants still set both.
+      sku: z.string().min(2).optional(),
+      price: z.string().optional(),
       currentStock: z.number().default(0),
       minStockLevel: z.number().default(15),
       businessId: z.number().optional(),
       categoryId: z.number().optional(),
     })).mutation(async ({ input }) => {
+      if (input.sku && await isSkuTaken(input.sku)) {
+        throw new TRPCError({ code: 'CONFLICT', message: `رمز المنتج (SKU) "${input.sku}" مستخدم بالفعل` });
+      }
       await createProduct(input);
       return { success: true };
     }),
     update: adminProcedure.input(z.object({
       id: z.number(),
       name: z.string().optional(),
+      description: z.string().optional(),
+      sku: z.string().min(2).optional(),
       price: z.string().optional(),
       currentStock: z.number().optional(),
       minStockLevel: z.number().optional(),
       isActive: z.boolean().optional(),
     })).mutation(async ({ input }) => {
       const { id, ...data } = input;
+      if (data.sku && await isSkuTaken(data.sku, { excludeProductId: id })) {
+        throw new TRPCError({ code: 'CONFLICT', message: `رمز المنتج (SKU) "${data.sku}" مستخدم بالفعل` });
+      }
       await updateProduct(id, data);
       return { success: true };
     }),
@@ -2317,6 +2329,7 @@ export const appRouter = router({
     }),
     create: adminProcedure.input(z.object({
       productId: z.number(),
+      name: z.string().optional(),
       color: z.string().optional(),
       size: z.string().optional(),
       sku: z.string().optional(),
@@ -2325,11 +2338,21 @@ export const appRouter = router({
       minStockLevel: z.number().default(5),
     })).mutation(async ({ input }) => {
       const { price, ...rest } = input;
+      if (!rest.name?.trim() && !rest.color?.trim() && !rest.size?.trim()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'يجب تحديد اسم النوع أو اللون أو المقاس على الأقل' });
+      }
+      if (rest.name?.trim() && await isVariantNameTaken(rest.productId, rest.name)) {
+        throw new TRPCError({ code: 'CONFLICT', message: `يوجد بالفعل نوع بنفس الاسم "${rest.name}" لهذا المنتج` });
+      }
+      if (rest.sku && await isSkuTaken(rest.sku)) {
+        throw new TRPCError({ code: 'CONFLICT', message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل` });
+      }
       await createVariant({ ...rest, ...(price !== undefined ? { price: String(price) } : {}) });
       return { success: true };
     }),
     update: adminProcedure.input(z.object({
       id: z.number(),
+      name: z.string().optional(),
       color: z.string().optional(),
       size: z.string().optional(),
       sku: z.string().optional(),
@@ -2339,6 +2362,16 @@ export const appRouter = router({
       isActive: z.boolean().optional(),
     })).mutation(async ({ input }) => {
       const { id, price, ...rest } = input;
+      if (rest.name?.trim()) {
+        const current = await getVariantById(id);
+        const productId = current?.productId;
+        if (productId && await isVariantNameTaken(productId, rest.name, id)) {
+          throw new TRPCError({ code: 'CONFLICT', message: `يوجد بالفعل نوع بنفس الاسم "${rest.name}" لهذا المنتج` });
+        }
+      }
+      if (rest.sku && await isSkuTaken(rest.sku, { excludeVariantId: id })) {
+        throw new TRPCError({ code: 'CONFLICT', message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل` });
+      }
       await updateVariant(id, { ...rest, ...(price !== undefined ? { price: String(price) } : {}) });
       return { success: true };
     }),

@@ -107,8 +107,12 @@ export const products = mysqlTable("products", {
   businessId: int("businessId").notNull().default(1),
   categoryId: int("categoryId"),
   name: varchar("name", { length: 200 }).notNull(),
-  sku: varchar("sku", { length: 50 }).notNull().unique(),
-  price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  description: text("description"),
+  // sku/price are nullable: a parent product with variants (e.g. "أسورة نحاس") carries no SKU or
+  // price of its own — those live on product_variants. Standalone products without variants
+  // (e.g. "مسند سيارة") still set both, same as before this change.
+  sku: varchar("sku", { length: 50 }).unique(),
+  price: decimal("price", { precision: 10, scale: 2 }),
   currentStock: int("currentStock").default(0).notNull(),
   minStockLevel: int("minStockLevel").default(15).notNull(),
   isActive: boolean("isActive").default(true).notNull(),
@@ -389,6 +393,11 @@ export type InsertActivityLog = typeof activityLogs.$inferInsert;
 export const productVariants = mysqlTable("product_variants", {
   id: int("id").autoincrement().primaryKey(),
   productId: int("productId").notNull(),
+  // Generic variant label (e.g. "آية الكرسي" for an engraving type) — used instead of
+  // color/size for products whose variant dimension isn't color or size. color/size stay
+  // available for products that do vary by them; a variant sets name OR color/size, not
+  // necessarily all three.
+  name: varchar("name", { length: 200 }),
   color: varchar("color", { length: 50 }),
   size: varchar("size", { length: 50 }),
   sku: varchar("sku", { length: 100 }),

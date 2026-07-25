@@ -1382,7 +1382,41 @@ export async function getVariantsByProduct(productId: number) {
   if (!db) return [];
   return db.select().from(productVariants)
     .where(and(eq(productVariants.productId, productId), eq(productVariants.isActive, true)))
-    .orderBy(asc(productVariants.color), asc(productVariants.size));
+    .orderBy(asc(productVariants.name), asc(productVariants.color), asc(productVariants.size));
+}
+
+/** True if `sku` is already used by an active product or variant (SKUs are unique across both). */
+export async function isSkuTaken(sku: string, opts: { excludeProductId?: number; excludeVariantId?: number } = {}): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const trimmed = sku.trim();
+  if (!trimmed) return false;
+
+  const productConditions: any[] = [eq(products.sku, trimmed)];
+  if (opts.excludeProductId) productConditions.push(sql`${products.id} != ${opts.excludeProductId}`);
+  const productMatch = await db.select({ id: products.id }).from(products).where(and(...productConditions)).limit(1);
+  if (productMatch.length > 0) return true;
+
+  const variantConditions: any[] = [eq(productVariants.sku, trimmed)];
+  if (opts.excludeVariantId) variantConditions.push(sql`${productVariants.id} != ${opts.excludeVariantId}`);
+  const variantMatch = await db.select({ id: productVariants.id }).from(productVariants).where(and(...variantConditions)).limit(1);
+  return variantMatch.length > 0;
+}
+
+/** True if an active variant with the same (trimmed, case-insensitive) name already exists under this product. */
+export async function isVariantNameTaken(productId: number, name: string, excludeVariantId?: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const conditions: any[] = [
+    eq(productVariants.productId, productId),
+    eq(productVariants.isActive, true),
+    sql`LOWER(TRIM(${productVariants.name})) = LOWER(${trimmed})`,
+  ];
+  if (excludeVariantId) conditions.push(sql`${productVariants.id} != ${excludeVariantId}`);
+  const match = await db.select({ id: productVariants.id }).from(productVariants).where(and(...conditions)).limit(1);
+  return match.length > 0;
 }
 
 export async function getVariantById(id: number) {
@@ -1428,7 +1462,7 @@ export async function getAllVariantsWithProduct(businessId?: number, businessIds
   if (productIds.length === 0) return [];
   conditions.push(inArray(productVariants.productId, productIds));
   const variants = await db.select().from(productVariants).where(and(...conditions))
-    .orderBy(asc(productVariants.color), asc(productVariants.size));
+    .orderBy(asc(productVariants.name), asc(productVariants.color), asc(productVariants.size));
   return variants.map(v => {
     const product = allProducts.find(p => p.id === v.productId);
     return { ...v, productName: product?.name || 'Unknown', businessId: product?.businessId };

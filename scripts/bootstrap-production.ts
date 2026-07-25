@@ -27,7 +27,7 @@
  */
 import "dotenv/config";
 import { getDb } from "../server/db";
-import { businesses, employees, products, importBatches, orders } from "../drizzle/schema";
+import { businesses, employees, products, productVariants, importBatches, orders } from "../drizzle/schema";
 import { eq, sql as drizzleSql } from "drizzle-orm";
 import { isAdminTierRole } from "../server/permissions";
 
@@ -45,26 +45,27 @@ const BUSINESS_SLUG = argValue("business-slug", "bracelets")!;
 const OWNER_EMPLOYEE_ID = argValue("owner-employee-id");
 const VOID_BATCH_ID = argValue("void-batch-id");
 
-// Product catalog to bootstrap: the 9 items already defined in seedInitialData() (server/db.ts)
-// plus the 3 additional real product lines confirmed present in the legacy XLSX but absent
-// from that seed list (found via frequency analysis of all 7247 reconstructed legacy orders).
-// Prices for the 3 new lines are the AVERAGE historical unit price (total ÷ quantity) observed
-// across their own matching legacy orders — a data-grounded starting point, not a verified
-// retail price. Review and adjust before relying on them for new sales.
-const PRODUCT_CATALOG: { name: string; sku: string; price: string; currentStock: number; minStockLevel: number }[] = [
-  // Existing seedInitialData() set — unchanged names/skus/prices, kept identical for consistency.
-  { name: "أسورة سادة", sku: "PLAIN-001", price: "150.00", currentStock: 100, minStockLevel: 20 },
+// Parent/variant model (2026-07-25 refactor): "أسورة نحاس" is ONE product with engraving-type
+// variants — not 9 separate products. Names/skus/prices below are unchanged from the original
+// seedInitialData() flat catalog, just re-homed as variants under one parent.
+const PARENT_PRODUCT_NAME = "أسورة نحاس";
+const BRACELET_VARIANTS: { name: string; sku: string; price: string; currentStock: number; minStockLevel: number }[] = [
+  { name: "سادة", sku: "PLAIN-001", price: "150.00", currentStock: 100, minStockLevel: 20 },
   { name: "آية الكرسي", sku: "AYAT-001", price: "180.00", currentStock: 80, minStockLevel: 15 },
   { name: "ذكر التحصين", sku: "DHIKR-001", price: "175.00", currentStock: 60, minStockLevel: 15 },
   { name: "فالله خير حافظاً", sku: "HAFIZ-001", price: "185.00", currentStock: 70, minStockLevel: 15 },
   { name: "منقوش", sku: "ENGR-001", price: "200.00", currentStock: 50, minStockLevel: 10 },
   { name: "عين حورس", sku: "HORUS-001", price: "160.00", currentStock: 90, minStockLevel: 20 },
   { name: "قل أعوذ برب الفلق", sku: "FALAQ-001", price: "180.00", currentStock: 65, minStockLevel: 15 },
-  { name: "أسورة إنه من سليمان", sku: "SULAI-001", price: "185.00", currentStock: 50, minStockLevel: 15 },
-  { name: "أسورة كهيعص", sku: "KAHYA-001", price: "185.00", currentStock: 50, minStockLevel: 15 },
-  // New — confirmed real, non-bracelet product lines found in the legacy file (2026-07-25 analysis).
-  // Prices below are historical averages (n=430/78/20 matching legacy orders respectively) — NOT
-  // vetted retail prices. currentStock intentionally set to 0 (unknown real stock) pending review.
+  { name: "إنه من سليمان", sku: "SULAI-001", price: "185.00", currentStock: 50, minStockLevel: 15 },
+  { name: "كهيعص", sku: "KAHYA-001", price: "185.00", currentStock: 50, minStockLevel: 15 },
+];
+
+// Standalone products (no variants) — confirmed real, non-bracelet product lines found in the
+// legacy XLSX (frequency analysis of all 7247 reconstructed legacy orders). Prices are the
+// AVERAGE historical unit price (total ÷ quantity) from their own matching legacy orders — a
+// data-grounded starting point, not a verified retail price. Review before relying on them.
+const STANDALONE_PRODUCTS: { name: string; sku: string; price: string; currentStock: number; minStockLevel: number }[] = [
   { name: "مسند سيارة 5 في 1 متعدد الوظائف", sku: "CARMNT-001", price: "472.51", currentStock: 0, minStockLevel: 10 },
   { name: "كفر مرتبة ووتر بروف", sku: "MATCVR-001", price: "297.10", currentStock: 0, minStockLevel: 10 },
   { name: "مسن سكاكين", sku: "KNFSHRP-001", price: "267.65", currentStock: 0, minStockLevel: 10 },
@@ -78,13 +79,14 @@ async function main() {
 
   console.log(`[bootstrap] Mode: ${CONFIRM ? "*** CONFIRM (writes to DB) ***" : "DRY RUN (no writes)"}`);
 
-  // ==================== Safety gate: refuse unless businesses AND products are both empty ====================
+  // ==================== Safety gate: refuse unless businesses/products/variants are all empty ====================
   const existingBusinesses = await db.select().from(businesses);
   const existingProducts = await db.select().from(products);
-  if (existingBusinesses.length > 0 || existingProducts.length > 0) {
+  const existingVariants = await db.select().from(productVariants);
+  if (existingBusinesses.length > 0 || existingProducts.length > 0 || existingVariants.length > 0) {
     throw new Error(
-      `رفض التنفيذ: هذا السكربت مخصص فقط لحالة قاعدة بيانات فارغة تمامًا من businesses/products. ` +
-      `الحالي: businesses=${existingBusinesses.length}, products=${existingProducts.length}. ` +
+      `رفض التنفيذ: هذا السكربت مخصص فقط لحالة قاعدة بيانات فارغة تمامًا من businesses/products/product_variants. ` +
+      `الحالي: businesses=${existingBusinesses.length}, products=${existingProducts.length}, product_variants=${existingVariants.length}. ` +
       `لا شيء تم تعديله — هذه الحالة تحتاج مراجعة يدوية منفصلة، لا bootstrap تلقائي.`
     );
   }
@@ -116,11 +118,12 @@ async function main() {
   console.log("=".repeat(70));
   console.log(`1) إنشاء عمل واحد: name="${BUSINESS_NAME}", slug="${BUSINESS_SLUG}", isActive=true`);
   console.log(`2) ربط الموظف #${OWNER_EMPLOYEE_ID} (${owner.name}, ${owner.role}) بهذا العمل عبر UPDATE employees.businessId`);
-  console.log(`3) إنشاء ${PRODUCT_CATALOG.length} منتج (9 من الكتالوج القياسي + 3 مؤكَّدة من الملف القديم)`);
+  console.log(`3) إنشاء منتج أب واحد "${PARENT_PRODUCT_NAME}" بـ ${BRACELET_VARIANTS.length} نوع (variants) تحته`);
+  console.log(`4) إنشاء ${STANDALONE_PRODUCTS.length} منتج مستقل بدون أنواع (مسند سيارة، كفر مرتبة، مسن سكاكين)`);
   if (voidBatch) {
-    console.log(`4) تعليم دفعة الاستيراد #${voidBatch.id} (حالتها الحالية: "${voidBatch.status}", ${voidBatchOrderCount} أوردر مرتبط) كـ "failed"`);
+    console.log(`5) تعليم دفعة الاستيراد #${voidBatch.id} (حالتها الحالية: "${voidBatch.status}", ${voidBatchOrderCount} أوردر مرتبط) كـ "failed"`);
   } else {
-    console.log(`4) (لم يُطلب --void-batch-id — لن تُعدَّل أي دفعة استيراد)`);
+    console.log(`5) (لم يُطلب --void-batch-id — لن تُعدَّل أي دفعة استيراد)`);
   }
 
   if (!CONFIRM) {
@@ -141,9 +144,23 @@ async function main() {
   await db.update(employees).set({ businessId }).where(eq(employees.id, Number(OWNER_EMPLOYEE_ID)));
   console.log(`تم ربط الموظف #${OWNER_EMPLOYEE_ID} بالعمل #${businessId}.`);
 
-  const productRows = PRODUCT_CATALOG.map(p => ({ ...p, businessId, isActive: true }));
-  await db.insert(products).values(productRows);
-  console.log(`تم إنشاء ${productRows.length} منتج تحت العمل #${businessId}.`);
+  const [parentInsertResult] = await db.insert(products).values({
+    name: PARENT_PRODUCT_NAME,
+    description: "أساور نحاسية طبية بأنواع نقش مختلفة",
+    businessId,
+    isActive: true,
+    // sku/price intentionally omitted — this product's identity/pricing lives on its variants.
+  });
+  const parentProductId = (parentInsertResult as any).insertId as number;
+  console.log(`تم إنشاء المنتج الأب "${PARENT_PRODUCT_NAME}" برقم #${parentProductId}.`);
+
+  const variantRows = BRACELET_VARIANTS.map(v => ({ ...v, productId: parentProductId, isActive: true }));
+  await db.insert(productVariants).values(variantRows);
+  console.log(`تم إنشاء ${variantRows.length} نوع تحت "${PARENT_PRODUCT_NAME}".`);
+
+  const standaloneRows = STANDALONE_PRODUCTS.map(p => ({ ...p, businessId, isActive: true }));
+  await db.insert(products).values(standaloneRows);
+  console.log(`تم إنشاء ${standaloneRows.length} منتج مستقل تحت العمل #${businessId}.`);
 
   if (voidBatch) {
     await db.update(importBatches).set({
@@ -158,7 +175,8 @@ async function main() {
   console.log("=".repeat(70));
   console.log(`SELECT COUNT(*) FROM businesses;              -- متوقَّع: 1`);
   console.log(`SELECT id, name, businessId FROM employees WHERE id = ${OWNER_EMPLOYEE_ID};  -- متوقَّع businessId=${businessId}`);
-  console.log(`SELECT COUNT(*) FROM products WHERE businessId = ${businessId};  -- متوقَّع: ${PRODUCT_CATALOG.length}`);
+  console.log(`SELECT COUNT(*) FROM products WHERE businessId = ${businessId};  -- متوقَّع: ${1 + standaloneRows.length} (منتج أب واحد + ${standaloneRows.length} مستقل)`);
+  console.log(`SELECT COUNT(*) FROM product_variants WHERE productId = ${parentProductId};  -- متوقَّع: ${variantRows.length}`);
   console.log(`SELECT COUNT(*) FROM orders;                   -- متوقَّع: 0 (لم يُشغَّل أي استيراد بعد)`);
   console.log(`SELECT COUNT(*) FROM order_items;              -- متوقَّع: 0`);
   if (voidBatch) console.log(`SELECT id, status FROM import_batches WHERE id = ${voidBatch.id};  -- متوقَّع status='failed'`);

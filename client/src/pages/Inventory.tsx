@@ -15,7 +15,8 @@ import {
 import { toast } from "sonner";
 import {
   Package, Plus, Minus, AlertTriangle, TrendingUp, TrendingDown,
-  History, ArrowDownCircle, ArrowUpCircle, BarChart3, ClipboardList, Pencil, Check, X, Grid3X3, Trash2, Save, Tag
+  History, ArrowDownCircle, ArrowUpCircle, BarChart3, ClipboardList, Pencil, Check, X, Grid3X3, Trash2, Save, Tag,
+  ChevronDown, ChevronUp, Archive, ArchiveRestore,
 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 
@@ -49,7 +50,24 @@ export default function Inventory() {
   // History / daily log
   const [showHistory, setShowHistory] = useState(false);
   const [historyProductId, setHistoryProductId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<"products" | "variants" | "daily">("products");
+  const [activeTab, setActiveTab] = useState<"products" | "daily">("products");
+
+  // Which product cards are expanded to show their variants
+  const [expandedProducts, setExpandedProducts] = useState<Record<number, boolean>>({});
+
+  // Product create/edit dialog
+  const [showProductFormDialog, setShowProductFormDialog] = useState(false);
+  const [productFormMode, setProductFormMode] = useState<"create" | "edit">("create");
+  const [productFormId, setProductFormId] = useState<number | null>(null);
+  const [pfName, setPfName] = useState("");
+  const [pfDescription, setPfDescription] = useState("");
+  const [pfSku, setPfSku] = useState("");
+  const [pfPrice, setPfPrice] = useState("");
+  const [pfStock, setPfStock] = useState("0");
+  const [pfMinStock, setPfMinStock] = useState("15");
+
+  // Product archive confirm
+  const [archiveProductTarget, setArchiveProductTarget] = useState<any | null>(null);
 
   // Edit stock state
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
@@ -72,6 +90,7 @@ export default function Inventory() {
   const [variantFormMode, setVariantFormMode] = useState<"create" | "edit">("create");
   const [variantFormProductId, setVariantFormProductId] = useState<number | null>(null);
   const [variantFormId, setVariantFormId] = useState<number | null>(null);
+  const [vfName, setVfName] = useState("");
   const [vfColor, setVfColor] = useState("");
   const [vfSize, setVfSize] = useState("");
   const [vfSku, setVfSku] = useState("");
@@ -190,12 +209,39 @@ export default function Inventory() {
     onError: (e) => toast.error(e.message),
   });
 
+  const createProductMutation = trpc.products.create.useMutation({
+    onSuccess: () => {
+      toast.success("تم إضافة المنتج بنجاح");
+      utils.products.list.invalidate();
+      closeProductForm();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const editProductMutation = trpc.products.update.useMutation({
+    onSuccess: () => {
+      toast.success("تم تعديل المنتج بنجاح");
+      utils.products.list.invalidate();
+      closeProductForm();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const archiveProductMutation = trpc.products.update.useMutation({
+    onSuccess: () => {
+      toast.success(archiveProductTarget?.isActive ? "تم أرشفة المنتج" : "تم إعادة تفعيل المنتج");
+      utils.products.list.invalidate();
+      setArchiveProductTarget(null);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // ---- Variant form helpers ----
   function openCreateVariant(productId: number) {
     setVariantFormMode("create");
     setVariantFormProductId(productId);
     setVariantFormId(null);
-    setVfColor(""); setVfSize(""); setVfSku(""); setVfPrice(""); setVfStock("0"); setVfMinStock("5");
+    setVfName(""); setVfColor(""); setVfSize(""); setVfSku(""); setVfPrice(""); setVfStock("0"); setVfMinStock("5");
     setShowVariantFormDialog(true);
   }
 
@@ -203,6 +249,7 @@ export default function Inventory() {
     setVariantFormMode("edit");
     setVariantFormProductId(variant.productId);
     setVariantFormId(variant.id);
+    setVfName(variant.name ?? "");
     setVfColor(variant.color ?? "");
     setVfSize(variant.size ?? "");
     setVfSku(variant.sku ?? "");
@@ -219,8 +266,8 @@ export default function Inventory() {
   }
 
   function submitVariantForm() {
-    if (!vfColor.trim() && !vfSize.trim()) {
-      toast.error("لازم تدخل اللون أو المقاس على الأقل");
+    if (!vfName.trim() && !vfColor.trim() && !vfSize.trim()) {
+      toast.error("لازم تدخل اسم النوع أو اللون أو المقاس على الأقل");
       return;
     }
     const stockNum = Number(vfStock);
@@ -238,6 +285,7 @@ export default function Inventory() {
       if (!variantFormProductId) return;
       createVariantMutation.mutate({
         productId: variantFormProductId,
+        name: vfName.trim() || undefined,
         color: vfColor.trim() || undefined,
         size: vfSize.trim() || undefined,
         sku: vfSku.trim() || undefined,
@@ -249,10 +297,75 @@ export default function Inventory() {
       if (!variantFormId) return;
       editVariantMutation.mutate({
         id: variantFormId,
+        name: vfName.trim() || undefined,
         color: vfColor.trim() || undefined,
         size: vfSize.trim() || undefined,
         sku: vfSku.trim() || undefined,
         price: priceNum,
+        currentStock: stockNum,
+        minStockLevel: minNum,
+      });
+    }
+  }
+
+  // ---- Product form helpers ----
+  function openCreateProduct() {
+    setProductFormMode("create");
+    setProductFormId(null);
+    setPfName(""); setPfDescription(""); setPfSku(""); setPfPrice(""); setPfStock("0"); setPfMinStock("15");
+    setShowProductFormDialog(true);
+  }
+
+  function openEditProduct(product: any) {
+    setProductFormMode("edit");
+    setProductFormId(product.id);
+    setPfName(product.name ?? "");
+    setPfDescription(product.description ?? "");
+    setPfSku(product.sku ?? "");
+    setPfPrice(product.price != null ? String(product.price) : "");
+    setPfStock(String(product.currentStock ?? 0));
+    setPfMinStock(String(product.minStockLevel ?? 15));
+    setShowProductFormDialog(true);
+  }
+
+  function closeProductForm() {
+    setShowProductFormDialog(false);
+    setProductFormId(null);
+  }
+
+  function submitProductForm() {
+    if (!pfName.trim()) {
+      toast.error("اسم المنتج مطلوب");
+      return;
+    }
+    const stockNum = Number(pfStock);
+    const minNum = Number(pfMinStock);
+    if (isNaN(stockNum) || stockNum < 0 || isNaN(minNum) || minNum < 0) {
+      toast.error("المخزون والحد الأدنى لازم أرقام صحيحة");
+      return;
+    }
+    const priceNum = pfPrice.trim() === "" ? undefined : Number(pfPrice);
+    if (priceNum !== undefined && (isNaN(priceNum) || priceNum < 0)) {
+      toast.error("السعر لازم رقم صحيح");
+      return;
+    }
+    if (productFormMode === "create") {
+      createProductMutation.mutate({
+        name: pfName.trim(),
+        description: pfDescription.trim() || undefined,
+        sku: pfSku.trim() || undefined,
+        price: priceNum !== undefined ? String(priceNum) : undefined,
+        currentStock: stockNum,
+        minStockLevel: minNum,
+      });
+    } else {
+      if (!productFormId) return;
+      editProductMutation.mutate({
+        id: productFormId,
+        name: pfName.trim(),
+        description: pfDescription.trim() || undefined,
+        sku: pfSku.trim() || undefined,
+        price: priceNum !== undefined ? String(priceNum) : undefined,
         currentStock: stockNum,
         minStockLevel: minNum,
       });
@@ -419,14 +532,6 @@ export default function Inventory() {
             الأصناف
           </Button>
           <Button
-            variant={activeTab === "variants" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setActiveTab("variants")}
-          >
-            <Grid3X3 className="h-4 w-4 ml-1" />
-            المقاسات والألوان
-          </Button>
-          <Button
             variant={activeTab === "daily" ? "default" : "outline"}
             size="sm"
             onClick={() => { setActiveTab("daily"); setHistoryProductId(null); }}
@@ -434,6 +539,12 @@ export default function Inventory() {
             <ClipboardList className="h-4 w-4 ml-1" />
             الجرد اليومي
           </Button>
+          {activeTab === "products" && (
+            <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={openCreateProduct}>
+              <Plus className="h-4 w-4 ml-1" />
+              إضافة منتج
+            </Button>
+          )}
         </div>
       </div>
 
@@ -470,7 +581,7 @@ export default function Inventory() {
       </div>
 
       {/* Low Stock Alert */}
-      {lowStock && lowStock.length > 0 && activeTab !== "variants" && (
+      {lowStock && lowStock.length > 0 && activeTab === "products" && (
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
             <AlertTriangle className="h-4 w-4 text-destructive" />
@@ -486,336 +597,367 @@ export default function Inventory() {
         </div>
       )}
 
-      {/* ===== TAB: PRODUCTS ===== */}
+      {/* ===== TAB: PRODUCTS (with nested variants) ===== */}
       {activeTab === "products" && (
         <>
-          {isLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Array.from({ length: 7 }).map((_, i) => (
-                <div key={i} className="h-52 bg-muted animate-pulse rounded-xl" />
+          {isLoading || variantsLoading ? (
+            <div className="space-y-4">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />
               ))}
             </div>
+          ) : !products || products.length === 0 ? (
+            <Card>
+              <CardContent className="p-12 text-center">
+                <Package className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
+                <p className="text-muted-foreground">لا توجد منتجات بعد</p>
+                <Button size="sm" className="mt-3" onClick={openCreateProduct}>
+                  <Plus className="h-3.5 w-3.5 ml-1" />
+                  إضافة أول منتج
+                </Button>
+              </CardContent>
+            </Card>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {products?.map(product => {
-                const isLow = product.currentStock <= product.minStockLevel;
+            <div className="space-y-4">
+              {products.map(product => {
+                const group = variantsByProduct[product.id];
+                const hasVariants = !!group && group.variants.length > 0;
+                const isExpanded = !!expandedProducts[product.id];
+                const isLow = !hasVariants && product.currentStock <= product.minStockLevel;
                 const stockPct = Math.min(100, Math.round((product.currentStock / Math.max(product.minStockLevel * 3, 1)) * 100));
 
                 return (
-                  <Card key={product.id} className={`transition-all hover:shadow-md ${isLow ? 'border-destructive/40 bg-destructive/5' : ''}`}>
-                    <CardContent className="p-4">
-                      {/* Product Header */}
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1">
-                          <p className="font-bold text-foreground text-sm leading-snug">{product.name}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">{product.sku}</p>
-                        </div>
-                        {isLow && (
-                          <Badge variant="destructive" className="text-xs shrink-0 mr-2">
-                            <AlertTriangle className="h-3 w-3 ml-1" />
-                            ينفد
-                          </Badge>
-                        )}
-                      </div>
-
-                      {/* Stock Bar */}
-                      <div className="mb-3">
-                        <div className="flex justify-between items-center mb-1.5">
-                          <span className="text-xs text-muted-foreground">المخزون الحالي</span>
-                          {editingProductId === product.id ? (
-                            <div className="flex items-center gap-1">
-                              <Input
-                                type="number"
-                                min="0"
-                                value={editStockValue}
-                                onChange={e => setEditStockValue(e.target.value)}
-                                className="w-20 h-7 text-center text-sm font-bold"
-                                autoFocus
-                                onKeyDown={e => {
-                                  if (e.key === 'Enter') saveEditStock();
-                                  if (e.key === 'Escape') cancelEditStock();
-                                }}
-                              />
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" onClick={saveEditStock}>
-                                <Check className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500" onClick={cancelEditStock}>
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1">
-                              <span className={`text-xl font-bold ${isLow ? 'text-destructive' : 'text-foreground'}`}>
-                                {product.currentStock} <span className="text-xs font-normal text-muted-foreground">قطعة</span>
-                              </span>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-6 w-6 p-0 text-muted-foreground hover:text-primary"
-                                onClick={() => startEditStock(product)}
-                                title="تعديل عدد القطع"
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                        <div className="w-full bg-muted rounded-full h-2.5">
-                          <div
-                            className={`h-2.5 rounded-full transition-all ${isLow ? 'bg-destructive' : stockPct > 60 ? 'bg-green-500' : 'bg-yellow-500'}`}
-                            style={{ width: `${stockPct}%` }}
-                          />
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          الحد الأدنى: {product.minStockLevel} قطعة
-                        </p>
-                      </div>
-
-                      {/* Price */}
-                      <div className="flex items-center justify-between mb-3 pb-3 border-b border-border">
-                        <span className="text-xs text-muted-foreground">السعر</span>
-                        <div className="flex items-center gap-1">
-                          <span className="text-sm font-semibold text-primary">
-                            {Number(product.price).toLocaleString('ar-EG')} ج.م
-                          </span>
+                  <Card key={product.id} className={`transition-all ${isLow ? 'border-destructive/40 bg-destructive/5' : ''} ${!product.isActive ? 'opacity-60' : ''}`}>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base flex items-start gap-2">
+                        {hasVariants && (
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-6 w-6 p-0 text-muted-foreground hover:text-primary"
-                            onClick={() => openEditPrice(product)}
-                            title="تعديل السعر"
+                            className="h-7 w-7 p-0 shrink-0 mt-0.5"
+                            onClick={() => setExpandedProducts(prev => ({ ...prev, [product.id]: !prev[product.id] }))}
+                            title={isExpanded ? "طي الأنواع" : "عرض الأنواع"}
                           >
-                            <Pencil className="h-3 w-3" />
+                            {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                          </Button>
+                        )}
+                        <Package className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-foreground">{product.name}</span>
+                            {!product.isActive && <Badge variant="outline" className="text-xs">مؤرشف</Badge>}
+                            {product.sku && <span className="text-xs text-muted-foreground font-mono">{product.sku}</span>}
+                            {hasVariants && (
+                              <>
+                                <Badge variant="secondary" className="text-xs">{group.variants.length} نوع</Badge>
+                                <Badge variant="outline" className="text-xs">
+                                  إجمالي: {group.variants.reduce((s: number, v: any) => s + v.currentStock, 0)} قطعة
+                                </Badge>
+                              </>
+                            )}
+                            {isLow && (
+                              <Badge variant="destructive" className="text-xs">
+                                <AlertTriangle className="h-3 w-3 ml-1" />
+                                ينفد
+                              </Badge>
+                            )}
+                          </div>
+                          {product.description && (
+                            <p className="text-xs text-muted-foreground mt-1">{product.description}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-blue-600 hover:bg-blue-50" onClick={() => openEditProduct(product)} title="تعديل المنتج">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className={`h-8 w-8 p-0 ${product.isActive ? 'text-red-600 hover:bg-red-50' : 'text-green-600 hover:bg-green-50'}`}
+                            onClick={() => setArchiveProductTarget(product)}
+                            title={product.isActive ? "أرشفة المنتج" : "إعادة تفعيل المنتج"}
+                          >
+                            {product.isActive ? <Archive className="h-3.5 w-3.5" /> : <ArchiveRestore className="h-3.5 w-3.5" />}
                           </Button>
                         </div>
-                      </div>
+                      </CardTitle>
+                    </CardHeader>
 
-                      {/* Action Buttons */}
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9"
-                          onClick={() => handleMovement(product.id, 'in')}
-                        >
-                          <ArrowDownCircle className="h-3.5 w-3.5 ml-1" />
-                          وارد
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="flex-1 border-red-300 text-red-600 hover:bg-red-50 h-9"
-                          onClick={() => handleMovement(product.id, 'out')}
-                          disabled={product.currentStock === 0}
-                        >
-                          <ArrowUpCircle className="h-3.5 w-3.5 ml-1" />
-                          صادر
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-9 w-9 p-0 shrink-0"
-                          onClick={() => { setHistoryProductId(product.id); setShowHistory(true); }}
-                          title="سجل الحركات"
-                        >
-                          <History className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </CardContent>
+                    {hasVariants ? (
+                      isExpanded && (
+                        <CardContent>
+                          {/* Low stock variants alert */}
+                          {group.variants.some((v: any) => v.currentStock <= v.minStockLevel) && (
+                            <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 mb-4">
+                              <div className="flex items-center gap-2 mb-1">
+                                <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                                <p className="font-semibold text-destructive text-xs">أنواع تحتاج إعادة تخزين</p>
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {group.variants.filter((v: any) => v.currentStock <= v.minStockLevel).map((v: any) => (
+                                  <Badge key={v.id} variant="destructive" className="text-xs">
+                                    {v.name || [v.color, v.size].filter(Boolean).join(" - ") || "بدون اسم"}: {v.currentStock}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Variants Table */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b border-border">
+                                  <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">النوع</th>
+                                  <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">السعر</th>
+                                  <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">SKU</th>
+                                  <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">المخزون</th>
+                                  <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">الحالة</th>
+                                  <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">إجراءات</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {group.variants.map((variant: any) => {
+                                  const vLow = variant.currentStock <= variant.minStockLevel;
+                                  const label = variant.name || [variant.color, variant.size].filter(Boolean).join(" - ") || "-";
+                                  return (
+                                    <tr key={variant.id} className={`border-b border-border/50 hover:bg-muted/30 ${vLow ? 'bg-destructive/5' : ''} ${!variant.isActive ? 'opacity-60' : ''}`}>
+                                      <td className="py-2.5 px-3">
+                                        <span className="font-medium text-foreground">{label}</span>
+                                        {!variant.isActive && <Badge variant="outline" className="text-xs mr-2">مؤرشف</Badge>}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-center">
+                                        <span className="font-semibold text-foreground">{variant.price ? `${Number(variant.price).toLocaleString()} ج.م` : '-'}</span>
+                                      </td>
+                                      <td className="py-2.5 px-3">
+                                        <span className="text-xs text-muted-foreground font-mono">{variant.sku || '-'}</span>
+                                      </td>
+                                      <td className="py-2.5 px-3 text-center">
+                                        {editingVariantId === variant.id ? (
+                                          <div className="flex items-center justify-center gap-1">
+                                            <Input
+                                              type="number"
+                                              min="0"
+                                              value={editVariantStockValue}
+                                              onChange={e => setEditVariantStockValue(e.target.value)}
+                                              className="w-16 h-7 text-center text-sm font-bold"
+                                              autoFocus
+                                              onKeyDown={e => {
+                                                if (e.key === 'Enter') saveEditVariantStock();
+                                                if (e.key === 'Escape') cancelEditVariantStock();
+                                              }}
+                                            />
+                                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-green-600" onClick={saveEditVariantStock}>
+                                              <Check className="h-3 w-3" />
+                                            </Button>
+                                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-500" onClick={cancelEditVariantStock}>
+                                              <X className="h-3 w-3" />
+                                            </Button>
+                                          </div>
+                                        ) : (
+                                          <div className="flex items-center justify-center gap-1">
+                                            <span className={`font-bold ${vLow ? 'text-destructive' : 'text-foreground'}`}>
+                                              {variant.currentStock}
+                                            </span>
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="h-5 w-5 p-0 text-muted-foreground hover:text-primary"
+                                              onClick={() => startEditVariantStock(variant)}
+                                            >
+                                              <Pencil className="h-2.5 w-2.5" />
+                                            </Button>
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="py-2.5 px-3 text-center">
+                                        {vLow ? (
+                                          <Badge variant="destructive" className="text-xs">ينفد</Badge>
+                                        ) : (
+                                          <Badge className="text-xs bg-green-100 text-green-700 border-0">متوفر</Badge>
+                                        )}
+                                      </td>
+                                      <td className="py-2.5 px-3">
+                                        <div className="flex items-center justify-center gap-1">
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-7 w-7 p-0 text-green-600 hover:bg-green-50"
+                                            onClick={() => handleVariantMovement(variant.id, 'in')}
+                                            title="وارد"
+                                          >
+                                            <ArrowDownCircle className="h-3.5 w-3.5" />
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
+                                            onClick={() => handleVariantMovement(variant.id, 'out')}
+                                            disabled={variant.currentStock === 0}
+                                            title="صادر"
+                                          >
+                                            <ArrowUpCircle className="h-3.5 w-3.5" />
+                                          </Button>
+                                          <div className="w-px h-5 bg-border mx-0.5" />
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-7 w-7 p-0 text-blue-600 hover:bg-blue-50"
+                                            onClick={() => openEditVariant(variant)}
+                                            title="تعديل الصنف"
+                                          >
+                                            <Pencil className="h-3.5 w-3.5" />
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
+                                            onClick={() => setDeleteVariantTarget(variant)}
+                                            title="أرشفة الصنف"
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </Button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-3"
+                            onClick={() => openCreateVariant(product.id)}
+                          >
+                            <Plus className="h-3.5 w-3.5 ml-1" />
+                            إضافة نوع جديد
+                          </Button>
+                        </CardContent>
+                      )
+                    ) : (
+                      <CardContent className="pt-0">
+                        {/* Stock Bar */}
+                        <div className="mb-3">
+                          <div className="flex justify-between items-center mb-1.5">
+                            <span className="text-xs text-muted-foreground">المخزون الحالي</span>
+                            {editingProductId === product.id ? (
+                              <div className="flex items-center gap-1">
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  value={editStockValue}
+                                  onChange={e => setEditStockValue(e.target.value)}
+                                  className="w-20 h-7 text-center text-sm font-bold"
+                                  autoFocus
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') saveEditStock();
+                                    if (e.key === 'Escape') cancelEditStock();
+                                  }}
+                                />
+                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" onClick={saveEditStock}>
+                                  <Check className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500" onClick={cancelEditStock}>
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <span className={`text-xl font-bold ${isLow ? 'text-destructive' : 'text-foreground'}`}>
+                                  {product.currentStock} <span className="text-xs font-normal text-muted-foreground">قطعة</span>
+                                </span>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-6 w-6 p-0 text-muted-foreground hover:text-primary"
+                                  onClick={() => startEditStock(product)}
+                                  title="تعديل عدد القطع"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                          <div className="w-full bg-muted rounded-full h-2.5">
+                            <div
+                              className={`h-2.5 rounded-full transition-all ${isLow ? 'bg-destructive' : stockPct > 60 ? 'bg-green-500' : 'bg-yellow-500'}`}
+                              style={{ width: `${stockPct}%` }}
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            الحد الأدنى: {product.minStockLevel} قطعة
+                          </p>
+                        </div>
+
+                        {/* Price */}
+                        <div className="flex items-center justify-between mb-3 pb-3 border-b border-border">
+                          <span className="text-xs text-muted-foreground">السعر</span>
+                          <div className="flex items-center gap-1">
+                            <span className="text-sm font-semibold text-primary">
+                              {product.price != null ? `${Number(product.price).toLocaleString('ar-EG')} ج.م` : 'بدون سعر'}
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 w-6 p-0 text-muted-foreground hover:text-primary"
+                              onClick={() => openEditPrice(product)}
+                              title="تعديل السعر"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9"
+                            onClick={() => handleMovement(product.id, 'in')}
+                          >
+                            <ArrowDownCircle className="h-3.5 w-3.5 ml-1" />
+                            وارد
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 border-red-300 text-red-600 hover:bg-red-50 h-9"
+                            onClick={() => handleMovement(product.id, 'out')}
+                            disabled={product.currentStock === 0}
+                          >
+                            <ArrowUpCircle className="h-3.5 w-3.5 ml-1" />
+                            صادر
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-9 w-9 p-0 shrink-0"
+                            onClick={() => { setHistoryProductId(product.id); setShowHistory(true); }}
+                            title="سجل الحركات"
+                          >
+                            <History className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-9 shrink-0 text-xs"
+                            onClick={() => openCreateVariant(product.id)}
+                            title="إضافة أنواع لهذا المنتج"
+                          >
+                            <Grid3X3 className="h-3.5 w-3.5 ml-1" />
+                            إضافة نوع
+                          </Button>
+                        </div>
+                      </CardContent>
+                    )}
                   </Card>
                 );
               })}
             </div>
           )}
         </>
-      )}
-
-      {/* ===== TAB: VARIANTS (المقاسات والألوان) ===== */}
-      {activeTab === "variants" && (
-        <div className="space-y-6">
-          {variantsLoading ? (
-            <div className="space-y-4">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="h-40 bg-muted animate-pulse rounded-xl" />
-              ))}
-            </div>
-          ) : Object.keys(variantsByProduct).length === 0 ? (
-            <Card>
-              <CardContent className="p-12 text-center">
-                <Grid3X3 className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground">لا توجد منتجات بمقاسات وألوان</p>
-                <p className="text-xs text-muted-foreground mt-1">المنتجات التي لها variants ستظهر هنا</p>
-              </CardContent>
-            </Card>
-          ) : (
-            Object.entries(variantsByProduct).map(([productId, group]) => (
-              <Card key={productId}>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Package className="h-5 w-5 text-primary" />
-                    {group.productName}
-                    <Badge variant="secondary" className="text-xs mr-2">
-                      {group.variants.length} نوع
-                    </Badge>
-                    <Badge variant="outline" className="text-xs">
-                      إجمالي: {group.variants.reduce((s: number, v: any) => s + v.currentStock, 0)} قطعة
-                    </Badge>
-                    <Button
-                      size="sm"
-                      className="mr-auto h-8 bg-primary hover:bg-primary/90"
-                      onClick={() => openCreateVariant(Number(productId))}
-                    >
-                      <Plus className="h-3.5 w-3.5 ml-1" />
-                      إضافة صنف
-                    </Button>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {/* Low stock variants alert */}
-                  {group.variants.some((v: any) => v.currentStock <= v.minStockLevel) && (
-                    <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 mb-4">
-                      <div className="flex items-center gap-2 mb-1">
-                        <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
-                        <p className="font-semibold text-destructive text-xs">أنواع تحتاج إعادة تخزين</p>
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {group.variants.filter((v: any) => v.currentStock <= v.minStockLevel).map((v: any) => (
-                          <Badge key={v.id} variant="destructive" className="text-xs">
-                            {v.color} - {v.size}: {v.currentStock}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Variants Table */}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border">
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">اللون</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">المقاس</th>
-                          <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">السعر</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">SKU</th>
-                          <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">المخزون</th>
-                          <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">الحالة</th>
-                          <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">إجراءات</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {group.variants.map((variant: any) => {
-                          const isLow = variant.currentStock <= variant.minStockLevel;
-                          return (
-                            <tr key={variant.id} className={`border-b border-border/50 hover:bg-muted/30 ${isLow ? 'bg-destructive/5' : ''}`}>
-                              <td className="py-2.5 px-3">
-                                <span className="font-medium text-foreground">{variant.color || '-'}</span>
-                              </td>
-                              <td className="py-2.5 px-3">
-                                <span className="text-foreground">{variant.size || '-'}</span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center">
-                                <span className="font-semibold text-foreground">{variant.price ? `${Number(variant.price).toLocaleString()} ج.م` : '-'}</span>
-                              </td>
-                              <td className="py-2.5 px-3">
-                                <span className="text-xs text-muted-foreground font-mono">{variant.sku || '-'}</span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center">
-                                {editingVariantId === variant.id ? (
-                                  <div className="flex items-center justify-center gap-1">
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      value={editVariantStockValue}
-                                      onChange={e => setEditVariantStockValue(e.target.value)}
-                                      className="w-16 h-7 text-center text-sm font-bold"
-                                      autoFocus
-                                      onKeyDown={e => {
-                                        if (e.key === 'Enter') saveEditVariantStock();
-                                        if (e.key === 'Escape') cancelEditVariantStock();
-                                      }}
-                                    />
-                                    <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-green-600" onClick={saveEditVariantStock}>
-                                      <Check className="h-3 w-3" />
-                                    </Button>
-                                    <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-500" onClick={cancelEditVariantStock}>
-                                      <X className="h-3 w-3" />
-                                    </Button>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center justify-center gap-1">
-                                    <span className={`font-bold ${isLow ? 'text-destructive' : 'text-foreground'}`}>
-                                      {variant.currentStock}
-                                    </span>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      className="h-5 w-5 p-0 text-muted-foreground hover:text-primary"
-                                      onClick={() => startEditVariantStock(variant)}
-                                    >
-                                      <Pencil className="h-2.5 w-2.5" />
-                                    </Button>
-                                  </div>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-3 text-center">
-                                {isLow ? (
-                                  <Badge variant="destructive" className="text-xs">ينفد</Badge>
-                                ) : (
-                                  <Badge className="text-xs bg-green-100 text-green-700 border-0">متوفر</Badge>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-3">
-                                <div className="flex items-center justify-center gap-1">
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0 text-green-600 hover:bg-green-50"
-                                    onClick={() => handleVariantMovement(variant.id, 'in')}
-                                    title="وارد"
-                                  >
-                                    <ArrowDownCircle className="h-3.5 w-3.5" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
-                                    onClick={() => handleVariantMovement(variant.id, 'out')}
-                                    disabled={variant.currentStock === 0}
-                                    title="صادر"
-                                  >
-                                    <ArrowUpCircle className="h-3.5 w-3.5" />
-                                  </Button>
-                                  <div className="w-px h-5 bg-border mx-0.5" />
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0 text-blue-600 hover:bg-blue-50"
-                                    onClick={() => openEditVariant(variant)}
-                                    title="تعديل الصنف"
-                                  >
-                                    <Pencil className="h-3.5 w-3.5" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
-                                    onClick={() => setDeleteVariantTarget(variant)}
-                                    title="حذف الصنف"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </Button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
-        </div>
       )}
 
       {/* ===== TAB: DAILY LOG ===== */}
@@ -1033,7 +1175,7 @@ export default function Inventory() {
           <div className="space-y-4">
             <div className={`rounded-lg p-3 ${variantMovementType === 'in' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
               <p className="text-sm font-bold text-foreground">
-                {selectedVariant?.color} - {selectedVariant?.size}
+                {selectedVariant?.name || [selectedVariant?.color, selectedVariant?.size].filter(Boolean).join(" - ")}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 المخزون الحالي: <span className="font-semibold">{selectedVariant?.currentStock}</span> قطعة
@@ -1156,17 +1298,21 @@ export default function Inventory() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            <div>
+              <Label>اسم النوع</Label>
+              <Input value={vfName} onChange={e => setVfName(e.target.value)} className="mt-1" placeholder="مثلاً: آية الكرسي" autoFocus />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label>اللون</Label>
+                <Label>اللون (اختياري)</Label>
                 <Input value={vfColor} onChange={e => setVfColor(e.target.value)} className="mt-1" placeholder="مثلاً: ذهبي" />
               </div>
               <div>
-                <Label>المقاس</Label>
+                <Label>المقاس (اختياري)</Label>
                 <Input value={vfSize} onChange={e => setVfSize(e.target.value)} className="mt-1" placeholder="مثلاً: وسط" />
               </div>
             </div>
-            <p className="text-xs text-muted-foreground -mt-1">لازم تدخل اللون أو المقاس على الأقل</p>
+            <p className="text-xs text-muted-foreground -mt-1">لازم تدخل اسم النوع أو اللون أو المقاس على الأقل</p>
             <div>
               <Label>SKU (اختياري)</Label>
               <Input value={vfSku} onChange={e => setVfSku(e.target.value)} className="mt-1 font-mono" placeholder="كود الصنف" />
@@ -1238,20 +1384,20 @@ export default function Inventory() {
         </DialogContent>
       </Dialog>
 
-      {/* ===== Variant Delete Confirm ===== */}
+      {/* ===== Variant Archive Confirm ===== */}
       <Dialog open={!!deleteVariantTarget} onOpenChange={(o) => { if (!o) setDeleteVariantTarget(null); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <Trash2 className="h-5 w-5" />
-              حذف الصنف
+              أرشفة الصنف
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            هل أنت متأكد من حذف الصنف{" "}
+            هل أنت متأكد من أرشفة الصنف{" "}
             <span className="font-semibold text-foreground">
-              {deleteVariantTarget?.color} {deleteVariantTarget?.size ? `- ${deleteVariantTarget.size}` : ""}
-            </span>؟ سجلات المخزون السابقة هتفضل محفوظة.
+              {deleteVariantTarget?.name || [deleteVariantTarget?.color, deleteVariantTarget?.size].filter(Boolean).join(" - ")}
+            </span>؟ لن يظهر بعدها للموظفين، لكن سجلات المخزون والأوردرات المرتبطة به هتفضل محفوظة، ويمكن التراجع لاحقًا.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteVariantTarget(null)}>إلغاء</Button>
@@ -1260,7 +1406,99 @@ export default function Inventory() {
               onClick={() => deleteVariantTarget && deleteVariantMutation.mutate({ id: deleteVariantTarget.id })}
               disabled={deleteVariantMutation.isPending}
             >
-              {deleteVariantMutation.isPending ? "جاري الحذف..." : "حذف"}
+              {deleteVariantMutation.isPending ? "جاري الأرشفة..." : "أرشفة"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== Product Create/Edit Dialog ===== */}
+      <Dialog open={showProductFormDialog} onOpenChange={(o) => { if (!o) closeProductForm(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {productFormMode === "create" ? <Plus className="h-5 w-5 text-primary" /> : <Pencil className="h-5 w-5 text-blue-600" />}
+              {productFormMode === "create" ? "إضافة منتج جديد" : "تعديل المنتج"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>اسم المنتج <span className="text-destructive">*</span></Label>
+              <Input value={pfName} onChange={e => setPfName(e.target.value)} className="mt-1" placeholder="مثلاً: أسورة نحاس" autoFocus />
+            </div>
+            <div>
+              <Label>الوصف (اختياري)</Label>
+              <Textarea value={pfDescription} onChange={e => setPfDescription(e.target.value)} className="mt-1" rows={2} />
+            </div>
+            <div>
+              <Label>SKU (اختياري — اتركه فارغًا لو المنتج له أنواع متعددة بأسعار مختلفة)</Label>
+              <Input value={pfSku} onChange={e => setPfSku(e.target.value)} className="mt-1 font-mono" placeholder="كود المنتج" />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <Label>السعر (اختياري)</Label>
+                <Input type="number" min="0" value={pfPrice} onChange={e => setPfPrice(e.target.value)} className="mt-1" placeholder="ج.م" />
+              </div>
+              <div>
+                <Label>المخزون</Label>
+                <Input type="number" min="0" value={pfStock} onChange={e => setPfStock(e.target.value)} className="mt-1" />
+              </div>
+              <div>
+                <Label>الحد الأدنى</Label>
+                <Input type="number" min="0" value={pfMinStock} onChange={e => setPfMinStock(e.target.value)} className="mt-1" />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeProductForm}>إلغاء</Button>
+            <Button
+              onClick={submitProductForm}
+              disabled={createProductMutation.isPending || editProductMutation.isPending}
+            >
+              {(createProductMutation.isPending || editProductMutation.isPending) ? (
+                <span className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  جاري الحفظ...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2"><Save className="h-4 w-4" />حفظ</span>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== Product Archive Confirm ===== */}
+      <Dialog open={!!archiveProductTarget} onOpenChange={(o) => { if (!o) setArchiveProductTarget(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Archive className="h-5 w-5" />
+              {archiveProductTarget?.isActive ? "أرشفة المنتج" : "إعادة تفعيل المنتج"}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {archiveProductTarget?.isActive ? (
+              <>
+                هل أنت متأكد من أرشفة المنتج{" "}
+                <span className="font-semibold text-foreground">{archiveProductTarget?.name}</span>؟
+                لن يظهر بعدها للموظفين، لكن سجلات المخزون والأوردرات المرتبطة به هتفضل محفوظة بالكامل، ويمكن التراجع لاحقًا.
+              </>
+            ) : (
+              <>
+                هل تريد إعادة تفعيل المنتج{" "}
+                <span className="font-semibold text-foreground">{archiveProductTarget?.name}</span>؟
+              </>
+            )}
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setArchiveProductTarget(null)}>إلغاء</Button>
+            <Button
+              variant={archiveProductTarget?.isActive ? "destructive" : "default"}
+              onClick={() => archiveProductTarget && archiveProductMutation.mutate({ id: archiveProductTarget.id, isActive: !archiveProductTarget.isActive })}
+              disabled={archiveProductMutation.isPending}
+            >
+              {archiveProductMutation.isPending ? "جاري الحفظ..." : (archiveProductTarget?.isActive ? "أرشفة" : "تفعيل")}
             </Button>
           </DialogFooter>
         </DialogContent>
