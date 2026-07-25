@@ -618,17 +618,49 @@ async function main() {
   }
 
   const skippedCount = rejected.length + skippedAsWarning + skippedNoProductMatch + importErrors.length;
-  const finalStatus = importErrors.length > 0 && importedCount === 0 ? "failed" : "completed";
+
+  // ==================== Strict post-import verification ====================
+  // Never trust the in-memory `importedCount` counter alone — it only reflects what this
+  // process *attempted* and didn't throw on, not what the database actually persisted.
+  // Re-query the database itself for the authoritative count before saying anything succeeded.
+  const [verifyRow] = await db
+    .select({ cnt: drizzleSql<string>`COUNT(*)` })
+    .from(orders)
+    .where(eq(orders.importBatchId, batchId));
+  const actualInsertedCount = Number(verifyRow?.cnt ?? 0);
+
+  if (actualInsertedCount !== importedCount) {
+    const mismatchSummary =
+      `تناقض حرج بعد الاستيراد: العداد الداخلي يقول ${importedCount} أوردر مُدرَج، ` +
+      `لكن قاعدة البيانات تؤكد ${actualInsertedCount} فقط لدفعة #${batchId}.`;
+    await db.update(importBatches).set({
+      status: "failed",
+      importedCount: actualInsertedCount,
+      skippedCount,
+      duplicateCount: alreadyInDb.length,
+      completedAt: new Date(),
+      errorSummary: mismatchSummary,
+    }).where(eq(importBatches.id, batchId));
+    throw new Error(`${mismatchSummary} تم تعليم الدفعة "failed" تلقائيًا. لا تعتمد على أي رسالة نجاح سابقة لهذا التحقق.`);
+  }
+
+  // A run with importable candidates but zero rows actually persisted (e.g. every single
+  // order was silently skipped for lack of a confident product match) is a failure, even
+  // though no exception was ever thrown — "completed" must never be printed for this case.
+  const allSkippedNoProduct = toImport.length > 0 && actualInsertedCount === 0 && skippedNoProductMatch === toImport.length;
+  const finalStatus = actualInsertedCount > 0 || toImport.length === 0 ? "completed" : "failed";
 
   await db.update(importBatches).set({
     status: finalStatus,
-    importedCount,
+    importedCount: actualInsertedCount,
     skippedCount,
     duplicateCount: alreadyInDb.length,
     completedAt: new Date(),
     errorSummary: importErrors.length
       ? `${importErrors.length} خطأ أثناء الإدخال. أول خطأ: ${importErrors[0].error}`
-      : (skippedNoProductMatch ? `${skippedNoProductMatch} أوردر بدون مطابقة منتج مؤكدة.` : null),
+      : allSkippedNoProduct
+        ? `فشل كامل: كل الأوردرات المرشحة (${toImport.length}) تم تخطيها بسبب عدم تطابق المنتج — لم يُستورَد أي أوردر. راجع كتالوج المنتجات (businessId=${BUSINESS_ID}) وقارنه بأسماء المنتجات في الملف.`
+        : (skippedNoProductMatch ? `${skippedNoProductMatch} أوردر بدون مطابقة منتج مؤكدة.` : null),
   }).where(eq(importBatches.id, batchId));
 
   if (unmatchedProducts.length || importErrors.length) {
@@ -642,12 +674,22 @@ async function main() {
 
   console.log("\n" + "=".repeat(70));
   console.log(`[import-legacy-orders] انتهى الاستيراد الفعلي — دفعة #${batchId} (${finalStatus})`);
-  console.log(`تم استيراده فعليًا: ${importedCount}`);
+  console.log(`تم التحقق من قاعدة البيانات مباشرة: ${actualInsertedCount} صف فعلي في orders لهذه الدفعة (مطابق للعداد الداخلي).`);
+  if (allSkippedNoProduct) {
+    console.log(`⚠️  فشل كامل: كل الأوردرات المرشحة (${toImport.length}) تخطّت بسبب عدم تطابق المنتج. لا يوجد أي أوردر مستورَد.`);
+  }
+  console.log(`تم استيراده فعليًا (مؤكَّد من القاعدة): ${actualInsertedCount}`);
   console.log(`تم تخطيه: ${skippedCount} (مرفوض: ${rejected.length}، ملاحظات: ${skippedAsWarning}، بدون منتج مطابق: ${skippedNoProductMatch}، خطأ إدخال: ${importErrors.length})`);
   console.log(`موجود بالفعل (مكرر): ${alreadyInDb.length}`);
-  console.log(`للتراجع عن هذه الدفعة لاحقًا:`);
-  console.log(`  tsx scripts/import-legacy-orders.ts --rollback ${batchId} --performed-by=${PERFORMED_BY} --confirm`);
+  if (finalStatus === "completed") {
+    console.log(`للتراجع عن هذه الدفعة لاحقًا:`);
+    console.log(`  tsx scripts/import-legacy-orders.ts --rollback ${batchId} --performed-by=${PERFORMED_BY} --confirm`);
+  }
   console.log("=".repeat(70));
+
+  if (finalStatus === "failed") {
+    throw new Error(`دفعة الاستيراد #${batchId} انتهت بحالة "failed" — راجع الأسباب أعلاه قبل أي إعادة محاولة.`);
+  }
 }
 
 main().catch(err => {
