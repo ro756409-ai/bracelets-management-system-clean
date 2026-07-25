@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { BrandMark } from "@/components/BrandMark";
+import { BrandLogo } from "@/components/BrandLogo";
 import { getLoginUrl } from "@/const";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
@@ -22,14 +22,14 @@ export default function Home() {
       <div className="max-w-md w-full">
         {/* Logo & Title */}
         <div className="text-center mb-10">
-          <div className="inline-flex mb-6 shadow-xl rounded-3xl">
-            <BrandMark className="w-20 h-20 rounded-3xl" />
+          <div className="inline-flex justify-center mb-6 shadow-xl rounded-3xl">
+            <BrandLogo variant="icon" size="xl" className="rounded-3xl" />
           </div>
           <h1 className="text-3xl font-bold text-foreground mb-2">
             متجرك
           </h1>
           <p className="text-muted-foreground text-lg">
-            من أول الأوردر لحد التحصيل
+            كل أعمالك في مكان واحد
           </p>
         </div>
 

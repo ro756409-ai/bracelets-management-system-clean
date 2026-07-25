@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { BrandMark } from "@/components/BrandMark";
+import { BrandLogo } from "@/components/BrandLogo";
 import { Eye, EyeOff, Lock, User } from "lucide-react";
 import { toast } from "sonner";
 
@@ -66,7 +66,7 @@ export default function EmployeeLogin() {
     <div
       className="min-h-screen flex items-center justify-center p-4"
       style={{
-        background: "linear-gradient(135deg, var(--primary-dark) 0%, #180C38 40%, var(--primary-dark) 100%)",
+        background: "linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%)",
       }}
     >
       {/* Background pattern */}
@@ -77,8 +77,8 @@ export default function EmployeeLogin() {
             45deg,
             transparent,
             transparent 20px,
-            rgba(108,76,241,0.3) 20px,
-            rgba(108,76,241,0.3) 21px
+            rgba(91,61,245,0.3) 20px,
+            rgba(91,61,245,0.3) 21px
           )`,
         }}
       />
@@ -88,10 +88,9 @@ export default function EmployeeLogin() {
           <CardHeader className="pb-4 pt-8 text-center">
             {/* Logo */}
             <div className="flex justify-center mb-4">
-              <BrandMark className="w-20 h-20 rounded-2xl shadow-lg" />
+              <BrandLogo variant="vertical" size="xl" showEnglishName />
             </div>
-            <h1 className="text-xl font-bold text-foreground">متجرك</h1>
-            <p className="text-sm text-muted-foreground mt-1">تسجيل دخول الموظف</p>
+            <p className="text-sm text-muted-foreground">تسجيل دخول الموظف</p>
           </CardHeader>
 
           <CardContent className="pb-8 px-6">
@@ -148,7 +147,7 @@ export default function EmployeeLogin() {
               <Button
                 type="submit"
                 className="w-full h-11 text-base font-semibold mt-2"
-                style={{ background: "linear-gradient(135deg, var(--primary), var(--secondary))" }}
+                style={{ background: "linear-gradient(135deg, var(--primary), var(--primary-dark))" }}
                 disabled={isLoading}
               >
                 {isLoading ? (

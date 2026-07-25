@@ -4,11 +4,17 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-sm: var(--radius-brand-sm);
+  --radius-md: var(--radius-brand-md);
+  --radius-lg: var(--radius-brand-lg);
+  --radius-xl: var(--radius-brand-xl);
+  --radius-pill: var(--radius-brand-pill);
+  --shadow-card: var(--shadow-card);
+  --shadow-dropdown: var(--shadow-dropdown);
+  --shadow-modal: var(--shadow-modal);
+  --shadow-sidebar: var(--shadow-sidebar);
   --font-sans: var(--font-brand);
+  --font-en: var(--font-brand-en);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -51,93 +57,106 @@
 }
 
 :root {
-  --radius: 0.75rem;
-  --font-brand: 'Cairo', 'Tajawal', sans-serif;
+  /* Corner radius scale — sm/md/lg/xl/pill per the approved brand book (§16) */
+  --radius-brand-sm: 4px;
+  --radius-brand-md: 8px;
+  --radius-brand-lg: 14px;
+  --radius-brand-xl: 24px;
+  --radius-brand-pill: 32px;
+  --radius: var(--radius-brand-md);
+  --font-brand: 'IBM Plex Sans Arabic', 'Inter', 'Cairo', 'Tajawal', sans-serif;
+  --font-brand-en: 'Inter', 'IBM Plex Sans Arabic', sans-serif;
 
-  /* ==================== Matjarak (متجرك) brand identity ==================== */
-  --background: #F7F7FB;
-  --foreground: #18181B;
+  /* Shadows — always neutral navy at low opacity, never tinted purple (brand book §16) */
+  --shadow-card: 0 1px 2px 0 rgb(30 41 59 / 0.06), 0 1px 3px 0 rgb(30 41 59 / 0.08);
+  --shadow-dropdown: 0 4px 6px -1px rgb(30 41 59 / 0.1), 0 2px 4px -2px rgb(30 41 59 / 0.08);
+  --shadow-modal: 0 20px 25px -5px rgb(30 41 59 / 0.15), 0 8px 10px -6px rgb(30 41 59 / 0.1);
+  --shadow-sidebar: 1px 0 3px 0 rgb(30 41 59 / 0.1);
+
+  /* ==================== Matjarak (متجرك) brand identity — approved 2026 brand book ==================== */
+  --background: #F8FAFC;
+  --foreground: #1E293B;
   --card: #FFFFFF;
-  --card-foreground: #18181B;
+  --card-foreground: #1E293B;
   --popover: #FFFFFF;
-  --popover-foreground: #18181B;
-  --primary: #6C4CF1;
+  --popover-foreground: #1E293B;
+  --primary: #5B3DF5;
   --primary-foreground: #FFFFFF;
-  --primary-dark: #24134F;
-  --secondary: #14B8A6;
+  --primary-dark: #4527D6;
+  --secondary: #1E293B;
   --secondary-foreground: #FFFFFF;
-  --muted: #EDEDF5;
-  --muted-foreground: #6B7280;
-  --accent: #EFEBFC;
-  --accent-foreground: #24134F;
-  --destructive: #DC2626;
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+  --accent: #EDE9FE;
+  --accent-foreground: #4527D6;
+  --destructive: #EF4444;
   --destructive-foreground: #FFFFFF;
-  --success: #16A34A;
+  --success: #10B981;
   --success-foreground: #FFFFFF;
   --warning: #F59E0B;
-  --warning-foreground: #18181B;
-  --error: #DC2626;
+  --warning-foreground: #1E293B;
+  --error: #EF4444;
   --error-foreground: #FFFFFF;
-  --border: #E4E4EE;
-  --input: #E4E4EE;
-  --ring: #6C4CF1;
-  --chart-1: #6C4CF1;
-  --chart-2: #14B8A6;
-  --chart-3: #16A34A;
+  --border: #E2E8F0;
+  --input: #E2E8F0;
+  --ring: #5B3DF5;
+  --chart-1: #5B3DF5;
+  --chart-2: #3B82F6;
+  --chart-3: #10B981;
   --chart-4: #F59E0B;
-  --chart-5: #DC2626;
-  /* Sidebar: Matjarak primary-dark base */
-  --sidebar: #24134F;
-  --sidebar-foreground: #F1EEFB;
-  --sidebar-primary: #6C4CF1;
+  --chart-5: #EF4444;
+  /* Sidebar: Matjarak dark navy base (brand book §27 mobile/desktop hierarchy) */
+  --sidebar: #1E293B;
+  --sidebar-foreground: #F1F5F9;
+  --sidebar-primary: #5B3DF5;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #341A66;
-  --sidebar-accent-foreground: #F1EEFB;
-  --sidebar-border: #3A1F73;
-  --sidebar-ring: #6C4CF1;
+  --sidebar-accent: #334155;
+  --sidebar-accent-foreground: #F1F5F9;
+  --sidebar-border: #334155;
+  --sidebar-ring: #5B3DF5;
 }
 
 .dark {
   /* Matjarak dark mode: same brand hues on dark neutral surfaces */
-  --background: #18181B;
-  --foreground: #F7F7FB;
-  --card: #212126;
-  --card-foreground: #F7F7FB;
-  --popover: #212126;
-  --popover-foreground: #F7F7FB;
-  --primary: #8267F4;
+  --background: #0F172A;
+  --foreground: #F1F5F9;
+  --card: #1E293B;
+  --card-foreground: #F1F5F9;
+  --popover: #1E293B;
+  --popover-foreground: #F1F5F9;
+  --primary: #7C63F7;
   --primary-foreground: #FFFFFF;
-  --primary-dark: #24134F;
-  --secondary: #2DD4BF;
-  --secondary-foreground: #0B1A18;
-  --muted: #27272E;
-  --muted-foreground: #9CA3AF;
-  --accent: #2E1F5E;
+  --primary-dark: #4527D6;
+  --secondary: #334155;
+  --secondary-foreground: #F1F5F9;
+  --muted: #1E293B;
+  --muted-foreground: #94A3B8;
+  --accent: #322659;
   --accent-foreground: #EDE9FE;
   --destructive: #EF4444;
   --destructive-foreground: #FFFFFF;
-  --success: #22C55E;
-  --success-foreground: #06210F;
+  --success: #34D399;
+  --success-foreground: #052E1E;
   --warning: #FBBF24;
   --warning-foreground: #221604;
   --error: #EF4444;
   --error-foreground: #FFFFFF;
-  --border: #2E2E36;
-  --input: #2E2E36;
-  --ring: #8267F4;
-  --chart-1: #8267F4;
-  --chart-2: #2DD4BF;
-  --chart-3: #22C55E;
+  --border: #334155;
+  --input: #334155;
+  --ring: #7C63F7;
+  --chart-1: #7C63F7;
+  --chart-2: #60A5FA;
+  --chart-3: #34D399;
   --chart-4: #FBBF24;
   --chart-5: #EF4444;
-  --sidebar: #180C38;
-  --sidebar-foreground: #F1EEFB;
-  --sidebar-primary: #8267F4;
+  --sidebar: #0B1220;
+  --sidebar-foreground: #F1F5F9;
+  --sidebar-primary: #7C63F7;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #2E1B5C;
-  --sidebar-accent-foreground: #F1EEFB;
-  --sidebar-border: #2E1B5C;
-  --sidebar-ring: #8267F4;
+  --sidebar-accent: #1E293B;
+  --sidebar-accent-foreground: #F1F5F9;
+  --sidebar-border: #1E293B;
+  --sidebar-ring: #7C63F7;
 }
 
 @layer base {

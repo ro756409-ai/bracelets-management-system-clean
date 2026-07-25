@@ -28,7 +28,7 @@ import {
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
-import { BrandMark } from './BrandMark';
+import { BrandLogo } from './BrandLogo';
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { trpc } from "@/lib/trpc";
@@ -95,10 +95,7 @@ export default function DashboardLayout({
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
           <div className="flex flex-col items-center gap-4">
-            <BrandMark className="w-16 h-16" />
-            <h1 className="text-2xl font-bold text-center text-foreground">
-              متجرك
-            </h1>
+            <BrandLogo variant="vertical" size="xl" />
             <p className="text-sm text-muted-foreground text-center">
               يرجى تسجيل الدخول للوصول إلى المنصة
             </p>
@@ -190,12 +187,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                 <PanelLeft className="h-4 w-4 text-sidebar-foreground/60" />
               </button>
               {!isCollapsed && (
-                <div className="flex items-center gap-2 min-w-0">
-                  <BrandMark className="h-8 w-8" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-sidebar-foreground truncate">متجرك</p>
-                    <p className="text-xs text-sidebar-foreground/50 truncate">Matjarak</p>
-                  </div>
+                <div className="min-w-0">
+                  <BrandLogo variant="horizontal" size="md" showEnglishName mode="dark" />
                 </div>
               )}
             </div>
