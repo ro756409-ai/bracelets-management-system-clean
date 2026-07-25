@@ -1315,33 +1315,92 @@ export async function getActivityLogs(filters: {
 }
 
 // ==================== SALES CHANNELS ====================
-export async function getAllSalesChannels(businessId?: number) {
+/**
+ * Client-safe shape of a sales channel: the raw `apiToken`/`webhookSecret` are NEVER included.
+ * Callers that need to show "is a secret configured?" get booleans plus the last 4 characters,
+ * which is enough to identify a credential without exposing it.
+ */
+export type SafeSalesChannel = Omit<SalesChannel, "apiToken" | "webhookSecret"> & {
+  hasApiToken: boolean;
+  apiTokenLast4: string | null;
+  hasWebhookSecret: boolean;
+  webhookSecretLast4: string | null;
+};
+
+function toSafeSalesChannel(row: SalesChannel): SafeSalesChannel {
+  const { apiToken, webhookSecret, ...rest } = row;
+  const last4 = (v: string | null | undefined) => (v && v.length > 0 ? v.slice(-4) : null);
+  return {
+    ...rest,
+    hasApiToken: Boolean(apiToken),
+    apiTokenLast4: last4(apiToken),
+    hasWebhookSecret: Boolean(webhookSecret),
+    webhookSecretLast4: last4(webhookSecret),
+  };
+}
+
+export async function getAllSalesChannels(businessId?: number, opts: { includeInactive?: boolean } = { includeInactive: true }): Promise<SafeSalesChannel[]> {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [];
+  if (!opts.includeInactive) conditions.push(eq(salesChannels.isActive, true));
   if (businessId) conditions.push(eq(salesChannels.businessId, businessId));
-  return db.select().from(salesChannels)
+  const rows = await db.select().from(salesChannels)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(salesChannels.createdAt));
+  return rows.map(toSafeSalesChannel);
 }
 
-export async function getActiveSalesChannels(businessId?: number) {
+export async function getActiveSalesChannels(businessId?: number): Promise<SafeSalesChannel[]> {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [eq(salesChannels.isActive, true)];
   if (businessId) conditions.push(eq(salesChannels.businessId, businessId));
-  return db.select().from(salesChannels)
+  const rows = await db.select().from(salesChannels)
     .where(and(...conditions))
     .orderBy(asc(salesChannels.name));
+  return rows.map(toSafeSalesChannel);
 }
 
-export async function getSalesChannelById(id: number) {
+export async function getSalesChannelById(id: number): Promise<SafeSalesChannel | undefined> {
   const db = await getDb();
   if (!db) return undefined;
   const result = await db.select().from(salesChannels).where(eq(salesChannels.id, id)).limit(1);
-  return result[0];
+  return result[0] ? toSafeSalesChannel(result[0]) : undefined;
 }
 
+/** True if `secret` is already used as the webhook secret of another channel (secrets must be unique to route webhooks unambiguously). */
+export async function isWebhookSecretTaken(secret: string, excludeChannelId?: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const trimmed = secret.trim();
+  if (!trimmed) return false;
+  const conditions: any[] = [eq(salesChannels.webhookSecret, trimmed)];
+  if (excludeChannelId) conditions.push(sql`${salesChannels.id} != ${excludeChannelId}`);
+  const match = await db.select({ id: salesChannels.id }).from(salesChannels).where(and(...conditions)).limit(1);
+  return match.length > 0;
+}
+
+/** True if an active channel with the same (trimmed, case-insensitive) name already exists for this business. */
+export async function isSalesChannelNameTaken(businessId: number, name: string, excludeChannelId?: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const conditions: any[] = [
+    eq(salesChannels.businessId, businessId),
+    eq(salesChannels.isActive, true),
+    sql`LOWER(TRIM(${salesChannels.name})) = LOWER(${trimmed})`,
+  ];
+  if (excludeChannelId) conditions.push(sql`${salesChannels.id} != ${excludeChannelId}`);
+  const match = await db.select({ id: salesChannels.id }).from(salesChannels).where(and(...conditions)).limit(1);
+  return match.length > 0;
+}
+
+/**
+ * SERVER-INTERNAL ONLY — returns the full row including secrets, for webhook routing.
+ * Never expose the result of this through a tRPC procedure; use getSalesChannelById instead.
+ */
 export async function getSalesChannelByWebhookSecret(secret: string) {
   const db = await getDb();
   if (!db) return undefined;
@@ -1351,6 +1410,7 @@ export async function getSalesChannelByWebhookSecret(secret: string) {
   return result[0];
 }
 
+/** SERVER-INTERNAL ONLY — see getSalesChannelByWebhookSecret. */
 export async function getSalesChannelByPlatformAndBusiness(platform: string, businessId?: number) {
   const db = await getDb();
   if (!db) return undefined;
@@ -1375,7 +1435,21 @@ export async function createSalesChannel(data: InsertSalesChannel) {
 export async function updateSalesChannel(id: number, data: Partial<InsertSalesChannel>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(salesChannels).set(data).where(eq(salesChannels.id, id));
+  // Secrets are write-only from the client's perspective: since the API never returns them,
+  // an edit form can't round-trip them. `undefined` therefore means "leave unchanged" — only an
+  // explicit non-empty value replaces a stored secret, so re-saving a form can't silently wipe one.
+  const patch: Partial<InsertSalesChannel> = { ...data };
+  if (patch.apiToken === undefined || patch.apiToken === "") delete patch.apiToken;
+  if (patch.webhookSecret === undefined || patch.webhookSecret === "") delete patch.webhookSecret;
+  if (Object.keys(patch).length === 0) return;
+  await db.update(salesChannels).set(patch).where(eq(salesChannels.id, id));
+}
+
+/** Explicitly clears one stored secret (the only way to remove one, since update() ignores empty values). */
+export async function clearSalesChannelSecret(id: number, field: "apiToken" | "webhookSecret") {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(salesChannels).set({ [field]: null }).where(eq(salesChannels.id, id));
 }
 
 export async function deleteSalesChannel(id: number) {
@@ -1383,6 +1457,12 @@ export async function deleteSalesChannel(id: number) {
   if (!db) throw new Error("Database not available");
   // Soft delete - just deactivate
   await db.update(salesChannels).set({ isActive: false }).where(eq(salesChannels.id, id));
+}
+
+export async function reactivateSalesChannel(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(salesChannels).set({ isActive: true }).where(eq(salesChannels.id, id));
 }
 
 // ==================== PRODUCT VARIANTS ====================

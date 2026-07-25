@@ -239,6 +239,31 @@ row-reconstruction step — each CSV row maps directly to one order.
 - Dry-run mode also performs product-name matching against the live `products` table (not
   just at commit time), so unmatched-product risk is visible before any write happens.
 
+## 5c. Sales channels & integration credentials (2026-07-25)
+
+`sales_channels` holds per-channel integration credentials (`apiToken`, `webhookSecret`).
+These were previously returned in full by `salesChannels.list`, which was a
+`protectedProcedure` — so any logged-in user (including a `viewer`-role employee) could
+read them from the Network tab, even though the UI masked them visually. Fixed:
+
+- **Every** `salesChannels` procedure is now `adminProcedure`, including the read ones.
+- `getAllSalesChannels` / `getActiveSalesChannels` / `getSalesChannelById` return a
+  `SafeSalesChannel` (see `server/db.ts`): raw secrets stripped, replaced by
+  `hasApiToken` / `apiTokenLast4` / `hasWebhookSecret` / `webhookSecretLast4`.
+  `getSalesChannelByWebhookSecret` and `getSalesChannelByPlatformAndBusiness` still return
+  full rows — they are **server-internal only** (webhook routing) and must never be exposed
+  through a procedure.
+- Secrets are **write-only**: because the API never returns them, an edit form can't
+  round-trip them, so `updateSalesChannel` treats `undefined` *and* `""` as "leave
+  unchanged". Removing a secret requires the explicit `salesChannels.clearSecret`.
+- Validation: unique `webhookSecret` across all channels (webhook routing matches on it, so
+  duplicates would be ambiguous), unique channel name per business, URL format on
+  `domain`/`webhookUrl`, minimum 8 characters for a webhook secret.
+- `delete` remains a soft delete (`isActive=false`); `reactivate` restores. The UI has an
+  archived-visibility toggle and hides archived channels by default.
+- Covered by `server/salesChannels.test.ts` (17 tests), including explicit assertions that
+  no response object ever carries an `apiToken`/`webhookSecret` property.
+
 ## 6. Deployment
 
 - Build: `pnpm build` → Vite build to `dist/public` + esbuild bundle of the server to

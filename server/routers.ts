@@ -8,7 +8,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { getDb, cairoParseDateRange, cairoTodayRange, cairoStartOfDay, cairoEndOfDay } from "./db";
-import { markOrderAsReturned, getReturnsList, getReturnsStats, createPrintLog, getPrintLogs, getPrintLogById, addActivityLog, getActivityLogs, getAllSalesChannels, getActiveSalesChannels, getSalesChannelById, createSalesChannel, updateSalesChannel, deleteSalesChannel, getVariantsByProduct, getVariantById, createVariant, updateVariant, deleteVariant, updateVariantStock, addVariantInventoryMovement, getAllVariantsWithProduct, replaceOrderItems, getOrderItems, getOrderItemsForOrders } from "./db";
+import { markOrderAsReturned, getReturnsList, getReturnsStats, createPrintLog, getPrintLogs, getPrintLogById, addActivityLog, getActivityLogs, getAllSalesChannels, getActiveSalesChannels, getSalesChannelById, createSalesChannel, updateSalesChannel, deleteSalesChannel, reactivateSalesChannel, clearSalesChannelSecret, isWebhookSecretTaken, isSalesChannelNameTaken, getVariantsByProduct, getVariantById, createVariant, updateVariant, deleteVariant, updateVariantStock, addVariantInventoryMovement, getAllVariantsWithProduct, replaceOrderItems, getOrderItems, getOrderItemsForOrders } from "./db";
 import { employees } from "../drizzle/schema";
 import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
 import { orders as ordersTable } from "../drizzle/schema";
@@ -2268,48 +2268,91 @@ export const appRouter = router({
   }),
 
   // ==================== SALES CHANNELS ====================
+  // NOTE: every procedure here is adminProcedure — sales channels hold integration
+  // credentials, so even read access is admin-only. The queries themselves never return
+  // raw apiToken/webhookSecret (see getAllSalesChannels/getSalesChannelById in db.ts);
+  // clients get hasApiToken/apiTokenLast4-style fields instead.
   salesChannels: router({
-    list: protectedProcedure.input(z.object({
+    list: adminProcedure.input(z.object({
       businessId: z.number().optional(),
+      includeInactive: z.boolean().optional(),
     }).optional()).query(async ({ input }) => {
-      return getAllSalesChannels(input?.businessId);
+      return getAllSalesChannels(input?.businessId, { includeInactive: input?.includeInactive ?? true });
     }),
-    activeList: protectedProcedure.input(z.object({
+    activeList: adminProcedure.input(z.object({
       businessId: z.number().optional(),
     }).optional()).query(async ({ input }) => {
       return getActiveSalesChannels(input?.businessId);
     }),
-    get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
+    get: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
       return getSalesChannelById(input.id);
     }),
     create: adminProcedure.input(z.object({
       businessId: z.number(),
-      name: z.string().min(2),
-      domain: z.string().optional(),
+      name: z.string().trim().min(2, 'اسم القناة مطلوب (حرفين على الأقل)'),
+      domain: z.string().trim().url('صيغة الدومين غير صحيحة').optional().or(z.literal('')),
       platform: z.enum(['easyorder', 'shopify', 'woocommerce', 'whatsapp', 'facebook', 'instagram', 'manual', 'other']).default('other'),
-      apiToken: z.string().optional(),
-      webhookSecret: z.string().optional(),
-      webhookUrl: z.string().optional(),
+      apiToken: z.string().trim().min(1).optional(),
+      webhookSecret: z.string().trim().min(8, 'سر الـ webhook يجب أن يكون 8 أحرف على الأقل').optional(),
+      webhookUrl: z.string().trim().url('صيغة رابط الـ webhook غير صحيحة').optional().or(z.literal('')),
     })).mutation(async ({ input }) => {
-      const result = await createSalesChannel(input);
+      if (await isSalesChannelNameTaken(input.businessId, input.name)) {
+        throw new TRPCError({ code: 'CONFLICT', message: `يوجد بالفعل قناة نشطة بنفس الاسم "${input.name}" لهذا العمل` });
+      }
+      if (input.webhookSecret && await isWebhookSecretTaken(input.webhookSecret)) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'سر الـ webhook مستخدم بالفعل في قناة أخرى — يجب أن يكون فريدًا لتوجيه الـ webhooks بشكل صحيح' });
+      }
+      const result = await createSalesChannel({
+        ...input,
+        domain: input.domain || undefined,
+        webhookUrl: input.webhookUrl || undefined,
+      });
       return { success: true, id: result.id };
     }),
     update: adminProcedure.input(z.object({
       id: z.number(),
-      name: z.string().optional(),
-      domain: z.string().optional(),
+      name: z.string().trim().min(2).optional(),
+      domain: z.string().trim().url('صيغة الدومين غير صحيحة').optional().or(z.literal('')),
       platform: z.enum(['easyorder', 'shopify', 'woocommerce', 'whatsapp', 'facebook', 'instagram', 'manual', 'other']).optional(),
-      apiToken: z.string().optional(),
-      webhookSecret: z.string().optional(),
-      webhookUrl: z.string().optional(),
+      // Omit or send "" to keep the stored secret unchanged — the API never returns it,
+      // so a form can't round-trip it. Use clearSecret to remove one.
+      apiToken: z.string().trim().optional(),
+      webhookSecret: z.string().trim().optional(),
+      webhookUrl: z.string().trim().url('صيغة رابط الـ webhook غير صحيحة').optional().or(z.literal('')),
       isActive: z.boolean().optional(),
     })).mutation(async ({ input }) => {
       const { id, ...data } = input;
+      const current = await getSalesChannelById(id);
+      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'القناة غير موجودة' });
+
+      if (data.name && await isSalesChannelNameTaken(current.businessId, data.name, id)) {
+        throw new TRPCError({ code: 'CONFLICT', message: `يوجد بالفعل قناة نشطة بنفس الاسم "${data.name}" لهذا العمل` });
+      }
+      if (data.webhookSecret) {
+        if (data.webhookSecret.length < 8) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'سر الـ webhook يجب أن يكون 8 أحرف على الأقل' });
+        }
+        if (await isWebhookSecretTaken(data.webhookSecret, id)) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'سر الـ webhook مستخدم بالفعل في قناة أخرى' });
+        }
+      }
       await updateSalesChannel(id, data);
+      return { success: true };
+    }),
+    /** Removes a stored credential (update() alone can never clear one, by design). */
+    clearSecret: adminProcedure.input(z.object({
+      id: z.number(),
+      field: z.enum(['apiToken', 'webhookSecret']),
+    })).mutation(async ({ input }) => {
+      await clearSalesChannelSecret(input.id, input.field);
       return { success: true };
     }),
     delete: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       await deleteSalesChannel(input.id);
+      return { success: true };
+    }),
+    reactivate: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
+      await reactivateSalesChannel(input.id);
       return { success: true };
     }),
   }),
