@@ -124,7 +124,21 @@ function looksLikeOrderNumber(v: string): boolean {
   // Real legacy order numbers observed are short sequential digits (1-6 digits) — an 11-digit
   // all-digit string is almost certainly a phone number, not an order number, so it must be
   // excluded here or it gets mistaken for a new-order boundary.
-  return /^\d{1,6}$/.test(t) || /^FB-\d+-\d+$/.test(t);
+  //
+  // Two additional legacy order-number formats were found (2026-07-25 investigation) that this
+  // regex originally missed entirely, causing whole runs of orders to be silently swallowed as
+  // free text into whichever preceding order happened to still be "open" (confirmed: 339
+  // "ORD-YYYY-NNNNNN" orders and 298 single-segment "FB-NNNN" orders were lost this way,
+  // concentrated in 3 blocks that absorbed 83/127/854 rows each instead of starting new orders):
+  //   - "ORD-2026-000678" — ORD-<4-digit year>-<sequence>
+  //   - "FB-3297"          — FB-<short sequence>, distinct from the existing FB-<13-digit
+  //                          timestamp>-<sequence> two-segment format below
+  return (
+    /^\d{1,6}$/.test(t) ||
+    /^FB-\d+-\d+$/.test(t) ||
+    /^FB-\d{1,10}$/.test(t) ||
+    /^ORD-\d{4}-\d+$/.test(t)
+  );
 }
 function looksLikeDateTime(v: string): boolean {
   return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(v.trim());
