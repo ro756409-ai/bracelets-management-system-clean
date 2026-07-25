@@ -134,7 +134,10 @@ export const orders = mysqlTable("orders", {
   customerAddress: text("customerAddress").notNull(),
   governorate: varchar("governorate", { length: 50 }).notNull(),
   city: varchar("city", { length: 100 }),
-  productId: int("productId").notNull(),
+  // Nullable: an order awaiting manual product review (needsReview) genuinely has no product
+  // yet. Previously NOT NULL, which forced the EasyOrder webhook to silently attach
+  // unmatched orders to productId=1. Several call sites already guarded for null.
+  productId: int("productId"),
   productName: varchar("productName", { length: 200 }).notNull(),
   quantity: int("quantity").default(1).notNull(),
   totalAmount: decimal("totalAmount", { precision: 10, scale: 2 }).notNull(),
@@ -173,6 +176,17 @@ export const orders = mysqlTable("orders", {
   importBatchId: int("importBatchId"),
   externalOrderId: varchar("externalOrderId", { length: 100 }),
   easyOrderShortId: int("easyOrderShortId"),
+  // Full untruncated payload of the external order, kept so a mis-mapped order can be
+  // re-processed later without re-fetching from the provider.
+  externalRawPayload: text("externalRawPayload"),
+  // `updated_at` reported by the external system — used to decide whether an incoming
+  // payload is newer than what we already stored.
+  externalUpdatedAt: timestamp("externalUpdatedAt"),
+  // Set when an order could not be confidently mapped to a product/variant. Such orders are
+  // created (never dropped) but flagged for manual review instead of being silently
+  // attached to an arbitrary product.
+  needsReview: boolean("needsReview").default(false).notNull(),
+  reviewReason: text("reviewReason"),
   adName: varchar("adName", { length: 255 }),
   pageName: varchar("pageName", { length: 255 }),
   isDuplicate: boolean("isDuplicate").default(false).notNull(),
@@ -226,13 +240,48 @@ export const salesChannels = mysqlTable("sales_channels", {
   apiToken: text("apiToken"),
   webhookSecret: text("webhookSecret"),
   webhookUrl: text("webhookUrl"),
+  // Base URL for this channel's API (EasyOrder etc.). Null = use the provider default.
+  apiBaseUrl: varchar("apiBaseUrl", { length: 300 }),
   isActive: boolean("isActive").default(true).notNull(),
+  // ---- Connection / sync status (surfaced in the Sales Channels UI) ----
+  lastSyncAt: timestamp("lastSyncAt"),
+  lastSyncStatus: mysqlEnum("lastSyncStatus", ["never", "success", "error"]).default("never").notNull(),
+  lastSyncError: text("lastSyncError"),
+  lastSyncedOrderCount: int("lastSyncedOrderCount").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
 export type SalesChannel = typeof salesChannels.$inferSelect;
 export type InsertSalesChannel = typeof salesChannels.$inferInsert;
+
+// سجل عمليات المزامنة (webhook + مزامنة يدوية) لكل قناة بيع
+export const syncLogs = mysqlTable("sync_logs", {
+  id: int("id").autoincrement().primaryKey(),
+  channelId: int("channelId"),
+  provider: varchar("provider", { length: 30 }).notNull(), // 'easyorder'
+  trigger: mysqlEnum("trigger", ["webhook", "manual", "retry"]).notNull(),
+  status: mysqlEnum("status", ["running", "success", "partial", "error"]).default("running").notNull(),
+  // Range requested for a manual sync (null for a single webhook event)
+  rangeFrom: timestamp("rangeFrom"),
+  rangeTo: timestamp("rangeTo"),
+  fetchedCount: int("fetchedCount").default(0).notNull(),
+  createdCount: int("createdCount").default(0).notNull(),
+  updatedCount: int("updatedCount").default(0).notNull(),
+  duplicateCount: int("duplicateCount").default(0).notNull(),
+  needsReviewCount: int("needsReviewCount").default(0).notNull(),
+  failedCount: int("failedCount").default(0).notNull(),
+  attempt: int("attempt").default(1).notNull(),
+  errorMessage: text("errorMessage"),
+  details: text("details"),
+  durationMs: int("durationMs"),
+  performedBy: int("performedBy"),
+  startedAt: timestamp("startedAt").defaultNow().notNull(),
+  finishedAt: timestamp("finishedAt"),
+});
+
+export type SyncLog = typeof syncLogs.$inferSelect;
+export type InsertSyncLog = typeof syncLogs.$inferInsert;
 
 // جدول حركات المخزن
 export const inventoryMovements = mysqlTable("inventory_movements", {
@@ -304,7 +353,9 @@ export const returns = mysqlTable("returns", {
   customerName: varchar("customerName", { length: 100 }).notNull(),
   customerPhone: varchar("customerPhone", { length: 20 }).notNull(),
   governorate: varchar("governorate", { length: 50 }).notNull(),
-  productId: int("productId").notNull(),
+  // Nullable to mirror orders.productId — a returned order may never have had a product
+  // resolved (see the needsReview flow).
+  productId: int("productId"),
   productName: varchar("productName", { length: 200 }).notNull(),
   quantity: int("quantity").notNull(),
   totalAmount: decimal("totalAmount", { precision: 10, scale: 2 }).notNull(),

@@ -14,6 +14,7 @@ import {
   categories, InsertCategory, Category,
   warehouses, InsertWarehouse, Warehouse,
   salesChannels, InsertSalesChannel, SalesChannel,
+  syncLogs, InsertSyncLog, SyncLog,
   productVariants, InsertProductVariant, ProductVariant,
   orderEditLogs, InsertOrderEditLog, OrderEditLog,
   scanLogs, InsertScanLog,
@@ -973,25 +974,32 @@ export async function editOrderWithInventory(
     lastUpdatedBy: updatedBy,
   }).where(eq(orders.id, orderId));
 
+  // Stock is only moved for orders that actually have a product resolved. An order still
+  // awaiting product review (productId null) has never deducted stock, so there is nothing
+  // to return or deduct here.
   if (isConfirmed && (updates.productId !== undefined || updates.quantity !== undefined)) {
-    await addInventoryMovement({
-      productId: oldProductId,
-      type: 'in',
-      quantity: oldQty,
-      reason: `تعديل أوردر ${order.orderNumber} - إرجاع قديم`,
-      orderId: order.id,
-      performedBy: updatedBy,
-      businessId: order.businessId ?? 1,
-    });
-    await addInventoryMovement({
-      productId: newProductId,
-      type: 'out',
-      quantity: newQty,
-      reason: `تعديل أوردر ${order.orderNumber} - خصم جديد`,
-      orderId: order.id,
-      performedBy: updatedBy,
-      businessId: order.businessId ?? 1,
-    });
+    if (oldProductId != null) {
+      await addInventoryMovement({
+        productId: oldProductId,
+        type: 'in',
+        quantity: oldQty,
+        reason: `تعديل أوردر ${order.orderNumber} - إرجاع قديم`,
+        orderId: order.id,
+        performedBy: updatedBy,
+        businessId: order.businessId ?? 1,
+      });
+    }
+    if (newProductId != null) {
+      await addInventoryMovement({
+        productId: newProductId,
+        type: 'out',
+        quantity: newQty,
+        reason: `تعديل أوردر ${order.orderNumber} - خصم جديد`,
+        orderId: order.id,
+        performedBy: updatedBy,
+        businessId: order.businessId ?? 1,
+      });
+    }
   }
 }
 
@@ -1075,7 +1083,8 @@ export async function markOrderAsReturned(
     .set({ status: 'returned', lastUpdatedBy: processedBy })
     .where(eq(orders.id, orderId));
 
-  if (restoreStock) {
+  // Only restore stock when a product was actually resolved for this order.
+  if (restoreStock && order.productId != null) {
     await addInventoryMovement({
       productId: order.productId,
       type: 'in',
@@ -1465,6 +1474,95 @@ export async function reactivateSalesChannel(id: number) {
   await db.update(salesChannels).set({ isActive: true }).where(eq(salesChannels.id, id));
 }
 
+/** SERVER-INTERNAL ONLY — full row incl. secrets, for the sync client. Never route to a client. */
+export async function getSalesChannelWithSecrets(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(salesChannels).where(eq(salesChannels.id, id)).limit(1);
+  return result[0];
+}
+
+export async function updateSalesChannelSyncStatus(
+  id: number,
+  status: { lastSyncStatus: "success" | "error"; lastSyncError?: string | null; lastSyncedOrderCount?: number }
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(salesChannels).set({
+    lastSyncAt: new Date(),
+    lastSyncStatus: status.lastSyncStatus,
+    lastSyncError: status.lastSyncError ?? null,
+    ...(status.lastSyncedOrderCount !== undefined ? { lastSyncedOrderCount: status.lastSyncedOrderCount } : {}),
+  }).where(eq(salesChannels.id, id));
+}
+
+// ==================== SYNC LOGS ====================
+export async function createSyncLog(data: InsertSyncLog): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [result] = await db.insert(syncLogs).values(data);
+  return (result as any).insertId as number;
+}
+
+export async function finishSyncLog(id: number, data: Partial<InsertSyncLog>) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(syncLogs).set({ ...data, finishedAt: new Date() }).where(eq(syncLogs.id, id));
+}
+
+export async function getSyncLogs(filters: { channelId?: number; limit?: number } = {}) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: any[] = [];
+  if (filters.channelId) conditions.push(eq(syncLogs.channelId, filters.channelId));
+  return db.select().from(syncLogs)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(syncLogs.startedAt))
+    .limit(filters.limit ?? 50);
+}
+
+/** Order lookup by the external system's order id — the idempotency key for imports. */
+export async function getOrderByExternalId(externalOrderId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(orders)
+    .where(eq(orders.externalOrderId, externalOrderId))
+    .limit(1);
+  return result[0];
+}
+
+/** Orders flagged for manual product review (unmatched/ambiguous external items). */
+export async function getOrdersNeedingReview(limit = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(orders)
+    .where(eq(orders.needsReview, true))
+    .orderBy(desc(orders.createdAt))
+    .limit(limit);
+}
+
+/** Full catalog needed by productMatching, in one round-trip. */
+export async function getMatchCatalog(businessId?: number) {
+  const db = await getDb();
+  if (!db) return { products: [], variants: [] };
+  const productConditions: any[] = [eq(products.isActive, true)];
+  if (businessId) productConditions.push(eq(products.businessId, businessId));
+  const productRows = await db.select().from(products).where(and(...productConditions));
+  const productIds = productRows.map(p => p.id);
+  const variantRows = productIds.length > 0
+    ? await db.select().from(productVariants)
+        .where(and(inArray(productVariants.productId, productIds), eq(productVariants.isActive, true)))
+    : [];
+  return {
+    products: productRows.map(p => ({
+      id: p.id, name: p.name, sku: p.sku, price: p.price, businessId: p.businessId,
+    })),
+    variants: variantRows.map(v => ({
+      id: v.id, productId: v.productId, name: v.name, sku: v.sku, price: v.price, isActive: v.isActive,
+    })),
+  };
+}
+
 // ==================== PRODUCT VARIANTS ====================
 export async function getVariantsByProduct(productId: number, opts: { includeInactive?: boolean } = {}) {
   const db = await getDb();
@@ -1679,17 +1777,19 @@ export async function editOrderFull(
 
   if (Object.keys(orderUpdates).length === 0) return currentOrder;
 
-  // Handle inventory changes if quantity changed
-  if ('quantity' in orderUpdates && currentOrder.status === 'confirmed') {
+  // Handle inventory changes if quantity changed. Skipped for orders with no resolved
+  // product (needsReview) — they have never deducted stock, so there is nothing to adjust.
+  if ('quantity' in orderUpdates && currentOrder.status === 'confirmed' && currentOrder.productId != null) {
+    const productId = currentOrder.productId;
     const oldQty = currentOrder.quantity;
     const newQty = orderUpdates.quantity;
     const diff = newQty - oldQty;
     if (diff !== 0) {
       // Deduct additional from stock if increased, restore if decreased
-      await updateProductStock(currentOrder.productId, -diff);
+      await updateProductStock(productId, -diff);
       await addInventoryMovement({
         businessId: currentOrder.businessId,
-        productId: currentOrder.productId,
+        productId,
         type: diff > 0 ? 'out' : 'in',
         quantity: Math.abs(diff),
         reason: `تعديل كمية أوردر #${currentOrder.orderNumber}`,

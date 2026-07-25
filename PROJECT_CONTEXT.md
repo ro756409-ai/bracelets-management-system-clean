@@ -281,6 +281,54 @@ Fixed:
   context (every non-admin-tier employee) is rejected from all eight procedures, and that
   exactly `{super_admin, admin, manager}` are admin-tier.
 
+## 5d. EasyOrder integration (Phase 2, 2026-07-25)
+
+Migration **`drizzle/0025_mysterious_typhoid_mary.sql`** (additive/widening):
+`orders.externalRawPayload/externalUpdatedAt/needsReview/reviewReason`,
+`sales_channels.apiBaseUrl/lastSyncAt/lastSyncStatus/lastSyncError/lastSyncedOrderCount`,
+new `sync_logs` table, and `orders.productId`/`returns.productId` widened to nullable.
+
+**Why productId became nullable.** The old webhook fell back to
+`productId: firstMatchedProductId ?? 1` — an unmatched order was silently attributed to
+product #1. An order awaiting review genuinely has no product, so the column now allows
+null and such orders are created with `needsReview = true` plus a human-readable
+`reviewReason`. Nothing is dropped and nothing is mis-attributed. Several call sites
+already guarded for null; the stock paths (`editOrderWithInventory`, `markOrderAsReturned`,
+`editOrderFull`) now skip inventory movement when no product is resolved, which is correct
+— an unresolved order never deducted stock in the first place.
+
+- **`server/productMatching.ts`** — the single matching implementation, shared by the
+  webhook and manual sync. Order of confidence: variant SKU → product SKU → variant name →
+  product name, with Arabic normalization (alef/hamza/ta-marbuta/alef-maqsura/diacritics)
+  so `اية الكرسي` matches `آية الكرسي`. **Never guesses**: zero or 2+ candidates returns
+  `matched: false` (with `ambiguous: true` for the latter) and never carries a `productId`.
+  This also repaired a regression — after the parent/variant refactor `getAllProducts()`
+  returns only 4 rows, so the old name-only matcher could no longer match any bracelet.
+- **`server/easyorder.service.ts`** — payload normalization, the idempotent
+  `upsertEasyOrder` pipeline, `withRetry` (exponential backoff; 429/5xx retryable, 4xx not),
+  the `EasyOrderClient`, and `syncOrdersByDateRange`. Idempotency key is
+  `orders.externalOrderId`; an existing order is only rewritten when the incoming
+  `updated_at` is strictly newer, so replayed webhooks are no-ops.
+- **`server/easyorderWebhook.ts`** — rewritten on that shared pipeline. Creates real
+  `order_items` rows (one per cart item) instead of one concatenated `productName` string,
+  stores the full untruncated payload, and actually applies `order-status-update` events
+  instead of only logging them.
+- **Secret enforcement**: was disabled outright. Now gated by
+  `EASYORDER_WEBHOOK_ENFORCE_SECRET` — `log_only` (default) records what would have been
+  rejected, `enforce` returns 401. See `.env.example` for the rollout procedure.
+- **UI**: Sales Channels page gains Sync Now (date range), Test Connection, a
+  Connected/Error/Last-Sync badge, and an inline sync-log panel. Review queue exposed via
+  `orders.needingReview` / `orders.resolveReview`.
+- Tests: `productMatching.test.ts` (19) + `easyorder.service.test.ts` (24), including
+  retry/backoff behaviour, envelope-shape tolerance, and an assertion that the API token
+  never appears in an error message.
+
+⚠️ **Known limitation — the pull API contract is unverified.** No EasyOrder API key or
+documentation was available, so the endpoint path, date-range query-param names and auth
+header in `EASYORDER_ENDPOINT` are assumptions. They are isolated in one constant and
+configurable per channel. Verify them before relying on manual sync; the webhook path is
+verified against real payload traffic and does not depend on them.
+
 ## 6. Deployment
 
 - Build: `pnpm build` → Vite build to `dist/public` + esbuild bundle of the server to

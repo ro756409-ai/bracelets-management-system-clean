@@ -20,7 +20,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Edit, Trash2, Globe, ExternalLink, Power, PowerOff, KeyRound, Eye, EyeOff, X } from "lucide-react";
+import {
+  Plus, Edit, Trash2, Globe, ExternalLink, Power, PowerOff, KeyRound, Eye, EyeOff, X,
+  RefreshCw, CheckCircle2, AlertCircle, Clock, PlugZap, History,
+} from "lucide-react";
 import { toast } from "sonner";
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -63,12 +66,59 @@ const emptyForm: ChannelForm = {
   businessId: null,
 };
 
+/** Connection status derived from the channel's last sync outcome. */
+function ConnectionStatus({ channel }: { channel: any }) {
+  const status = channel.lastSyncStatus as "never" | "success" | "error" | undefined;
+  const lastSync = channel.lastSyncAt ? new Date(channel.lastSyncAt) : null;
+
+  const config =
+    status === "success"
+      ? { icon: CheckCircle2, cls: "bg-green-100 text-green-700", label: "متصل" }
+      : status === "error"
+      ? { icon: AlertCircle, cls: "bg-red-100 text-red-700", label: "خطأ" }
+      : { icon: Clock, cls: "bg-gray-100 text-gray-600", label: "لم تتم المزامنة بعد" };
+  const Icon = config.icon;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge className={`text-xs gap-1 border-0 ${config.cls}`}>
+          <Icon className="h-3 w-3" />
+          {config.label}
+        </Badge>
+        {lastSync && (
+          <span className="text-xs text-muted-foreground">
+            آخر مزامنة: {lastSync.toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            {channel.lastSyncedOrderCount > 0 && ` — ${channel.lastSyncedOrderCount} أوردر`}
+          </span>
+        )}
+      </div>
+      {status === "error" && channel.lastSyncError && (
+        <p className="text-xs text-destructive line-clamp-2">{channel.lastSyncError}</p>
+      )}
+    </div>
+  );
+}
+
+/** Default sync range: the last 7 days. */
+function defaultSyncRange() {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 7);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  return { from: fmt(from), to: fmt(to) };
+}
+
 export default function SalesChannels() {
   const { currentBusinessIds } = useBusinessContext();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<ChannelForm>(emptyForm);
   const [showArchived, setShowArchived] = useState(false);
+  const [syncDialogChannel, setSyncDialogChannel] = useState<any | null>(null);
+  const [syncRange, setSyncRange] = useState(defaultSyncRange);
+  const [logsChannelId, setLogsChannelId] = useState<number | null>(null);
+  const utils = trpc.useUtils();
   // Which stored secrets the currently-edited channel already has (the values themselves
   // are never sent to the client, so we only ever know "configured / not configured").
   const [editingSecrets, setEditingSecrets] = useState<{ hasApiToken: boolean; hasWebhookSecret: boolean }>({
@@ -82,6 +132,11 @@ export default function SalesChannels() {
   });
 
   const { data: businesses } = trpc.businesses.activeList.useQuery();
+
+  const { data: syncLogs } = trpc.salesChannels.syncLogs.useQuery(
+    { channelId: logsChannelId ?? undefined, limit: 20 },
+    { enabled: logsChannelId !== null }
+  );
 
   const visibleChannels = (channels ?? []).filter((c: any) => showArchived || c.isActive);
 
@@ -117,6 +172,37 @@ export default function SalesChannels() {
   const reactivateMutation = trpc.salesChannels.reactivate.useMutation({
     onSuccess: () => {
       toast.success("تم إعادة تفعيل قناة البيع");
+      refetch();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const syncNowMutation = trpc.salesChannels.syncNow.useMutation({
+    onSuccess: (r) => {
+      if (r.status === "error") {
+        toast.error(`فشلت المزامنة: ${r.error ?? "خطأ غير معروف"}`);
+      } else {
+        const parts = [
+          `${r.created} جديد`,
+          r.updated > 0 && `${r.updated} محدَّث`,
+          r.duplicates > 0 && `${r.duplicates} مكرر`,
+          r.needsReview > 0 && `${r.needsReview} يحتاج مراجعة`,
+          r.failed > 0 && `${r.failed} فشل`,
+        ].filter(Boolean).join(" · ");
+        if (r.status === "partial") toast.warning(`اكتملت جزئيًا — ${parts}`);
+        else toast.success(`تمت المزامنة — ${parts}`);
+      }
+      setSyncDialogChannel(null);
+      refetch();
+      utils.salesChannels.syncLogs.invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const testConnectionMutation = trpc.salesChannels.testConnection.useMutation({
+    onSuccess: (r) => {
+      if (r.ok) toast.success("الاتصال ناجح — بيانات الاعتماد صحيحة");
+      else toast.error(`فشل الاتصال: ${r.error}`);
       refetch();
     },
     onError: (err) => toast.error(err.message),
@@ -314,6 +400,80 @@ export default function SalesChannels() {
                     <Badge variant="outline" className="text-xs text-muted-foreground">بدون Webhook Secret</Badge>
                   )}
                 </div>
+                <div className="pt-2 border-t">
+                  <ConnectionStatus channel={channel} />
+                </div>
+
+                {channel.platform === "easyorder" && channel.isActive && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="gap-1 h-8"
+                      onClick={() => { setSyncRange(defaultSyncRange()); setSyncDialogChannel(channel); }}
+                      disabled={syncNowMutation.isPending}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${syncNowMutation.isPending ? "animate-spin" : ""}`} />
+                      مزامنة الآن
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1 h-8"
+                      onClick={() => testConnectionMutation.mutate({ id: channel.id })}
+                      disabled={testConnectionMutation.isPending}
+                    >
+                      <PlugZap className="h-3.5 w-3.5" />
+                      اختبار الاتصال
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1 h-8"
+                      onClick={() => setLogsChannelId(logsChannelId === channel.id ? null : channel.id)}
+                    >
+                      <History className="h-3.5 w-3.5" />
+                      السجل
+                    </Button>
+                  </div>
+                )}
+
+                {logsChannelId === channel.id && (
+                  <div className="rounded-lg border bg-muted/30 p-2 space-y-1 max-h-56 overflow-y-auto">
+                    {!syncLogs || syncLogs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-3">لا توجد عمليات مزامنة بعد</p>
+                    ) : (
+                      syncLogs.map((log: any) => (
+                        <div key={log.id} className="text-xs flex items-start gap-2 p-1.5 rounded bg-background">
+                          <Badge
+                            className={`text-[10px] shrink-0 border-0 ${
+                              log.status === "success" ? "bg-green-100 text-green-700"
+                              : log.status === "partial" ? "bg-yellow-100 text-yellow-700"
+                              : log.status === "error" ? "bg-red-100 text-red-700"
+                              : "bg-gray-100 text-gray-600"
+                            }`}
+                          >
+                            {log.status}
+                          </Badge>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-muted-foreground">
+                              {log.trigger} · {new Date(log.startedAt).toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                            </span>
+                            <div className="text-foreground">
+                              جلب {log.fetchedCount} · جديد {log.createdCount} · محدَّث {log.updatedCount}
+                              {log.needsReviewCount > 0 && ` · مراجعة ${log.needsReviewCount}`}
+                              {log.failedCount > 0 && ` · فشل ${log.failedCount}`}
+                            </div>
+                            {log.errorMessage && (
+                              <p className="text-destructive line-clamp-2">{log.errorMessage}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
                 <div className="flex items-center gap-2 pt-2 border-t">
                   <Button
                     variant="ghost"
@@ -361,6 +521,85 @@ export default function SalesChannels() {
           ))}
         </div>
       )}
+
+      {/* Sync Now Dialog */}
+      <Dialog open={!!syncDialogChannel} onOpenChange={(o) => { if (!o) setSyncDialogChannel(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RefreshCw className="h-5 w-5 text-primary" />
+              مزامنة الأوردرات — {syncDialogChannel?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              سيتم جلب أوردرات هذه الفترة من EasyOrder. الأوردرات الموجودة بالفعل لن تتكرر —
+              تُحدَّث فقط لو تغيّرت من عند المصدر.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>من تاريخ</Label>
+                <Input
+                  type="date"
+                  value={syncRange.from}
+                  onChange={(e) => setSyncRange((r) => ({ ...r, from: e.target.value }))}
+                  dir="ltr"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>إلى تاريخ</Label>
+                <Input
+                  type="date"
+                  value={syncRange.to}
+                  onChange={(e) => setSyncRange((r) => ({ ...r, to: e.target.value }))}
+                  dir="ltr"
+                />
+              </div>
+            </div>
+            {!syncDialogChannel?.hasApiToken && (
+              <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3">
+                <p className="text-xs text-destructive">
+                  لا يوجد API Token مضبوط لهذه القناة — أضفه من زر "تعديل" قبل المزامنة.
+                </p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSyncDialogChannel(null)}>إلغاء</Button>
+            <Button
+              onClick={() => {
+                if (!syncDialogChannel) return;
+                const from = new Date(syncRange.from);
+                const to = new Date(syncRange.to);
+                to.setHours(23, 59, 59, 999);
+                if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+                  toast.error("يرجى اختيار تاريخين صحيحين");
+                  return;
+                }
+                if (from > to) {
+                  toast.error("تاريخ البداية يجب أن يكون قبل تاريخ النهاية");
+                  return;
+                }
+                syncNowMutation.mutate({ id: syncDialogChannel.id, from, to });
+              }}
+              disabled={syncNowMutation.isPending || !syncDialogChannel?.hasApiToken}
+              className="gap-1"
+            >
+              {syncNowMutation.isPending ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  جاري المزامنة...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4" />
+                  ابدأ المزامنة
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabled } from "./bosta.service";
+import { syncOrdersByDateRange, testChannelConnection } from "./easyorder.service";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -52,6 +53,7 @@ import {
   searchEmployees, countActiveAdminTierEmployees,
   getAllProducts, getProductById, createProduct, updateProduct,
   isSkuTaken, isVariantNameTaken,
+  getSyncLogs, getOrdersNeedingReview,
   getLowStockProducts, addInventoryMovement, getInventoryMovements,
   getOrders, getOrderById, getOrdersByIds, createOrder, updateOrder,
   assignOrderToEmployee, bulkAssignOrders,
@@ -470,6 +472,40 @@ export const appRouter = router({
         performedByRole: ctx.user.role ?? 'admin',
       });
       // ❌ الإرسال التلقائي لـ Bosta معطل - الإرسال يدوي فقط من صفحة الأوردرات
+      return { success: true };
+    }),
+
+    /** Orders whose external items could not be matched to a product/variant. */
+    needingReview: adminProcedure.input(z.object({
+      limit: z.number().min(1).max(500).default(100),
+    }).optional()).query(async ({ input }) => {
+      return getOrdersNeedingReview(input?.limit ?? 100);
+    }),
+    /** Resolves a review-flagged order by assigning the correct product/variant. */
+    resolveReview: adminProcedure.input(z.object({
+      orderId: z.number(),
+      productId: z.number(),
+      variantId: z.number().nullable().optional(),
+      productName: z.string().min(1).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const order = await getOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'الأوردر غير موجود' });
+      await updateOrder(input.orderId, {
+        productId: input.productId,
+        variantId: input.variantId ?? null,
+        ...(input.productName ? { productName: input.productName } : {}),
+        needsReview: false,
+        reviewReason: null,
+      } as any);
+      await addActivityLog({
+        action: 'resolve_order_review',
+        entityType: 'order',
+        entityId: input.orderId,
+        description: `تعيين منتج يدويًا لأوردر #${order.orderNumber}`,
+        performedBy: ctx.user.id,
+        performedByName: ctx.user.name ?? 'مدير',
+        performedByRole: ctx.user.role ?? 'admin',
+      });
       return { success: true };
     }),
 
@@ -2354,6 +2390,48 @@ export const appRouter = router({
     reactivate: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       await reactivateSalesChannel(input.id);
       return { success: true };
+    }),
+    /** Verifies the channel's stored API credentials without importing anything. */
+    testConnection: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
+      return testChannelConnection(input.id);
+    }),
+    /** Manual "Sync Now" — pulls orders for a date range and upserts them idempotently. */
+    syncNow: adminProcedure.input(z.object({
+      id: z.number(),
+      from: z.date(),
+      to: z.date(),
+    })).mutation(async ({ ctx, input }) => {
+      if (input.from > input.to) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'تاريخ البداية يجب أن يكون قبل تاريخ النهاية' });
+      }
+      const actingEmpId = await resolveActingEmployeeId(ctx);
+      return syncOrdersByDateRange({
+        channelId: input.id,
+        from: input.from,
+        to: input.to,
+        performedBy: actingEmpId,
+      });
+    }),
+    /** Re-runs a previous sync range; recorded with trigger = "retry". */
+    retrySync: adminProcedure.input(z.object({
+      id: z.number(),
+      from: z.date(),
+      to: z.date(),
+    })).mutation(async ({ ctx, input }) => {
+      const actingEmpId = await resolveActingEmployeeId(ctx);
+      return syncOrdersByDateRange({
+        channelId: input.id,
+        from: input.from,
+        to: input.to,
+        performedBy: actingEmpId,
+        trigger: "retry",
+      });
+    }),
+    syncLogs: adminProcedure.input(z.object({
+      channelId: z.number().optional(),
+      limit: z.number().min(1).max(200).default(50),
+    }).optional()).query(async ({ input }) => {
+      return getSyncLogs({ channelId: input?.channelId, limit: input?.limit ?? 50 });
     }),
   }),
 
