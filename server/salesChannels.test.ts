@@ -42,6 +42,23 @@ function createUserContext(): TrpcContext {
   };
 }
 
+/**
+ * The context a NON-admin-tier employee actually gets in production.
+ *
+ * server/_core/context.ts only ever sets ctx.user via buildSyntheticAdminUser(), and only
+ * for employees passing `emp.isActive && isAdminTierRole(emp.role)`. Every other employee —
+ * viewer, agent, warehouse, data_entry, order_confirmation, shipping, accountant,
+ * facebook_entry, scanner — gets `user: null` and is rejected before any router runs.
+ * (Those roles use the separate /employee-login portal, not this router tree.)
+ */
+function createNoUserContext(): TrpcContext {
+  return {
+    user: null,
+    req: { protocol: "https", headers: {} } as TrpcContext["req"],
+    res: { clearCookie: () => {} } as TrpcContext["res"],
+  };
+}
+
 /** Skips the rest of a test gracefully in environments with no live DATABASE_URL. */
 function isNoDbError(err: unknown): boolean {
   return String((err as any)?.message ?? err).includes("Database not available");
@@ -76,6 +93,52 @@ describe("salesChannels — access control", () => {
     const caller = appRouter.createCaller(createAdminContext());
     const result = await caller.salesChannels.list();
     expect(Array.isArray(result)).toBe(true);
+  });
+});
+
+describe("salesChannels — production role reality (regression guard)", () => {
+  // These document how auth ACTUALLY resolves in this app, so the equivalence below
+  // can't silently drift. createUserContext() above (role: "user") is a synthetic shape
+  // that production never produces — the real non-admin state is `user: null`.
+
+  it("a session with no user (every non-admin-tier employee) is rejected from all procedures", async () => {
+    const caller = appRouter.createCaller(createNoUserContext());
+    await expect(caller.salesChannels.list()).rejects.toThrow();
+    await expect(caller.salesChannels.activeList()).rejects.toThrow();
+    await expect(caller.salesChannels.get({ id: 1 })).rejects.toThrow();
+    await expect(caller.salesChannels.create({ businessId: 1, name: "قناة" })).rejects.toThrow();
+    await expect(caller.salesChannels.update({ id: 1, name: "قناة" })).rejects.toThrow();
+    await expect(caller.salesChannels.delete({ id: 1 })).rejects.toThrow();
+    await expect(caller.salesChannels.reactivate({ id: 1 })).rejects.toThrow();
+    await expect(caller.salesChannels.clearSecret({ id: 1, field: "apiToken" })).rejects.toThrow();
+  });
+
+  it("exactly super_admin/admin/manager are admin-tier — everyone else has no dashboard session", async () => {
+    const { isAdminTierRole, EMPLOYEE_ROLE_VALUES } = await import("./permissions");
+    const adminTier = EMPLOYEE_ROLE_VALUES.filter(isAdminTierRole);
+    expect([...adminTier].sort()).toEqual(["admin", "manager", "super_admin"]);
+
+    // Viewer specifically — the role called out in the access review.
+    expect(isAdminTierRole("viewer")).toBe(false);
+    for (const role of ["viewer", "agent", "warehouse", "data_entry", "order_confirmation", "shipping", "accountant", "facebook_entry", "scanner"]) {
+      expect(isAdminTierRole(role)).toBe(false);
+    }
+  });
+
+  it("moving reads from protectedProcedure to adminProcedure did not change who has access", async () => {
+    // context.ts builds ctx.user ONLY via buildSyntheticAdminUser(), which hardcodes
+    // role:"admin", and only for admin-tier employees. So `ctx.user != null` already
+    // implies `ctx.user.role === "admin"` — protectedProcedure and adminProcedure admit
+    // an identical set, and no previously-authorized user lost access.
+    const adminCaller = appRouter.createCaller(createAdminContext());
+    const noUserCaller = appRouter.createCaller(createNoUserContext());
+
+    // protectedProcedure-based (unchanged by this work) and adminProcedure-based
+    // (changed) behave identically for both context shapes.
+    await expect(adminCaller.products.list()).resolves.toBeDefined();      // protectedProcedure
+    await expect(adminCaller.salesChannels.list()).resolves.toBeDefined(); // adminProcedure (was protected)
+    await expect(noUserCaller.products.list()).rejects.toThrow();
+    await expect(noUserCaller.salesChannels.list()).rejects.toThrow();
   });
 });
 

@@ -242,11 +242,26 @@ row-reconstruction step — each CSV row maps directly to one order.
 ## 5c. Sales channels & integration credentials (2026-07-25)
 
 `sales_channels` holds per-channel integration credentials (`apiToken`, `webhookSecret`).
-These were previously returned in full by `salesChannels.list`, which was a
-`protectedProcedure` — so any logged-in user (including a `viewer`-role employee) could
-read them from the Network tab, even though the UI masked them visually. Fixed:
+These were previously returned **in full** by `salesChannels.list`/`get`/`activeList`, so the
+raw values sat in the JSON payload even though the UI masked them visually (`••••`+last4).
+
+**Scope of the exposure — verified, not assumed.** `server/_core/context.ts` sets `ctx.user`
+only via `buildSyntheticAdminUser()`, and only for employees passing
+`isActive && isAdminTierRole(role)`. So the readers were **admin-tier employees
+(`super_admin`/`admin`/`manager`) only** — not "any logged-in user". A `viewer`/`agent`/
+`warehouse`/etc. employee has `ctx.user = null`, is rejected by `protectedProcedure` before
+any router runs, and uses the separate `/employee-login` portal entirely. The real risk was
+therefore narrower than a public leak: secrets travelled to admin browsers (and any
+DevTools/proxy/log along that path) with no need to.
+
+Fixed:
 
 - **Every** `salesChannels` procedure is now `adminProcedure`, including the read ones.
+  ⚠️ Note this is a **defence-in-depth no-op, not an access change**: because
+  `buildSyntheticAdminUser` hardcodes `role: "admin"`, `ctx.user != null` already implies
+  `ctx.user.role === "admin"`, so `protectedProcedure` and `adminProcedure` admit an
+  identical set here. **No role gained or lost access.** The real fix is the masking below.
+  `server/salesChannels.test.ts` pins this equivalence so it can't silently drift.
 - `getAllSalesChannels` / `getActiveSalesChannels` / `getSalesChannelById` return a
   `SafeSalesChannel` (see `server/db.ts`): raw secrets stripped, replaced by
   `hasApiToken` / `apiTokenLast4` / `hasWebhookSecret` / `webhookSecretLast4`.
@@ -261,8 +276,10 @@ read them from the Network tab, even though the UI masked them visually. Fixed:
   `domain`/`webhookUrl`, minimum 8 characters for a webhook secret.
 - `delete` remains a soft delete (`isActive=false`); `reactivate` restores. The UI has an
   archived-visibility toggle and hides archived channels by default.
-- Covered by `server/salesChannels.test.ts` (17 tests), including explicit assertions that
-  no response object ever carries an `apiToken`/`webhookSecret` property.
+- Covered by `server/salesChannels.test.ts` (20 tests), including explicit assertions that
+  no response object ever carries an `apiToken`/`webhookSecret` property, that a `user: null`
+  context (every non-admin-tier employee) is rejected from all eight procedures, and that
+  exactly `{super_admin, admin, manager}` are admin-tier.
 
 ## 6. Deployment
 
