@@ -155,6 +155,13 @@
       "when": 1781305756342,
       "tag": "0021_smiling_banshee",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1784923621891,
+      "tag": "0022_giant_slapstick",
+      "breakpoints": true
     }
   ]
 }

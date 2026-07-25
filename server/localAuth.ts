@@ -8,9 +8,10 @@
 import { Router, type Express } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { getEmployeeByUsernameOrEmail } from "./db";
+import { getEmployeeByUsernameOrEmail, updateEmployee } from "./db";
 import { COOKIE_NAME } from "../shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { isAdminTierRole } from "./permissions";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -43,7 +44,7 @@ export async function verifyOwnerLogin(identifier: string, password: string): Pr
   if (!employee.isActive) {
     return { status: 403, body: { success: false, error: "هذا الحساب موقوف، تواصل مع الإدارة" } };
   }
-  if (employee.role !== "manager") {
+  if (!isAdminTierRole(employee.role)) {
     return { status: 403, body: { success: false, error: "هذا الحساب لا يملك صلاحية الدخول للوحة الإدارة" } };
   }
   if (!employee.passwordHash) {
@@ -60,6 +61,9 @@ export async function verifyOwnerLogin(identifier: string, password: string): Pr
   }
 
   const token = jwt.sign({ employeeId: employee.id, role: employee.role }, JWT_SECRET, { expiresIn: "7d" });
+  updateEmployee(employee.id, { lastLoginAt: new Date() }).catch(() => {
+    // Non-fatal: login already succeeded, don't block it on a stats-only write.
+  });
 
   return {
     status: 200,

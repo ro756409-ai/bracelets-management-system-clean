@@ -9,9 +9,10 @@
  */
 import "dotenv/config";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { getDb } from "../server/db";
 import { employees } from "../drizzle/schema";
+import { ADMIN_TIER_ROLES } from "../server/permissions";
 
 async function main() {
   const username = process.env.INITIAL_ADMIN_USERNAME;
@@ -29,9 +30,9 @@ async function main() {
     process.exit(1);
   }
 
-  const existingManagers = await db.select().from(employees).where(eq(employees.role, "manager")).limit(1);
-  if (existingManagers.length > 0) {
-    console.log(`[seed-admin] An admin/manager account already exists (${existingManagers[0].username ?? existingManagers[0].name}) — skipping.`);
+  const existingAdmins = await db.select().from(employees).where(inArray(employees.role, ADMIN_TIER_ROLES)).limit(1);
+  if (existingAdmins.length > 0) {
+    console.log(`[seed-admin] An admin-tier account already exists (${existingAdmins[0].username ?? existingAdmins[0].name}) — skipping.`);
     process.exit(0);
   }
 

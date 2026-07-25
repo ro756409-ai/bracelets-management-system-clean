@@ -66,6 +66,10 @@ router.post("/login", async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
+    db.update(employees).set({ lastLoginAt: new Date() }).where(eq(employees.id, employee.id)).catch(() => {
+      // Non-fatal: login already succeeded, don't block it on a stats-only write.
+    });
+
     return res.json({
       success: true,
       employee: {

@@ -5,6 +5,7 @@ import { getDb } from "../db";
 import { employees } from "../../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { COOKIE_NAME } from "@shared/const";
+import { isAdminTierRole } from "../permissions";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -39,7 +40,7 @@ async function findActiveManagerById(employeeId: number): Promise<Employee | nul
   const db = await getDb();
   if (!db) return null;
   const [emp] = await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1);
-  if (emp && emp.isActive && emp.role === "manager") return emp;
+  if (emp && emp.isActive && isAdminTierRole(emp.role)) return emp;
   return null;
 }
 

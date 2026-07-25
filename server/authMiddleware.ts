@@ -9,6 +9,7 @@ import { getDb } from "./db";
 import { employees } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { COOKIE_NAME } from "@shared/const";
+import { isAdminTierRole } from "./permissions";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const EMP_COOKIE = "employee_token";
@@ -23,7 +24,7 @@ async function isActiveManagerSession(req: Request, cookieName: string): Promise
     const db = await getDb();
     if (!db) return false;
     const [emp] = await db.select().from(employees).where(eq(employees.id, payload.employeeId)).limit(1);
-    return Boolean(emp && emp.isActive && emp.role === "manager");
+    return Boolean(emp && emp.isActive && isAdminTierRole(emp.role));
   } catch {
     return false;
   }

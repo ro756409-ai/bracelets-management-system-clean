@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import bcrypt from "bcryptjs";
 
 const mockGetEmployeeByUsernameOrEmail = vi.fn();
+const mockUpdateEmployee = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("./db", () => ({
   getEmployeeByUsernameOrEmail: (...args: any[]) => mockGetEmployeeByUsernameOrEmail(...args),
+  updateEmployee: (...args: any[]) => mockUpdateEmployee(...args),
 }));
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret-for-local-auth";

@@ -1,4 +1,4 @@
-import { eq, desc, asc, and, or, gte, lte, sql, inArray, isNull } from "drizzle-orm";
+import { eq, desc, asc, and, or, gte, lte, sql, inArray, isNull, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser, users,
@@ -219,14 +219,57 @@ export async function getUserByOpenId(openId: string) {
 }
 
 // ==================== EMPLOYEES ====================
+export interface EmployeeFilters {
+  businessId?: number;
+  search?: string;
+  role?: string;
+  isActive?: boolean;
+}
+
+// Column set for any employee query whose result may reach the client — omits passwordHash.
+const { passwordHash: _employeePasswordHashColumn, ...employeeSafeColumns } = getTableColumns(employees);
+
 export async function getAllEmployees(businessId?: number) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [];
   if (businessId) conditions.push(eq(employees.businessId, businessId));
-  return db.select().from(employees)
+  return db.select(employeeSafeColumns).from(employees)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(asc(employees.name));
+}
+
+export async function searchEmployees(filters: EmployeeFilters) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: any[] = [];
+  if (filters.businessId) conditions.push(eq(employees.businessId, filters.businessId));
+  if (filters.role) conditions.push(eq(employees.role, filters.role as any));
+  if (filters.isActive !== undefined) conditions.push(eq(employees.isActive, filters.isActive));
+  if (filters.search && filters.search.trim()) {
+    const term = `%${filters.search.trim()}%`;
+    conditions.push(
+      sql`(${employees.name} LIKE ${term} OR ${employees.username} LIKE ${term} OR ${employees.email} LIKE ${term})`
+    );
+  }
+  return db.select(employeeSafeColumns).from(employees)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(asc(employees.name));
+}
+
+const ADMIN_TIER_ROLES_FOR_QUERY = ["super_admin", "admin", "manager"] as const;
+
+/** Number of currently-active admin-tier employees (super_admin/admin/manager). */
+export async function countActiveAdminTierEmployees(excludeId?: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const conditions: any[] = [
+    eq(employees.isActive, true),
+    inArray(employees.role, ADMIN_TIER_ROLES_FOR_QUERY),
+  ];
+  if (excludeId) conditions.push(sql`${employees.id} != ${excludeId}`);
+  const rows = await db.select({ id: employees.id }).from(employees).where(and(...conditions));
+  return rows.length;
 }
 
 export async function getActiveEmployees(businessId?: number) {
@@ -234,7 +277,7 @@ export async function getActiveEmployees(businessId?: number) {
   if (!db) return [];
   const conditions: any[] = [eq(employees.isActive, true)];
   if (businessId) conditions.push(eq(employees.businessId, businessId));
-  return db.select().from(employees)
+  return db.select(employeeSafeColumns).from(employees)
     .where(and(...conditions))
     .orderBy(asc(employees.name));
 }
@@ -242,7 +285,7 @@ export async function getActiveEmployees(businessId?: number) {
 export async function getEmployeeById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
-  const result = await db.select().from(employees).where(eq(employees.id, id)).limit(1);
+  const result = await db.select(employeeSafeColumns).from(employees).where(eq(employees.id, id)).limit(1);
   return result[0];
 }
 

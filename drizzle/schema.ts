@@ -82,12 +82,18 @@ export const employees = mysqlTable("employees", {
   name: varchar("name", { length: 100 }).notNull(),
   phone: varchar("phone", { length: 20 }),
   email: varchar("email", { length: 320 }),
-  role: mysqlEnum("role", ["agent", "warehouse", "manager", "facebook_entry", "scanner"]).default("agent").notNull(),
+  role: mysqlEnum("role", [
+    // existing roles — unchanged, still drive current admin/manager/employee-portal auth
+    "agent", "warehouse", "manager", "facebook_entry", "scanner",
+    // new roles (Sprint 3 employee management) — additive only
+    "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
+  ]).default("agent").notNull(),
   isActive: boolean("isActive").default(true).notNull(),
   businessId: int("businessId"),
   userId: int("userId"),
   username: varchar("username", { length: 50 }).unique(),
   passwordHash: varchar("passwordHash", { length: 255 }),
+  lastLoginAt: timestamp("lastLoginAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -142,7 +148,7 @@ export const orders = mysqlTable("orders", {
     "returned",
     "printed",
   ]).default("new").notNull(),
-  source: mysqlEnum("source", ["easyorder", "easyorder_ataba", "easyorder_farhat", "shopify", "whatsapp", "manual", "facebook"]).default("manual").notNull(),
+  source: mysqlEnum("source", ["easyorder", "easyorder_ataba", "easyorder_farhat", "easyorder_flashbox", "shopify", "whatsapp", "manual", "facebook"]).default("manual").notNull(),
   assignedEmployeeId: int("assignedEmployeeId"),
   assignedAt: timestamp("assignedAt"),
   confirmedAt: timestamp("confirmedAt"),
@@ -160,6 +166,7 @@ export const orders = mysqlTable("orders", {
   employeeNotes: text("employeeNotes"),
   lastUpdatedBy: int("lastUpdatedBy"),
   importRowIndex: int("importRowIndex"),
+  importBatchId: int("importBatchId"),
   externalOrderId: varchar("externalOrderId", { length: 100 }),
   easyOrderShortId: int("easyOrderShortId"),
   adName: varchar("adName", { length: 255 }),
@@ -427,3 +434,26 @@ export const scanLogs = mysqlTable("scan_logs", {
 });
 export type ScanLog = typeof scanLogs.$inferSelect;
 export type InsertScanLog = typeof scanLogs.$inferInsert;
+
+// ==================== IMPORT BATCHES ====================
+// سجل كل عملية استيراد جماعي (مثل استيراد الأوردرات التاريخية) — يسمح بمعرفة
+// كل أوردر جاء من أي دفعة، ومن نفّذها، ولإمكانية التراجع عن دفعة بعينها لاحقًا.
+export const importBatches = mysqlTable("import_batches", {
+  id: int("id").autoincrement().primaryKey(),
+  label: varchar("label", { length: 150 }).notNull(),
+  source: varchar("source", { length: 100 }).notNull(),
+  status: mysqlEnum("status", ["running", "completed", "failed", "rolled_back"]).default("running").notNull(),
+  totalRows: int("totalRows").default(0).notNull(),
+  importedCount: int("importedCount").default(0).notNull(),
+  skippedCount: int("skippedCount").default(0).notNull(),
+  duplicateCount: int("duplicateCount").default(0).notNull(),
+  performedBy: int("performedBy").notNull(),
+  performedByName: varchar("performedByName", { length: 100 }),
+  startedAt: timestamp("startedAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+  rolledBackAt: timestamp("rolledBackAt"),
+  rolledBackBy: int("rolledBackBy"),
+  errorSummary: text("errorSummary"),
+});
+export type ImportBatch = typeof importBatches.$inferSelect;
+export type InsertImportBatch = typeof importBatches.$inferInsert;

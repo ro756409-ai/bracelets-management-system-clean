@@ -17,32 +17,63 @@ import { Plus, Edit, Trash2, Users, UserCheck, UserX, KeyRound, Eye, EyeOff, Cop
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 
-const ROLE_LABELS: Record<string, string> = {
+// يجب أن تطابق EMPLOYEE_ROLE_VALUES في server/permissions.ts
+const EMPLOYEE_ROLES = [
+  "agent", "warehouse", "manager", "facebook_entry", "scanner",
+  "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
+] as const;
+
+type EmployeeRoleValue = (typeof EMPLOYEE_ROLES)[number];
+
+const ROLE_LABELS: Record<EmployeeRoleValue, string> = {
   agent: "موظف تأكيدات",
   warehouse: "موظف مخزن",
   manager: "مدير",
   facebook_entry: "إدخال فيسبوك",
   scanner: "موظف اسكان",
+  super_admin: "مسؤول عام",
+  admin: "مسؤول إداري",
+  data_entry: "إدخال بيانات",
+  order_confirmation: "تأكيد الطلبات",
+  shipping: "شحن",
+  accountant: "محاسب",
+  viewer: "مشاهدة فقط",
 };
 
-const ROLE_COLORS: Record<string, string> = {
+const ROLE_COLORS: Record<EmployeeRoleValue, string> = {
   agent: "bg-blue-100 text-blue-700",
   warehouse: "bg-purple-100 text-purple-700",
   manager: "bg-amber-100 text-amber-700",
   facebook_entry: "bg-indigo-100 text-indigo-700",
   scanner: "bg-green-100 text-green-700",
+  super_admin: "bg-red-100 text-red-700",
+  admin: "bg-amber-100 text-amber-700",
+  data_entry: "bg-cyan-100 text-cyan-700",
+  order_confirmation: "bg-teal-100 text-teal-700",
+  shipping: "bg-sky-100 text-sky-700",
+  accountant: "bg-emerald-100 text-emerald-700",
+  viewer: "bg-gray-100 text-gray-700",
 };
+
+const ALL_ROLES = EMPLOYEE_ROLES;
 
 type EmployeeForm = {
   name: string;
   phone: string;
   email: string;
-  role: "agent" | "warehouse" | "manager" | "facebook_entry" | "scanner";
+  role: EmployeeRoleValue;
 };
 
 const defaultForm: EmployeeForm = {
   name: "", phone: "", email: "", role: "agent",
 };
+
+function formatLastLogin(value: unknown): string {
+  if (!value) return "لم يسجل الدخول بعد";
+  const date = new Date(value as string);
+  if (Number.isNaN(date.getTime())) return "لم يسجل الدخول بعد";
+  return date.toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
 
 export default function Employees() {
   const { user } = useAuth();
@@ -68,9 +99,17 @@ export default function Employees() {
   const [reclaimEmpId, setReclaimEmpId] = useState<number | null>(null);
   const [reclaimEmpName, setReclaimEmpName] = useState("");
 
-  const { data: employees, isLoading } = trpc.employees.list.useQuery(
-    currentBusinessId ? { businessId: currentBusinessId } : undefined
-  );
+  // فلاتر قائمة الموظفين
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+
+  const { data: employees, isLoading } = trpc.employees.list.useQuery({
+    businessId: currentBusinessId ?? undefined,
+    search: search.trim() ? search.trim() : undefined,
+    role: roleFilter !== "all" ? (roleFilter as EmployeeRoleValue) : undefined,
+    isActive: statusFilter === "all" ? undefined : statusFilter === "active",
+  });
 
   // جرد كل الموظفين
   const { data: allInventory, isLoading: invLoading } = trpc.employees.allInventory.useQuery(undefined, {
@@ -491,7 +530,38 @@ export default function Employees() {
       {/* Employees List */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">قائمة الموظفين</CardTitle>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <CardTitle className="text-base">قائمة الموظفين</CardTitle>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="بحث بالاسم أو اسم المستخدم أو البريد"
+                className="h-8 w-56 text-sm"
+              />
+              <Select value={roleFilter} onValueChange={setRoleFilter}>
+                <SelectTrigger className="h-8 w-40 text-sm">
+                  <SelectValue placeholder="كل الأدوار" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل الأدوار</SelectItem>
+                  {ALL_ROLES.map(role => (
+                    <SelectItem key={role} value={role}>{ROLE_LABELS[role]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={statusFilter} onValueChange={v => setStatusFilter(v as typeof statusFilter)}>
+                <SelectTrigger className="h-8 w-32 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل الحالات</SelectItem>
+                  <SelectItem value="active">نشط فقط</SelectItem>
+                  <SelectItem value="inactive">غير نشط فقط</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
@@ -529,12 +599,15 @@ export default function Employees() {
                       {emp.phone && (
                         <p className="text-xs text-muted-foreground" dir="ltr">{emp.phone}</p>
                       )}
+                      <p className="text-xs text-muted-foreground">
+                        آخر دخول: {formatLastLogin((emp as any).lastLoginAt)}
+                      </p>
                     </div>
                   </div>
 
                   {/* Role Badge */}
-                  <Badge className={`${ROLE_COLORS[emp.role]} border-0 text-xs shrink-0`}>
-                    {ROLE_LABELS[emp.role]}
+                  <Badge className={`${ROLE_COLORS[emp.role] ?? "bg-gray-100 text-gray-700"} border-0 text-xs shrink-0`}>
+                    {ROLE_LABELS[emp.role] ?? emp.role}
                   </Badge>
 
                   {/* Actions */}
@@ -580,7 +653,9 @@ export default function Employees() {
               ))}
               {(!employees || employees.length === 0) && (
                 <div className="p-8 text-center text-muted-foreground">
-                  لا يوجد موظفون. أضف موظفاً جديداً للبدء.
+                  {search || roleFilter !== "all" || statusFilter !== "all"
+                    ? "لا يوجد موظفون مطابقون لهذا البحث/الفلتر."
+                    : "لا يوجد موظفون. أضف موظفاً جديداً للبدء."}
                 </div>
               )}
             </div>
@@ -631,11 +706,9 @@ export default function Employees() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="agent">موظف تأكيدات</SelectItem>
-                  <SelectItem value="warehouse">موظف مخزن</SelectItem>
-                  <SelectItem value="manager">مدير</SelectItem>
-                  <SelectItem value="facebook_entry">إدخال فيسبوك</SelectItem>
-                  <SelectItem value="scanner">موظف اسكان</SelectItem>
+                  {ALL_ROLES.map(role => (
+                    <SelectItem key={role} value={role}>{ROLE_LABELS[role]}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

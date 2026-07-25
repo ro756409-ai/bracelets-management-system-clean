@@ -13,6 +13,7 @@ import { employees } from "../drizzle/schema";
 import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
 import { orders as ordersTable } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
+import { isAdminTierRole, EMPLOYEE_ROLE_VALUES } from "./permissions";
 
 const EMP_JWT_SECRET = process.env.JWT_SECRET;
 const EMP_COOKIE = "employee_token";
@@ -48,6 +49,7 @@ import {
 import {
   getAllEmployees, getActiveEmployees, getEmployeeById,
   createEmployee, updateEmployee, deleteEmployee,
+  searchEmployees, countActiveAdminTierEmployees,
   getAllProducts, getProductById, createProduct, updateProduct,
   getLowStockProducts, addInventoryMovement, getInventoryMovements,
   getOrders, getOrderById, getOrdersByIds, createOrder, updateOrder,
@@ -116,8 +118,11 @@ export const appRouter = router({
   employees: router({
     list: protectedProcedure.input(z.object({
       businessId: z.number().optional(),
+      search: z.string().optional(),
+      role: z.enum(EMPLOYEE_ROLE_VALUES).optional(),
+      isActive: z.boolean().optional(),
     }).optional()).query(async ({ input }) => {
-      return getAllEmployees(input?.businessId);
+      return searchEmployees(input ?? {});
     }),
     activeList: protectedProcedure.input(z.object({
       businessId: z.number().optional(),
@@ -131,7 +136,7 @@ export const appRouter = router({
       name: z.string().min(2),
       phone: z.string().optional(),
       email: z.string().email().optional(),
-      role: z.enum(['agent', 'warehouse', 'manager', 'facebook_entry', 'scanner']).default('agent'),
+      role: z.enum(EMPLOYEE_ROLE_VALUES).default('agent'),
       businessId: z.number().optional(),
     })).mutation(async ({ input }) => {
       await createEmployee(input);
@@ -142,15 +147,46 @@ export const appRouter = router({
       name: z.string().min(2).optional(),
       phone: z.string().optional(),
       email: z.string().email().optional(),
-      role: z.enum(['agent', 'warehouse', 'manager', 'facebook_entry', 'scanner']).optional(),
+      role: z.enum(EMPLOYEE_ROLE_VALUES).optional(),
       isActive: z.boolean().optional(),
       businessId: z.number().optional(),
-    })).mutation(async ({ input }) => {
+    })).mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const target = await getEmployeeById(id);
+      if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'الموظف غير موجود' });
+
+      const revokesAdminAccess =
+        data.isActive === false || (data.role !== undefined && !isAdminTierRole(data.role));
+
+      if (revokesAdminAccess && isAdminTierRole(target.role) && target.isActive) {
+        const actingEmployeeId = await resolveActingEmployeeId(ctx);
+        if (actingEmployeeId === id) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'لا يمكنك إلغاء صلاحيتك الإدارية عن حسابك الخاص' });
+        }
+        const remaining = await countActiveAdminTierEmployees(id);
+        if (remaining === 0) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'لا يمكن ذلك — يجب أن يبقى مسؤول إداري واحد نشط على الأقل' });
+        }
+      }
+
       await updateEmployee(id, data);
       return { success: true };
     }),
-    delete: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
+    delete: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ ctx, input }) => {
+      const target = await getEmployeeById(input.id);
+      if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'الموظف غير موجود' });
+
+      if (isAdminTierRole(target.role) && target.isActive) {
+        const actingEmployeeId = await resolveActingEmployeeId(ctx);
+        if (actingEmployeeId === input.id) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'لا يمكنك حذف حسابك الخاص' });
+        }
+        const remaining = await countActiveAdminTierEmployees(input.id);
+        if (remaining === 0) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'لا يمكن حذف آخر مسؤول إداري نشط' });
+        }
+      }
+
       await deleteEmployee(input.id);
       return { success: true };
     }),
