@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
@@ -14,11 +15,12 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
-  Package, Plus, Minus, AlertTriangle, TrendingUp, TrendingDown,
-  History, ArrowDownCircle, ArrowUpCircle, BarChart3, ClipboardList, Pencil, Check, X, Grid3X3, Trash2, Save, Tag,
-  ChevronDown, ChevronUp, Archive, ArchiveRestore,
+  Package, Plus, AlertTriangle,
+  History, ArrowDownCircle, ArrowUpCircle, ClipboardList, Pencil, Save, Tag,
+  ChevronDown, ChevronUp, Archive, ArchiveRestore, Search, ArrowUpDown, EyeOff, Eye,
 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { getStockStatus, computeVariantTotals, type StockStatus } from "@shared/inventoryCalculations";
 
 // Reason presets
 const IN_REASONS = [
@@ -35,17 +37,43 @@ const OUT_REASONS = [
   "خصم يدوي",
 ];
 
+const STATUS_LABELS: Record<StockStatus, string> = {
+  available: "متوفر", low: "منخفض", out: "نفد المخزون", archived: "مؤرشف",
+};
+const STATUS_CLASSES: Record<StockStatus, string> = {
+  available: "bg-green-100 text-green-700 border-0",
+  low: "bg-yellow-100 text-yellow-700 border-0",
+  out: "bg-red-100 text-red-700 border-0",
+  archived: "bg-gray-100 text-gray-600 border-0",
+};
+
+function StatusBadge({ status }: { status: StockStatus }) {
+  return <Badge className={`text-xs shrink-0 ${STATUS_CLASSES[status]}`}>{STATUS_LABELS[status]}</Badge>;
+}
+
+function variantLabel(v: any): string {
+  return v.name || [v.color, v.size].filter(Boolean).join(" - ") || "بدون اسم";
+}
+
 export default function Inventory() {
   const utils = trpc.useUtils();
   const { currentBusinessIds, currentGroup } = useBusinessContext();
 
-  // Dialog state
+  // ---- Page controls: search / filter / sort / archived toggle ----
+  const [search, setSearch] = useState("");
+  const [stockStatusFilter, setStockStatusFilter] = useState<"all" | "available" | "low" | "out">("all");
+  const [showArchived, setShowArchived] = useState(false);
+  const [sortBy, setSortBy] = useState<"name" | "stock" | "price" | "updated">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  // Dialog state — product-level movement
   const [showMovementDialog, setShowMovementDialog] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [movementType, setMovementType] = useState<"in" | "out">("in");
   const [quantity, setQuantity] = useState("1");
   const [reason, setReason] = useState("");
   const [customReason, setCustomReason] = useState("");
+  const [movementNotes, setMovementNotes] = useState("");
 
   // History / daily log
   const [showHistory, setShowHistory] = useState(false);
@@ -69,21 +97,19 @@ export default function Inventory() {
   // Product archive confirm
   const [archiveProductTarget, setArchiveProductTarget] = useState<any | null>(null);
 
-  // Edit stock state
+  // Edit stock state (standalone products only — direct stock edit was never asked to be
+  // removed for standalone products, only for variants; kept as-is)
   const [editingProductId, setEditingProductId] = useState<number | null>(null);
   const [editStockValue, setEditStockValue] = useState("");
 
-  // Variant stock edit
-  const [editingVariantId, setEditingVariantId] = useState<number | null>(null);
-  const [editVariantStockValue, setEditVariantStockValue] = useState("");
-
-  // Variant movement
+  // Variant movement (incoming/outgoing)
   const [showVariantMovementDialog, setShowVariantMovementDialog] = useState(false);
   const [selectedVariantId, setSelectedVariantId] = useState<number | null>(null);
   const [variantMovementType, setVariantMovementType] = useState<"in" | "out">("in");
   const [variantQuantity, setVariantQuantity] = useState("1");
   const [variantReason, setVariantReason] = useState("");
   const [variantCustomReason, setVariantCustomReason] = useState("");
+  const [variantMovementNotes, setVariantMovementNotes] = useState("");
 
   // Variant create/edit dialog
   const [showVariantFormDialog, setShowVariantFormDialog] = useState(false);
@@ -91,14 +117,14 @@ export default function Inventory() {
   const [variantFormProductId, setVariantFormProductId] = useState<number | null>(null);
   const [variantFormId, setVariantFormId] = useState<number | null>(null);
   const [vfName, setVfName] = useState("");
-  const [vfColor, setVfColor] = useState("");
-  const [vfSize, setVfSize] = useState("");
   const [vfSku, setVfSku] = useState("");
   const [vfPrice, setVfPrice] = useState("");
-  const [vfStock, setVfStock] = useState("0");
+  const [vfCostPrice, setVfCostPrice] = useState("");
+  const [vfStock, setVfStock] = useState("0"); // create-only ("initial stock")
   const [vfMinStock, setVfMinStock] = useState("5");
+  const [vfIsActive, setVfIsActive] = useState(true);
 
-  // Variant delete confirm
+  // Variant archive confirm
   const [deleteVariantTarget, setDeleteVariantTarget] = useState<any | null>(null);
 
   // Product price edit dialog
@@ -106,9 +132,10 @@ export default function Inventory() {
   const [priceProductId, setPriceProductId] = useState<number | null>(null);
   const [priceValue, setPriceValue] = useState("");
 
-  const { data: products, isLoading } = trpc.products.list.useQuery(
-    currentBusinessIds ? { businessIds: currentBusinessIds } : undefined
-  );
+  const { data: rawProducts, isLoading } = trpc.products.list.useQuery({
+    ...(currentBusinessIds ? { businessIds: currentBusinessIds } : {}),
+    includeInactive: true,
+  });
   const { data: lowStock } = trpc.products.lowStock.useQuery(
     currentBusinessIds ? { businessIds: currentBusinessIds } : undefined
   );
@@ -118,10 +145,11 @@ export default function Inventory() {
     businessIds: currentBusinessIds,
   });
 
-  // Variants query
-  const { data: allVariants, isLoading: variantsLoading } = trpc.variants.all.useQuery(
-    currentBusinessIds ? { businessIds: currentBusinessIds } : {}
-  );
+  // Variants query (all, including archived — filtered client-side by showArchived)
+  const { data: rawVariants, isLoading: variantsLoading } = trpc.variants.all.useQuery({
+    ...(currentBusinessIds ? { businessIds: currentBusinessIds } : {}),
+    includeInactive: true,
+  });
 
   const addMovementMutation = trpc.products.addMovement.useMutation({
     onSuccess: () => {
@@ -134,6 +162,7 @@ export default function Inventory() {
       setQuantity("1");
       setReason("");
       setCustomReason("");
+      setMovementNotes("");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -149,17 +178,7 @@ export default function Inventory() {
     onError: (e) => toast.error(e.message),
   });
 
-  const updateVariantMutation = trpc.variants.update.useMutation({
-    onSuccess: () => {
-      toast.success("تم تحديث جرد الـ variant بنجاح");
-      utils.variants.all.invalidate();
-      setEditingVariantId(null);
-      setEditVariantStockValue("");
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const updateVariantStockMutation = trpc.variants.updateStock.useMutation({
+  const variantMovementMutation = trpc.variants.addMovement.useMutation({
     onSuccess: () => {
       toast.success("تم تحديث المخزون بنجاح");
       utils.variants.all.invalidate();
@@ -167,6 +186,7 @@ export default function Inventory() {
       setVariantQuantity("1");
       setVariantReason("");
       setVariantCustomReason("");
+      setVariantMovementNotes("");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -191,7 +211,16 @@ export default function Inventory() {
 
   const deleteVariantMutation = trpc.variants.delete.useMutation({
     onSuccess: () => {
-      toast.success("تم حذف الصنف");
+      toast.success(deleteVariantTarget?.isActive === false ? "تم إعادة تفعيل الصنف" : "تم أرشفة الصنف");
+      utils.variants.all.invalidate();
+      setDeleteVariantTarget(null);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const reactivateVariantMutation = trpc.variants.update.useMutation({
+    onSuccess: () => {
+      toast.success("تم إعادة تفعيل الصنف");
       utils.variants.all.invalidate();
       setDeleteVariantTarget(null);
     },
@@ -241,7 +270,7 @@ export default function Inventory() {
     setVariantFormMode("create");
     setVariantFormProductId(productId);
     setVariantFormId(null);
-    setVfName(""); setVfColor(""); setVfSize(""); setVfSku(""); setVfPrice(""); setVfStock("0"); setVfMinStock("5");
+    setVfName(""); setVfSku(""); setVfPrice(""); setVfCostPrice(""); setVfStock("0"); setVfMinStock("5"); setVfIsActive(true);
     setShowVariantFormDialog(true);
   }
 
@@ -250,12 +279,11 @@ export default function Inventory() {
     setVariantFormProductId(variant.productId);
     setVariantFormId(variant.id);
     setVfName(variant.name ?? "");
-    setVfColor(variant.color ?? "");
-    setVfSize(variant.size ?? "");
     setVfSku(variant.sku ?? "");
     setVfPrice(variant.price != null ? String(variant.price) : "");
-    setVfStock(String(variant.currentStock ?? 0));
+    setVfCostPrice(variant.costPrice != null ? String(variant.costPrice) : "");
     setVfMinStock(String(variant.minStockLevel ?? 5));
+    setVfIsActive(variant.isActive !== false);
     setShowVariantFormDialog(true);
   }
 
@@ -266,44 +294,57 @@ export default function Inventory() {
   }
 
   function submitVariantForm() {
-    if (!vfName.trim() && !vfColor.trim() && !vfSize.trim()) {
-      toast.error("لازم تدخل اسم النوع أو اللون أو المقاس على الأقل");
+    if (!vfName.trim()) {
+      toast.error("اسم النوع مطلوب");
       return;
     }
-    const stockNum = Number(vfStock);
+    if (!vfSku.trim()) {
+      toast.error("رمز المنتج (SKU) مطلوب");
+      return;
+    }
     const minNum = Number(vfMinStock);
-    if (isNaN(stockNum) || stockNum < 0 || isNaN(minNum) || minNum < 0) {
-      toast.error("المخزون والحد الأدنى لازم أرقام صحيحة");
+    if (isNaN(minNum) || minNum < 0) {
+      toast.error("الحد الأدنى لازم يكون رقم صحيح غير سالب");
       return;
     }
     const priceNum = vfPrice.trim() === "" ? undefined : Number(vfPrice);
     if (priceNum !== undefined && (isNaN(priceNum) || priceNum < 0)) {
-      toast.error("السعر لازم رقم صحيح");
+      toast.error("سعر البيع لازم يكون رقم صحيح غير سالب");
+      return;
+    }
+    const costPriceNum = vfCostPrice.trim() === "" ? undefined : Number(vfCostPrice);
+    if (costPriceNum !== undefined && (isNaN(costPriceNum) || costPriceNum < 0)) {
+      toast.error("سعر التكلفة لازم يكون رقم صحيح غير سالب");
       return;
     }
     if (variantFormMode === "create") {
       if (!variantFormProductId) return;
+      const stockNum = Number(vfStock);
+      if (isNaN(stockNum) || stockNum < 0) {
+        toast.error("المخزون الابتدائي لازم يكون رقم صحيح غير سالب");
+        return;
+      }
       createVariantMutation.mutate({
         productId: variantFormProductId,
-        name: vfName.trim() || undefined,
-        color: vfColor.trim() || undefined,
-        size: vfSize.trim() || undefined,
-        sku: vfSku.trim() || undefined,
+        name: vfName.trim(),
+        sku: vfSku.trim(),
         price: priceNum,
+        costPrice: costPriceNum,
         currentStock: stockNum,
         minStockLevel: minNum,
+        isActive: vfIsActive,
       });
     } else {
       if (!variantFormId) return;
+      // Stock is intentionally NOT sent — edit dialog never overwrites currentStock directly.
       editVariantMutation.mutate({
         id: variantFormId,
-        name: vfName.trim() || undefined,
-        color: vfColor.trim() || undefined,
-        size: vfSize.trim() || undefined,
-        sku: vfSku.trim() || undefined,
+        name: vfName.trim(),
+        sku: vfSku.trim(),
         price: priceNum,
-        currentStock: stockNum,
+        costPrice: costPriceNum,
         minStockLevel: minNum,
+        isActive: vfIsActive,
       });
     }
   }
@@ -409,32 +450,13 @@ export default function Inventory() {
     setEditStockValue("");
   };
 
-  const startEditVariantStock = (variant: { id: number; currentStock: number }) => {
-    setEditingVariantId(variant.id);
-    setEditVariantStockValue(String(variant.currentStock));
-  };
-
-  const saveEditVariantStock = () => {
-    if (editingVariantId === null || editVariantStockValue === "") return;
-    const newStock = Number(editVariantStockValue);
-    if (isNaN(newStock) || newStock < 0) {
-      toast.error("يرجى إدخال رقم صحيح");
-      return;
-    }
-    updateVariantMutation.mutate({ id: editingVariantId, currentStock: newStock });
-  };
-
-  const cancelEditVariantStock = () => {
-    setEditingVariantId(null);
-    setEditVariantStockValue("");
-  };
-
   const handleMovement = (productId: number, type: "in" | "out") => {
     setSelectedProductId(productId);
     setMovementType(type);
     setQuantity("1");
     setReason("");
     setCustomReason("");
+    setMovementNotes("");
     setShowMovementDialog(true);
   };
 
@@ -444,6 +466,7 @@ export default function Inventory() {
     setVariantQuantity("1");
     setVariantReason("");
     setVariantCustomReason("");
+    setVariantMovementNotes("");
     setShowVariantMovementDialog(true);
   };
 
@@ -455,24 +478,100 @@ export default function Inventory() {
       type: movementType,
       quantity: Number(quantity),
       reason: finalReason || undefined,
+      notes: movementNotes.trim() || undefined,
     });
   };
 
   const handleSubmitVariantMovement = () => {
     if (!selectedVariantId || !variantQuantity) return;
-    const delta = variantMovementType === 'in' ? Number(variantQuantity) : -Number(variantQuantity);
-    updateVariantStockMutation.mutate({
+    const finalReason = variantReason === "__custom__" ? variantCustomReason : variantReason;
+    variantMovementMutation.mutate({
       variantId: selectedVariantId,
-      delta,
+      type: variantMovementType,
+      quantity: Number(variantQuantity),
+      reason: finalReason || undefined,
+      notes: variantMovementNotes.trim() || undefined,
     });
   };
 
-  const selectedProduct = products?.find(p => p.id === selectedProductId);
-  const selectedVariant = allVariants?.find((v: any) => v.id === selectedVariantId);
-  const totalStock = products?.reduce((sum, p) => sum + p.currentStock, 0) ?? 0;
-  const totalVariantStock = allVariants?.reduce((sum: number, v: any) => sum + v.currentStock, 0) ?? 0;
+  const selectedProduct = rawProducts?.find(p => p.id === selectedProductId);
+  const selectedVariant = rawVariants?.find((v: any) => v.id === selectedVariantId);
+
+  // Group ALL variants (active + archived) by product — archived-visibility is applied later per-view.
+  const variantsByProduct = useMemo(() => {
+    if (!rawVariants) return {} as Record<number, { productName: string; variants: any[] }>;
+    const grouped: Record<number, { productName: string; variants: any[] }> = {};
+    for (const v of rawVariants as any[]) {
+      const key = v.productId;
+      if (!grouped[key]) grouped[key] = { productName: v.productName || `منتج #${v.productId}`, variants: [] };
+      grouped[key].variants.push(v);
+    }
+    return grouped;
+  }, [rawVariants]);
+
+  // ---- Search / filter / sort pipeline ----
+  const searchLower = search.trim().toLowerCase();
+  function matchesSearch(name?: string | null, sku?: string | null): boolean {
+    if (!searchLower) return true;
+    return (name ?? "").toLowerCase().includes(searchLower) || (sku ?? "").toLowerCase().includes(searchLower);
+  }
+
+  const rows = useMemo(() => {
+    if (!rawProducts) return [];
+    const list = rawProducts.map(product => {
+      const group = variantsByProduct[product.id];
+      const allVariantsForProduct = group?.variants ?? [];
+      const hasVariants = allVariantsForProduct.length > 0;
+      const visibleVariants = allVariantsForProduct
+        .filter(v => showArchived || v.isActive)
+        .filter(v => matchesSearch(v.name, v.sku) || !searchLower || matchesSearch(product.name, product.sku));
+      const { totalStock: variantTotalStock, totalValue, attentionCount } = computeVariantTotals(allVariantsForProduct);
+      const totalStock = hasVariants ? variantTotalStock : product.currentStock;
+
+      const productMatches = matchesSearch(product.name, product.sku);
+      const variantMatches = allVariantsForProduct.some(v => (showArchived || v.isActive) && matchesSearch(v.name, v.sku));
+      const searchOk = !searchLower || productMatches || variantMatches;
+
+      const productStatus = getStockStatus(product.isActive, product.currentStock, product.minStockLevel);
+      const statusOk = stockStatusFilter === "all"
+        ? true
+        : hasVariants
+          ? visibleVariants.some(v => getStockStatus(v.isActive, v.currentStock, v.minStockLevel) === stockStatusFilter)
+          : productStatus === stockStatusFilter;
+
+      const archivedOk = showArchived || product.isActive;
+
+      const minPrice = hasVariants
+        ? visibleVariants.reduce((min, v) => v.price != null && (min === null || Number(v.price) < min) ? Number(v.price) : min, null as number | null)
+        : (product.price != null ? Number(product.price) : null);
+
+      return {
+        product, group, hasVariants, visibleVariants, totalStock, totalValue, attentionCount,
+        include: archivedOk && searchOk && statusOk,
+        forceExpand: !!searchLower && !productMatches && variantMatches,
+        sortKeys: {
+          name: product.name,
+          stock: totalStock,
+          price: minPrice ?? -1,
+          updated: new Date(product.updatedAt as any).getTime(),
+        },
+      };
+    }).filter(r => r.include);
+
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "name") cmp = a.sortKeys.name.localeCompare(b.sortKeys.name, "ar");
+      else cmp = (a.sortKeys[sortBy] as number) - (b.sortKeys[sortBy] as number);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return list;
+  }, [rawProducts, variantsByProduct, showArchived, searchLower, stockStatusFilter, sortBy, sortDir]);
+
+  const totalStockAll = rows.reduce((s, r) => s + r.totalStock, 0);
   const lowStockCount = lowStock?.length ?? 0;
-  const lowVariantCount = allVariants?.filter((v: any) => v.currentStock <= v.minStockLevel).length ?? 0;
+  const lowVariantCount = (rawVariants as any[] | undefined)?.filter(
+    (v: any) => v.isActive && getStockStatus(true, v.currentStock, v.minStockLevel) !== "available"
+  ).length ?? 0;
 
   // Daily log: group movements by date
   const dailyLog = useMemo(() => {
@@ -498,19 +597,7 @@ export default function Inventory() {
   const todayIn = todayLog?.inQty ?? 0;
   const todayOut = todayLog?.outQty ?? 0;
 
-  // Group variants by product
-  const variantsByProduct = useMemo(() => {
-    if (!allVariants) return {};
-    const grouped: Record<string, { productName: string; variants: any[] }> = {};
-    for (const v of allVariants as any[]) {
-      const key = v.productId;
-      if (!grouped[key]) {
-        grouped[key] = { productName: v.productName || `منتج #${v.productId}`, variants: [] };
-      }
-      grouped[key].variants.push(v);
-    }
-    return grouped;
-  }, [allVariants]);
+  const hasActiveFilters = !!search || stockStatusFilter !== "all" || showArchived;
 
   return (
     <div className="space-y-6">
@@ -553,7 +640,7 @@ export default function Inventory() {
         <Card>
           <CardContent className="p-4 text-center">
             <Package className="h-6 w-6 text-primary mx-auto mb-2" />
-            <p className="text-2xl font-bold text-foreground">{(totalStock + totalVariantStock).toLocaleString('ar-EG')}</p>
+            <p className="text-2xl font-bold text-foreground">{totalStockAll.toLocaleString('ar-EG')}</p>
             <p className="text-xs text-muted-foreground mt-1">إجمالي المخزون</p>
           </CardContent>
         </Card>
@@ -561,7 +648,7 @@ export default function Inventory() {
           <CardContent className="p-4 text-center">
             <AlertTriangle className={`h-6 w-6 mx-auto mb-2 ${(lowStockCount + lowVariantCount) > 0 ? 'text-destructive' : 'text-muted-foreground'}`} />
             <p className={`text-2xl font-bold ${(lowStockCount + lowVariantCount) > 0 ? 'text-destructive' : 'text-foreground'}`}>{lowStockCount + lowVariantCount}</p>
-            <p className="text-xs text-muted-foreground mt-1">صنف ينفد</p>
+            <p className="text-xs text-muted-foreground mt-1">صنف يحتاج تخزين</p>
           </CardContent>
         </Card>
         <Card>
@@ -600,13 +687,78 @@ export default function Inventory() {
       {/* ===== TAB: PRODUCTS (with nested variants) ===== */}
       {activeTab === "products" && (
         <>
+          {/* Page controls: search / status filter / archived toggle / sort */}
+          <Card>
+            <CardContent className="p-3 flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="h-4 w-4 text-muted-foreground absolute right-3 top-1/2 -translate-y-1/2" />
+                <Input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="بحث بالمنتج، النوع، أو SKU..."
+                  className="pr-9 h-9"
+                />
+              </div>
+              <Select value={stockStatusFilter} onValueChange={v => setStockStatusFilter(v as typeof stockStatusFilter)}>
+                <SelectTrigger className="w-40 h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل الحالات</SelectItem>
+                  <SelectItem value="available">متوفر</SelectItem>
+                  <SelectItem value="low">منخفض</SelectItem>
+                  <SelectItem value="out">نفد المخزون</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={sortBy} onValueChange={v => setSortBy(v as typeof sortBy)}>
+                <SelectTrigger className="w-36 h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="name">ترتيب بالاسم</SelectItem>
+                  <SelectItem value="stock">ترتيب بالمخزون</SelectItem>
+                  <SelectItem value="price">ترتيب بالسعر</SelectItem>
+                  <SelectItem value="updated">ترتيب بآخر تحديث</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 w-9 p-0"
+                onClick={() => setSortDir(d => d === "asc" ? "desc" : "asc")}
+                title={sortDir === "asc" ? "تصاعدي" : "تنازلي"}
+              >
+                <ArrowUpDown className="h-4 w-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant={showArchived ? "default" : "outline"}
+                className="h-9"
+                onClick={() => setShowArchived(s => !s)}
+              >
+                {showArchived ? <Eye className="h-3.5 w-3.5 ml-1" /> : <EyeOff className="h-3.5 w-3.5 ml-1" />}
+                {showArchived ? "إخفاء المؤرشف" : "إظهار المؤرشف"}
+              </Button>
+              {hasActiveFilters && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-9 text-xs text-muted-foreground"
+                  onClick={() => { setSearch(""); setStockStatusFilter("all"); setShowArchived(false); }}
+                >
+                  مسح الفلاتر
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+
           {isLoading || variantsLoading ? (
             <div className="space-y-4">
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="h-32 bg-muted animate-pulse rounded-xl" />
               ))}
             </div>
-          ) : !products || products.length === 0 ? (
+          ) : !rawProducts || rawProducts.length === 0 ? (
             <Card>
               <CardContent className="p-12 text-center">
                 <Package className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
@@ -617,13 +769,19 @@ export default function Inventory() {
                 </Button>
               </CardContent>
             </Card>
+          ) : rows.length === 0 ? (
+            <Card>
+              <CardContent className="p-12 text-center">
+                <Search className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
+                <p className="text-muted-foreground">لا توجد نتائج مطابقة للبحث/الفلاتر الحالية</p>
+              </CardContent>
+            </Card>
           ) : (
             <div className="space-y-4">
-              {products.map(product => {
-                const group = variantsByProduct[product.id];
-                const hasVariants = !!group && group.variants.length > 0;
-                const isExpanded = !!expandedProducts[product.id];
-                const isLow = !hasVariants && product.currentStock <= product.minStockLevel;
+              {rows.map(({ product, hasVariants, visibleVariants, totalStock, totalValue, attentionCount, forceExpand }) => {
+                const isExpanded = forceExpand || !!expandedProducts[product.id];
+                const productStatus = getStockStatus(product.isActive, product.currentStock, product.minStockLevel);
+                const isLow = !hasVariants && (productStatus === "low" || productStatus === "out");
                 const stockPct = Math.min(100, Math.round((product.currentStock / Math.max(product.minStockLevel * 3, 1)) * 100));
 
                 return (
@@ -645,28 +803,46 @@ export default function Inventory() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-foreground">{product.name}</span>
-                            {!product.isActive && <Badge variant="outline" className="text-xs">مؤرشف</Badge>}
+                            {!product.isActive && <StatusBadge status="archived" />}
                             {product.sku && <span className="text-xs text-muted-foreground font-mono">{product.sku}</span>}
                             {hasVariants && (
                               <>
-                                <Badge variant="secondary" className="text-xs">{group.variants.length} نوع</Badge>
-                                <Badge variant="outline" className="text-xs">
-                                  إجمالي: {group.variants.reduce((s: number, v: any) => s + v.currentStock, 0)} قطعة
+                                <Badge variant="secondary" className="text-xs">
+                                  {visibleVariants.filter(v => v.isActive).length} نوع نشط
                                 </Badge>
+                                <Badge variant="outline" className="text-xs">
+                                  إجمالي المخزون: {totalStock} قطعة
+                                </Badge>
+                                {totalValue !== null && (
+                                  <Badge variant="outline" className="text-xs">
+                                    قيمة المخزون: {totalValue.toLocaleString('ar-EG')} ج.م
+                                  </Badge>
+                                )}
+                                {attentionCount > 0 && (
+                                  <Badge variant="destructive" className="text-xs">
+                                    <AlertTriangle className="h-3 w-3 ml-1" />
+                                    {attentionCount} نوع يحتاج تخزين
+                                  </Badge>
+                                )}
                               </>
                             )}
-                            {isLow && (
-                              <Badge variant="destructive" className="text-xs">
-                                <AlertTriangle className="h-3 w-3 ml-1" />
-                                ينفد
-                              </Badge>
-                            )}
+                            {isLow && <StatusBadge status={productStatus} />}
                           </div>
                           {product.description && (
                             <p className="text-xs text-muted-foreground mt-1">{product.description}</p>
                           )}
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 text-xs"
+                            onClick={() => openCreateVariant(product.id)}
+                            title="إضافة نوع"
+                          >
+                            <Plus className="h-3.5 w-3.5 ml-1" />
+                            نوع
+                          </Button>
                           <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-blue-600 hover:bg-blue-50" onClick={() => openEditProduct(product)} title="تعديل المنتج">
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
@@ -686,154 +862,101 @@ export default function Inventory() {
                     {hasVariants ? (
                       isExpanded && (
                         <CardContent>
-                          {/* Low stock variants alert */}
-                          {group.variants.some((v: any) => v.currentStock <= v.minStockLevel) && (
-                            <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 mb-4">
-                              <div className="flex items-center gap-2 mb-1">
-                                <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
-                                <p className="font-semibold text-destructive text-xs">أنواع تحتاج إعادة تخزين</p>
-                              </div>
-                              <div className="flex flex-wrap gap-1">
-                                {group.variants.filter((v: any) => v.currentStock <= v.minStockLevel).map((v: any) => (
-                                  <Badge key={v.id} variant="destructive" className="text-xs">
-                                    {v.name || [v.color, v.size].filter(Boolean).join(" - ") || "بدون اسم"}: {v.currentStock}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Variants Table */}
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                              <thead>
-                                <tr className="border-b border-border">
-                                  <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">النوع</th>
-                                  <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">السعر</th>
-                                  <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">SKU</th>
-                                  <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">المخزون</th>
-                                  <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">الحالة</th>
-                                  <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">إجراءات</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {group.variants.map((variant: any) => {
-                                  const vLow = variant.currentStock <= variant.minStockLevel;
-                                  const label = variant.name || [variant.color, variant.size].filter(Boolean).join(" - ") || "-";
-                                  return (
-                                    <tr key={variant.id} className={`border-b border-border/50 hover:bg-muted/30 ${vLow ? 'bg-destructive/5' : ''} ${!variant.isActive ? 'opacity-60' : ''}`}>
-                                      <td className="py-2.5 px-3">
-                                        <span className="font-medium text-foreground">{label}</span>
-                                        {!variant.isActive && <Badge variant="outline" className="text-xs mr-2">مؤرشف</Badge>}
-                                      </td>
-                                      <td className="py-2.5 px-3 text-center">
-                                        <span className="font-semibold text-foreground">{variant.price ? `${Number(variant.price).toLocaleString()} ج.م` : '-'}</span>
-                                      </td>
-                                      <td className="py-2.5 px-3">
-                                        <span className="text-xs text-muted-foreground font-mono">{variant.sku || '-'}</span>
-                                      </td>
-                                      <td className="py-2.5 px-3 text-center">
-                                        {editingVariantId === variant.id ? (
+                          {visibleVariants.length === 0 ? (
+                            <p className="text-sm text-muted-foreground text-center py-4">لا توجد أنواع مطابقة</p>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="border-b border-border">
+                                    <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">النوع</th>
+                                    <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">SKU</th>
+                                    <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">المخزون</th>
+                                    <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">الحد الأدنى</th>
+                                    <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">سعر البيع</th>
+                                    <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">سعر التكلفة</th>
+                                    <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">الحالة</th>
+                                    <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">إجراءات</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {visibleVariants.map((variant: any) => {
+                                    const vStatus = getStockStatus(variant.isActive, variant.currentStock, variant.minStockLevel);
+                                    return (
+                                      <tr key={variant.id} className={`border-b border-border/50 hover:bg-muted/30 ${vStatus === 'low' || vStatus === 'out' ? 'bg-destructive/5' : ''} ${!variant.isActive ? 'opacity-60' : ''}`}>
+                                        <td className="py-2.5 px-3">
+                                          <span className="font-medium text-foreground">{variantLabel(variant)}</span>
+                                        </td>
+                                        <td className="py-2.5 px-3">
+                                          <span className="text-xs text-muted-foreground font-mono">{variant.sku || '-'}</span>
+                                        </td>
+                                        <td className="py-2.5 px-3 text-center">
+                                          <span className={`font-bold ${vStatus === 'low' || vStatus === 'out' ? 'text-destructive' : 'text-foreground'}`}>
+                                            {variant.currentStock}
+                                          </span>
+                                        </td>
+                                        <td className="py-2.5 px-3 text-center">
+                                          <span className="text-muted-foreground">{variant.minStockLevel}</span>
+                                        </td>
+                                        <td className="py-2.5 px-3 text-center">
+                                          <span className="font-semibold text-foreground">{variant.price ? `${Number(variant.price).toLocaleString()} ج.م` : '-'}</span>
+                                        </td>
+                                        <td className="py-2.5 px-3 text-center">
+                                          <span className="text-muted-foreground">{variant.costPrice ? `${Number(variant.costPrice).toLocaleString()} ج.م` : '-'}</span>
+                                        </td>
+                                        <td className="py-2.5 px-3 text-center">
+                                          <StatusBadge status={vStatus} />
+                                        </td>
+                                        <td className="py-2.5 px-3">
                                           <div className="flex items-center justify-center gap-1">
-                                            <Input
-                                              type="number"
-                                              min="0"
-                                              value={editVariantStockValue}
-                                              onChange={e => setEditVariantStockValue(e.target.value)}
-                                              className="w-16 h-7 text-center text-sm font-bold"
-                                              autoFocus
-                                              onKeyDown={e => {
-                                                if (e.key === 'Enter') saveEditVariantStock();
-                                                if (e.key === 'Escape') cancelEditVariantStock();
-                                              }}
-                                            />
-                                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-green-600" onClick={saveEditVariantStock}>
-                                              <Check className="h-3 w-3" />
-                                            </Button>
-                                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-500" onClick={cancelEditVariantStock}>
-                                              <X className="h-3 w-3" />
-                                            </Button>
-                                          </div>
-                                        ) : (
-                                          <div className="flex items-center justify-center gap-1">
-                                            <span className={`font-bold ${vLow ? 'text-destructive' : 'text-foreground'}`}>
-                                              {variant.currentStock}
-                                            </span>
                                             <Button
                                               size="sm"
                                               variant="ghost"
-                                              className="h-5 w-5 p-0 text-muted-foreground hover:text-primary"
-                                              onClick={() => startEditVariantStock(variant)}
+                                              className="h-7 w-7 p-0 text-green-600 hover:bg-green-50"
+                                              onClick={() => handleVariantMovement(variant.id, 'in')}
+                                              title="وارد"
+                                              disabled={!variant.isActive}
                                             >
-                                              <Pencil className="h-2.5 w-2.5" />
+                                              <ArrowDownCircle className="h-3.5 w-3.5" />
+                                            </Button>
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
+                                              onClick={() => handleVariantMovement(variant.id, 'out')}
+                                              disabled={!variant.isActive || variant.currentStock === 0}
+                                              title="صادر"
+                                            >
+                                              <ArrowUpCircle className="h-3.5 w-3.5" />
+                                            </Button>
+                                            <div className="w-px h-5 bg-border mx-0.5" />
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="h-7 w-7 p-0 text-blue-600 hover:bg-blue-50"
+                                              onClick={() => openEditVariant(variant)}
+                                              title="تعديل الصنف"
+                                            >
+                                              <Pencil className="h-3.5 w-3.5" />
+                                            </Button>
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className={`h-7 w-7 p-0 ${variant.isActive ? 'text-red-600 hover:bg-red-50' : 'text-green-600 hover:bg-green-50'}`}
+                                              onClick={() => setDeleteVariantTarget(variant)}
+                                              title={variant.isActive ? "أرشفة الصنف" : "إعادة تفعيل الصنف"}
+                                            >
+                                              {variant.isActive ? <Archive className="h-3.5 w-3.5" /> : <ArchiveRestore className="h-3.5 w-3.5" />}
                                             </Button>
                                           </div>
-                                        )}
-                                      </td>
-                                      <td className="py-2.5 px-3 text-center">
-                                        {vLow ? (
-                                          <Badge variant="destructive" className="text-xs">ينفد</Badge>
-                                        ) : (
-                                          <Badge className="text-xs bg-green-100 text-green-700 border-0">متوفر</Badge>
-                                        )}
-                                      </td>
-                                      <td className="py-2.5 px-3">
-                                        <div className="flex items-center justify-center gap-1">
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            className="h-7 w-7 p-0 text-green-600 hover:bg-green-50"
-                                            onClick={() => handleVariantMovement(variant.id, 'in')}
-                                            title="وارد"
-                                          >
-                                            <ArrowDownCircle className="h-3.5 w-3.5" />
-                                          </Button>
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
-                                            onClick={() => handleVariantMovement(variant.id, 'out')}
-                                            disabled={variant.currentStock === 0}
-                                            title="صادر"
-                                          >
-                                            <ArrowUpCircle className="h-3.5 w-3.5" />
-                                          </Button>
-                                          <div className="w-px h-5 bg-border mx-0.5" />
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            className="h-7 w-7 p-0 text-blue-600 hover:bg-blue-50"
-                                            onClick={() => openEditVariant(variant)}
-                                            title="تعديل الصنف"
-                                          >
-                                            <Pencil className="h-3.5 w-3.5" />
-                                          </Button>
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
-                                            onClick={() => setDeleteVariantTarget(variant)}
-                                            title="أرشفة الصنف"
-                                          >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                          </Button>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="mt-3"
-                            onClick={() => openCreateVariant(product.id)}
-                          >
-                            <Plus className="h-3.5 w-3.5 ml-1" />
-                            إضافة نوع جديد
-                          </Button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                         </CardContent>
                       )
                     ) : (
@@ -856,15 +979,13 @@ export default function Inventory() {
                                     if (e.key === 'Escape') cancelEditStock();
                                   }}
                                 />
-                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" onClick={saveEditStock}>
-                                  <Check className="h-3.5 w-3.5" />
-                                </Button>
-                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500" onClick={cancelEditStock}>
-                                  <X className="h-3.5 w-3.5" />
+                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" onClick={saveEditStock} disabled={updateStockMutation.isPending}>
+                                  <Save className="h-3.5 w-3.5" />
                                 </Button>
                               </div>
                             ) : (
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-2">
+                                <StatusBadge status={productStatus} />
                                 <span className={`text-xl font-bold ${isLow ? 'text-destructive' : 'text-foreground'}`}>
                                   {product.currentStock} <span className="text-xs font-normal text-muted-foreground">قطعة</span>
                                 </span>
@@ -916,6 +1037,7 @@ export default function Inventory() {
                             size="sm"
                             className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9"
                             onClick={() => handleMovement(product.id, 'in')}
+                            disabled={!product.isActive}
                           >
                             <ArrowDownCircle className="h-3.5 w-3.5 ml-1" />
                             وارد
@@ -925,7 +1047,7 @@ export default function Inventory() {
                             variant="outline"
                             className="flex-1 border-red-300 text-red-600 hover:bg-red-50 h-9"
                             onClick={() => handleMovement(product.id, 'out')}
-                            disabled={product.currentStock === 0}
+                            disabled={!product.isActive || product.currentStock === 0}
                           >
                             <ArrowUpCircle className="h-3.5 w-3.5 ml-1" />
                             صادر
@@ -938,16 +1060,6 @@ export default function Inventory() {
                             title="سجل الحركات"
                           >
                             <History className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-9 shrink-0 text-xs"
-                            onClick={() => openCreateVariant(product.id)}
-                            title="إضافة أنواع لهذا المنتج"
-                          >
-                            <Grid3X3 className="h-3.5 w-3.5 ml-1" />
-                            إضافة نوع
                           </Button>
                         </div>
                       </CardContent>
@@ -974,7 +1086,7 @@ export default function Inventory() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">كل الأصناف</SelectItem>
-                {products?.map(p => (
+                {rawProducts?.map(p => (
                   <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
                 ))}
               </SelectContent>
@@ -1012,7 +1124,7 @@ export default function Inventory() {
                   <CardContent className="px-4 pb-4">
                     <div className="space-y-2">
                       {day.items.map((m: any) => {
-                        const productName = products?.find(p => p.id === m.productId)?.name ?? `صنف #${m.productId}`;
+                        const productName = rawProducts?.find(p => p.id === m.productId)?.name ?? `صنف #${m.productId}`;
                         return (
                           <div key={m.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-muted/40">
                             <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${m.type === 'in' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
@@ -1031,6 +1143,9 @@ export default function Inventory() {
                                   <span className="text-xs text-muted-foreground truncate">— {m.reason}</span>
                                 )}
                               </div>
+                              {m.notes && (
+                                <p className="text-xs text-muted-foreground mt-0.5">{m.notes}</p>
+                              )}
                               <p className="text-xs text-muted-foreground mt-0.5">
                                 {new Date(m.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
                               </p>
@@ -1118,6 +1233,17 @@ export default function Inventory() {
                 />
               )}
             </div>
+
+            <div>
+              <Label>مرجع/ملاحظات (اختياري)</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="رقم أوردر، اسم مورّد، أو أي ملاحظة إضافية..."
+                value={movementNotes}
+                onChange={e => setMovementNotes(e.target.value)}
+                rows={2}
+              />
+            </div>
           </div>
 
           <DialogFooter>
@@ -1175,7 +1301,7 @@ export default function Inventory() {
           <div className="space-y-4">
             <div className={`rounded-lg p-3 ${variantMovementType === 'in' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
               <p className="text-sm font-bold text-foreground">
-                {selectedVariant?.name || [selectedVariant?.color, selectedVariant?.size].filter(Boolean).join(" - ")}
+                {selectedVariant ? variantLabel(selectedVariant) : ''}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 المخزون الحالي: <span className="font-semibold">{selectedVariant?.currentStock}</span> قطعة
@@ -1197,6 +1323,41 @@ export default function Inventory() {
                 <p className="text-xs text-destructive mt-1">الكمية أكبر من المخزون المتاح</p>
               )}
             </div>
+
+            <div>
+              <Label>السبب</Label>
+              <Select value={variantReason} onValueChange={setVariantReason}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="اختر السبب..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(variantMovementType === 'in' ? IN_REASONS : OUT_REASONS).map(r => (
+                    <SelectItem key={r} value={r}>{r}</SelectItem>
+                  ))}
+                  <SelectItem value="__custom__">سبب آخر...</SelectItem>
+                </SelectContent>
+              </Select>
+              {variantReason === "__custom__" && (
+                <Textarea
+                  className="mt-2"
+                  placeholder="اكتب السبب..."
+                  value={variantCustomReason}
+                  onChange={e => setVariantCustomReason(e.target.value)}
+                  rows={2}
+                />
+              )}
+            </div>
+
+            <div>
+              <Label>مرجع/ملاحظات (اختياري)</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="رقم أوردر، اسم مورّد، أو أي ملاحظة إضافية..."
+                value={variantMovementNotes}
+                onChange={e => setVariantMovementNotes(e.target.value)}
+                rows={2}
+              />
+            </div>
           </div>
 
           <DialogFooter>
@@ -1207,11 +1368,11 @@ export default function Inventory() {
                 !variantQuantity ||
                 Number(variantQuantity) < 1 ||
                 (variantMovementType === 'out' && Number(variantQuantity) > (selectedVariant?.currentStock ?? 0)) ||
-                updateVariantStockMutation.isPending
+                variantMovementMutation.isPending
               }
               onClick={handleSubmitVariantMovement}
             >
-              {updateVariantStockMutation.isPending ? (
+              {variantMovementMutation.isPending ? (
                 <span className="flex items-center gap-2">
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   جاري الحفظ...
@@ -1239,9 +1400,9 @@ export default function Inventory() {
             <DialogTitle className="flex items-center gap-2">
               <History className="h-5 w-5" />
               سجل حركات المخزون
-              {historyProductId && products && (
+              {historyProductId && rawProducts && (
                 <span className="text-muted-foreground font-normal text-sm">
-                  — {products.find(p => p.id === historyProductId)?.name}
+                  — {rawProducts.find(p => p.id === historyProductId)?.name}
                 </span>
               )}
             </DialogTitle>
@@ -1251,7 +1412,7 @@ export default function Inventory() {
               <p className="text-center text-muted-foreground py-8">لا توجد حركات مخزون</p>
             ) : (
               movements.map((m: any) => {
-                const productName = products?.find(p => p.id === m.productId)?.name ?? `صنف #${m.productId}`;
+                const productName = rawProducts?.find(p => p.id === m.productId)?.name ?? `صنف #${m.productId}`;
                 return (
                   <div key={m.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${m.type === 'in' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
@@ -1270,6 +1431,7 @@ export default function Inventory() {
                           <span className="text-xs text-muted-foreground">— {m.reason}</span>
                         )}
                       </div>
+                      {m.notes && <p className="text-xs text-muted-foreground mt-0.5">{m.notes}</p>}
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {new Date(m.createdAt).toLocaleString('ar-EG')}
                       </p>
@@ -1299,37 +1461,46 @@ export default function Inventory() {
           </DialogHeader>
           <div className="space-y-3">
             <div>
-              <Label>اسم النوع</Label>
+              <Label>اسم النوع <span className="text-destructive">*</span></Label>
               <Input value={vfName} onChange={e => setVfName(e.target.value)} className="mt-1" placeholder="مثلاً: آية الكرسي" autoFocus />
+            </div>
+            <div>
+              <Label>SKU <span className="text-destructive">*</span></Label>
+              <Input value={vfSku} onChange={e => setVfSku(e.target.value)} className="mt-1 font-mono" placeholder="كود الصنف" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label>اللون (اختياري)</Label>
-                <Input value={vfColor} onChange={e => setVfColor(e.target.value)} className="mt-1" placeholder="مثلاً: ذهبي" />
-              </div>
-              <div>
-                <Label>المقاس (اختياري)</Label>
-                <Input value={vfSize} onChange={e => setVfSize(e.target.value)} className="mt-1" placeholder="مثلاً: وسط" />
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground -mt-1">لازم تدخل اسم النوع أو اللون أو المقاس على الأقل</p>
-            <div>
-              <Label>SKU (اختياري)</Label>
-              <Input value={vfSku} onChange={e => setVfSku(e.target.value)} className="mt-1 font-mono" placeholder="كود الصنف" />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label>السعر</Label>
+                <Label>سعر البيع</Label>
                 <Input type="number" min="0" value={vfPrice} onChange={e => setVfPrice(e.target.value)} className="mt-1" placeholder="ج.م" />
               </div>
               <div>
-                <Label>المخزون</Label>
-                <Input type="number" min="0" value={vfStock} onChange={e => setVfStock(e.target.value)} className="mt-1" />
+                <Label>سعر التكلفة (اختياري)</Label>
+                <Input type="number" min="0" value={vfCostPrice} onChange={e => setVfCostPrice(e.target.value)} className="mt-1" placeholder="ج.م" />
               </div>
+            </div>
+            {variantFormMode === "create" ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>المخزون الابتدائي</Label>
+                  <Input type="number" min="0" value={vfStock} onChange={e => setVfStock(e.target.value)} className="mt-1" />
+                </div>
+                <div>
+                  <Label>الحد الأدنى</Label>
+                  <Input type="number" min="0" value={vfMinStock} onChange={e => setVfMinStock(e.target.value)} className="mt-1" />
+                </div>
+              </div>
+            ) : (
               <div>
                 <Label>الحد الأدنى</Label>
                 <Input type="number" min="0" value={vfMinStock} onChange={e => setVfMinStock(e.target.value)} className="mt-1" />
+                <p className="text-xs text-muted-foreground mt-1">
+                  لتغيير المخزون الحالي استخدم زر "وارد"/"صادر" من الجدول، مش التعديل المباشر هنا.
+                </p>
               </div>
+            )}
+            <div className="flex items-center gap-2 pt-1">
+              <Checkbox id="vf-active" checked={vfIsActive} onCheckedChange={(c) => setVfIsActive(c === true)} />
+              <Label htmlFor="vf-active" className="cursor-pointer">نشط</Label>
             </div>
           </div>
           <DialogFooter>
@@ -1362,7 +1533,7 @@ export default function Inventory() {
           </DialogHeader>
           <div className="space-y-2">
             <p className="text-sm font-semibold text-foreground">
-              {products?.find(p => p.id === priceProductId)?.name}
+              {rawProducts?.find(p => p.id === priceProductId)?.name}
             </p>
             <Label>السعر (ج.م) <span className="text-destructive">*</span></Label>
             <Input
@@ -1384,29 +1555,46 @@ export default function Inventory() {
         </DialogContent>
       </Dialog>
 
-      {/* ===== Variant Archive Confirm ===== */}
+      {/* ===== Variant Archive/Reactivate Confirm ===== */}
       <Dialog open={!!deleteVariantTarget} onOpenChange={(o) => { if (!o) setDeleteVariantTarget(null); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
-              <Trash2 className="h-5 w-5" />
-              أرشفة الصنف
+              <Archive className="h-5 w-5" />
+              {deleteVariantTarget?.isActive ? "أرشفة الصنف" : "إعادة تفعيل الصنف"}
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            هل أنت متأكد من أرشفة الصنف{" "}
-            <span className="font-semibold text-foreground">
-              {deleteVariantTarget?.name || [deleteVariantTarget?.color, deleteVariantTarget?.size].filter(Boolean).join(" - ")}
-            </span>؟ لن يظهر بعدها للموظفين، لكن سجلات المخزون والأوردرات المرتبطة به هتفضل محفوظة، ويمكن التراجع لاحقًا.
+            {deleteVariantTarget?.isActive ? (
+              <>
+                هل أنت متأكد من أرشفة الصنف{" "}
+                <span className="font-semibold text-foreground">{deleteVariantTarget ? variantLabel(deleteVariantTarget) : ''}</span>؟
+                {" "}لن يظهر بعدها للموظفين، لكن سجلات المخزون والأوردرات المرتبطة به هتفضل محفوظة، ويمكن التراجع لاحقًا.
+              </>
+            ) : (
+              <>
+                هل تريد إعادة تفعيل الصنف{" "}
+                <span className="font-semibold text-foreground">{deleteVariantTarget ? variantLabel(deleteVariantTarget) : ''}</span>؟
+              </>
+            )}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteVariantTarget(null)}>إلغاء</Button>
             <Button
-              variant="destructive"
-              onClick={() => deleteVariantTarget && deleteVariantMutation.mutate({ id: deleteVariantTarget.id })}
-              disabled={deleteVariantMutation.isPending}
+              variant={deleteVariantTarget?.isActive ? "destructive" : "default"}
+              onClick={() => {
+                if (!deleteVariantTarget) return;
+                if (deleteVariantTarget.isActive) {
+                  deleteVariantMutation.mutate({ id: deleteVariantTarget.id });
+                } else {
+                  reactivateVariantMutation.mutate({ id: deleteVariantTarget.id, isActive: true });
+                }
+              }}
+              disabled={deleteVariantMutation.isPending || reactivateVariantMutation.isPending}
             >
-              {deleteVariantMutation.isPending ? "جاري الأرشفة..." : "أرشفة"}
+              {(deleteVariantMutation.isPending || reactivateVariantMutation.isPending)
+                ? "جاري الحفظ..."
+                : (deleteVariantTarget?.isActive ? "أرشفة" : "تفعيل")}
             </Button>
           </DialogFooter>
         </DialogContent>

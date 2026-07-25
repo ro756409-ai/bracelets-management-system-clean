@@ -169,6 +169,13 @@
       "when": 1784994627588,
       "tag": "0023_magenta_warbound",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1784999307885,
+      "tag": "0024_ancient_the_enforcers",
+      "breakpoints": true
     }
   ]
 }

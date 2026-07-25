@@ -318,17 +318,18 @@ export async function deleteEmployee(id: number) {
 }
 
 // ==================== PRODUCTS ====================
-export async function getAllProducts(businessId?: number, businessIds?: number[]) {
+export async function getAllProducts(businessId?: number, businessIds?: number[], opts: { includeInactive?: boolean } = {}) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [eq(products.isActive, true)];
+  const conditions: any[] = [];
+  if (!opts.includeInactive) conditions.push(eq(products.isActive, true));
   if (businessIds && businessIds.length > 0) {
     conditions.push(inArray(products.businessId, businessIds));
   } else if (businessId) {
     conditions.push(eq(products.businessId, businessId));
   }
   return db.select().from(products)
-    .where(and(...conditions))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(asc(products.name));
 }
 
@@ -998,16 +999,24 @@ export async function editOrderWithInventory(
 export async function addInventoryMovement(data: InsertInventoryMovement) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  if (data.type === 'out') {
+    const current = await getProductById(data.productId);
+    if (!current) throw new Error("المنتج غير موجود");
+    if (data.quantity > current.currentStock) {
+      throw new Error(`الكمية الصادرة (${data.quantity}) أكبر من المخزون الحالي (${current.currentStock})`);
+    }
+  }
   await db.insert(inventoryMovements).values(data);
   const delta = data.type === 'in' ? data.quantity : -data.quantity;
   await updateProductStock(data.productId, delta);
 }
 
-export async function getInventoryMovements(productId?: number, limit = 50, businessId?: number, businessIds?: number[]) {
+export async function getInventoryMovements(productId?: number, limit = 50, businessId?: number, businessIds?: number[], variantId?: number) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [];
   if (productId) conditions.push(eq(inventoryMovements.productId, productId));
+  if (variantId) conditions.push(eq(inventoryMovements.variantId, variantId));
   if (businessIds && businessIds.length > 0) {
     conditions.push(inArray(inventoryMovements.businessId, businessIds));
   } else if (businessId) {
@@ -1377,11 +1386,13 @@ export async function deleteSalesChannel(id: number) {
 }
 
 // ==================== PRODUCT VARIANTS ====================
-export async function getVariantsByProduct(productId: number) {
+export async function getVariantsByProduct(productId: number, opts: { includeInactive?: boolean } = {}) {
   const db = await getDb();
   if (!db) return [];
+  const conditions: any[] = [eq(productVariants.productId, productId)];
+  if (!opts.includeInactive) conditions.push(eq(productVariants.isActive, true));
   return db.select().from(productVariants)
-    .where(and(eq(productVariants.productId, productId), eq(productVariants.isActive, true)))
+    .where(and(...conditions))
     .orderBy(asc(productVariants.name), asc(productVariants.color), asc(productVariants.size));
 }
 
@@ -1445,6 +1456,7 @@ export async function deleteVariant(id: number) {
   await db.update(productVariants).set({ isActive: false }).where(eq(productVariants.id, id));
 }
 
+/** Low-level stock delta with no audit trail — kept for internal/legacy callers. Prefer addVariantInventoryMovement. */
 export async function updateVariantStock(variantId: number, delta: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1453,11 +1465,45 @@ export async function updateVariantStock(variantId: number, delta: number) {
     .where(eq(productVariants.id, variantId));
 }
 
-export async function getAllVariantsWithProduct(businessId?: number, businessIds?: number[]) {
+/** Records an audited stock movement for a variant (reason/notes) and applies the delta. Rejects if it would go negative. */
+export async function addVariantInventoryMovement(data: {
+  variantId: number;
+  type: "in" | "out";
+  quantity: number;
+  reason?: string;
+  notes?: string;
+  orderId?: number;
+  performedBy?: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const variant = await getVariantById(data.variantId);
+  if (!variant) throw new Error("الصنف غير موجود");
+  if (data.type === "out" && data.quantity > variant.currentStock) {
+    throw new Error(`الكمية الصادرة (${data.quantity}) أكبر من المخزون الحالي (${variant.currentStock})`);
+  }
+  const product = await getProductById(variant.productId);
+  await db.insert(inventoryMovements).values({
+    businessId: product?.businessId ?? 1,
+    productId: variant.productId,
+    variantId: variant.id,
+    type: data.type,
+    quantity: data.quantity,
+    reason: data.reason || null,
+    notes: data.notes || null,
+    orderId: data.orderId ?? null,
+    performedBy: data.performedBy ?? null,
+  });
+  const delta = data.type === "in" ? data.quantity : -data.quantity;
+  await updateVariantStock(data.variantId, delta);
+}
+
+export async function getAllVariantsWithProduct(businessId?: number, businessIds?: number[], opts: { includeInactive?: boolean } = {}) {
   const db = await getDb();
   if (!db) return [];
-  const conditions: any[] = [eq(productVariants.isActive, true)];
-  const allProducts = await getAllProducts(businessId, businessIds);
+  const conditions: any[] = [];
+  if (!opts.includeInactive) conditions.push(eq(productVariants.isActive, true));
+  const allProducts = await getAllProducts(businessId, businessIds, { includeInactive: opts.includeInactive });
   const productIds = allProducts.map(p => p.id);
   if (productIds.length === 0) return [];
   conditions.push(inArray(productVariants.productId, productIds));

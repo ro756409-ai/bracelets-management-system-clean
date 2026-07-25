@@ -240,9 +240,13 @@ export const inventoryMovements = mysqlTable("inventory_movements", {
   businessId: int("businessId").notNull().default(1),
   warehouseId: int("warehouseId"),
   productId: int("productId").notNull(),
+  // Set when this movement is for a specific variant of `productId` (the parent product).
+  // Null means the movement is for a standalone (non-variant) product.
+  variantId: int("variantId"),
   type: mysqlEnum("type", ["in", "out"]).notNull(),
   quantity: int("quantity").notNull(),
   reason: varchar("reason", { length: 200 }),
+  notes: text("notes"),
   orderId: int("orderId"),
   performedBy: int("performedBy"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -402,6 +406,7 @@ export const productVariants = mysqlTable("product_variants", {
   size: varchar("size", { length: 50 }),
   sku: varchar("sku", { length: 100 }),
   price: decimal("price", { precision: 10, scale: 2 }),
+  costPrice: decimal("costPrice", { precision: 10, scale: 2 }),
   currentStock: int("currentStock").default(0).notNull(),
   minStockLevel: int("minStockLevel").default(5).notNull(),
   isActive: boolean("isActive").default(true).notNull(),

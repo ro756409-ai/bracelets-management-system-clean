@@ -8,7 +8,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { getDb, cairoParseDateRange, cairoTodayRange, cairoStartOfDay, cairoEndOfDay } from "./db";
-import { markOrderAsReturned, getReturnsList, getReturnsStats, createPrintLog, getPrintLogs, getPrintLogById, addActivityLog, getActivityLogs, getAllSalesChannels, getActiveSalesChannels, getSalesChannelById, createSalesChannel, updateSalesChannel, deleteSalesChannel, getVariantsByProduct, getVariantById, createVariant, updateVariant, deleteVariant, updateVariantStock, getAllVariantsWithProduct, replaceOrderItems, getOrderItems, getOrderItemsForOrders } from "./db";
+import { markOrderAsReturned, getReturnsList, getReturnsStats, createPrintLog, getPrintLogs, getPrintLogById, addActivityLog, getActivityLogs, getAllSalesChannels, getActiveSalesChannels, getSalesChannelById, createSalesChannel, updateSalesChannel, deleteSalesChannel, getVariantsByProduct, getVariantById, createVariant, updateVariant, deleteVariant, updateVariantStock, addVariantInventoryMovement, getAllVariantsWithProduct, replaceOrderItems, getOrderItems, getOrderItemsForOrders } from "./db";
 import { employees } from "../drizzle/schema";
 import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
 import { orders as ordersTable } from "../drizzle/schema";
@@ -261,8 +261,9 @@ export const appRouter = router({
     list: protectedProcedure.input(z.object({
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
+      includeInactive: z.boolean().optional(),
     }).optional()).query(async ({ input }) => {
-      return getAllProducts(input?.businessId, input?.businessIds);
+      return getAllProducts(input?.businessId, input?.businessIds, { includeInactive: input?.includeInactive });
     }),
     get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
       return getProductById(input.id);
@@ -313,6 +314,7 @@ export const appRouter = router({
       type: z.enum(['in', 'out']),
       quantity: z.number().min(1),
       reason: z.string().optional(),
+      notes: z.string().optional(),
       orderId: z.number().optional(),
     })).mutation(async ({ ctx, input }) => {
       const actingEmpId = await resolveActingEmployeeId(ctx);
@@ -324,11 +326,12 @@ export const appRouter = router({
     }),
     movements: protectedProcedure.input(z.object({
       productId: z.number().optional(),
+      variantId: z.number().optional(),
       limit: z.number().default(50),
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
     })).query(async ({ input }) => {
-      return getInventoryMovements(input.productId, input.limit, input.businessId, input.businessIds);
+      return getInventoryMovements(input.productId, input.limit, input.businessId, input.businessIds, input.variantId);
     }),
   }),
 
@@ -2315,53 +2318,58 @@ export const appRouter = router({
   variants: router({
     byProduct: protectedProcedure.input(z.object({
       productId: z.number(),
+      includeInactive: z.boolean().optional(),
     })).query(async ({ input }) => {
-      return getVariantsByProduct(input.productId);
+      return getVariantsByProduct(input.productId, { includeInactive: input.includeInactive });
     }),
     all: protectedProcedure.input(z.object({
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
+      includeInactive: z.boolean().optional(),
     }).optional()).query(async ({ input }) => {
-      return getAllVariantsWithProduct(input?.businessId, input?.businessIds);
+      return getAllVariantsWithProduct(input?.businessId, input?.businessIds, { includeInactive: input?.includeInactive });
     }),
     get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
       return getVariantById(input.id);
     }),
     create: adminProcedure.input(z.object({
       productId: z.number(),
-      name: z.string().optional(),
+      name: z.string().min(1, "اسم النوع مطلوب"),
       color: z.string().optional(),
       size: z.string().optional(),
-      sku: z.string().optional(),
-      price: z.number().optional(),
-      currentStock: z.number().default(0),
-      minStockLevel: z.number().default(5),
+      sku: z.string().min(1, "رمز المنتج (SKU) مطلوب"),
+      price: z.number().min(0).optional(),
+      costPrice: z.number().min(0).optional(),
+      currentStock: z.number().min(0).default(0),
+      minStockLevel: z.number().min(0).default(5),
+      isActive: z.boolean().optional(),
     })).mutation(async ({ input }) => {
-      const { price, ...rest } = input;
-      if (!rest.name?.trim() && !rest.color?.trim() && !rest.size?.trim()) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'يجب تحديد اسم النوع أو اللون أو المقاس على الأقل' });
-      }
-      if (rest.name?.trim() && await isVariantNameTaken(rest.productId, rest.name)) {
+      const { price, costPrice, ...rest } = input;
+      if (await isVariantNameTaken(rest.productId, rest.name)) {
         throw new TRPCError({ code: 'CONFLICT', message: `يوجد بالفعل نوع بنفس الاسم "${rest.name}" لهذا المنتج` });
       }
-      if (rest.sku && await isSkuTaken(rest.sku)) {
+      if (await isSkuTaken(rest.sku)) {
         throw new TRPCError({ code: 'CONFLICT', message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل` });
       }
-      await createVariant({ ...rest, ...(price !== undefined ? { price: String(price) } : {}) });
+      await createVariant({
+        ...rest,
+        ...(price !== undefined ? { price: String(price) } : {}),
+        ...(costPrice !== undefined ? { costPrice: String(costPrice) } : {}),
+      });
       return { success: true };
     }),
     update: adminProcedure.input(z.object({
       id: z.number(),
-      name: z.string().optional(),
+      name: z.string().min(1).optional(),
       color: z.string().optional(),
       size: z.string().optional(),
-      sku: z.string().optional(),
-      price: z.number().optional(),
-      currentStock: z.number().optional(),
-      minStockLevel: z.number().optional(),
+      sku: z.string().min(1).optional(),
+      price: z.number().min(0).optional(),
+      costPrice: z.number().min(0).optional(),
+      minStockLevel: z.number().min(0).optional(),
       isActive: z.boolean().optional(),
     })).mutation(async ({ input }) => {
-      const { id, price, ...rest } = input;
+      const { id, price, costPrice, ...rest } = input;
       if (rest.name?.trim()) {
         const current = await getVariantById(id);
         const productId = current?.productId;
@@ -2372,7 +2380,11 @@ export const appRouter = router({
       if (rest.sku && await isSkuTaken(rest.sku, { excludeVariantId: id })) {
         throw new TRPCError({ code: 'CONFLICT', message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل` });
       }
-      await updateVariant(id, { ...rest, ...(price !== undefined ? { price: String(price) } : {}) });
+      await updateVariant(id, {
+        ...rest,
+        ...(price !== undefined ? { price: String(price) } : {}),
+        ...(costPrice !== undefined ? { costPrice: String(costPrice) } : {}),
+      });
       return { success: true };
     }),
     updateStock: adminProcedure.input(z.object({
@@ -2380,6 +2392,18 @@ export const appRouter = router({
       delta: z.number(),
     })).mutation(async ({ input }) => {
       await updateVariantStock(input.variantId, input.delta);
+      return { success: true };
+    }),
+    addMovement: adminProcedure.input(z.object({
+      variantId: z.number(),
+      type: z.enum(['in', 'out']),
+      quantity: z.number().min(1),
+      reason: z.string().optional(),
+      notes: z.string().optional(),
+      orderId: z.number().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const actingEmpId = await resolveActingEmployeeId(ctx);
+      await addVariantInventoryMovement({ ...input, performedBy: actingEmpId });
       return { success: true };
     }),
     delete: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {

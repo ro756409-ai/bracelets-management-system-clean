@@ -134,6 +134,32 @@ middleware; they can still do everything through the main dashboard login.
   level, with no create/archive flow at all).
 - See §5 for how the legacy importer maps free-text engraving descriptions onto this model.
 
+### 4c. Inventory UI overhaul (2026-07-25)
+
+Migration **`drizzle/0024_ancient_the_enforcers.sql`** (additive/widening, same as 0023) adds:
+`product_variants.costPrice`, `inventory_movements.variantId`, `inventory_movements.notes`.
+The latter two exist because variant stock movements previously had **no audit trail at all**
+(`variants.updateStock` just incremented the number) — `addVariantInventoryMovement()` in
+`server/db.ts` now logs every variant movement the same way product movements always were.
+
+- **Archived visibility**: `getAllProducts`/`getVariantsByProduct`/`getAllVariantsWithProduct`
+  take an `includeInactive` option (default `false`, i.e. unchanged behavior for every existing
+  caller — order creation dropdowns etc. still only ever see active items). `Inventory.tsx` is
+  the only caller that passes `includeInactive: true`, filtering client-side via a "show
+  archived" toggle so switching it doesn't require a refetch.
+- **Stock changes are append-only**: `variants.update`'s zod schema no longer accepts
+  `currentStock` at all — the edit dialog has no stock field. Stock only moves through
+  `products.addMovement` / `variants.addMovement`, both of which now reject (server-side, not
+  just UI-disabled) an `out` movement whose quantity exceeds current stock.
+- **Variant identity**: `variants.create` now requires both `name` and `sku` (previously either
+  name/color/size was enough) — matches the parent/variant model where every real variant has
+  both. `costPrice` is optional everywhere it appears.
+- Parent product card totals (active variant count, total stock, total inventory value when any
+  variant has a `costPrice`, count of variants needing restock) are computed by
+  `shared/inventoryCalculations.ts` (`computeVariantTotals`, `getStockStatus`) — a pure,
+  framework-free module imported by both `Inventory.tsx` and its test file, so the UI and its
+  test coverage can't drift apart.
+
 ## 5. Legacy orders importer
 
 Script: [scripts/import-legacy-orders.ts](scripts/import-legacy-orders.ts). Imports
