@@ -114,6 +114,18 @@ function ConnectionStatus({ channel }: { channel: any }) {
 function SyncStatus({ channel }: { channel: any }) {
   const status = channel.lastSyncStatus as "never" | "success" | "error" | undefined;
   const lastSync = channel.lastSyncAt ? new Date(channel.lastSyncAt) : null;
+
+  // EasyOrder's public API has no list-orders endpoint, so pull sync can never succeed for
+  // it. Reporting a "failed sync" would blame the channel for a capability that does not
+  // exist; state how orders actually arrive instead.
+  if (channel.platform === "easyorder") {
+    return (
+      <p className="text-xs text-muted-foreground">
+        الأوردرات تصل تلقائيًا عبر Webhook — لا تحتاج مزامنة يدوية.
+      </p>
+    );
+  }
+
   if (!lastSync && status === "never") return null;
 
   return (
@@ -140,23 +152,12 @@ function SyncStatus({ channel }: { channel: any }) {
   );
 }
 
-/** Default sync range: the last 7 days. */
-function defaultSyncRange() {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - 7);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return { from: fmt(from), to: fmt(to) };
-}
-
 export default function SalesChannels() {
   const { currentBusinessIds } = useBusinessContext();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<ChannelForm>(emptyForm);
   const [showArchived, setShowArchived] = useState(false);
-  const [syncDialogChannel, setSyncDialogChannel] = useState<any | null>(null);
-  const [syncRange, setSyncRange] = useState(defaultSyncRange);
   const [logsChannelId, setLogsChannelId] = useState<number | null>(null);
   const [testingChannelId, setTestingChannelId] = useState<number | null>(null);
   const utils = trpc.useUtils();
@@ -218,28 +219,9 @@ export default function SalesChannels() {
     onError: (err) => toast.error(err.message),
   });
 
-  const syncNowMutation = trpc.salesChannels.syncNow.useMutation({
-    onSuccess: (r) => {
-      if (r.status === "error") {
-        toast.error(`فشلت المزامنة: ${r.error ?? "خطأ غير معروف"}`);
-      } else {
-        const parts = [
-          `${r.created} جديد`,
-          r.updated > 0 && `${r.updated} محدَّث`,
-          r.duplicates > 0 && `${r.duplicates} مكرر`,
-          r.needsReview > 0 && `${r.needsReview} يحتاج مراجعة`,
-          r.failed > 0 && `${r.failed} فشل`,
-        ].filter(Boolean).join(" · ");
-        if (r.status === "partial") toast.warning(`اكتملت جزئيًا — ${parts}`);
-        else toast.success(`تمت المزامنة — ${parts}`);
-      }
-      setSyncDialogChannel(null);
-      refetch();
-      utils.salesChannels.syncLogs.invalidate();
-    },
-    onError: (err) => toast.error(err.message),
-  });
-
+  // No syncNow mutation: EasyOrder's public API documents no list-orders endpoint, so a
+  // pull sync cannot work. The server-side `salesChannels.syncNow` procedure is left in
+  // place for the day a private/undocumented list endpoint is granted.
   const testConnectionMutation = trpc.salesChannels.testConnection.useMutation({
     onSuccess: (r) => {
       if (r.connected) {
@@ -456,16 +438,6 @@ export default function SalesChannels() {
                 {channel.platform === "easyorder" && channel.isActive && (
                   <div className="flex items-center gap-2 flex-wrap">
                     <Button
-                      variant="default"
-                      size="sm"
-                      className="gap-1 h-8"
-                      onClick={() => { setSyncRange(defaultSyncRange()); setSyncDialogChannel(channel); }}
-                      disabled={syncNowMutation.isPending}
-                    >
-                      <RefreshCw className={`h-3.5 w-3.5 ${syncNowMutation.isPending ? "animate-spin" : ""}`} />
-                      مزامنة الآن
-                    </Button>
-                    <Button
                       variant="outline"
                       size="sm"
                       className="gap-1 h-8"
@@ -583,85 +555,6 @@ export default function SalesChannels() {
           ))}
         </div>
       )}
-
-      {/* Sync Now Dialog */}
-      <Dialog open={!!syncDialogChannel} onOpenChange={(o) => { if (!o) setSyncDialogChannel(null); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <RefreshCw className="h-5 w-5 text-primary" />
-              مزامنة الأوردرات — {syncDialogChannel?.name}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              سيتم جلب أوردرات هذه الفترة من EasyOrder. الأوردرات الموجودة بالفعل لن تتكرر —
-              تُحدَّث فقط لو تغيّرت من عند المصدر.
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>من تاريخ</Label>
-                <Input
-                  type="date"
-                  value={syncRange.from}
-                  onChange={(e) => setSyncRange((r) => ({ ...r, from: e.target.value }))}
-                  dir="ltr"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>إلى تاريخ</Label>
-                <Input
-                  type="date"
-                  value={syncRange.to}
-                  onChange={(e) => setSyncRange((r) => ({ ...r, to: e.target.value }))}
-                  dir="ltr"
-                />
-              </div>
-            </div>
-            {!syncDialogChannel?.hasApiToken && (
-              <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3">
-                <p className="text-xs text-destructive">
-                  لا يوجد API Token مضبوط لهذه القناة — أضفه من زر "تعديل" قبل المزامنة.
-                </p>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSyncDialogChannel(null)}>إلغاء</Button>
-            <Button
-              onClick={() => {
-                if (!syncDialogChannel) return;
-                const from = new Date(syncRange.from);
-                const to = new Date(syncRange.to);
-                to.setHours(23, 59, 59, 999);
-                if (isNaN(from.getTime()) || isNaN(to.getTime())) {
-                  toast.error("يرجى اختيار تاريخين صحيحين");
-                  return;
-                }
-                if (from > to) {
-                  toast.error("تاريخ البداية يجب أن يكون قبل تاريخ النهاية");
-                  return;
-                }
-                syncNowMutation.mutate({ id: syncDialogChannel.id, from, to });
-              }}
-              disabled={syncNowMutation.isPending || !syncDialogChannel?.hasApiToken}
-              className="gap-1"
-            >
-              {syncNowMutation.isPending ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  جاري المزامنة...
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="h-4 w-4" />
-                  ابدأ المزامنة
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Create/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
