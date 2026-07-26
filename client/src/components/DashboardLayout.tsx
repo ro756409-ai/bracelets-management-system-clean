@@ -10,6 +10,9 @@ import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -23,7 +26,7 @@ import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, LogOut, PanelLeft, Users, ShoppingCart,
-  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Smartphone
+  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -41,29 +44,84 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const menuItems = [
-  { icon: LayoutDashboard, label: "لوحة التحكم", path: "/dashboard" },
-  { icon: ShoppingCart, label: "الأوردرات", path: "/orders" },
-  { icon: PackageCheck, label: "التجهيز والطباعة", path: "/preparation" },
-  { icon: QrCode, label: "مسح QR (موظفين)", path: "/employee-qr-scanner" },
-  { icon: QrCode, label: "سجل المسحات", path: "/scan-logs" },
-  { icon: QrCode, label: "مسح QR الأوردرات", path: "/scan-orders" },
-  { icon: Printer, label: "المطبوعات", path: "/printed-orders" },
-  { icon: Clock, label: "سجل الطباعات", path: "/print-logs" },
-  { icon: Activity, label: "سجل الأنشطة", path: "/activity-log" },
-  { icon: Briefcase, label: "مساحة العمل", path: "/workspace" },
-  { icon: Package, label: "المخزون", path: "/inventory" },
-  { icon: BarChart3, label: "التقارير", path: "/reports" },
-];
+/**
+ * Sidebar, grouped by workflow instead of one flat list of 19 items (Phase A of the UI
+ * redesign — see UI_AUDIT.md). Every route and the `adminOnly` gate below is unchanged
+ * from the previous `menuItems`/`adminMenuItems` split; only the grouping/visual
+ * hierarchy is new.
+ *
+ * Deliberately NOT included: /employee-dashboard, /manager-dashboard, /today-shipments,
+ * /facebook-entry. These are a separate portal gated by the `employee_token` cookie
+ * (`employeePortal.me`), independent of this layout's `app_session_id` session — an
+ * owner logged in via /login has no `employee_token` and would be bounced to
+ * /employee-login if this sidebar linked there. Reached instead via /employee-login's
+ * own role-based redirect. (The original audit listed these as simply "hidden from the
+ * sidebar"; this is the corrected finding after tracing the two cookies.)
+ */
+type MenuItem = { icon: typeof LayoutDashboard; label: string; path: string; adminOnly?: boolean };
+type MenuGroup = { label: string; icon: typeof LayoutDashboard; items: MenuItem[] };
 
-const adminMenuItems = [
-  { icon: Users, label: "الموظفين", path: "/employees" },
-  { icon: RotateCcw, label: "المرتجعات", path: "/returns" },
-  { icon: AlertTriangle, label: "المكررات", path: "/duplicates" },
-  { icon: Globe, label: "قنوات البيع", path: "/sales-channels" },
-  { icon: Building2, label: "إدارة الأنشطة", path: "/businesses" },
-  { icon: Zap, label: "Easy Order ربط", path: "/webhook-settings" },
-  { icon: GitMerge, label: "تقرير الدمج", path: "/merge-logs" },
+const MENU_GROUPS: MenuGroup[] = [
+  {
+    label: "الرئيسية",
+    icon: Home,
+    items: [
+      { icon: LayoutDashboard, label: "لوحة التحكم", path: "/dashboard" },
+      { icon: Briefcase, label: "مساحة العمل", path: "/workspace" },
+    ],
+  },
+  {
+    label: "الطلبات",
+    icon: ShoppingCart,
+    items: [
+      { icon: ShoppingCart, label: "الأوردرات", path: "/orders" },
+      { icon: RotateCcw, label: "المرتجعات", path: "/returns", adminOnly: true },
+      { icon: AlertTriangle, label: "المكررات", path: "/duplicates", adminOnly: true },
+    ],
+  },
+  {
+    label: "التشغيل",
+    icon: PackageCheck,
+    items: [
+      { icon: PackageCheck, label: "التجهيز والطباعة", path: "/preparation" },
+      { icon: Printer, label: "المطبوعات", path: "/printed-orders" },
+      { icon: Clock, label: "سجل الطباعات", path: "/print-logs" },
+      { icon: QrCode, label: "مسح QR الأوردرات", path: "/scan-orders" },
+      { icon: QrCode, label: "سجل المسحات", path: "/scan-logs" },
+      { icon: Activity, label: "سجل الأنشطة", path: "/activity-log" },
+    ],
+  },
+  {
+    label: "المخزون",
+    icon: Boxes,
+    items: [{ icon: Package, label: "المخزون", path: "/inventory" }],
+  },
+  {
+    label: "الموظفون",
+    icon: UserCog,
+    items: [{ icon: Users, label: "الموظفين", path: "/employees", adminOnly: true }],
+  },
+  {
+    label: "التقارير",
+    icon: LineChart,
+    items: [
+      { icon: BarChart3, label: "التقارير", path: "/reports" },
+      { icon: GitMerge, label: "تقرير الدمج", path: "/merge-logs", adminOnly: true },
+    ],
+  },
+  {
+    label: "التكاملات",
+    icon: Plug,
+    items: [
+      { icon: Globe, label: "قنوات البيع", path: "/sales-channels", adminOnly: true },
+      { icon: Zap, label: "Easy Order ربط", path: "/webhook-settings", adminOnly: true },
+    ],
+  },
+  {
+    label: "الإعدادات",
+    icon: Settings,
+    items: [{ icon: Building2, label: "إدارة الأنشطة", path: "/businesses", adminOnly: true }],
+  },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
@@ -144,7 +202,12 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   const lowStockCount = lowStockProducts?.length ?? 0;
 
   const isAdmin = user?.role === 'admin';
-  const allMenuItems = isAdmin ? [...menuItems, ...adminMenuItems] : menuItems;
+  // Same visibility rule as before (isAdmin gate) — only which GROUP an item is displayed
+  // under is new, not who can see it.
+  const visibleGroups = MENU_GROUPS
+    .map(group => ({ ...group, items: group.items.filter(item => !item.adminOnly || isAdmin) }))
+    .filter(group => group.items.length > 0);
+  const allMenuItems = visibleGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
 
   useEffect(() => {
@@ -214,39 +277,49 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                 </Select>
               </div>
             )}
-            <SidebarMenu className="px-2">
-              {allMenuItems.map(item => {
-                const isActive = location === item.path || location.startsWith(item.path + '/');
-                const showBadge = item.path === '/inventory' && lowStockCount > 0;
-                return (
-                  <SidebarMenuItem key={item.path}>
-                    <SidebarMenuButton
-                      isActive={isActive}
-                      onClick={() => setLocation(item.path)}
-                      tooltip={item.label}
-                      className="h-10 transition-all font-medium"
-                    >
-                      <item.icon className={`h-4 w-4 shrink-0 ${isActive ? "text-sidebar-primary" : ""}`} />
-                      <span className="flex-1">{item.label}</span>
-                      {showBadge && !isCollapsed && (
-                        <Badge variant="destructive" className="h-5 text-xs px-1.5">
-                          {lowStockCount}
-                        </Badge>
-                      )}
-                      {showBadge && isCollapsed && (
-                        <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-destructive" />
-                      )}
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
+            {visibleGroups.map(group => (
+              <SidebarGroup key={group.label} className="px-2 py-0.5">
+                <SidebarGroupLabel className="gap-1.5">
+                  <group.icon className="h-3.5 w-3.5" />
+                  {group.label}
+                </SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {group.items.map(item => {
+                      const isActive = location === item.path || location.startsWith(item.path + '/');
+                      const showBadge = item.path === '/inventory' && lowStockCount > 0;
+                      return (
+                        <SidebarMenuItem key={item.path}>
+                          <SidebarMenuButton
+                            isActive={isActive}
+                            onClick={() => setLocation(item.path)}
+                            tooltip={item.label}
+                            className="h-10 transition-all font-medium"
+                          >
+                            <item.icon className={`h-4 w-4 shrink-0 ${isActive ? "text-sidebar-primary" : ""}`} />
+                            <span className="flex-1 truncate">{item.label}</span>
+                            {showBadge && !isCollapsed && (
+                              <Badge variant="destructive" className="h-5 text-xs px-1.5">
+                                {lowStockCount}
+                              </Badge>
+                            )}
+                            {showBadge && isCollapsed && (
+                              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-destructive" />
+                            )}
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            ))}
           </SidebarContent>
 
           <SidebarFooter className="p-3 border-t border-sidebar-border">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-sidebar-accent/50 transition-colors w-full text-right focus:outline-none">
+                <button className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-sidebar-accent/50 transition-colors w-full text-right focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring">
                   <Avatar className="h-8 w-8 border border-sidebar-border shrink-0">
                     <AvatarFallback className="text-xs font-bold bg-sidebar-primary text-sidebar-primary-foreground">
                       {user?.name?.charAt(0).toUpperCase() ?? 'U'}

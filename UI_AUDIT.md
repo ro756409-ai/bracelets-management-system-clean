@@ -35,12 +35,51 @@ These are defects, not taste. Each is a safe, contained fix.
 |---|---|---|---|
 | B1 | Sidebar links to `/employee-qr-scanner`, which **has no route** — clicking it 404s | [DashboardLayout.tsx:48](client/src/components/DashboardLayout.tsx:48) vs App.tsx | **High** — visibly broken nav item |
 | B2 | `ComponentShowcase.tsx` (1,437 lines) is never imported or routed — dead code | App.tsx has no import | Low |
-| B3 | Three live pages are unreachable from the sidebar: `/manager-dashboard`, `/today-shipments`, `/facebook-entry` | grep of DashboardLayout | **High** — staff must type URLs |
-| B4 | `/scan-logs`, `/facebook-entry`, `/scan-orders`, `/employee-dashboard` etc. render **outside** `ProtectedLayout` — no sidebar, and they self-guard | App.tsx routes | Medium — inconsistent shell |
+| B3 | *(corrected below)* | | |
+| B4 | *(corrected below — was two different bugs, split into B4/B6)* | | |
 | B5 | 15 pages have no breakpoints at all, so a 360px phone gets the desktop layout | grep | **High** |
+| B6 | `/scan-logs` and `/scan-orders` were routed **outside** `ProtectedLayout` in `App.tsx`, so clicking them from the sidebar unmounted the whole admin shell (sidebar disappeared) despite being genuine admin-session pages | App.tsx routing vs. every sibling route | **High** — silent navigation break |
 
-B1 and B3 mean the navigation is currently both broken and incomplete. I would fix these
-in Phase A regardless of styling.
+### Correction after implementation: B3/B4 were one auth-architecture finding, not two bugs
+
+The original audit read "three pages unreachable from the sidebar" as a simple omission and
+planned to add sidebar links for `/manager-dashboard`, `/today-shipments`, `/employee-dashboard`
+("Today Confirmations"), and `/facebook-entry`. Tracing the actual auth code before touching
+the sidebar turned up why they were never linked:
+
+- This admin sidebar (`DashboardLayout`) renders for a session resolved via `trpc.auth.me`,
+  which reads the `app_session_id` cookie (or, for an admin-tier employee, `employee_token`
+  bridged to a synthetic admin user — see `server/_core/context.ts`).
+- Those four pages instead call `trpc.employeePortal.me` directly
+  ([EmployeeDashboard.tsx:143](client/src/pages/EmployeeDashboard.tsx:143),
+  [ManagerDashboard.tsx:74](client/src/pages/ManagerDashboard.tsx:74),
+  [TodayShipments.tsx:97](client/src/pages/TodayShipments.tsx:97),
+  [FacebookEntry.tsx:135](client/src/pages/FacebookEntry.tsx:135)), which requires the
+  `employee_token` cookie specifically ([routers.ts:35](server/routers.ts:35)) and — on
+  failure — **hard-redirects to `/employee-login`**
+  ([ManagerDashboard.tsx:77](client/src/pages/ManagerDashboard.tsx:77)).
+- An owner who signed in through `/login` has `app_session_id` but no `employee_token`.
+  Linking these pages into this sidebar would have sent that owner to a page that
+  immediately boots them to a different login screen — a regression, not a fix, and a
+  direct violation of "preserve all existing functionality."
+
+These four pages are a **separate portal** reached through `/employee-login`'s own
+role-based redirect (manager → `/dashboard`, `facebook_entry` → `/facebook-entry`,
+`warehouse` → `/warehouse-dashboard`, everyone else → `/employee-dashboard`), not an
+oversight in this sidebar. **Not implemented, and correctly so** — this needed the brief's
+"if you find an architectural problem, propose, don't auto-implement" clause. If unifying
+the two portals under one navigation is wanted, it is a follow-up decision for the user, not
+a UI-phase change.
+
+What **was** a genuine, safe bug — found while tracing the same code — was B6 above:
+`/scan-logs` and `/scan-orders` are `ProtectedLayout` pages exactly like every other sidebar
+item (same `app_session_id` session, same `trpc.orders.scan` / admin-tier data), but were
+routed as bare top-level routes in `App.tsx`, missing the `<ProtectedLayout>` wrapper every
+sibling route has. That is a mechanical omission, not a design choice, and fixing it does not
+touch auth, permissions, or any business rule — so it was fixed in Phase A alongside B1.
+
+B1 and B6 are both now fixed. B3/B4 stand corrected: intentional, not a bug — the sidebar
+change accounts for it by deliberately not linking those four routes.
 
 ---
 
@@ -117,21 +156,33 @@ consistent Arabic defaults rather than replaced.
 
 All existing routes and permission gates preserved; only grouping and presentation change.
 
+**As implemented** (revised from the original proposal after the B3/B4 correction above —
+`مؤكدات اليوم`, `لوحة المدير`, `إدخال فيسبوك`, and `شحنات اليوم`/`جدول الشحن` are
+intentionally not here; see the correction note):
+
 ```
 الرئيسية      لوحة التحكم · مساحة العمل
-الطلبات       الأوردرات · مؤكدات اليوم · إدخال فيسبوك · المكررات · المرتجعات
-التشغيل       التجهيز والطباعة · المطبوعات · شحنات اليوم · جدول الشحن
-              مسح QR الأوردرات · سجل المسحات · سجل الطباعات
+الطلبات       الأوردرات · المرتجعات · المكررات
+التشغيل       التجهيز والطباعة · المطبوعات · سجل الطباعات
+              مسح QR الأوردرات · سجل المسحات · سجل الأنشطة
 المخزون       المخزون
-الموظفون      الموظفين · لوحة المدير
-التقارير      التقارير · سجل الأنشطة · تقرير الدمج
+الموظفون      الموظفين
+التقارير      التقارير · تقرير الدمج
 التكاملات     قنوات البيع · ربط Easy Order
 الإعدادات     إدارة الأنشطة
 ```
 
-- Fixes B1 (drop the dead `/employee-qr-scanner` link) and B3 (surface the three hidden pages).
-- Admin-only group membership stays exactly as `adminMenuItems` defines it today.
+- Fixes B1 (drop the dead `/employee-qr-scanner` link) and B6 (`/scan-logs`/`/scan-orders`
+  now render inside `ProtectedLayout` like every other item, so the sidebar no longer
+  disappears when they are opened).
+- Admin-only group membership stays exactly as `adminMenuItems` defined it — a `MenuItem`
+  now carries `adminOnly?: boolean` instead of living in a second array, but the same
+  `isAdmin` boolean gates the same set of items.
 - **No الحسابات entry** — the module does not exist, so per the brief it is left out entirely.
+- Each group carries a small header icon (`Home`, `ShoppingCart`, `PackageCheck`, `Boxes`,
+  `UserCog`, `LineChart`, `Plug`, `Settings`) for the "icon alignment"/"section labels"
+  requirement; `SidebarGroupLabel` already fades out under icon-only collapse via the
+  existing primitive, so collapsed mode needed no new code.
 
 ## 6. Orders page structure
 

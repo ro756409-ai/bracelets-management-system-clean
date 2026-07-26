@@ -170,7 +170,7 @@ export default function ScanOrders() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 max-w-lg mx-auto" dir="rtl">
+    <div className="max-w-lg mx-auto" dir="rtl">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <div className="bg-purple-600 p-2.5 rounded-xl">
