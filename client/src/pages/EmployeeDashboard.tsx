@@ -21,6 +21,9 @@ import {
 import QRCodeLib from "qrcode";
 import jsQR from "jsqr";
 import { BrandMark } from "@/components/BrandMark";
+import { StatCard, ConfirmDialog } from "@/components/shared";
+import { ChevronRight, ChevronLeft } from "lucide-react";
+import { getMissingConfirmationFields } from "@/lib/orderConfirmationValidation";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new:       { label: "جديد",         color: "text-primary",            bg: "bg-accent border-primary/30" },
@@ -86,6 +89,10 @@ export default function EmployeeDashboard() {
   // Notes editing state
   const [editingNotes, setEditingNotes] = useState<Record<number, string>>({});
   const [showStockPanel, setShowStockPanel] = useState(false);
+
+  // Confirmation for marking/unmarking an order as a duplicate — previously fired on a
+  // single click with no confirmation at all.
+  const [duplicateConfirm, setDuplicateConfirm] = useState<{ orderId: number; action: "mark" | "unmark" } | null>(null);
 
   // Date filter state
   const [dateFrom, setDateFrom] = useState<string>("");
@@ -517,6 +524,92 @@ export default function EmployeeDashboard() {
   ];
 
   const employeeName = meData?.name ?? empSession?.name ?? "الموظف";
+
+  // ==================== Confirmation validation ====================
+  // Blocks تأكيد with a clear reason instead of letting an order through with data the
+  // confirmation call cannot act on (no phone to call, no address to ship to, ...).
+  function handleConfirmOrder(order: any) {
+    const missing = getMissingConfirmationFields(order);
+    if (missing.length > 0) {
+      toast.error(`لا يمكن التأكيد — بيانات ناقصة: ${missing.join("، ")}`);
+      return;
+    }
+    confirmMutation.mutate({ orderId: order.id });
+  }
+
+  // ==================== Next / previous navigation within the expanded order ====================
+  const expandedIndex = filteredOrders.findIndex(o => o.id === expandedOrder);
+  const goToAdjacentOrder = (direction: 1 | -1) => {
+    if (expandedIndex === -1 || filteredOrders.length === 0) return;
+    const nextIndex = (expandedIndex + direction + filteredOrders.length) % filteredOrders.length;
+    setExpandedOrder(filteredOrders[nextIndex].id);
+  };
+
+  // ==================== Keyboard shortcuts ====================
+  // C confirm · N no answer · P postpone · X cancel · E edit — act on the expanded order,
+  // and only when no dialog is open and focus isn't inside a text field (so typing a note
+  // doesn't accidentally trigger an action).
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (typing) return;
+      if (postponeDialog.open || cancelDialog.open || editDialog.open) return;
+      const order = filteredOrders.find(o => o.id === expandedOrder);
+      if (!order) return;
+      const canAct = order.status === "new" || order.status === "postponed" || order.status === "no_answer";
+      if (!canAct) return;
+
+      switch (e.key.toLowerCase()) {
+        case "c":
+          handleConfirmOrder(order);
+          break;
+        case "n":
+          noAnswerMutation.mutate({ orderId: order.id });
+          break;
+        case "p":
+          setPostponeDialog({ open: true, orderId: order.id });
+          setPostponeDate(""); setPostponeNotes("");
+          break;
+        case "x":
+          setCancelDialog({ open: true, orderId: order.id });
+          setCancelReason(""); setCancelNotes("");
+          break;
+        case "e":
+          setEditDialog({ open: true, orderId: order.id });
+          setEditProductName(order.productName ?? "");
+          setEditQuantity(order.quantity ?? 1);
+          setEditTotalAmount(Number(order.totalAmount));
+          setEditNotes(order.notes ?? "");
+          setEditGovernorate(order.governorate ?? "");
+          setEditAddress(order.customerAddress ?? "");
+          setEditCustomerName(order.customerName ?? "");
+          setEditCustomerPhone(order.customerPhone ?? "");
+          setEditCustomerPhone2((order as any).customerPhone2 ?? "");
+          setEditCity((order as any).city ?? "");
+          setEditShippingFees(Number((order as any).shippingFees || 0));
+          setEditPaymentMethod((order as any).paymentMethod ?? "cod");
+          setEditEmployeeNotes((order as any).employeeNotes ?? "");
+          setEditColor((order as any).color ?? "");
+          setEditSize((order as any).size ?? "");
+          setShowEditHistory(false);
+          break;
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedOrder, filteredOrders, postponeDialog.open, cancelDialog.open, editDialog.open]);
+
+  // ==================== Postpone quick presets ====================
+  // The date field is day-granular (postponedTo has no time-of-day input here), so presets
+  // resolve to the nearest meaningful DAY rather than inventing a time the form can't
+  // actually record. "اليوم"/"مساء اليوم" both mean "later today"; "غدًا" means tomorrow.
+  function applyPostponePreset(preset: "today" | "tomorrow") {
+    const d = new Date();
+    if (preset === "tomorrow") d.setDate(d.getDate() + 1);
+    setPostponeDate(d.toISOString().split("T")[0]);
+  }
 
   return (
     <div className="min-h-screen bg-background" dir="rtl">
@@ -1008,19 +1101,12 @@ export default function EmployeeDashboard() {
           </div>
         )}
 
-        {/* Stats Row */}
+        {/* Stats Row — each tile doubles as a quick filter into the tab it names */}
         <div className="grid grid-cols-4 gap-2">
-          {[
-            { label: "الكل", value: displayStats?.total ?? 0, color: "text-foreground" },
-            { label: "جديد", value: displayStats?.new ?? 0, color: "text-primary" },
-            { label: "مؤكد", value: displayStats?.confirmed ?? 0, color: "text-[var(--success)]" },
-            { label: "مؤجل", value: displayStats?.postponed ?? 0, color: "text-[var(--warning)]" },
-          ].map(s => (
-            <div key={s.label} className="rounded-[var(--radius-brand-md)] border border-border bg-card p-3 text-center shadow-[var(--shadow-card)]">
-              <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">{s.label}</p>
-            </div>
-          ))}
+          <StatCard label="الكل" value={displayStats?.total ?? 0} active={activeTab === "all"} onClick={() => setActiveTab("all")} />
+          <StatCard label="جديد" value={displayStats?.new ?? 0} tone="primary" active={activeTab === "new"} onClick={() => setActiveTab("new")} />
+          <StatCard label="مؤكد" value={displayStats?.confirmed ?? 0} tone="success" active={activeTab === "confirmed"} onClick={() => setActiveTab("confirmed")} />
+          <StatCard label="مؤجل" value={displayStats?.postponed ?? 0} tone="warning" active={activeTab === "postponed"} onClick={() => setActiveTab("postponed")} />
         </div>
 
         {/* Search */}
@@ -1161,6 +1247,26 @@ export default function EmployeeDashboard() {
                   {/* Expanded Details */}
                   {isExpanded && (
                     <div className="border-t border-border bg-muted/40 px-4 py-3 space-y-3">
+                      {/* Move through the current filtered list without collapsing back to it */}
+                      {filteredOrders.length > 1 && (
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); goToAdjacentOrder(-1); }}
+                            className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] px-2 py-1 hover:bg-muted"
+                          >
+                            <ChevronRight className="h-3.5 w-3.5" /> السابق
+                          </button>
+                          <span className="tabular-nums">{expandedIndex + 1} / {filteredOrders.length}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); goToAdjacentOrder(1); }}
+                            className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] px-2 py-1 hover:bg-muted"
+                          >
+                            التالي <ChevronLeft className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
                       {/* Why this order was flagged, verbatim from the import/parse step */}
                       {order.needsReview && order.reviewReason && (
                         <div className="flex items-start gap-2 rounded-[var(--radius-brand-md)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3">
@@ -1248,7 +1354,7 @@ export default function EmployeeDashboard() {
                         {order.isDuplicate ? (
                           <button
                             className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-1 text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20"
-                            onClick={() => unmarkDuplicateMutation.mutate({ orderId: order.id })}
+                            onClick={() => setDuplicateConfirm({ orderId: order.id, action: "unmark" })}
                             disabled={unmarkDuplicateMutation.isPending}
                             title="إلغاء تعليم التكرار"
                           >
@@ -1257,7 +1363,7 @@ export default function EmployeeDashboard() {
                         ) : (
                           <button
                             className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-border px-2 py-1 text-xs text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
-                            onClick={() => markDuplicateMutation.mutate({ orderId: order.id })}
+                            onClick={() => setDuplicateConfirm({ orderId: order.id, action: "mark" })}
                             disabled={markDuplicateMutation.isPending}
                             title="تعليم كمكرر"
                           >
@@ -1272,7 +1378,7 @@ export default function EmployeeDashboard() {
                           <Button
                             size="sm"
                             className="h-9 flex-1 bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90"
-                            onClick={() => confirmMutation.mutate({ orderId: order.id })}
+                            onClick={() => handleConfirmOrder(order)}
                             disabled={confirmMutation.isPending}
                           >
                             <CheckCircle2 className="h-4 w-4 ml-1" />
@@ -1639,6 +1745,10 @@ export default function EmployeeDashboard() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            <div className="flex flex-wrap gap-1.5">
+              <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => applyPostponePreset("today")}>مساء اليوم</Button>
+              <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => applyPostponePreset("tomorrow")}>غدًا</Button>
+            </div>
             <div>
               <Label>تاريخ الاتصال مرة أخرى <span className="text-destructive">*</span></Label>
               <Input
@@ -1717,6 +1827,26 @@ export default function EmployeeDashboard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Duplicate mark/unmark confirmation — both actions used to fire on a single click */}
+      <ConfirmDialog
+        open={duplicateConfirm !== null}
+        onOpenChange={(open) => { if (!open) setDuplicateConfirm(null); }}
+        title={duplicateConfirm?.action === "mark" ? "تعليم الأوردر كمكرر" : "إلغاء تعليم التكرار"}
+        description={
+          duplicateConfirm?.action === "mark"
+            ? "سيتم تعليم هذا الأوردر كمكرر حتى تتم مراجعته."
+            : "سيُزال تعليم التكرار عن هذا الأوردر."
+        }
+        confirmLabel={duplicateConfirm?.action === "mark" ? "تعليم" : "إلغاء التعليم"}
+        onConfirm={() => {
+          if (!duplicateConfirm) return;
+          if (duplicateConfirm.action === "mark") markDuplicateMutation.mutate({ orderId: duplicateConfirm.orderId });
+          else unmarkDuplicateMutation.mutate({ orderId: duplicateConfirm.orderId });
+          setDuplicateConfirm(null);
+        }}
+        pending={markDuplicateMutation.isPending || unmarkDuplicateMutation.isPending}
+      />
     </div>
   );
 }
