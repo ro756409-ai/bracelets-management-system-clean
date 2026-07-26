@@ -8,8 +8,9 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
 } from "recharts";
-import { TrendingUp, Users, XCircle, Calendar } from "lucide-react";
+import { TrendingUp, Users, XCircle, BarChart3 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { PageHeader } from "@/components/shared";
 
 type DateRange = "today" | "week" | "month";
 
@@ -84,13 +85,11 @@ export default function Reports() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">التقارير والأداء</h1>
-          <p className="text-muted-foreground text-sm mt-1">تحليل أداء الفريق وأسباب الإلغاء</p>
-        </div>
-      </div>
+      <PageHeader
+        title="التقارير والأداء"
+        description="تحليل أداء الفريق وأسباب الإلغاء"
+        icon={<BarChart3 className="h-5 w-5" />}
+      />
 
       {/* Date Range Filter */}
       <div className="flex gap-2">
@@ -239,30 +238,30 @@ export default function Reports() {
                           </td>
                           <td className="p-3 text-center font-bold text-foreground">{emp.total}</td>
                           <td className="p-3 text-center">
-                            <span className="text-green-700 font-semibold">{emp.confirmed}</span>
+                            <span className="text-[var(--success)] font-semibold">{emp.confirmed}</span>
                           </td>
                           <td className="p-3 text-center">
-                            <span className="text-red-700 font-semibold">{emp.cancelled}</span>
+                            <span className="text-destructive font-semibold">{emp.cancelled}</span>
                           </td>
                           <td className="p-3 text-center">
-                            <span className="text-yellow-700 font-semibold">{emp.postponed}</span>
+                            <span className="text-[var(--warning)] font-semibold">{emp.postponed}</span>
                           </td>
                           <td className="p-3 text-center">
                             <div className="flex items-center justify-center gap-2">
                               <div className="w-16 bg-muted rounded-full h-1.5">
                                 <div
-                                  className="h-1.5 rounded-full bg-green-500"
+                                  className="h-1.5 rounded-full bg-[var(--success)]"
                                   style={{ width: `${emp.confirmRate}%` }}
                                 />
                               </div>
-                              <span className={`text-xs font-bold ${emp.confirmRate >= 70 ? 'text-green-700' : emp.confirmRate >= 50 ? 'text-yellow-700' : 'text-red-700'}`}>
+                              <span className={`text-xs font-bold ${emp.confirmRate >= 70 ? 'text-[var(--success)]' : emp.confirmRate >= 50 ? 'text-[var(--warning)]' : 'text-destructive'}`}>
                                 {emp.confirmRate}%
                               </span>
                             </div>
                           </td>
                           <td className="p-3 text-center">
                             <Badge
-                              className={`text-xs border-0 ${emp.cancelRate <= 20 ? 'bg-green-100 text-green-700' : emp.cancelRate <= 40 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}
+                              className={`text-xs border-0 ${emp.cancelRate <= 20 ? 'bg-[var(--success)]/10 text-[var(--success)]' : emp.cancelRate <= 40 ? 'bg-[var(--warning)]/10 text-[var(--warning)]' : 'bg-destructive/10 text-destructive'}`}
                             >
                               {emp.cancelRate}%
                             </Badge>
@@ -283,17 +282,17 @@ export default function Reports() {
           <CardContent className="p-4">
             <p className="text-sm font-semibold text-foreground mb-3">مؤشرات الأداء</p>
             <div className="grid grid-cols-3 gap-3">
-              <div className="bg-green-50 rounded-lg p-3 text-center">
-                <p className="text-lg font-bold text-green-700">70%+</p>
-                <p className="text-xs text-green-600">أداء ممتاز</p>
+              <div className="bg-[var(--success)]/10 rounded-lg p-3 text-center">
+                <p className="text-lg font-bold text-[var(--success)]">70%+</p>
+                <p className="text-xs text-[var(--success)]">أداء ممتاز</p>
               </div>
-              <div className="bg-yellow-50 rounded-lg p-3 text-center">
-                <p className="text-lg font-bold text-yellow-700">50-70%</p>
-                <p className="text-xs text-yellow-600">أداء متوسط</p>
+              <div className="bg-[var(--warning)]/10 rounded-lg p-3 text-center">
+                <p className="text-lg font-bold text-[var(--warning)]">50-70%</p>
+                <p className="text-xs text-[var(--warning)]">أداء متوسط</p>
               </div>
-              <div className="bg-red-50 rounded-lg p-3 text-center">
-                <p className="text-lg font-bold text-red-700">أقل من 50%</p>
-                <p className="text-xs text-red-600">يحتاج تحسين</p>
+              <div className="bg-destructive/10 rounded-lg p-3 text-center">
+                <p className="text-lg font-bold text-destructive">أقل من 50%</p>
+                <p className="text-xs text-destructive">يحتاج تحسين</p>
               </div>
             </div>
           </CardContent>

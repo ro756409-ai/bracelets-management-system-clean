@@ -4,9 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import DashboardLayout from "@/components/DashboardLayout";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, RotateCcw } from "lucide-react";
+import { PageHeader, StatCard } from "@/components/shared";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 
 const RETURN_REASON_LABELS: Record<string, string> = {
@@ -19,12 +19,12 @@ const RETURN_REASON_LABELS: Record<string, string> = {
 };
 
 const RETURN_REASON_COLORS: Record<string, string> = {
-  customer_refused: "bg-red-100 text-red-700 border-red-200",
-  wrong_product: "bg-orange-100 text-orange-700 border-orange-200",
-  damaged: "bg-yellow-100 text-yellow-700 border-yellow-200",
-  wrong_address: "bg-purple-100 text-purple-700 border-purple-200",
-  customer_not_available: "bg-blue-100 text-blue-700 border-blue-200",
-  other: "bg-gray-100 text-gray-700 border-gray-200",
+  customer_refused: "bg-destructive/10 text-destructive border-destructive/20",
+  wrong_product: "bg-[var(--warning)]/10 text-[var(--warning)] border-[var(--warning)]/20",
+  damaged: "bg-[var(--warning)]/10 text-[var(--warning)] border-[var(--warning)]/20",
+  wrong_address: "bg-accent text-accent-foreground border-primary/20",
+  customer_not_available: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/20",
+  other: "bg-muted text-muted-foreground border-border",
 };
 
 export default function Returns() {
@@ -55,39 +55,23 @@ export default function Returns() {
   const totalPages = Math.ceil(total / LIMIT);
 
   return (
-    <DashboardLayout>
-      <div className="p-6 space-y-6" dir="rtl">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">تقرير المرتجعات</h1>
-            <p className="text-muted-foreground text-sm mt-1">متابعة جميع الأوردرات المرتجعة وأسباب الإرجاع</p>
-          </div>
-        </div>
+      <div className="p-4 sm:p-6 space-y-6" dir="rtl">
+        <PageHeader
+          title="تقرير المرتجعات"
+          description="متابعة جميع الأوردرات المرتجعة وأسباب الإرجاع"
+          icon={<RotateCcw className="h-5 w-5" />}
+        />
 
         {/* Stats Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="pt-4 pb-4">
-              <div className="text-2xl font-bold text-foreground">{stats?.total ?? 0}</div>
-              <div className="text-sm text-muted-foreground">إجمالي المرتجعات</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4 pb-4">
-              <div className="text-2xl font-bold text-red-600">
-                {stats?.totalAmount ? Number(stats.totalAmount).toLocaleString("ar-EG") : 0} ج.م
-              </div>
-              <div className="text-sm text-muted-foreground">إجمالي قيمة المرتجعات</div>
-            </CardContent>
-          </Card>
+          <StatCard label="إجمالي المرتجعات" value={stats?.total ?? 0} />
+          <StatCard
+            label="إجمالي قيمة المرتجعات"
+            value={`${stats?.totalAmount ? Number(stats.totalAmount).toLocaleString("ar-EG") : 0} ج.م`}
+            tone="danger"
+          />
           {stats?.byReason?.slice(0, 2).map((r: any) => (
-            <Card key={r.reason}>
-              <CardContent className="pt-4 pb-4">
-                <div className="text-2xl font-bold text-foreground">{Number(r.count)}</div>
-                <div className="text-sm text-muted-foreground">{RETURN_REASON_LABELS[r.reason] ?? r.reason}</div>
-              </CardContent>
-            </Card>
+            <StatCard key={r.reason} label={RETURN_REASON_LABELS[r.reason] ?? r.reason} value={Number(r.count)} />
           ))}
         </div>
 
@@ -176,7 +160,7 @@ export default function Returns() {
                   <tbody>
                     {items.map((r: any) => (
                       <tr key={r.id} className="border-b hover:bg-muted/20 transition-colors">
-                        <td className="p-3 font-mono text-xs font-semibold text-amber-600">{r.orderNumber}</td>
+                        <td className="p-3 font-mono text-xs font-semibold text-[var(--warning)]">{r.orderNumber}</td>
                         <td className="p-3">
                           <div className="font-medium">{r.customerName}</div>
                           <div className="text-muted-foreground text-xs">{r.customerPhone}</div>
@@ -194,9 +178,9 @@ export default function Returns() {
                         </td>
                         <td className="p-3">
                           {r.stockRestored ? (
-                            <Badge className="bg-green-100 text-green-700 border-green-200 border text-xs">أُعيد للمخزون</Badge>
+                            <Badge className="bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/20 border text-xs">أُعيد للمخزون</Badge>
                           ) : (
-                            <Badge className="bg-gray-100 text-gray-500 border-gray-200 border text-xs">لم يُعَد</Badge>
+                            <Badge className="bg-muted text-muted-foreground border-border border text-xs">لم يُعَد</Badge>
                           )}
                         </td>
                         <td className="p-3 text-muted-foreground text-xs">
@@ -224,6 +208,5 @@ export default function Returns() {
           </div>
         )}
       </div>
-    </DashboardLayout>
   );
 }

@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Trash2, RotateCcw, Phone, MapPin, Package, AlertTriangle, Trash } from "lucide-react";
+import { PageHeader } from "@/components/shared";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -45,19 +46,12 @@ export default function Duplicates() {
   });
 
   return (
-    <div className="p-6 max-w-4xl mx-auto" dir="rtl">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <AlertTriangle className="h-6 w-6 text-orange-500" />
-            الأوردرات المكررة
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            الأوردرات التي علّمها الموظفون كمكررة — راجعها واحذف غير المطلوب
-          </p>
-        </div>
-        {duplicates.length > 0 && (
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6" dir="rtl">
+      <PageHeader
+        title="الأوردرات المكررة"
+        description="الأوردرات التي علّمها الموظفون كمكررة — راجعها واحذف غير المطلوب"
+        icon={<AlertTriangle className="h-5 w-5" />}
+        primaryAction={duplicates.length > 0 ? (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="destructive" size="sm" className="gap-2">
@@ -84,8 +78,8 @@ export default function Duplicates() {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {/* Content */}
       {isLoading ? (
@@ -100,16 +94,16 @@ export default function Duplicates() {
           {duplicates.map((order: any) => (
             <div
               key={order.id}
-              className="bg-card border border-orange-200 rounded-xl p-4 shadow-sm"
+              className="bg-card border border-[var(--warning)]/30 rounded-xl p-4 shadow-[var(--shadow-card)]"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   {/* Header row */}
                   <div className="flex items-center gap-2 mb-2 flex-wrap">
-                    <Badge variant="outline" className="text-xs font-mono border-orange-300 text-orange-700 bg-orange-50">
+                    <Badge variant="outline" className="text-xs font-mono border-[var(--warning)]/40 text-[var(--warning)] bg-[var(--warning)]/10">
                       #{order.orderNumber}
                     </Badge>
-                    <Badge className="text-xs bg-orange-100 text-orange-700 border-0">
+                    <Badge className="text-xs bg-[var(--warning)]/15 text-[var(--warning)] border-0">
                       ⚠️ مكرر
                     </Badge>
                     {order.source && (
@@ -135,7 +129,7 @@ export default function Duplicates() {
                   </div>
 
                   {order.notes && (
-                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-1 mt-2">
+                    <p className="text-xs text-[var(--warning)] bg-[var(--warning)]/10 border border-[var(--warning)]/20 rounded px-2 py-1 mt-2">
                       ملاحظة: {order.notes}
                     </p>
                   )}
@@ -183,7 +177,7 @@ export default function Duplicates() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 text-xs gap-1 border-green-300 text-green-700 hover:bg-green-50"
+                    className="h-8 text-xs gap-1 border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10"
                     onClick={() => restoreMutation.mutate({ orderId: order.id })}
                     disabled={restoreMutation.isPending}
                     title="إعادة للأوردرات العادية"

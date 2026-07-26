@@ -15,7 +15,9 @@ import {
   Filter,
   RotateCcw,
   Calendar,
+  QrCode,
 } from "lucide-react";
+import { PageHeader, StatCard } from "@/components/shared";
 import {
   Select,
   SelectContent,
@@ -81,17 +83,17 @@ export default function ScanLogs() {
   }, [scanLogs, search]);
 
   const resultColors = {
-    success: { bg: "bg-green-50 border-green-200", text: "text-green-700", badge: "bg-green-100 text-green-700" },
-    duplicate: { bg: "bg-yellow-50 border-yellow-200", text: "text-yellow-700", badge: "bg-yellow-100 text-yellow-700" },
-    cancelled: { bg: "bg-red-50 border-red-200", text: "text-red-700", badge: "bg-red-100 text-red-700" },
-    failed: { bg: "bg-red-50 border-red-200", text: "text-red-700", badge: "bg-red-100 text-red-700" },
+    success: { bg: "bg-[var(--success)]/5 border-[var(--success)]/20", text: "text-[var(--success)]", badge: "bg-[var(--success)]/10 text-[var(--success)]" },
+    duplicate: { bg: "bg-[var(--warning)]/5 border-[var(--warning)]/20", text: "text-[var(--warning)]", badge: "bg-[var(--warning)]/10 text-[var(--warning)]" },
+    cancelled: { bg: "bg-destructive/5 border-destructive/20", text: "text-destructive", badge: "bg-destructive/10 text-destructive" },
+    failed: { bg: "bg-destructive/5 border-destructive/20", text: "text-destructive", badge: "bg-destructive/10 text-destructive" },
   };
 
   const resultIcons = {
-    success: <CheckCircle2 className="h-4 w-4 text-green-600" />,
-    duplicate: <AlertTriangle className="h-4 w-4 text-yellow-600" />,
-    cancelled: <XCircle className="h-4 w-4 text-red-600" />,
-    failed: <XCircle className="h-4 w-4 text-red-600" />,
+    success: <CheckCircle2 className="h-4 w-4 text-[var(--success)]" />,
+    duplicate: <AlertTriangle className="h-4 w-4 text-[var(--warning)]" />,
+    cancelled: <XCircle className="h-4 w-4 text-destructive" />,
+    failed: <XCircle className="h-4 w-4 text-destructive" />,
   };
 
   const resultLabels = {
@@ -129,55 +131,20 @@ export default function ScanLogs() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto" dir="rtl">
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">سجل المسحات</h1>
-        <p className="text-gray-600">عرض كل مسحات QR الخاصة بك</p>
-      </div>
+    <div className="max-w-6xl mx-auto space-y-6" dir="rtl">
+      <PageHeader
+        title="سجل المسحات"
+        description="عرض كل مسحات QR الخاصة بك"
+        icon={<QrCode className="h-5 w-5" />}
+      />
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <Card className="bg-white border-0 shadow-sm">
-          <CardContent className="pt-4 pb-4">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-              <p className="text-xs text-gray-500 mt-1">إجمالي المسحات</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-green-50 border-green-200">
-          <CardContent className="pt-4 pb-4">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-green-700">{stats.success}</p>
-              <p className="text-xs text-green-600 mt-1">نجح</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-yellow-50 border-yellow-200">
-          <CardContent className="pt-4 pb-4">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-yellow-700">{stats.duplicate}</p>
-              <p className="text-xs text-yellow-600 mt-1">مكرر</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-red-50 border-red-200">
-          <CardContent className="pt-4 pb-4">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-red-700">{stats.failed}</p>
-              <p className="text-xs text-red-600 mt-1">فشل</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-orange-50 border-orange-200">
-          <CardContent className="pt-4 pb-4">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-orange-700">{stats.cancelled}</p>
-              <p className="text-xs text-orange-600 mt-1">ملغي</p>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <StatCard label="إجمالي المسحات" value={stats.total} />
+        <StatCard label="نجح" value={stats.success} tone="success" />
+        <StatCard label="مكرر" value={stats.duplicate} tone="warning" />
+        <StatCard label="فشل" value={stats.failed} tone="danger" />
+        <StatCard label="ملغي" value={stats.cancelled} tone="danger" />
       </div>
 
       {/* Filters */}
@@ -192,7 +159,7 @@ export default function ScanLogs() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             {/* Search */}
             <div className="relative">
-              <Search className="absolute right-3 top-3 h-4 w-4 text-gray-400" />
+              <Search className="absolute right-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="ابحث عن رقم أوردر أو رقم تسلسلي..."
                 value={search}
@@ -217,7 +184,7 @@ export default function ScanLogs() {
 
             {/* Date From */}
             <div className="relative">
-              <Calendar className="absolute right-3 top-3 h-4 w-4 text-gray-400" />
+              <Calendar className="absolute right-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
                 type="date"
                 value={dateFrom}
@@ -228,7 +195,7 @@ export default function ScanLogs() {
 
             {/* Date To */}
             <div className="relative">
-              <Calendar className="absolute right-3 top-3 h-4 w-4 text-gray-400" />
+              <Calendar className="absolute right-3 top-3 h-4 w-4 text-muted-foreground" />
               <Input
                 type="date"
                 value={dateTo}
@@ -256,7 +223,7 @@ export default function ScanLogs() {
             <Button
               size="sm"
               onClick={handleExportCSV}
-              className="gap-1 bg-green-600 hover:bg-green-700"
+              className="gap-1"
             >
               <Download className="h-3.5 w-3.5" />
               تصدير CSV
@@ -275,25 +242,25 @@ export default function ScanLogs() {
         <CardContent className="pb-4">
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="text-gray-500">جاري التحميل...</div>
+              <div className="text-muted-foreground">جاري التحميل...</div>
             </div>
           ) : filteredLogs.length === 0 ? (
             <div className="flex items-center justify-center py-8">
               <div className="text-center">
-                <p className="text-gray-500">لا توجد مسحات</p>
+                <p className="text-muted-foreground">لا توجد مسحات</p>
               </div>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="text-right py-3 px-4 font-semibold text-gray-700">التاريخ والوقت</th>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-700">الرقم التسلسلي</th>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-700">رقم الأوردر</th>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-700">العميل</th>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-700">النتيجة</th>
-                    <th className="text-right py-3 px-4 font-semibold text-gray-700">المسح بواسطة</th>
+                  <tr className="border-b border-border bg-muted/50">
+                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">التاريخ والوقت</th>
+                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">الرقم التسلسلي</th>
+                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">رقم الأوردر</th>
+                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">العميل</th>
+                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">النتيجة</th>
+                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">المسح بواسطة</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -302,29 +269,29 @@ export default function ScanLogs() {
                     return (
                       <tr
                         key={log.id}
-                        className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${colors.bg}`}
+                        className={`border-b border-border hover:bg-muted/30 transition-colors ${colors.bg}`}
                       >
                         <td className="py-3 px-4">
-                          <div className="flex items-center gap-2 text-gray-700">
-                            <Clock className="h-3.5 w-3.5 text-gray-400" />
+                          <div className="flex items-center gap-2 text-foreground">
+                            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
                             {new Date(log.createdAt).toLocaleString("ar-EG")}
                           </div>
                         </td>
-                        <td className="py-3 px-4 font-mono text-gray-700 dir-ltr">{log.serialNumber}</td>
+                        <td className="py-3 px-4 font-mono text-foreground dir-ltr">{log.serialNumber}</td>
                         <td className="py-3 px-4">
                           {log.order ? (
                             <Badge variant="outline" className="text-xs">
                               #{log.order.orderNumber}
                             </Badge>
                           ) : (
-                            <span className="text-gray-400">-</span>
+                            <span className="text-muted-foreground">-</span>
                           )}
                         </td>
                         <td className="py-3 px-4">
-                          <div className="text-gray-700">
+                          <div className="text-foreground">
                             {log.order?.customerName || "-"}
                           </div>
-                          <div className="text-xs text-gray-500 dir-ltr">
+                          <div className="text-xs text-muted-foreground dir-ltr">
                             {log.order?.customerPhone || "-"}
                           </div>
                         </td>
@@ -336,7 +303,7 @@ export default function ScanLogs() {
                             </Badge>
                           </div>
                         </td>
-                        <td className="py-3 px-4 text-gray-700">{log.scannedByName}</td>
+                        <td className="py-3 px-4 text-foreground">{log.scannedByName}</td>
                       </tr>
                     );
                   })}

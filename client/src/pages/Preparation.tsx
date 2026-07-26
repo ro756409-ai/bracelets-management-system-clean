@@ -15,8 +15,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  confirmed: { label: "مؤكد", color: "bg-green-100 text-green-800 border-green-200" },
-  printed: { label: "مطبوع", color: "bg-blue-100 text-blue-800 border-blue-200" },
+  confirmed: { label: "مؤكد", color: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/20" },
+  printed: { label: "مطبوع", color: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/20" },
 };
 
 const ITEMS_PER_PAGE = 50;
@@ -171,14 +171,14 @@ export default function Preparation() {
       {/* Stats Bar */}
       <div className="grid grid-cols-3 gap-3 px-6 py-3 border-b bg-muted/30">
         <div className="flex items-center gap-2 bg-background rounded-lg px-3 py-2 border">
-          <div className="w-2 h-2 rounded-full bg-green-500" />
+          <div className="w-2 h-2 rounded-full bg-[var(--success)]" />
           <span className="text-sm text-muted-foreground">مؤكد</span>
-          <span className="text-sm font-bold text-green-700 mr-auto">{confirmedCount}</span>
+          <span className="text-sm font-bold text-[var(--success)] mr-auto">{confirmedCount}</span>
         </div>
         <div className="flex items-center gap-2 bg-background rounded-lg px-3 py-2 border">
-          <div className="w-2 h-2 rounded-full bg-blue-500" />
+          <div className="w-2 h-2 rounded-full bg-[var(--info)]" />
           <span className="text-sm text-muted-foreground">مطبوع</span>
-          <span className="text-sm font-bold text-blue-700 mr-auto">{printedCount}</span>
+          <span className="text-sm font-bold text-[var(--info)] mr-auto">{printedCount}</span>
         </div>
         <div className="flex items-center gap-2 bg-background rounded-lg px-3 py-2 border">
           <div className="w-2 h-2 rounded-full bg-primary" />
@@ -237,7 +237,7 @@ export default function Preparation() {
             : <><Square className="w-3.5 h-3.5" /> تحديد الصفحة</>
           }
         </Button>
-        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-green-700" onClick={selectAllConfirmed}>
+        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-[var(--success)]" onClick={selectAllConfirmed}>
           <CheckSquare className="w-3.5 h-3.5" />
           تحديد كل المؤكدة ({confirmedCount})
         </Button>
@@ -296,7 +296,7 @@ export default function Preparation() {
             <tbody>
               {orders.map((order: any, idx: number) => {
                 const isSelected = selectedIds.includes(order.id);
-                const statusInfo = STATUS_LABELS[order.status] ?? { label: order.status, color: "bg-gray-100 text-gray-700" };
+                const statusInfo = STATUS_LABELS[order.status] ?? { label: order.status, color: "bg-muted text-muted-foreground" };
                 const confirmedAt = order.confirmedAt ? new Date(order.confirmedAt) : null;
                 const isNew = order.status === "confirmed";
 
@@ -308,7 +308,7 @@ export default function Preparation() {
                       isSelected
                         ? "bg-primary/8 hover:bg-primary/12"
                         : "hover:bg-muted/30"
-                    } ${isNew ? "border-r-2 border-r-green-400" : ""}`}
+                    } ${isNew ? "border-r-2 border-r-[var(--success)]/60" : ""}`}
                   >
                     <td className="p-3 text-center" onClick={e => e.stopPropagation()}>
                       <Checkbox
