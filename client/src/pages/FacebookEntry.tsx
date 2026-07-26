@@ -41,9 +41,9 @@ const WATERPROOF_PRODUCT_ID = 60001;
 
 /** Colour + label for the parsing-confidence meter. */
 function confidenceTone(pct: number) {
-  if (pct >= 75) return { label: "عالية", text: "text-emerald-700", bar: "bg-emerald-500" };
-  if (pct >= 45) return { label: "متوسطة", text: "text-amber-700", bar: "bg-amber-500" };
-  return { label: "منخفضة — راجع كل الحقول", text: "text-red-700", bar: "bg-red-500" };
+  if (pct >= 75) return { label: "عالية", text: "text-[var(--success)]", bar: "bg-[var(--success)]" };
+  if (pct >= 45) return { label: "متوسطة", text: "text-[var(--warning)]", bar: "bg-[var(--warning)]" };
+  return { label: "منخفضة — راجع كل الحقول", text: "text-destructive", bar: "bg-destructive" };
 }
 
 /** Arabic labels for the fields the confidence meter reports on. */
@@ -214,7 +214,7 @@ export default function FacebookEntry() {
 
   /** Ring styling applied to any input the parser was unsure about. */
   const fieldClass = (key: string) =>
-    lowConfidenceFields.has(key) ? "border-amber-500 bg-amber-50 ring-1 ring-amber-300" : "";
+    lowConfidenceFields.has(key) ? "border-[var(--warning)] bg-[var(--warning)]/10 ring-1 ring-[var(--warning)]/40" : "";
 
   // العدد الإجمالي للقطع = مجموع كميات البنود
   const totalPieces = useMemo(
@@ -439,6 +439,37 @@ export default function FacebookEntry() {
     setForm((f) => ({ ...f, selectedProducts: f.selectedProducts.filter((_, i) => i !== index) }));
   };
 
+  /**
+   * Manually add or remove an engraving. The manual form must stay fully usable when
+   * parsing fails, and engravings live in variants — so they need their own picker
+   * rather than only being reachable through the parser.
+   */
+  const toggleVariantItem = (variantId: number) => {
+    const variant = (catalog?.variants ?? []).find((v: any) => v.id === variantId);
+    const parent = (catalog?.products ?? []).find((p: any) => p.id === variant?.productId);
+    if (!variant || !parent) return;
+    setForm((f) => {
+      const existing = f.selectedProducts.findIndex((p) => p.variantId === variantId);
+      if (existing >= 0) {
+        return { ...f, selectedProducts: f.selectedProducts.filter((_, i) => i !== existing) };
+      }
+      return {
+        ...f,
+        selectedProducts: [
+          ...f.selectedProducts,
+          {
+            productId: parent.id,
+            variantId: variant.id,
+            variantName: variant.name ?? undefined,
+            productName: `${parent.name} - ${variant.name}`,
+            quantity: 1,
+            status: "matched" as const,
+          },
+        ],
+      };
+    });
+  };
+
   const setItemQuantityAt = (index: number, quantity: number) => {
     setForm((f) => {
       const items = [...f.selectedProducts];
@@ -535,8 +566,10 @@ export default function FacebookEntry() {
 
   if (meLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#1a0a00]">
-        <div className="text-amber-200 text-lg">جاري التحميل...</div>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <RefreshCw className="h-4 w-4 animate-spin" /> جاري التحميل...
+        </div>
       </div>
     );
   }
@@ -548,68 +581,76 @@ export default function FacebookEntry() {
 
   const finalTotal = form.totalAmount > 0 ? form.totalAmount : calculatedTotal;
   const editFinalTotal = editForm.totalAmount > 0 ? editForm.totalAmount : editCalculatedTotal;
+  const itemsNeedingReview = form.selectedProducts.filter((p) => p.status && p.status !== "matched").length;
 
   return (
-    <div className="min-h-screen bg-[#f5f0e8]" dir="rtl">
+    <div className="min-h-screen bg-background pb-24" dir="rtl">
       {/* Header */}
-      <div className="bg-[#3d1a00] text-white px-4 py-3 flex items-center justify-between shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-amber-500 rounded-full flex items-center justify-center font-bold text-sm">
-            {me.name?.charAt(0) ?? "م"}
+      <header className="sticky top-0 z-20 bg-sidebar text-sidebar-foreground px-4 py-3 shadow-[var(--shadow-card)]">
+        <div className="max-w-lg mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-sm">
+              {me.name?.charAt(0) ?? "م"}
+            </div>
+            <div className="leading-tight">
+              <p className="font-semibold text-sm">{me.name}</p>
+              <p className="text-xs text-sidebar-foreground/60">إدخال أوردرات فيسبوك</p>
+            </div>
           </div>
-          <div>
-            <p className="font-semibold text-sm">{me.name}</p>
-            <p className="text-xs text-amber-300">إدخال أوردرات فيسبوك</p>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-sidebar-foreground/80 hover:text-sidebar-foreground hover:bg-white/10 text-xs gap-1"
+              onClick={() => setShowOrders(!showOrders)}
+            >
+              <Package className="h-4 w-4" />
+              {showOrders ? "إخفاء" : "أوردراتي"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-sidebar-foreground/80 hover:text-sidebar-foreground hover:bg-white/10"
+              onClick={handleLogout}
+              title="تسجيل الخروج"
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-amber-200 hover:text-white hover:bg-white/10 text-xs gap-1"
-            onClick={() => setShowOrders(!showOrders)}
-          >
-            <Package className="h-4 w-4" />
-            {showOrders ? "إخفاء" : "أوردراتي"}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-amber-200 hover:text-white hover:bg-white/10"
-            onClick={handleLogout}
-          >
-            <LogOut className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
+      </header>
 
       <div className="max-w-lg mx-auto p-4 space-y-4">
-        {/* Paste Order Button */}
-        <Button
-          variant="outline"
-          className="w-full h-12 border-dashed border-2 border-amber-400 bg-amber-50 hover:bg-amber-100 text-amber-800 font-semibold gap-2"
-          onClick={() => setShowPaste(!showPaste)}
-        >
-          <ClipboardPaste className="h-5 w-5" />
-          {showPaste ? "إخفاء خانة اللصق" : "📋 الصق أوردر كامل (تحليل تلقائي)"}
-        </Button>
+        {/* ==================== Fast path: paste the customer message ==================== */}
+        <Card className="border-primary/30 bg-accent/40 shadow-[var(--shadow-card)]">
+          <CardHeader className="pb-2">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-2 text-right"
+              onClick={() => setShowPaste(!showPaste)}
+            >
+              <CardTitle className="text-sm flex items-center gap-2 text-accent-foreground">
+                <ClipboardPaste className="h-4 w-4" />
+                الصق رسالة العميل — تحليل تلقائي
+              </CardTitle>
+              <span className="text-xs text-accent-foreground/70">{showPaste ? "إخفاء" : "فتح"}</span>
+            </button>
+          </CardHeader>
 
-        {/* Paste Area */}
-        {showPaste && (
-          <Card className="border-amber-300 border-2 shadow-md">
-            <CardContent className="p-4 space-y-3">
-              <Label className="text-sm font-semibold text-amber-800">الصق نص الأوردر هنا:</Label>
+          {showPaste && (
+            <CardContent className="space-y-3 pt-0">
               <textarea
-                className="w-full h-40 border border-amber-200 rounded-lg p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white"
-                placeholder={`مثال:\nبيدج:عتبة  التاريخ: 25/4\nالاسم أشرف ابو دياب\nالعنوان :محافظة الشرقية ابو حماد...\nرقم الفون(١):01032579720\nنوع المنتج :ايه الكرسي   عدد القطع: 1\nالسعر: 180  الشحن: 40  الاجمالي:220`}
+                className="w-full h-36 rounded-[var(--radius-brand-md)] border border-border bg-card p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                placeholder={`انسخ رسالة العميل كما هي، مثال:\nالسلام عليكم عايزة ٢ آية الكرسي وواحدة عين حورس\nالاسم: منى سيد\n01012345678\nالشرقية — أبو حماد، شارع الجيش\nالإجمالي 810 والشحن 60`}
                 value={pasteText}
                 onChange={(e) => setPasteText(e.target.value)}
                 dir="rtl"
               />
+
               <div className="flex gap-2">
                 <Button
                   type="button"
-                  className="flex-1 bg-amber-600 hover:bg-amber-700 text-white gap-1"
+                  className="flex-1 gap-1"
                   onClick={parsePastedOrder}
                   disabled={parseQuery.isFetching}
                 >
@@ -621,195 +662,259 @@ export default function FacebookEntry() {
                   type="button"
                   variant="outline"
                   className="gap-1"
-                  onClick={() => { setShowPaste(false); setPasteText(""); setParseResult(null); }}
+                  onClick={() => { setPasteText(""); setParseResult(null); }}
+                  disabled={!pasteText && !parseResult}
                 >
                   <X className="h-4 w-4" />
-                  إلغاء
+                  مسح
                 </Button>
               </div>
 
-              <label className="flex items-center gap-2 text-xs text-amber-800">
+              <label className="flex items-center gap-2 text-xs text-accent-foreground/80">
                 <input
                   type="checkbox"
                   checked={autoParse}
                   onChange={(e) => setAutoParse(e.target.checked)}
-                  className="h-3.5 w-3.5 accent-amber-600"
+                  className="h-3.5 w-3.5 accent-[var(--primary)]"
                 />
                 تحليل تلقائي بعد التوقف عن الكتابة
               </label>
 
-              {/* Confidence meter. Parsing only fills the form — saving stays a separate,
-                  deliberate action by the employee. */}
+              {/* Confidence meter. Parsing only fills the form below — saving stays a
+                  separate, deliberate action by the employee. */}
               {parseResult && (
-                <div className="space-y-2 rounded-lg border border-amber-200 bg-white p-3">
+                <div className="space-y-2 rounded-[var(--radius-brand-md)] border border-border bg-card p-3">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-amber-900">دقة التحليل</span>
+                    <span className="font-semibold">دقة التحليل</span>
                     <span className={confidenceTone(parseResult.confidence).text}>
                       {parseResult.confidence}% — {confidenceTone(parseResult.confidence).label}
                     </span>
                   </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                     <div
-                      className={`h-full ${confidenceTone(parseResult.confidence).bar}`}
+                      className={`h-full transition-all ${confidenceTone(parseResult.confidence).bar}`}
                       style={{ width: `${parseResult.confidence}%` }}
                     />
                   </div>
                   {needsAttention.length > 0 && (
-                    <p className="flex items-start gap-1 text-[11px] text-amber-800">
-                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                    <p className="flex items-start gap-1 text-[11px] text-warning-foreground">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-[var(--warning)]" />
                       راجع يدويًا: {needsAttention.join("، ")}
                     </p>
                   )}
-                  <p className="text-[11px] text-gray-500">
+                  <p className="text-[11px] text-muted-foreground">
                     التحليل يملأ النموذج فقط — لن يُحفظ الأوردر إلا بضغطك على زر الحفظ.
                   </p>
                 </div>
               )}
             </CardContent>
-          </Card>
+          )}
+        </Card>
+
+        {/* Unresolved items block saving cleanly — surface it before the form */}
+        {itemsNeedingReview > 0 && (
+          <div className="flex items-start gap-2 rounded-[var(--radius-brand-md)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3 text-xs">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--warning)]" />
+            <span>
+              <strong>{itemsNeedingReview}</strong> صنف يحتاج تأكيد يدوي قبل الحفظ — حدّد النوع الصحيح من قسم «الأصناف».
+            </span>
+          </div>
         )}
 
-        {/* Add Order Form */}
-        <Card className="border-0 shadow-md">
+        {/* ==================== Review / manual entry form ==================== */}
+        <Card className="shadow-[var(--shadow-card)]">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2 text-[#3d1a00]">
-              <Plus className="h-5 w-5 text-amber-600" />
-              إضافة أوردر فيسبوك جديد
+            <CardTitle className="text-base flex items-center gap-2">
+              <Plus className="h-5 w-5 text-primary" />
+              {parseResult ? "راجع الأوردر قبل الحفظ" : "إضافة أوردر فيسبوك جديد"}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Customer Name */}
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">اسم العميل *</Label>
-                <Input
-                  placeholder="اسم العميل الكامل"
-                  value={form.customerName}
-                  onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
-                  className={`h-10 ${fieldClass("customerName")}`}
-                  required
-                />
-              </div>
+            <form onSubmit={handleSubmit} className="space-y-6">
 
-              {/* Phone */}
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium flex items-center gap-1">
-                  <Phone className="h-3.5 w-3.5" /> رقم التليفون *
-                </Label>
-                <Input
-                  placeholder="01xxxxxxxxx"
-                  value={form.customerPhone}
-                  onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
-                  className={`h-10 ${fieldClass("phone")}`}
-                  dir="ltr"
-                  required
-                />
-              </div>
+              {/* ---------- بيانات العميل ---------- */}
+              <section className="space-y-3">
+                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Phone className="h-3.5 w-3.5" /> بيانات العميل
+                </h3>
 
-              {/* Governorate */}
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium flex items-center gap-1">
-                  <MapPin className="h-3.5 w-3.5" /> المحافظة *
-                </Label>
-                <Select
-                  value={form.governorate}
-                  onValueChange={(v) => setForm((f) => ({ ...f, governorate: v }))}
-                >
-                  <SelectTrigger className={`h-10 ${fieldClass("governorate")}`}>
-                    <SelectValue placeholder="اختر المحافظة" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {EGYPT_GOVERNORATES.map((g) => (
-                      <SelectItem key={g} value={g}>{g}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">اسم العميل *</Label>
+                  <Input
+                    placeholder="اسم العميل الكامل"
+                    value={form.customerName}
+                    onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
+                    className={`h-10 ${fieldClass("customerName")}`}
+                    required
+                  />
+                </div>
 
-              {/* Address */}
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">العنوان التفصيلي *</Label>
-                <Input
-                  placeholder="الشارع، المنطقة، الحي..."
-                  value={form.customerAddress}
-                  onChange={(e) => setForm((f) => ({ ...f, customerAddress: e.target.value }))}
-                  className={`h-10 ${fieldClass("address")}`}
-                  required
-                />
-              </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">رقم التليفون *</Label>
+                  <Input
+                    placeholder="01xxxxxxxxx"
+                    value={form.customerPhone}
+                    onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
+                    className={`h-10 ${fieldClass("phone")}`}
+                    dir="ltr"
+                    required
+                  />
+                </div>
 
-              {/* City / area — optional, filled by the parser when the message names one */}
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium">المدينة / المنطقة</Label>
-                <Input
-                  placeholder="مثال: ابو حماد"
-                  value={form.city}
-                  onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
-                  className={`h-10 ${fieldClass("city")}`}
-                />
-              </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium flex items-center gap-1">
+                      <MapPin className="h-3.5 w-3.5" /> المحافظة *
+                    </Label>
+                    <Select
+                      value={form.governorate}
+                      onValueChange={(v) => setForm((f) => ({ ...f, governorate: v }))}
+                    >
+                      <SelectTrigger className={`h-10 ${fieldClass("governorate")}`}>
+                        <SelectValue placeholder="اختر" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {EGYPT_GOVERNORATES.map((g) => (
+                          <SelectItem key={g} value={g}>{g}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">المدينة / المنطقة</Label>
+                    <Input
+                      placeholder="مثال: أبو حماد"
+                      value={form.city}
+                      onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
+                      className={`h-10 ${fieldClass("city")}`}
+                    />
+                  </div>
+                </div>
 
-              {/* Product Multi-Select */}
-              <div className="space-y-2">
-                <Label className="text-sm font-medium flex items-center gap-1">
-                  <Package className="h-3.5 w-3.5" /> نوع المنتج / الحفر * <span className="text-xs text-muted-foreground">(اختر واحد أو أكتر)</span>
-                </Label>
-                <div className="flex flex-wrap gap-2">
-                  {products.map((p: any) => {
-                    const isSelected = form.selectedProducts.some((sp) => sp.productId === p.id);
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => toggleProduct(p.id, p.name)}
-                        className={`px-3 py-2 rounded-xl text-sm font-medium border-2 transition-all ${
-                          isSelected
-                            ? "bg-amber-600 text-white border-amber-600 shadow-md"
-                            : "bg-white text-gray-700 border-gray-200 hover:border-amber-400 hover:bg-amber-50"
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium">العنوان التفصيلي *</Label>
+                  <Input
+                    placeholder="الشارع، الحي، علامة مميزة..."
+                    value={form.customerAddress}
+                    onChange={(e) => setForm((f) => ({ ...f, customerAddress: e.target.value }))}
+                    className={`h-10 ${fieldClass("address")}`}
+                    required
+                  />
+                </div>
+              </section>
+
+              {/* ---------- الأصناف والكميات ---------- */}
+              <section className="space-y-3 border-t border-border pt-5">
+                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Package className="h-3.5 w-3.5" /> الأصناف والكميات
+                </h3>
+
+                {/* Engravings are variants of one parent product, so they get their own
+                    picker — otherwise the manual path could only ever select the bare
+                    parent, which is not a sellable item. */}
+                {(catalog?.variants ?? []).length > 0 && (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">نوع الحفر (أسورة نحاس)</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(catalog?.variants ?? []).map((v: any) => {
+                        const isSelected = form.selectedProducts.some((sp) => sp.variantId === v.id);
+                        return (
+                          <button
+                            key={v.id}
+                            type="button"
+                            onClick={() => toggleVariantItem(v.id)}
+                            className={`rounded-[var(--radius-brand-pill)] border px-3 py-1.5 text-xs font-medium transition-colors ${
+                              isSelected
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-border bg-card hover:border-primary/50 hover:bg-accent"
+                            }`}
+                          >
+                            {isSelected && <Check className="ml-1 inline h-3 w-3" />}
+                            {v.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Standalone products (car holder, waterproof cover, knife sharpener) */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">منتجات أخرى</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {products.map((p: any) => {
+                      const isSelected = form.selectedProducts.some((sp) => sp.productId === p.id && !sp.variantId);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => toggleProduct(p.id, p.name)}
+                          className={`rounded-[var(--radius-brand-pill)] border px-3 py-1.5 text-xs font-medium transition-colors ${
+                            isSelected
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-card hover:border-primary/50 hover:bg-accent"
+                          }`}
+                        >
+                          {isSelected && <Check className="ml-1 inline h-3 w-3" />}
+                          {p.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {form.selectedProducts.length === 0 ? (
+                  <p className="rounded-[var(--radius-brand-md)] border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+                    لم يتم اختيار أي صنف بعد
+                  </p>
+                ) : (
+                  <div className="space-y-2 rounded-[var(--radius-brand-md)] border border-border bg-muted/40 p-3">
+                    {form.selectedProducts.map((p, idx) => (
+                      <div
+                        key={idx}
+                        className={`space-y-1.5 rounded-[var(--radius-brand-sm)] p-2 ${
+                          p.status === "unmatched"
+                            ? "bg-destructive/5 ring-1 ring-destructive/30"
+                            : p.status === "ambiguous"
+                            ? "bg-[var(--warning)]/10 ring-1 ring-[var(--warning)]/40"
+                            : "bg-card"
                         }`}
                       >
-                        {isSelected && <Check className="h-3.5 w-3.5 inline ml-1" />}
-                        {p.name}
-                      </button>
-                    );
-                  })}
-                </div>
-                {form.selectedProducts.length > 0 && (
-                  <div className="mt-2 space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                    <p className="text-xs font-semibold text-amber-800">حدّد عدد القطع لكل نوع:</p>
-                    {form.selectedProducts.map((p, idx) => (
-                      <div key={idx} className="space-y-1">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm text-gray-700 flex-1 truncate">
+                          <span className="flex-1 truncate text-sm">
                             {p.productName}
-                            {p.status === "ambiguous" && <Badge variant="outline" className="mr-1 border-amber-400 text-amber-700 text-[10px]">يحتاج تحديد</Badge>}
-                            {p.status === "unmatched" && <Badge variant="outline" className="mr-1 border-red-400 text-red-700 text-[10px]">غير معروف</Badge>}
+                            {p.status === "ambiguous" && (
+                              <Badge variant="outline" className="mr-1 border-[var(--warning)] text-[10px] text-[var(--warning)]">يحتاج تحديد</Badge>
+                            )}
+                            {p.status === "unmatched" && (
+                              <Badge variant="outline" className="mr-1 border-destructive text-[10px] text-destructive">غير معروف</Badge>
+                            )}
                           </span>
                           <div className="flex items-center gap-1">
-                            <button type="button" onClick={() => setItemQuantityAt(idx, p.quantity - 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">−</button>
+                            <button type="button" onClick={() => setItemQuantityAt(idx, p.quantity - 1)} className="h-7 w-7 rounded-[var(--radius-brand-sm)] border border-border bg-card font-bold leading-none hover:bg-accent">−</button>
                             <Input
                               type="number"
                               min={1}
                               value={p.quantity}
                               onChange={(e) => setItemQuantityAt(idx, Number(e.target.value) || 1)}
-                              className="h-7 w-16 text-center"
+                              className="h-7 w-14 text-center"
                             />
-                            <button type="button" onClick={() => setItemQuantityAt(idx, p.quantity + 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">+</button>
-                            <button type="button" onClick={() => removeItemAt(idx)} className="h-7 w-7 rounded-md border border-red-200 bg-white text-red-500 leading-none hover:bg-red-50" title="إزالة">×</button>
+                            <button type="button" onClick={() => setItemQuantityAt(idx, p.quantity + 1)} className="h-7 w-7 rounded-[var(--radius-brand-sm)] border border-border bg-card font-bold leading-none hover:bg-accent">+</button>
+                            <button type="button" onClick={() => removeItemAt(idx)} className="h-7 w-7 rounded-[var(--radius-brand-sm)] border border-border bg-card leading-none text-destructive hover:bg-destructive/10" title="إزالة">×</button>
                           </div>
                         </div>
 
-                        {/* Ambiguous: the parser found more than one plausible engraving — the
-                            employee must choose; nothing is guessed on their behalf. */}
+                        {/* Ambiguous: more than one plausible engraving — the employee
+                            chooses; nothing is guessed on their behalf. */}
                         {p.status === "ambiguous" && p.candidates && p.candidates.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-1 rounded-md bg-amber-100/70 p-2">
-                            <span className="text-[11px] text-amber-800">هل تقصد:</span>
+                          <div className="flex flex-wrap items-center gap-1">
+                            <span className="text-[11px] text-muted-foreground">هل تقصد:</span>
                             {p.candidates.map((c) => (
                               <button
                                 key={c.id}
                                 type="button"
                                 onClick={() => chooseCandidate(idx, c.id)}
-                                className="rounded-md border border-amber-400 bg-white px-2 py-0.5 text-[11px] text-amber-900 hover:bg-amber-50"
+                                className="rounded-[var(--radius-brand-sm)] border border-border bg-card px-2 py-0.5 text-[11px] hover:bg-accent"
                               >
                                 {c.name}
                               </button>
@@ -820,8 +925,10 @@ export default function FacebookEntry() {
                         {/* Unmatched: keep the original phrase visible and let the employee
                             pick from the live catalog. Nothing is created automatically. */}
                         {p.status === "unmatched" && (
-                          <div className="space-y-1 rounded-md bg-red-50 p-2">
-                            {p.rawText && <p className="text-[11px] text-red-800">النص الأصلي: «{p.rawText}»</p>}
+                          <div className="space-y-1">
+                            {p.rawText && (
+                              <p className="text-[11px] text-muted-foreground">النص الأصلي: «{p.rawText}»</p>
+                            )}
                             <Select onValueChange={(v) => assignItemVariant(idx, Number(v))}>
                               <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="اختر النوع الصحيح يدويًا" /></SelectTrigger>
                               <SelectContent>
@@ -834,158 +941,153 @@ export default function FacebookEntry() {
                         )}
                       </div>
                     ))}
-                    <div className="flex items-center justify-between border-t border-amber-200 pt-2">
-                      <span className="text-sm font-semibold text-amber-800">إجمالي القطع</span>
-                      <span className="text-sm font-bold text-amber-900">{totalPieces} قطعة</span>
+                    <div className="flex items-center justify-between border-t border-border pt-2 text-sm">
+                      <span className="text-muted-foreground">إجمالي القطع</span>
+                      <span className="font-semibold">{totalPieces} قطعة</span>
                     </div>
                   </div>
                 )}
-              </div>
 
-              {/* خانتي المقاس واللون - تظهر فقط عند اختيار كفر مرتبة ووتر بروف */}
-              {isWaterproofSelected && (
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 space-y-3">
-                  <p className="text-xs font-semibold text-blue-800 flex items-center gap-1">
-                    <Package className="h-3.5 w-3.5" /> تفاصيل كفر مرتبة ووتر بروف
-                  </p>
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* المقاس */}
-                    <div className="space-y-1.5">
-                      <Label className="text-sm font-medium text-blue-900">المقاس *</Label>
-                      <Select
-                        value={form.size || ""}
-                        onValueChange={(v) => setForm((f) => ({ ...f, size: v, color: undefined, variantId: undefined }))}
-                      >
-                        <SelectTrigger className="h-10 border-blue-300 bg-white">
-                          <SelectValue placeholder="اختر المقاس" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {waterproofSizes.map((s: any) => (
-                            <SelectItem key={s} value={s}>{s}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    {/* اللون */}
-                    <div className="space-y-1.5">
-                      <Label className="text-sm font-medium text-blue-900">اللون *</Label>
-                      <Select
-                        value={form.color || ""}
-                        onValueChange={(v) => setForm((f) => ({ ...f, color: v }))}
-                        disabled={!form.size}
-                      >
-                        <SelectTrigger className="h-10 border-blue-300 bg-white">
-                          <SelectValue placeholder={form.size ? "اختر اللون" : "اختر المقاس أولا"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {waterproofColors.map((c: any) => (
-                            <SelectItem key={c} value={c}>{c}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                {/* Size/colour only apply to the waterproof mattress cover */}
+                {isWaterproofSelected && (
+                  <div className="space-y-3 rounded-[var(--radius-brand-md)] border border-border bg-muted/40 p-3">
+                    <p className="text-xs font-semibold">تفاصيل كفر مرتبة ووتر بروف</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-sm font-medium">المقاس *</Label>
+                        <Select
+                          value={form.size || ""}
+                          onValueChange={(v) => setForm((f) => ({ ...f, size: v, color: undefined, variantId: undefined }))}
+                        >
+                          <SelectTrigger className="h-10 bg-card"><SelectValue placeholder="اختر المقاس" /></SelectTrigger>
+                          <SelectContent>
+                            {waterproofSizes.map((sz: any) => (
+                              <SelectItem key={sz} value={sz}>{sz}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-sm font-medium">اللون *</Label>
+                        <Select
+                          value={form.color || ""}
+                          onValueChange={(v) => setForm((f) => ({ ...f, color: v }))}
+                          disabled={!form.size}
+                        >
+                          <SelectTrigger className="h-10 bg-card">
+                            <SelectValue placeholder={form.size ? "اختر اللون" : "اختر المقاس أولا"} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {waterproofColors.map((c: any) => (
+                              <SelectItem key={c} value={c}>{c}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                   </div>
-                  {form.size && form.color && (
-                    <p className="text-xs text-blue-700">
-                      ✅ المختار: {form.size} — {form.color}
-                    </p>
-                  )}
-                </div>
-              )}
+                )}
+              </section>
 
-              {/* Total + Shipping - تسعير يدوي */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">الإجمالي (ج.م) *</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    placeholder={calculatedTotal > 0 ? `مقترح: ${calculatedTotal}` : "اكتب الإجمالي"}
-                    value={form.totalAmount || ""}
-                    onChange={(e) => setForm((f) => ({ ...f, totalAmount: Number(e.target.value) || 0 }))}
-                    className={`h-10 font-semibold ${fieldClass("orderTotal")}`}
-                  />
+              {/* ---------- التسعير ---------- */}
+              <section className="space-y-3 border-t border-border pt-5">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  التسعير
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">الإجمالي (ج.م) *</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      placeholder={calculatedTotal > 0 ? `مقترح: ${calculatedTotal}` : "اكتب الإجمالي"}
+                      value={form.totalAmount || ""}
+                      onChange={(e) => setForm((f) => ({ ...f, totalAmount: Number(e.target.value) || 0 }))}
+                      className={`h-10 font-semibold ${fieldClass("orderTotal")}`}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">الشحن (ج.م)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={form.shippingCost}
+                      onChange={(e) => setForm((f) => ({ ...f, shippingCost: Number(e.target.value) || 0 }))}
+                      className={`h-10 ${fieldClass("shipping")}`}
+                    />
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">الشحن (ج.م)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={form.shippingCost}
-                    onChange={(e) => setForm((f) => ({ ...f, shippingCost: Number(e.target.value) || 0 }))}
-                    className={`h-10 ${fieldClass("shipping")}`}
-                  />
-                </div>
-              </div>
-
-              {/* ملخص الإجمالي */}
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-amber-800">الإجمالي المسجّل</span>
-                  <span className="text-lg font-bold text-amber-900">{finalTotal.toLocaleString()} ج.م</span>
-                </div>
-                <p className="text-xs text-amber-600 mt-1">
-                  {totalPieces} قطعة إجماليًا
-                  {form.shippingCost > 0 && ` — منها شحن ${form.shippingCost} ج.م`}
-                  {" — السعر يدوي حسب الاتفاق"}
+                <p className="text-xs text-muted-foreground">
+                  السعر يدوي حسب الاتفاق — المقترح استرشادي فقط.
                 </p>
-              </div>
+              </section>
 
-              {/* Ad Name (Badge) */}
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium flex items-center gap-1">
-                  <Megaphone className="h-3.5 w-3.5 text-blue-500" /> اسم البيدج (الإعلان)
-                </Label>
-                <Input
-                  placeholder="اسم الإعلان على فيسبوك (اختياري)"
-                  value={form.adName}
-                  onChange={(e) => setForm((f) => ({ ...f, adName: e.target.value }))}
-                  className="h-10"
-                />
-              </div>
+              {/* ---------- بيانات إضافية ---------- */}
+              <section className="space-y-3 border-t border-border pt-5">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  بيانات إضافية
+                </h3>
 
-              {/* Notes */}
-              <div className="space-y-1.5">
-                <Label className="text-sm font-medium flex items-center gap-1">
-                  <StickyNote className="h-3.5 w-3.5 text-green-600" /> ملاحظات
-                </Label>
-                <textarea
-                  className="w-full border border-gray-200 rounded-lg p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white h-20"
-                  placeholder="أي ملاحظات على الأوردر (اختياري)"
-                  value={form.notes}
-                  onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                  dir="rtl"
-                />
-              </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium flex items-center gap-1">
+                    <Megaphone className="h-3.5 w-3.5" /> اسم البيدج / الإعلان
+                  </Label>
+                  <Input
+                    placeholder="اختياري"
+                    value={form.adName}
+                    onChange={(e) => setForm((f) => ({ ...f, adName: e.target.value }))}
+                    className="h-10"
+                  />
+                </div>
 
-              {/* Date (auto) */}
-              <div className="flex items-center gap-2 text-sm text-muted-foreground bg-gray-50 rounded-lg px-3 py-2">
-                <Calendar className="h-4 w-4" />
-                <span>التاريخ: {new Date().toLocaleDateString("ar-EG", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</span>
-              </div>
+                <div className="space-y-1.5">
+                  <Label className="text-sm font-medium flex items-center gap-1">
+                    <StickyNote className="h-3.5 w-3.5" /> ملاحظات
+                  </Label>
+                  <textarea
+                    className="h-20 w-full resize-none rounded-[var(--radius-brand-md)] border border-border bg-card p-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    placeholder="أي ملاحظات على الأوردر (اختياري)"
+                    value={form.notes}
+                    onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                    dir="rtl"
+                  />
+                </div>
 
-              <Button
-                type="submit"
-                className="w-full h-11 bg-[#3d1a00] hover:bg-[#5a2800] text-white font-semibold text-base"
-                disabled={addOrderMutation.isPending}
-              >
-                {addOrderMutation.isPending ? (
-                  <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" /> جاري الإضافة...</span>
-                ) : (
-                  <span className="flex items-center gap-2"><Plus className="h-5 w-5" /> إضافة الأوردر</span>
-                )}
-              </Button>
+                <div className="flex items-center gap-2 rounded-[var(--radius-brand-md)] bg-muted px-3 py-2 text-xs text-muted-foreground">
+                  <Calendar className="h-3.5 w-3.5" />
+                  <span>التاريخ: {new Date().toLocaleDateString("ar-EG", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</span>
+                </div>
+              </section>
+
+              {/* Sticky action bar — the total stays visible while scrolling a long form */}
+              <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-card/95 px-4 py-3 backdrop-blur">
+                <div className="mx-auto flex max-w-lg items-center gap-3">
+                  <div className="leading-tight">
+                    <p className="text-[11px] text-muted-foreground">الإجمالي المسجّل</p>
+                    <p className="text-base font-bold">{finalTotal.toLocaleString()} ج.م</p>
+                  </div>
+                  <Button
+                    type="submit"
+                    className="h-11 flex-1 gap-2 text-base font-semibold"
+                    disabled={addOrderMutation.isPending}
+                  >
+                    {addOrderMutation.isPending
+                      ? <><RefreshCw className="h-4 w-4 animate-spin" /> جاري الإضافة...</>
+                      : <><Plus className="h-5 w-5" /> إضافة الأوردر</>}
+                  </Button>
+                </div>
+              </div>
             </form>
           </CardContent>
         </Card>
 
         {/* My Orders Section */}
         {showOrders && (
-          <Card className="border-0 shadow-md">
+          <Card className="shadow-[var(--shadow-card)]">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-base flex items-center gap-2 text-[#3d1a00]">
-                  <Package className="h-5 w-5 text-amber-600" />
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Package className="h-5 w-5 text-primary" />
                   أوردراتي ({myOrders.length})
                 </CardTitle>
                 <Button
@@ -1025,7 +1127,7 @@ export default function FacebookEntry() {
                 <p className="text-center text-muted-foreground text-sm py-6">لا توجد أوردرات في هذا النطاق</p>
               ) : (
                 myOrders.map((order: any) => (
-                  <div key={order.id} className="border rounded-xl p-3 bg-white space-y-1.5">
+                  <div key={order.id} className="rounded-[var(--radius-brand-md)] border border-border bg-card p-3 space-y-1.5">
                     <div className="flex items-center justify-between">
                       <Badge variant="outline" className="text-xs font-mono">{order.orderNumber}</Badge>
                       <span className="text-xs text-muted-foreground">
@@ -1042,23 +1144,23 @@ export default function FacebookEntry() {
                       <span>{order.governorate} — {order.customerAddress}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-gray-600">{order.productName} × {order.quantity}</span>
-                      <span className="font-semibold text-amber-700">{Number(order.totalAmount)} ج.م</span>
+                      <span className="text-muted-foreground">{order.productName} × {order.quantity}</span>
+                      <span className="font-semibold">{Number(order.totalAmount)} ج.م</span>
                     </div>
                     {(order.size || order.color) && (
-                      <div className="flex items-center gap-1 text-xs text-blue-700 bg-blue-50 rounded px-2 py-1">
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted rounded px-2 py-1">
                         <Package className="h-3 w-3" />
                         <span>{[order.size, order.color].filter(Boolean).join(' — ')}</span>
                       </div>
                     )}
                     {order.adName && (
-                      <div className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 rounded px-2 py-1">
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted rounded px-2 py-1">
                         <Megaphone className="h-3 w-3" />
                         <span>{order.adName}</span>
                       </div>
                     )}
                     {order.notes && (
-                      <div className="flex items-center gap-1 text-xs text-green-700 bg-green-50 rounded px-2 py-1">
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground bg-muted rounded px-2 py-1">
                         <StickyNote className="h-3 w-3" />
                         <span>{order.notes}</span>
                       </div>
@@ -1136,8 +1238,8 @@ export default function FacebookEntry() {
       <Dialog open={editingOrder !== null} onOpenChange={(open) => { if (!open) setEditingOrder(null); }}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-[#3d1a00]">
-              <Pencil className="h-5 w-5 text-amber-600" />
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-5 w-5 text-primary" />
               تعديل بيانات الأوردر
               {editingOrder && (
                 <Badge variant="outline" className="text-xs font-mono mr-2">{editingOrder.orderNumber}</Badge>
@@ -1217,8 +1319,8 @@ export default function FacebookEntry() {
                       onClick={() => toggleEditProduct(p.id, p.name)}
                       className={`px-3 py-2 rounded-xl text-sm font-medium border-2 transition-all ${
                         isSelected
-                          ? "bg-amber-600 text-white border-amber-600 shadow-md"
-                          : "bg-white text-gray-700 border-gray-200 hover:border-amber-400 hover:bg-amber-50"
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border bg-card hover:border-primary/50 hover:bg-accent"
                       }`}
                     >
                       {isSelected && <Check className="h-3.5 w-3.5 inline ml-1" />}
@@ -1228,13 +1330,13 @@ export default function FacebookEntry() {
                 })}
               </div>
               {editForm.selectedProducts.length > 0 && (
-                <div className="mt-2 space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                  <p className="text-xs font-semibold text-amber-800">حدّد عدد القطع لكل نوع:</p>
+                <div className="mt-2 space-y-2 rounded-[var(--radius-brand-md)] border border-border bg-muted/40 p-3">
+                  <p className="text-xs font-semibold">حدّد عدد القطع لكل نوع:</p>
                   {editForm.selectedProducts.map((p, idx) => (
                     <div key={idx} className="flex items-center justify-between gap-2">
                       <span className="text-sm text-gray-700 flex-1 truncate">{p.productName}</span>
                       <div className="flex items-center gap-1">
-                        <button type="button" onClick={() => setEditItemQuantityAt(idx, p.quantity - 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">−</button>
+                        <button type="button" onClick={() => setEditItemQuantityAt(idx, p.quantity - 1)} className="h-7 w-7 rounded-[var(--radius-brand-sm)] border border-border bg-card font-bold leading-none hover:bg-accent">−</button>
                         <Input
                           type="number"
                           min={1}
@@ -1242,14 +1344,14 @@ export default function FacebookEntry() {
                           onChange={(e) => setEditItemQuantityAt(idx, Number(e.target.value) || 1)}
                           className="h-7 w-16 text-center"
                         />
-                        <button type="button" onClick={() => setEditItemQuantityAt(idx, p.quantity + 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">+</button>
-                        <button type="button" onClick={() => removeEditItemAt(idx)} className="h-7 w-7 rounded-md border border-red-200 bg-white text-red-500 leading-none hover:bg-red-50" title="إزالة">×</button>
+                        <button type="button" onClick={() => setEditItemQuantityAt(idx, p.quantity + 1)} className="h-7 w-7 rounded-[var(--radius-brand-sm)] border border-border bg-card font-bold leading-none hover:bg-accent">+</button>
+                        <button type="button" onClick={() => removeEditItemAt(idx)} className="h-7 w-7 rounded-[var(--radius-brand-sm)] border border-border bg-card leading-none text-destructive hover:bg-destructive/10" title="إزالة">×</button>
                       </div>
                     </div>
                   ))}
-                  <div className="flex items-center justify-between border-t border-amber-200 pt-2">
-                    <span className="text-sm font-semibold text-amber-800">إجمالي القطع</span>
-                    <span className="text-sm font-bold text-amber-900">{editTotalPieces} قطعة</span>
+                  <div className="flex items-center justify-between border-t border-border pt-2">
+                    <span className="text-sm text-muted-foreground">إجمالي القطع</span>
+                    <span className="text-sm font-semibold">{editTotalPieces} قطعة</span>
                   </div>
                 </div>
               )}
@@ -1330,12 +1432,12 @@ export default function FacebookEntry() {
             </div>
 
             {/* ملخص الإجمالي */}
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+            <div className="rounded-[var(--radius-brand-md)] border border-border bg-muted/40 p-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-amber-800">الإجمالي المسجّل</span>
-                <span className="text-lg font-bold text-amber-900">{editFinalTotal.toLocaleString()} ج.م</span>
+                <span className="text-sm text-muted-foreground">الإجمالي المسجّل</span>
+                <span className="text-lg font-bold">{editFinalTotal.toLocaleString()} ج.م</span>
               </div>
-              <p className="text-xs text-amber-600 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 {editTotalPieces} قطعة إجماليًا
                 {editForm.shippingCost > 0 && ` — منها شحن ${editForm.shippingCost} ج.م`}
                 {" — السعر يدوي حسب الاتفاق"}
@@ -1361,7 +1463,7 @@ export default function FacebookEntry() {
                 <StickyNote className="h-3.5 w-3.5 text-green-600" /> ملاحظات
               </Label>
               <textarea
-                className="w-full border border-gray-200 rounded-lg p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white h-20"
+                className="h-20 w-full resize-none rounded-[var(--radius-brand-md)] border border-border bg-card p-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 placeholder="أي ملاحظات على الأوردر (اختياري)"
                 value={editForm.notes}
                 onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
@@ -1381,7 +1483,7 @@ export default function FacebookEntry() {
             <Button
               onClick={handleEditSubmit}
               disabled={updateOrderMutation.isPending}
-              className="flex-1 bg-[#3d1a00] hover:bg-[#5a2800] text-white gap-1"
+              className="flex-1 gap-1"
             >
               {updateOrderMutation.isPending ? (
                 <><RefreshCw className="h-4 w-4 animate-spin" /> جاري الحفظ...</>
