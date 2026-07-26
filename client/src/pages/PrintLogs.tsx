@@ -99,8 +99,8 @@ export default function PrintLogs() {
                   >
                     <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
                       log.type === "shipping_sheet"
-                        ? "bg-green-100 text-green-700"
-                        : "bg-blue-100 text-blue-700"
+                        ? "bg-[var(--success)]/15 text-[var(--success)]"
+                        : "bg-[var(--info)]/15 text-[var(--info)]"
                     }`}>
                       {log.type === "shipping_sheet"
                         ? <FileSpreadsheet className="w-4.5 h-4.5" />

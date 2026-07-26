@@ -42,11 +42,11 @@ const SCHEDULE_DATA = [
 ];
 
 const NOTES = [
-  { text: "يتم استلام محافظات الصعيد يومي الاحد والاربعاء ويتم تسليم الشحنات خلال 48 الي 72 ساعة", color: "bg-red-50 border-red-200 text-red-800" },
-  { text: "حساب الصعيد يوم الاحد ويوم الخميس & حساب مطروح والساحل يوم الاربعاء من كل اسبوع", color: "bg-yellow-50 border-yellow-200 text-yellow-800" },
-  { text: "الحساب متاح يومياً ماعدا الجمعة من الساعة 12 ظهراً الي الساعة 5 مساءً", color: "bg-blue-50 border-blue-200 text-blue-800" },
-  { text: "يتم استلام المحافظات قبل ميعاد التسليم يوم بناءً على توزيع المحافظات في الجدول", color: "bg-blue-50 border-blue-200 text-blue-800" },
-  { text: "مواعيد استلام الشحنات يومياً من الساعة 5 مساءً الي الساعة 10 مساءً", color: "bg-green-50 border-green-200 text-green-800" },
+  { text: "يتم استلام محافظات الصعيد يومي الاحد والاربعاء ويتم تسليم الشحنات خلال 48 الي 72 ساعة", color: "bg-destructive/10 border-destructive/30 text-destructive" },
+  { text: "حساب الصعيد يوم الاحد ويوم الخميس & حساب مطروح والساحل يوم الاربعاء من كل اسبوع", color: "bg-[var(--warning)]/10 border-[var(--warning)]/30 text-[var(--warning)]" },
+  { text: "الحساب متاح يومياً ماعدا الجمعة من الساعة 12 ظهراً الي الساعة 5 مساءً", color: "bg-[var(--info)]/10 border-[var(--info)]/30 text-[var(--info)]" },
+  { text: "يتم استلام المحافظات قبل ميعاد التسليم يوم بناءً على توزيع المحافظات في الجدول", color: "bg-[var(--info)]/10 border-[var(--info)]/30 text-[var(--info)]" },
+  { text: "مواعيد استلام الشحنات يومياً من الساعة 5 مساءً الي الساعة 10 مساءً", color: "bg-[var(--success)]/10 border-[var(--success)]/30 text-[var(--success)]" },
 ];
 
 // تحديد اليوم الحالي
@@ -69,7 +69,7 @@ export default function ShippingSchedule() {
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-amber-50 to-white">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600" />
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--warning)]" />
       </div>
     );
   }
@@ -127,8 +127,8 @@ export default function ShippingSchedule() {
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
         {viewMode === 'image' ? (
           /* عرض الصورة الأصلية */
-          <div className="bg-white rounded-2xl shadow-lg overflow-hidden border border-amber-100">
-            <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white text-center py-3 font-bold text-lg print:bg-blue-600">
+          <div className="bg-card rounded-2xl shadow-lg overflow-hidden border border-[var(--warning)]/20">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white text-center py-3 font-bold text-lg print:bg-[var(--info)]">
               جدول توزيع المحافظات
             </div>
             <img
@@ -140,17 +140,17 @@ export default function ShippingSchedule() {
         ) : (
           /* عرض الجدول التفاعلي */
           <>
-            <div className="bg-white rounded-2xl shadow-lg overflow-hidden border border-amber-100">
+            <div className="bg-card rounded-2xl shadow-lg overflow-hidden border border-[var(--warning)]/20">
               <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white text-center py-3 font-bold text-lg">
                 جدول توزيع المحافظات
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="bg-blue-50 border-b-2 border-blue-200">
-                      <th className="py-3 px-4 text-right font-bold text-blue-800 w-24">اليوم</th>
-                      <th className="py-3 px-4 text-right font-bold text-blue-800">المحافظات</th>
-                      <th className="py-3 px-4 text-right font-bold text-blue-800 w-40">إضافي</th>
+                    <tr className="bg-[var(--info)]/10 border-b-2 border-[var(--info)]/30">
+                      <th className="py-3 px-4 text-right font-bold text-[var(--info)] w-24">اليوم</th>
+                      <th className="py-3 px-4 text-right font-bold text-[var(--info)]">المحافظات</th>
+                      <th className="py-3 px-4 text-right font-bold text-[var(--info)] w-40">إضافي</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -161,24 +161,24 @@ export default function ShippingSchedule() {
                           key={i}
                           className={`border-b transition-colors ${
                             isToday
-                              ? 'bg-amber-50 border-amber-200 ring-2 ring-amber-400 ring-inset'
+                              ? 'bg-[var(--warning)]/10 border-[var(--warning)]/30 ring-2 ring-amber-400 ring-inset'
                               : i % 2 === 0
-                              ? 'bg-white hover:bg-gray-50'
-                              : 'bg-gray-50/50 hover:bg-gray-100/50'
+                              ? 'bg-card hover:bg-muted/50'
+                              : 'bg-muted/50/50 hover:bg-muted/50'
                           }`}
                         >
-                          <td className={`py-3 px-4 font-bold whitespace-nowrap ${isToday ? 'text-amber-700' : 'text-blue-700'}`}>
+                          <td className={`py-3 px-4 font-bold whitespace-nowrap ${isToday ? 'text-[var(--warning)]' : 'text-[var(--info)]'}`}>
                             {row.day}
                             {isToday && (
-                              <span className="block text-[10px] font-normal text-amber-600 bg-amber-100 rounded px-1 mt-0.5 text-center">
+                              <span className="block text-[10px] font-normal text-[var(--warning)] bg-[var(--warning)]/15 rounded px-1 mt-0.5 text-center">
                                 اليوم
                               </span>
                             )}
                           </td>
-                          <td className="py-3 px-4 text-gray-700 text-xs leading-relaxed">
+                          <td className="py-3 px-4 text-foreground text-xs leading-relaxed">
                             {row.governorates}
                           </td>
-                          <td className="py-3 px-4 font-semibold text-blue-700 text-xs">
+                          <td className="py-3 px-4 font-semibold text-[var(--info)] text-xs">
                             {row.extra}
                           </td>
                         </tr>
@@ -191,7 +191,7 @@ export default function ShippingSchedule() {
 
             {/* ملاحظات مهمة */}
             <div className="space-y-3">
-              <h3 className="font-bold text-gray-800 text-base">ملاحظات مهمة</h3>
+              <h3 className="font-bold text-foreground text-base">ملاحظات مهمة</h3>
               {NOTES.map((note, i) => (
                 <div
                   key={i}

@@ -197,9 +197,9 @@ export default function Businesses() {
                         disabled={toggleMutation.isPending}
                       >
                         {business.isActive ? (
-                          <ToggleRight className="h-4 w-4 text-green-600" />
+                          <ToggleRight className="h-4 w-4 text-[var(--success)]" />
                         ) : (
-                          <ToggleLeft className="h-4 w-4 text-gray-400" />
+                          <ToggleLeft className="h-4 w-4 text-muted-foreground" />
                         )}
                       </Button>
                     </div>

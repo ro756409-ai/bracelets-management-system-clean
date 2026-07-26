@@ -302,7 +302,7 @@ export default function ScanOrders() {
             </div>
 
             {scanResult.order && (
-              <div className="bg-white rounded-lg border p-3 space-y-2 mt-2">
+              <div className="bg-card rounded-lg border p-3 space-y-2 mt-2">
                 <div className="flex items-center gap-2 text-sm">
                   <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   <span className="font-medium">{scanResult.order.customerName}</span>

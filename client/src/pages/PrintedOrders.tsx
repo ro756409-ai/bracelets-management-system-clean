@@ -121,7 +121,7 @@ export default function PrintedOrders() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <Printer className="h-6 w-6 text-teal-600" />
+            <Printer className="h-6 w-6 text-[var(--info)]" />
             المطبوعات
           </h1>
           <p className="text-muted-foreground text-sm mt-1">{dateLabel}</p>
@@ -134,7 +134,7 @@ export default function PrintedOrders() {
           <Button
             variant="outline"
             size="sm"
-            className="border-green-200 text-green-700 hover:bg-green-50 gap-1"
+            className="border-[var(--success)]/30 text-[var(--success)] hover:bg-[var(--success)]/10 gap-1"
             onClick={handleExcelExport}
             disabled={orders.length === 0}
           >
@@ -143,7 +143,7 @@ export default function PrintedOrders() {
           </Button>
           <Button
             size="sm"
-            className="bg-teal-600 hover:bg-teal-700 text-white gap-1"
+            className="bg-[var(--info)] hover:bg-[var(--info)] text-white gap-1"
             disabled={selectedIds.length === 0}
             onClick={handleReprint}
           >
@@ -154,16 +154,16 @@ export default function PrintedOrders() {
       </div>
 
       {/* فلاتر التاريخ والبحث */}
-      <div className="flex flex-col gap-3 bg-teal-50 border border-teal-200 rounded-xl px-4 py-3">
+      <div className="flex flex-col gap-3 bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-xl px-4 py-3">
         <div className="flex items-center gap-3 flex-wrap">
           {/* فلتر التاريخ */}
-          <div className="flex gap-1 bg-white rounded-lg border border-teal-300 p-0.5">
+          <div className="flex gap-1 bg-card rounded-lg border border-[var(--info)]/40 p-0.5">
             {(['today', 'yesterday', 'custom'] as const).map(f => (
               <button
                 key={f}
                 onClick={() => setDateFilter(f)}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                  dateFilter === f ? 'bg-teal-600 text-white' : 'text-teal-700 hover:bg-teal-100'
+                  dateFilter === f ? 'bg-[var(--info)] text-white' : 'text-[var(--info)] hover:bg-[var(--info)]/15'
                 }`}
               >
                 {f === 'today' ? 'اليوم' : f === 'yesterday' ? 'أمس' : 'تاريخ مخصص'}
@@ -175,7 +175,7 @@ export default function PrintedOrders() {
               type="date"
               value={customDate}
               onChange={e => setCustomDate(e.target.value)}
-              className="text-xs border border-teal-300 bg-white rounded-lg px-3 py-1.5 text-teal-800 focus:outline-none focus:ring-2 focus:ring-teal-400"
+              className="text-xs border border-[var(--info)]/40 bg-card rounded-lg px-3 py-1.5 text-[var(--info)] focus:outline-none focus:ring-2 focus:ring-[var(--info)]"
             />
           )}
           {/* بحث */}
@@ -192,11 +192,11 @@ export default function PrintedOrders() {
 
         {/* إحصائيات */}
         <div className="flex items-center gap-4 flex-wrap text-xs">
-          <span className="text-teal-800 font-semibold">إجمالي: {orders.length} أوردر</span>
-          <span className="text-teal-700">الكمية: {totalQty} قطعة</span>
-          <span className="text-teal-700">المبالغ: {totalAmount.toLocaleString('ar-EG')} ج.م</span>
-          <span className="text-blue-700 font-medium">في بوسطة: {bostaCount}</span>
-          <span className="text-orange-700 font-medium">شركة أخرى: {nonBostaCount}</span>
+          <span className="text-[var(--info)] font-semibold">إجمالي: {orders.length} أوردر</span>
+          <span className="text-[var(--info)]">الكمية: {totalQty} قطعة</span>
+          <span className="text-[var(--info)]">المبالغ: {totalAmount.toLocaleString('ar-EG')} ج.م</span>
+          <span className="text-[var(--info)] font-medium">في بوسطة: {bostaCount}</span>
+          <span className="text-[var(--warning)] font-medium">شركة أخرى: {nonBostaCount}</span>
         </div>
       </div>
 
@@ -216,7 +216,7 @@ export default function PrintedOrders() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-teal-50 border-b border-teal-100">
+                <tr className="bg-[var(--info)]/10 border-b border-[var(--info)]/20">
                   <th className="p-3 text-right w-10">
                     <input
                       type="checkbox"
@@ -225,16 +225,16 @@ export default function PrintedOrders() {
                       className="rounded"
                     />
                   </th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">#</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">رقم الأوردر</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">العميل</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">التليفون</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">المحافظة</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">المنتج</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">الكمية</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">المبلغ</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">تاريخ الطباعة</th>
-                  <th className="p-3 text-right text-xs font-semibold text-teal-800">شحن</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">#</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">رقم الأوردر</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">العميل</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">التليفون</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">المحافظة</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">المنتج</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">الكمية</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">المبلغ</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">تاريخ الطباعة</th>
+                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">شحن</th>
                 </tr>
               </thead>
               <tbody>
@@ -246,7 +246,7 @@ export default function PrintedOrders() {
                       key={order.id}
                       className={`border-b transition-colors cursor-pointer ${
                         isSelected
-                          ? 'bg-teal-50'
+                          ? 'bg-[var(--info)]/10'
                           : idx % 2 === 0
                           ? 'bg-background hover:bg-muted/30'
                           : 'bg-muted/10 hover:bg-muted/30'
@@ -272,7 +272,7 @@ export default function PrintedOrders() {
                         {order.productName}
                       </td>
                       <td className="p-3 text-center text-xs font-medium">{order.quantity}</td>
-                      <td className="p-3 text-xs font-medium text-green-700">
+                      <td className="p-3 text-xs font-medium text-[var(--success)]">
                         {Number(order.totalAmount).toLocaleString('ar-EG')} ج.م
                       </td>
                       <td className="p-3 text-xs text-muted-foreground whitespace-nowrap">
@@ -285,9 +285,9 @@ export default function PrintedOrders() {
                       </td>
                       <td className="p-3">
                         {isBosta ? (
-                          <Badge className="bg-blue-100 text-blue-700 text-xs px-1.5 py-0.5">بوسطة</Badge>
+                          <Badge className="bg-[var(--info)]/15 text-[var(--info)] text-xs px-1.5 py-0.5">بوسطة</Badge>
                         ) : (
-                          <Badge className="bg-orange-100 text-orange-700 text-xs px-1.5 py-0.5">أخرى</Badge>
+                          <Badge className="bg-[var(--warning)]/15 text-[var(--warning)] text-xs px-1.5 py-0.5">أخرى</Badge>
                         )}
                       </td>
                     </tr>
@@ -301,11 +301,11 @@ export default function PrintedOrders() {
 
       {/* شريط التحديد */}
       {selectedIds.length > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-teal-700 text-white rounded-2xl shadow-2xl px-6 py-3 flex items-center gap-4">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[var(--info)] text-white rounded-2xl shadow-2xl px-6 py-3 flex items-center gap-4">
           <span className="text-sm font-medium">{selectedIds.length} أوردر محدد</span>
           <Button
             size="sm"
-            className="bg-white text-teal-700 hover:bg-teal-50 gap-1"
+            className="bg-card text-[var(--info)] hover:bg-[var(--info)]/10 gap-1"
             onClick={handleReprint}
           >
             <Printer className="h-4 w-4" />

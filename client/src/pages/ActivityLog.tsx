@@ -56,7 +56,7 @@ export default function ActivityLogPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Activity className="h-6 w-6 text-amber-600" />
+          <Activity className="h-6 w-6 text-[var(--warning)]" />
           <div>
             <h1 className="text-2xl font-bold">سجل الأنشطة</h1>
             <p className="text-sm text-muted-foreground">تتبع كل العمليات داخل النظام</p>
@@ -131,14 +131,14 @@ export default function ActivityLogPage() {
                     <tr key={log.id} className="border-b hover:bg-muted/50">
                       <td className="py-3 px-2 text-xs whitespace-nowrap">{formatDate(log.createdAt)}</td>
                       <td className="py-3 px-2">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--warning)]/15 text-[var(--warning)]">
                           {ACTION_LABELS[log.action] || log.action}
                         </span>
                       </td>
                       <td className="py-3 px-2 max-w-[300px] truncate">{log.description}</td>
                       <td className="py-3 px-2 whitespace-nowrap">{log.performedByName}</td>
                       <td className="py-3 px-2">
-                        <span className={`text-xs px-2 py-0.5 rounded ${log.performedByRole === 'admin' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
+                        <span className={`text-xs px-2 py-0.5 rounded ${log.performedByRole === 'admin' ? 'bg-destructive/15 text-destructive' : 'bg-[var(--info)]/15 text-[var(--info)]'}`}>
                           {log.performedByRole === 'admin' ? 'مدير' : 'موظف'}
                         </span>
                       </td>

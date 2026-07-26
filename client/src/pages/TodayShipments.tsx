@@ -35,9 +35,9 @@ const AGENT_COLORS: Record<string, { bg: string; border: string; text: string; b
     headerBg: "bg-gradient-to-r from-amber-700 to-amber-900",
   },
   "غير محدد": {
-    bg: "bg-gray-50",
-    border: "border-gray-200",
-    text: "text-gray-800",
+    bg: "bg-muted/50",
+    border: "border-border",
+    text: "text-foreground",
     badge: "bg-gray-600",
     headerBg: "bg-gradient-to-r from-gray-600 to-gray-800",
   },
@@ -210,7 +210,7 @@ export default function TodayShipments() {
       <div className="max-w-7xl mx-auto px-4 py-3 print:hidden">
         <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
           {/* Date Picker */}
-          <div className="flex items-center gap-2 bg-white rounded-lg border border-stone-200 px-3 py-2 shadow-sm">
+          <div className="flex items-center gap-2 bg-card rounded-lg border border-stone-200 px-3 py-2 shadow-sm">
             <Calendar className="h-4 w-4 text-amber-600" />
             <input
               type="date"
@@ -223,11 +223,11 @@ export default function TodayShipments() {
           {/* Day Info */}
           <div className="flex items-center gap-2">
             {shipmentsData && (
-              <Badge variant="outline" className="text-sm px-3 py-1 bg-white border-amber-300 text-amber-800">
+              <Badge variant="outline" className="text-sm px-3 py-1 bg-card border-amber-300 text-amber-800">
                 {shipmentsData.dayName} {isToday && "— اليوم"}
               </Badge>
             )}
-            <Badge variant="outline" className="text-sm px-3 py-1 bg-white border-stone-300 text-stone-700">
+            <Badge variant="outline" className="text-sm px-3 py-1 bg-card border-stone-300 text-stone-700">
               <Package className="h-3.5 w-3.5 ml-1" />
               {totalFilteredOrders} أوردر
             </Badge>
@@ -241,7 +241,7 @@ export default function TodayShipments() {
                 placeholder="بحث بالاسم أو التليفون أو رقم الأوردر..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="pr-9 bg-white border-stone-200"
+                className="pr-9 bg-card border-stone-200"
               />
             </div>
           </div>
@@ -251,7 +251,7 @@ export default function TodayShipments() {
       {/* Print Header */}
       <div className="hidden print:block text-center mb-4 px-4">
         <h1 className="text-2xl font-bold">شحنات يوم {shipmentsData?.dayName} — {selectedDate}</h1>
-        <p className="text-sm text-gray-600">إجمالي الأوردرات: {totalFilteredOrders}</p>
+        <p className="text-sm text-muted-foreground">إجمالي الأوردرات: {totalFilteredOrders}</p>
       </div>
 
       {/* Main Content */}
@@ -348,7 +348,7 @@ export default function TodayShipments() {
                             {agent.orders.map((order: ShipmentOrder, idx: number) => (
                               <tr
                                 key={order.id}
-                                className={`border-b border-stone-100 ${idx % 2 === 0 ? "bg-white" : colors.bg} hover:bg-stone-50 transition-colors`}
+                                className={`border-b border-stone-100 ${idx % 2 === 0 ? "bg-card" : colors.bg} hover:bg-stone-50 transition-colors`}
                               >
                                 <td className="px-3 py-2 text-stone-500 font-mono text-xs">{idx + 1}</td>
                                 <td className="px-3 py-2 font-medium text-stone-800">{order.orderNumber}</td>

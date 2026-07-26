@@ -700,7 +700,7 @@ export default function EmployeeDashboard() {
               className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
                 !selectedGroupId
                   ? 'bg-amber-700 text-white shadow-md'
-                  : 'bg-white text-gray-600 border border-gray-200 hover:border-amber-300'
+                  : 'bg-card text-muted-foreground border border-border hover:border-amber-300'
               }`}
             >
               كل الأقسام
@@ -712,7 +712,7 @@ export default function EmployeeDashboard() {
                 className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
                   selectedGroupId === group.id
                     ? 'bg-amber-700 text-white shadow-md'
-                    : 'bg-white text-gray-600 border border-gray-200 hover:border-amber-300'
+                    : 'bg-card text-muted-foreground border border-border hover:border-amber-300'
                 }`}
               >
                 {group.name}
@@ -723,10 +723,10 @@ export default function EmployeeDashboard() {
 
         {/* Stock Panel - مخزون شامل بالمنتجات والمقاسات والأسعار */}
         {showStockPanel && (
-          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 bg-amber-50 border-b border-amber-100">
-              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <h3 className="font-bold text-foreground flex items-center gap-2">
                 <Box className="h-4 w-4 text-amber-600" />
                 جرد المخزون
                 {selectedGroupId && (
@@ -735,7 +735,7 @@ export default function EmployeeDashboard() {
                   </span>
                 )}
               </h3>
-              <button onClick={() => setShowStockPanel(false)} className="text-gray-400 hover:text-gray-600">
+              <button onClick={() => setShowStockPanel(false)} className="text-muted-foreground hover:text-muted-foreground">
                 <XCircle className="h-4 w-4" />
               </button>
             </div>
@@ -744,7 +744,7 @@ export default function EmployeeDashboard() {
               {/* منتجات بدون variants (أساور نحاس) */}
               {stockData && stockData.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">الأصناف</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">الأصناف</p>
                   <div className="grid grid-cols-2 gap-2">
                     {stockData.map((p: any) => {
                       const isLow = p.currentStock <= p.minStockLevel;
@@ -752,16 +752,16 @@ export default function EmployeeDashboard() {
                         <div
                           key={p.id}
                           className={`rounded-lg p-3 border ${
-                            isLow ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100'
+                            isLow ? 'bg-red-50 border-red-200' : 'bg-muted/50 border-border'
                           }`}
                         >
-                          <p className="text-xs text-gray-500 truncate" title={p.name}>{p.name}</p>
+                          <p className="text-xs text-muted-foreground truncate" title={p.name}>{p.name}</p>
                           <p className={`text-lg font-bold mt-0.5 ${
-                            isLow ? 'text-red-600' : 'text-gray-900'
+                            isLow ? 'text-red-600' : 'text-foreground'
                           }`}>
-                            {p.currentStock} <span className="text-xs font-normal text-gray-400">قطعة</span>
+                            {p.currentStock} <span className="text-xs font-normal text-muted-foreground">قطعة</span>
                           </p>
-                          <p className="text-xs text-gray-400 mt-0.5">سعر: {Number(p.price).toLocaleString('ar-EG')} ج.م</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">سعر: {Number(p.price).toLocaleString('ar-EG')} ج.م</p>
                           {isLow && (
                             <p className="text-xs text-red-500 flex items-center gap-1 mt-0.5">
                               <AlertCircle className="h-3 w-3" /> مخزون منخفض
@@ -785,43 +785,43 @@ export default function EmployeeDashboard() {
                 }
                 return (
                   <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">المقاسات والألوان</p>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">المقاسات والألوان</p>
                     {Object.entries(grouped).map(([productId, group]) => (
                       <div key={productId} className="mb-3">
-                        <p className="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2">
+                        <p className="text-sm font-bold text-foreground mb-2 flex items-center gap-2">
                           <Package className="h-3.5 w-3.5 text-amber-600" />
                           {group.productName}
-                          <span className="text-xs font-normal text-gray-400">
+                          <span className="text-xs font-normal text-muted-foreground">
                             (إجمالي: {group.variants.reduce((s: number, v: any) => s + v.currentStock, 0)} قطعة)
                           </span>
                         </p>
                         <div className="overflow-x-auto">
                           <table className="w-full text-xs border-collapse">
                             <thead>
-                              <tr className="bg-gray-50">
-                                <th className="text-right py-1.5 px-2 font-semibold text-gray-500 border border-gray-100">اللون</th>
-                                <th className="text-right py-1.5 px-2 font-semibold text-gray-500 border border-gray-100">المقاس</th>
-                                <th className="text-center py-1.5 px-2 font-semibold text-gray-500 border border-gray-100">السعر</th>
-                                <th className="text-center py-1.5 px-2 font-semibold text-gray-500 border border-gray-100">المخزون</th>
-                                <th className="text-center py-1.5 px-2 font-semibold text-gray-500 border border-gray-100">الحالة</th>
+                              <tr className="bg-muted/50">
+                                <th className="text-right py-1.5 px-2 font-semibold text-muted-foreground border border-border">اللون</th>
+                                <th className="text-right py-1.5 px-2 font-semibold text-muted-foreground border border-border">المقاس</th>
+                                <th className="text-center py-1.5 px-2 font-semibold text-muted-foreground border border-border">السعر</th>
+                                <th className="text-center py-1.5 px-2 font-semibold text-muted-foreground border border-border">المخزون</th>
+                                <th className="text-center py-1.5 px-2 font-semibold text-muted-foreground border border-border">الحالة</th>
                               </tr>
                             </thead>
                             <tbody>
                               {group.variants.map((v: any) => {
                                 const isLow = v.currentStock <= v.minStockLevel;
                                 return (
-                                  <tr key={v.id} className={isLow ? 'bg-red-50' : 'bg-white'}>
-                                    <td className="py-1.5 px-2 border border-gray-100 font-medium text-gray-700">{v.color || '-'}</td>
-                                    <td className="py-1.5 px-2 border border-gray-100 text-gray-600">{v.size || '-'}</td>
-                                    <td className="py-1.5 px-2 border border-gray-100 text-center font-bold text-amber-700">
+                                  <tr key={v.id} className={isLow ? 'bg-red-50' : 'bg-card'}>
+                                    <td className="py-1.5 px-2 border border-border font-medium text-foreground">{v.color || '-'}</td>
+                                    <td className="py-1.5 px-2 border border-border text-muted-foreground">{v.size || '-'}</td>
+                                    <td className="py-1.5 px-2 border border-border text-center font-bold text-amber-700">
                                       {v.price ? `${Number(v.price).toLocaleString('ar-EG')} ج.م` : '-'}
                                     </td>
-                                    <td className={`py-1.5 px-2 border border-gray-100 text-center font-bold ${
-                                      isLow ? 'text-red-600' : 'text-gray-900'
+                                    <td className={`py-1.5 px-2 border border-border text-center font-bold ${
+                                      isLow ? 'text-red-600' : 'text-foreground'
                                     }`}>
                                       {v.currentStock}
                                     </td>
-                                    <td className="py-1.5 px-2 border border-gray-100 text-center">
+                                    <td className="py-1.5 px-2 border border-border text-center">
                                       {isLow ? (
                                         <span className="text-red-500 font-semibold">ينفد</span>
                                       ) : (
@@ -841,7 +841,7 @@ export default function EmployeeDashboard() {
               })()}
 
               {(!stockData || stockData.length === 0) && (!stockVariants || stockVariants.length === 0) && (
-                <p className="text-center text-gray-400 text-sm py-4">لا توجد بيانات مخزون</p>
+                <p className="text-center text-muted-foreground text-sm py-4">لا توجد بيانات مخزون</p>
               )}
             </div>
           </div>
@@ -849,20 +849,20 @@ export default function EmployeeDashboard() {
 
         {/* QR Scan Panel */}
         {showScanPanel && (
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden" dir="rtl">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gradient-to-l from-green-50 to-emerald-50">
+          <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden" dir="rtl">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-l from-green-50 to-emerald-50">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center">
                   <QrCode className="h-4 w-4 text-green-700" />
                 </div>
                 <div>
-                  <p className="text-sm font-bold text-gray-800">مسح QR - تجهيز الأوردرات</p>
-                  <p className="text-xs text-gray-500">افتح الكاميرا أو أدخل السيريال يدوياً</p>
+                  <p className="text-sm font-bold text-foreground">مسح QR - تجهيز الأوردرات</p>
+                  <p className="text-xs text-muted-foreground">افتح الكاميرا أو أدخل السيريال يدوياً</p>
                 </div>
               </div>
               <button
                 onClick={() => { setShowScanPanel(false); stopScanCamera(); setScanResult(null); }}
-                className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200"
+                className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground hover:bg-gray-200"
               >
                 <XCircle className="h-4 w-4" />
               </button>
@@ -898,8 +898,8 @@ export default function EmployeeDashboard() {
                 </div>
 
                 {!scanIsScanning && !scanCameraError && (
-                  <div className="w-full bg-gray-100 rounded-xl h-40 flex items-center justify-center border-2 border-dashed border-green-300">
-                    <div className="text-center text-gray-400">
+                  <div className="w-full bg-muted rounded-xl h-40 flex items-center justify-center border-2 border-dashed border-green-300">
+                    <div className="text-center text-muted-foreground">
                       <CameraOff className="h-10 w-10 mx-auto mb-2 opacity-50" />
                       <p className="text-xs">اضغط لتشغيل الكاميرا</p>
                     </div>
@@ -932,8 +932,8 @@ export default function EmployeeDashboard() {
               </div>
 
               {/* Manual input */}
-              <div className="border-t border-gray-100 pt-3">
-                <p className="text-xs text-gray-500 mb-2 text-center">أو أدخل السيريال يدوياً</p>
+              <div className="border-t border-border pt-3">
+                <p className="text-xs text-muted-foreground mb-2 text-center">أو أدخل السيريال يدوياً</p>
                 <form onSubmit={handleManualScanSubmit} className="flex gap-2">
                   <Input
                     value={manualSerial}
@@ -950,7 +950,7 @@ export default function EmployeeDashboard() {
 
               {/* Scan result */}
               {scanMutation.isPending && (
-                <div className="flex items-center justify-center gap-2 py-3 text-gray-500 text-sm">
+                <div className="flex items-center justify-center gap-2 py-3 text-muted-foreground text-sm">
                   <RefreshCw className="h-4 w-4 animate-spin" />
                   جاري التحقق...
                 </div>
@@ -979,10 +979,10 @@ export default function EmployeeDashboard() {
                     </span>
                   </div>
                   {scanResult.message && !scanResult.order && (
-                    <p className="text-xs text-gray-600 mt-1">{scanResult.message}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{scanResult.message}</p>
                   )}
                   {scanResult.order && (
-                    <div className="space-y-1 text-xs text-gray-700">
+                    <div className="space-y-1 text-xs text-foreground">
                       <p><span className="font-semibold">الأوردر:</span> {scanResult.order.orderNumber}</p>
                       <p><span className="font-semibold">العميل:</span> {scanResult.order.customerName}</p>
                       <p><span className="font-semibold">المنتج:</span> {scanResult.order.productName}</p>
@@ -995,7 +995,7 @@ export default function EmployeeDashboard() {
                   )}
                   <button
                     onClick={() => { setScanResult(null); }}
-                    className="mt-3 text-xs text-gray-500 underline"
+                    className="mt-3 text-xs text-muted-foreground underline"
                   >
                     مسح ومسح جديد
                   </button>
@@ -1021,8 +1021,8 @@ export default function EmployeeDashboard() {
                   <h4 className="text-sm font-bold text-amber-900">رسالة من الإدارة</h4>
                   <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">إشعار</span>
                 </div>
-                <p className="text-sm text-gray-800 leading-relaxed">{broadcastData.message}</p>
-                <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
+                <p className="text-sm text-foreground leading-relaxed">{broadcastData.message}</p>
+                <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
                   <span className="font-medium text-amber-700">{broadcastData.sentByName}</span>
                   <span>•</span>
                   <span>{new Date(broadcastData.createdAt).toLocaleString('ar-EG')}</span>
@@ -1034,13 +1034,13 @@ export default function EmployeeDashboard() {
 
         {/* Date Filter Panel */}
         {showDateFilter && (
-          <div className="bg-white rounded-xl border border-amber-200 shadow-sm p-4">
+          <div className="bg-card rounded-xl border border-amber-200 shadow-sm p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <h3 className="font-bold text-foreground flex items-center gap-2">
                 <CalendarDays className="h-4 w-4 text-amber-600" />
                 فلتر التاريخ
               </h3>
-              <button onClick={() => setShowDateFilter(false)} className="text-gray-400 hover:text-gray-600">
+              <button onClick={() => setShowDateFilter(false)} className="text-muted-foreground hover:text-muted-foreground">
                 <XCircle className="h-4 w-4" />
               </button>
             </div>
@@ -1049,7 +1049,7 @@ export default function EmployeeDashboard() {
               <button
                 onClick={() => { setDateFrom(""); setDateTo(""); }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                  !dateFrom && !dateTo ? 'bg-amber-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  !dateFrom && !dateTo ? 'bg-amber-600 text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-gray-200'
                 }`}
               >اليوم</button>
               <button
@@ -1061,34 +1061,34 @@ export default function EmployeeDashboard() {
                 }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                   dateFrom && dateTo && dateFrom === dateTo && dateFrom === (() => { const y = new Date(Date.now() + 2*60*60*1000); y.setUTCDate(y.getUTCDate() - 1); return y.toISOString().slice(0, 10); })()
-                    ? 'bg-amber-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    ? 'bg-amber-600 text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-gray-200'
                 }`}
               >أمس</button>
               <button
                 onClick={() => { setDateFrom("2024-01-01"); setDateTo(""); }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                  dateFrom === '2024-01-01' && !dateTo ? 'bg-amber-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  dateFrom === '2024-01-01' && !dateTo ? 'bg-amber-600 text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-gray-200'
                 }`}
               >كل الأوردرات</button>
             </div>
             {/* تاريخ مخصص */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">من تاريخ</label>
+                <label className="text-xs text-muted-foreground mb-1 block">من تاريخ</label>
                 <input
                   type="date"
                   value={dateFrom}
                   onChange={e => setDateFrom(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400"
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400"
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">إلى تاريخ</label>
+                <label className="text-xs text-muted-foreground mb-1 block">إلى تاريخ</label>
                 <input
                   type="date"
                   value={dateTo}
                   onChange={e => setDateTo(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400"
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400"
                 />
               </div>
             </div>
@@ -1231,14 +1231,14 @@ export default function EmployeeDashboard() {
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-1 shrink-0">
-                        <span className="text-xs text-gray-400 font-mono">{order.orderNumber}</span>
+                        <span className="text-xs text-muted-foreground font-mono">{order.orderNumber}</span>
                         {order.createdAt && (
-                          <span className="text-xs text-gray-400">{new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                          <span className="text-xs text-muted-foreground">{new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
                         )}
                         {isExpanded ? (
-                          <ChevronUp className="h-4 w-4 text-gray-400" />
+                          <ChevronUp className="h-4 w-4 text-muted-foreground" />
                         ) : (
-                          <ChevronDown className="h-4 w-4 text-gray-400" />
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
                         )}
                       </div>
                     </div>
@@ -1659,7 +1659,7 @@ export default function EmployeeDashboard() {
                     value={editEmployeeNotes}
                     onChange={e => setEditEmployeeNotes(e.target.value)}
                     placeholder="ملاحظات داخلية للموظف..."
-                    className="mt-1 bg-gray-50"
+                    className="mt-1 bg-muted/50"
                     rows={2}
                   />
                 </div>
@@ -1855,20 +1855,20 @@ export default function EmployeeDashboard() {
 function EditHistoryPanel({ orderId }: { orderId: number }) {
   const { data: logs, isLoading } = trpc.employeePortal.getOrderEditHistory.useQuery({ orderId });
 
-  if (isLoading) return <div className="text-xs text-gray-500 py-2">جاري تحميل السجل...</div>;
-  if (!logs || logs.length === 0) return <div className="text-xs text-gray-500 py-2">لا توجد تعديلات سابقة</div>;
+  if (isLoading) return <div className="text-xs text-muted-foreground py-2">جاري تحميل السجل...</div>;
+  if (!logs || logs.length === 0) return <div className="text-xs text-muted-foreground py-2">لا توجد تعديلات سابقة</div>;
 
   return (
-    <div className="border border-gray-200 rounded-lg p-2 max-h-40 overflow-y-auto bg-gray-50">
-      <p className="text-xs font-semibold text-gray-700 mb-2">سجل التعديلات:</p>
+    <div className="border border-border rounded-lg p-2 max-h-40 overflow-y-auto bg-muted/50">
+      <p className="text-xs font-semibold text-foreground mb-2">سجل التعديلات:</p>
       <div className="space-y-2">
         {logs.map((log: any, i: number) => (
-          <div key={i} className="text-xs border-b border-gray-100 pb-1 last:border-0">
+          <div key={i} className="text-xs border-b border-border pb-1 last:border-0">
             <div className="flex items-center justify-between">
-              <span className="font-medium text-gray-800">{log.editedByName}</span>
-              <span className="text-gray-400">{new Date(log.editedAt).toLocaleString('ar-EG')}</span>
+              <span className="font-medium text-foreground">{log.editedByName}</span>
+              <span className="text-muted-foreground">{new Date(log.editedAt).toLocaleString('ar-EG')}</span>
             </div>
-            <div className="mt-0.5 text-gray-600">
+            <div className="mt-0.5 text-muted-foreground">
               <span className="font-medium">{log.fieldName}:</span>{' '}
               <span className="text-red-600 line-through">{log.oldValue || '(فارغ)'}</span>{' → '}
               <span className="text-green-700">{log.newValue || '(فارغ)'}</span>
@@ -1904,11 +1904,11 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
 
   if (isLoading) {
     return (
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+      <div className="bg-card rounded-xl border border-border shadow-sm p-4">
         <div className="animate-pulse space-y-3">
           <div className="h-4 bg-gray-200 rounded w-1/3" />
-          <div className="h-16 bg-gray-100 rounded" />
-          <div className="h-16 bg-gray-100 rounded" />
+          <div className="h-16 bg-muted rounded" />
+          <div className="h-16 bg-muted rounded" />
         </div>
       </div>
     );
@@ -1918,34 +1918,34 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
   const doneTasks = (tasksList ?? []).filter((t: any) => t.status === 'done');
 
   return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+    <div className="bg-card rounded-xl border border-border shadow-sm p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="font-bold text-gray-900 flex items-center gap-2">
+        <h3 className="font-bold text-foreground flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-amber-600" />
           المهام ({pendingTasks.length} مهمة نشطة)
         </h3>
       </div>
 
       {pendingTasks.length === 0 && doneTasks.length === 0 ? (
-        <p className="text-sm text-gray-500 text-center py-4">لا توجد مهام حالياً</p>
+        <p className="text-sm text-muted-foreground text-center py-4">لا توجد مهام حالياً</p>
       ) : (
         <div className="space-y-2">
           {pendingTasks.map((task: any) => {
             const statusConf = TASK_STATUS[task.status] ?? TASK_STATUS.new;
             return (
-              <div key={task.id} className="border border-gray-100 rounded-lg p-3 hover:bg-gray-50 transition-colors">
+              <div key={task.id} className="border border-border rounded-lg p-3 hover:bg-muted/50 transition-colors">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <h4 className="font-semibold text-gray-900 text-sm">{task.title}</h4>
+                      <h4 className="font-semibold text-foreground text-sm">{task.title}</h4>
                       <Badge className={`${statusConf.bg} ${statusConf.color} border text-xs px-1.5 py-0`}>
                         {statusConf.label}
                       </Badge>
                     </div>
                     {task.description && (
-                      <p className="text-xs text-gray-600 leading-relaxed mb-1">{task.description}</p>
+                      <p className="text-xs text-muted-foreground leading-relaxed mb-1">{task.description}</p>
                     )}
-                    <div className="flex items-center gap-2 text-xs text-gray-400">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>{new Date(task.createdAt).toLocaleDateString('ar-EG')}</span>
                       <span>•</span>
                       <span>{task.createdByName}</span>
@@ -1971,7 +1971,7 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
 
           {doneTasks.length > 0 && (
             <details className="mt-2">
-              <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">
+              <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
                 مهام مكتملة ({doneTasks.length})
               </summary>
               <div className="space-y-1 mt-2">
@@ -1979,7 +1979,7 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
                   <div key={task.id} className="border border-green-100 rounded-lg p-2 bg-green-50/50">
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0" />
-                      <span className="text-sm text-gray-700 line-through">{task.title}</span>
+                      <span className="text-sm text-foreground line-through">{task.title}</span>
                     </div>
                   </div>
                 ))}

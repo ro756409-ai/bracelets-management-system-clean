@@ -24,13 +24,13 @@ import {
 } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  new:       { label: "جديد",    color: "text-blue-700",   bg: "bg-blue-50 border-blue-200" },
-  confirmed: { label: "مؤكد",    color: "text-green-700",  bg: "bg-green-50 border-green-200" },
-  postponed: { label: "مؤجل",    color: "text-amber-700",  bg: "bg-amber-50 border-amber-200" },
-  cancelled: { label: "ملغي",    color: "text-red-700",    bg: "bg-red-50 border-red-200" },
-  preparing: { label: "جاري التجهيز", color: "text-purple-700", bg: "bg-purple-50 border-purple-200" },
-  shipped:   { label: "تم الشحن", color: "text-indigo-700", bg: "bg-indigo-50 border-indigo-200" },
-  delivered: { label: "تم التسليم", color: "text-teal-700", bg: "bg-teal-50 border-teal-200" },
+  new:       { label: "جديد",         color: "text-primary",           bg: "bg-accent border-primary/30" },
+  confirmed: { label: "مؤكد",         color: "text-[var(--success)]",  bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
+  postponed: { label: "مؤجل",         color: "text-[var(--warning)]",  bg: "bg-[var(--warning)]/10 border-[var(--warning)]/30" },
+  cancelled: { label: "ملغي",         color: "text-destructive",       bg: "bg-destructive/10 border-destructive/30" },
+  preparing: { label: "جاري التجهيز", color: "text-[var(--info)]",     bg: "bg-[var(--info)]/10 border-[var(--info)]/30" },
+  shipped:   { label: "تم الشحن",     color: "text-[var(--info)]",     bg: "bg-[var(--info)]/10 border-[var(--info)]/30" },
+  delivered: { label: "تم التسليم",   color: "text-[var(--success)]",  bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
 };
 
 const CANCEL_REASONS = [
@@ -105,7 +105,7 @@ export default function ManagerDashboard() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50 flex" dir="rtl">
+    <div className="min-h-screen bg-muted/50 flex" dir="rtl">
       {/* Sidebar - Desktop */}
       <aside className="hidden md:flex flex-col w-64 bg-sidebar text-sidebar-foreground min-h-screen sticky top-0">
         <div className="p-4 border-b border-sidebar-border">
@@ -147,7 +147,7 @@ export default function ManagerDashboard() {
               <p className="text-sm font-medium text-sidebar-foreground truncate">{managerName}</p>
               <p className="text-xs text-sidebar-foreground/50">مدير</p>
             </div>
-            <button onClick={handleLogout} className="text-sidebar-foreground/40 hover:text-red-400 transition-colors" title="تسجيل الخروج">
+            <button onClick={handleLogout} className="text-sidebar-foreground/40 hover:text-destructive/70 transition-colors" title="تسجيل الخروج">
               <LogOut className="h-4 w-4" />
             </button>
           </div>
@@ -186,7 +186,7 @@ export default function ManagerDashboard() {
               })}
             </nav>
             <div className="p-3 border-t border-sidebar-border">
-              <button onClick={handleLogout} className="w-full flex items-center gap-2 px-3 py-2 text-red-400 hover:bg-red-500/10 rounded-lg text-sm">
+              <button onClick={handleLogout} className="w-full flex items-center gap-2 px-3 py-2 text-destructive/70 hover:bg-destructive/100/10 rounded-lg text-sm">
                 <LogOut className="h-4 w-4" />
                 تسجيل الخروج
               </button>
@@ -265,21 +265,21 @@ function ManagerDashboardTab() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">لوحة التحكم</h1>
+      <h1 className="text-2xl font-bold text-foreground">لوحة التحكم</h1>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="إجمالي الأوردرات" value={stats?.statusStats?.reduce((s: number, x: any) => s + Number(x.count), 0) ?? 0} color="text-gray-900" bg="bg-white" />
-        <StatCard label="أوردرات جديدة" value={Number(stats?.statusStats?.find((s: any) => s.status === 'new')?.count ?? 0)} color="text-blue-600" bg="bg-blue-50" />
-        <StatCard label="مؤكدة" value={Number(stats?.statusStats?.find((s: any) => s.status === 'confirmed')?.count ?? 0)} color="text-green-600" bg="bg-green-50" />
-        <StatCard label="ملغية" value={Number(stats?.statusStats?.find((s: any) => s.status === 'cancelled')?.count ?? 0)} color="text-red-600" bg="bg-red-50" />
+        <StatCard label="إجمالي الأوردرات" value={stats?.statusStats?.reduce((s: number, x: any) => s + Number(x.count), 0) ?? 0} color="text-foreground" bg="bg-card" />
+        <StatCard label="أوردرات جديدة" value={Number(stats?.statusStats?.find((s: any) => s.status === 'new')?.count ?? 0)} color="text-[var(--info)]" bg="bg-[var(--info)]/10" />
+        <StatCard label="مؤكدة" value={Number(stats?.statusStats?.find((s: any) => s.status === 'confirmed')?.count ?? 0)} color="text-[var(--success)]" bg="bg-[var(--success)]/10" />
+        <StatCard label="ملغية" value={Number(stats?.statusStats?.find((s: any) => s.status === 'cancelled')?.count ?? 0)} color="text-destructive" bg="bg-destructive/10" />
       </div>
 
       {/* Broadcast Message Section - محسّن */}
-      <Card className="border-amber-200 shadow-sm">
+      <Card className="border-[var(--warning)]/30 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center">
               <span className="text-sm">📢</span>
             </div>
             إرسال رسالة لجميع الموظفين
@@ -288,14 +288,14 @@ function ManagerDashboardTab() {
         </CardHeader>
         <CardContent className="space-y-3">
           {activeBroadcast && (
-            <div className="relative overflow-hidden bg-gradient-to-l from-amber-50 to-orange-50 border border-amber-200 rounded-lg p-3">
-              <div className="absolute top-0 left-0 w-1 h-full bg-amber-500"></div>
+            <div className="relative overflow-hidden bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-lg p-3">
+              <div className="absolute top-0 left-0 w-1 h-full bg-[var(--warning)]/100"></div>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex-1 mr-2">
-                  <p className="text-xs text-amber-700 font-bold mb-1">الرسالة الحالية:</p>
-                  <p className="text-sm text-gray-800 leading-relaxed">{activeBroadcast.message}</p>
-                  <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
-                    <span className="font-medium text-amber-700">{activeBroadcast.sentByName}</span>
+                  <p className="text-xs text-[var(--warning)] font-bold mb-1">الرسالة الحالية:</p>
+                  <p className="text-sm text-foreground leading-relaxed">{activeBroadcast.message}</p>
+                  <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
+                    <span className="font-medium text-[var(--warning)]">{activeBroadcast.sentByName}</span>
                     <span>•</span>
                     <span>{new Date(activeBroadcast.createdAt).toLocaleString('ar-EG')}</span>
                   </div>
@@ -303,7 +303,7 @@ function ManagerDashboardTab() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="text-red-600 border-red-200 hover:bg-red-50 shrink-0"
+                  className="text-destructive border-destructive/30 hover:bg-destructive/10 shrink-0"
                   onClick={() => clearBroadcastMutation.mutate()}
                   disabled={clearBroadcastMutation.isPending}
                 >
@@ -332,7 +332,7 @@ function ManagerDashboardTab() {
                 }
               }}
               disabled={!broadcastMsg.trim() || sendBroadcastMutation.isPending}
-              className="bg-amber-700 hover:bg-amber-800 text-white shrink-0"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground shrink-0"
             >
               {sendBroadcastMutation.isPending ? 'جاري...' : 'إرسال'}
             </Button>
@@ -342,16 +342,16 @@ function ManagerDashboardTab() {
 
       {/* Low Stock Alert */}
       {lowStockCount > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-          <div className="flex items-center gap-2 text-red-700 font-bold mb-2">
+        <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-4">
+          <div className="flex items-center gap-2 text-destructive font-bold mb-2">
             <AlertTriangle className="h-5 w-5" />
             تنبيه نقص المخزون ({lowStockCount} صنف)
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {lowStock?.map((p: any) => (
-              <div key={p.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-red-100">
-                <span className="text-sm font-medium text-gray-700">{p.name}</span>
-                <span className="text-sm font-bold text-red-600">{p.currentStock} / {p.minStockLevel}</span>
+              <div key={p.id} className="flex items-center justify-between bg-card rounded-lg px-3 py-2 border border-destructive/20">
+                <span className="text-sm font-medium text-foreground">{p.name}</span>
+                <span className="text-sm font-bold text-destructive">{p.currentStock} / {p.minStockLevel}</span>
               </div>
             ))}
           </div>
@@ -371,9 +371,9 @@ function ManagerDashboardTab() {
                 const height = (Number(d.count) / maxVal) * 100;
                 return (
                   <div key={i} className="flex flex-col items-center flex-shrink-0" style={{ width: "20px" }}>
-                    <span className="text-[10px] text-gray-400 mb-1">{Number(d.count)}</span>
+                    <span className="text-[10px] text-muted-foreground mb-1">{Number(d.count)}</span>
                     <div
-                      className="w-3 rounded-t bg-amber-500"
+                      className="w-3 rounded-t bg-[var(--warning)]/100"
                       style={{ height: `${Math.max(height, 4)}%` }}
                     />
                   </div>
@@ -389,9 +389,9 @@ function ManagerDashboardTab() {
 
 function StatCard({ label, value, color, bg }: { label: string; value: number; color: string; bg: string }) {
   return (
-    <div className={`${bg} rounded-xl p-4 border border-gray-100 shadow-sm`}>
+    <div className={`${bg} rounded-xl p-4 border border-border shadow-sm`}>
       <p className={`text-2xl font-bold ${color}`}>{value}</p>
-      <p className="text-sm text-gray-500 mt-1">{label}</p>
+      <p className="text-sm text-muted-foreground mt-1">{label}</p>
     </div>
   );
 }
@@ -504,9 +504,9 @@ function ManagerOrdersTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-gray-900">الأوردرات</h1>
+        <h1 className="text-2xl font-bold text-foreground">الأوردرات</h1>
         {selectedOrders.length > 0 && (
-          <Button onClick={() => setAssignDialog(true)} className="bg-amber-600 hover:bg-amber-700 text-white">
+          <Button onClick={() => setAssignDialog(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground">
             <Users className="h-4 w-4 ml-2" />
             توزيع {selectedOrders.length} أوردر
           </Button>
@@ -516,11 +516,11 @@ function ManagerOrdersTab() {
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
         <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث بالاسم أو الهاتف أو رقم الأوردر..." className="pr-10 bg-white" />
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="بحث بالاسم أو الهاتف أو رقم الأوردر..." className="pr-10 bg-card" />
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[140px] bg-white"><SelectValue placeholder="الحالة" /></SelectTrigger>
+          <SelectTrigger className="w-[140px] bg-card"><SelectValue placeholder="الحالة" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">كل الحالات</SelectItem>
             {Object.entries(STATUS_CONFIG).map(([k, v]) => (
@@ -529,14 +529,14 @@ function ManagerOrdersTab() {
           </SelectContent>
         </Select>
         <Select value={govFilter} onValueChange={setGovFilter}>
-          <SelectTrigger className="w-[140px] bg-white"><SelectValue placeholder="المحافظة" /></SelectTrigger>
+          <SelectTrigger className="w-[140px] bg-card"><SelectValue placeholder="المحافظة" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">كل المحافظات</SelectItem>
             {GOVERNORATES.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={groupFilter} onValueChange={setGroupFilter}>
-          <SelectTrigger className="w-[160px] bg-white"><SelectValue placeholder="القسم" /></SelectTrigger>
+          <SelectTrigger className="w-[160px] bg-card"><SelectValue placeholder="القسم" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">كل الأقسام</SelectItem>
             {(groupsList ?? []).map((g: any) => <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>)}
@@ -551,7 +551,7 @@ function ManagerOrdersTab() {
             checked={selectedOrders.length > 0 && selectedOrders.length === orders.filter((o: any) => o.status === 'new').length}
             onCheckedChange={toggleSelectAll}
           />
-          <span className="text-sm text-gray-600">تحديد كل الأوردرات الجديدة</span>
+          <span className="text-sm text-muted-foreground">تحديد كل الأوردرات الجديدة</span>
         </div>
       )}
 
@@ -559,16 +559,16 @@ function ManagerOrdersTab() {
       {isLoading ? (
         <div className="space-y-3">
           {[1,2,3].map(i => (
-            <div key={i} className="bg-white rounded-xl p-4 animate-pulse border">
-              <div className="h-4 bg-gray-200 rounded w-3/4 mb-2" />
-              <div className="h-3 bg-gray-100 rounded w-1/2" />
+            <div key={i} className="bg-card rounded-xl p-4 animate-pulse border">
+              <div className="h-4 bg-muted rounded w-3/4 mb-2" />
+              <div className="h-3 bg-muted rounded w-1/2" />
             </div>
           ))}
         </div>
       ) : orders.length === 0 ? (
-        <div className="bg-white rounded-xl p-10 text-center border shadow-sm">
-          <ShoppingCart className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500 font-medium">لا توجد أوردرات</p>
+        <div className="bg-card rounded-xl p-10 text-center border shadow-sm">
+          <ShoppingCart className="h-10 w-10 text-muted-foreground/60 mx-auto mb-3" />
+          <p className="text-muted-foreground font-medium">لا توجد أوردرات</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -579,7 +579,7 @@ function ManagerOrdersTab() {
             const isSelected = selectedOrders.includes(order.id);
 
             return (
-              <div key={order.id} className={`bg-white rounded-xl border shadow-sm overflow-hidden ${isSelected ? 'ring-2 ring-amber-400' : ''}`}>
+              <div key={order.id} className={`bg-card rounded-xl border shadow-sm overflow-hidden ${isSelected ? 'ring-2 ring-[var(--warning)]' : ''}`}>
                 <div className="p-4 cursor-pointer" onClick={() => setExpandedOrder(isExpanded ? null : order.id)}>
                   <div className="flex items-start gap-3">
                     {order.status === 'new' && (
@@ -592,42 +592,42 @@ function ManagerOrdersTab() {
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-gray-900">{order.customerName}</span>
+                        <span className="font-bold text-foreground">{order.customerName}</span>
                         <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusConf.bg} ${statusConf.color}`}>
                           {statusConf.label}
                         </span>
                         {order.assignedEmployeeId && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
                             {(employeesList ?? []).find((e: any) => e.id === order.assignedEmployeeId)?.name ?? "—"}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-3 mt-1.5 text-sm text-gray-500">
+                      <div className="flex items-center gap-3 mt-1.5 text-sm text-muted-foreground">
                         <span className="flex items-center gap-1"><Phone className="h-3.5 w-3.5" /><span dir="ltr">{order.customerPhone}</span></span>
                         <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{order.governorate}</span>
                       </div>
                       <div className="flex items-center gap-3 mt-1 text-sm">
-                        <span className="text-gray-600"><Package className="h-3.5 w-3.5 inline ml-1" />{order.productName}</span>
-                        <span className="font-semibold text-amber-700">{Number(order.totalAmount).toLocaleString()} ج.م</span>
+                        <span className="text-muted-foreground"><Package className="h-3.5 w-3.5 inline ml-1" />{order.productName}</span>
+                        <span className="font-semibold text-[var(--warning)]">{Number(order.totalAmount).toLocaleString()} ج.م</span>
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
-                      <span className="text-xs text-gray-400 font-mono">{order.orderNumber}</span>
-                      {isExpanded ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
+                      <span className="text-xs text-muted-foreground font-mono">{order.orderNumber}</span>
+                      {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                     </div>
                   </div>
                 </div>
 
                 {isExpanded && (
-                  <div className="border-t bg-gray-50 px-4 py-3 space-y-3">
+                  <div className="border-t bg-muted/50 px-4 py-3 space-y-3">
                     <div>
-                      <p className="text-xs text-gray-400 mb-1">العنوان</p>
-                      <p className="text-sm text-gray-700">{order.customerAddress}</p>
+                      <p className="text-xs text-muted-foreground mb-1">العنوان</p>
+                      <p className="text-sm text-foreground">{order.customerAddress}</p>
                     </div>
                     {order.notes && (
                       <div>
-                        <p className="text-xs text-gray-400 mb-1">ملاحظات</p>
-                        <p className="text-sm text-gray-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">{order.notes}</p>
+                        <p className="text-xs text-muted-foreground mb-1">ملاحظات</p>
+                        <p className="text-sm text-foreground bg-[var(--warning)]/10 border border-[var(--warning)]/20 rounded-lg px-3 py-2">{order.notes}</p>
                       </div>
                     )}
 
@@ -637,7 +637,7 @@ function ManagerOrdersTab() {
                         <Select onValueChange={(val) => {
                           assignMutation.mutate({ orderId: order.id, employeeId: parseInt(val) });
                         }}>
-                          <SelectTrigger className="flex-1 bg-white"><SelectValue placeholder="توزيع على موظف..." /></SelectTrigger>
+                          <SelectTrigger className="flex-1 bg-card"><SelectValue placeholder="توزيع على موظف..." /></SelectTrigger>
                           <SelectContent>
                             {agents.map((emp: any) => (
                               <SelectItem key={emp.id} value={emp.id.toString()}>{emp.name}</SelectItem>
@@ -649,13 +649,13 @@ function ManagerOrdersTab() {
 
                     {canAct && (
                       <div className="flex gap-2 pt-1">
-                        <Button size="sm" className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9" onClick={() => confirmMutation.mutate({ orderId: order.id })} disabled={confirmMutation.isPending}>
+                        <Button size="sm" className="flex-1 bg-[var(--success)] hover:bg-[var(--success)] text-white h-9" onClick={() => confirmMutation.mutate({ orderId: order.id })} disabled={confirmMutation.isPending}>
                           <CheckCircle2 className="h-4 w-4 ml-1" />تأكيد
                         </Button>
-                        <Button size="sm" variant="outline" className="flex-1 border-amber-300 text-amber-700 hover:bg-amber-50 h-9" onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}>
+                        <Button size="sm" variant="outline" className="flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 h-9" onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}>
                           <Clock className="h-4 w-4 ml-1" />تأجيل
                         </Button>
-                        <Button size="sm" variant="outline" className="flex-1 border-red-300 text-red-600 hover:bg-red-50 h-9" onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); }}>
+                        <Button size="sm" variant="outline" className="flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 h-9" onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); }}>
                           <XCircle className="h-4 w-4 ml-1" />إلغاء
                         </Button>
                       </div>
@@ -685,7 +685,7 @@ function ManagerOrdersTab() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAssignDialog(false)}>إلغاء</Button>
-            <Button onClick={handleBulkAssign} disabled={bulkAssignMutation.isPending} className="bg-amber-600 hover:bg-amber-700 text-white">
+            <Button onClick={handleBulkAssign} disabled={bulkAssignMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground">
               {bulkAssignMutation.isPending ? "جاري..." : "توزيع"}
             </Button>
           </DialogFooter>
@@ -695,7 +695,7 @@ function ManagerOrdersTab() {
       {/* Postpone Dialog */}
       <Dialog open={postponeDialog.open} onOpenChange={open => setPostponeDialog(d => ({ ...d, open }))}>
         <DialogContent className="max-w-sm" dir="rtl">
-          <DialogHeader><DialogTitle className="flex items-center gap-2"><Clock className="h-5 w-5 text-amber-600" />تأجيل الأوردر</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Clock className="h-5 w-5 text-[var(--warning)]" />تأجيل الأوردر</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div>
               <Label>تاريخ الاتصال مرة أخرى <span className="text-destructive">*</span></Label>
@@ -712,7 +712,7 @@ function ManagerOrdersTab() {
               if (!postponeDate) { toast.error("حدد التاريخ"); return; }
               if (!postponeDialog.orderId) return;
               postponeMutation.mutate({ orderId: postponeDialog.orderId, postponedTo: new Date(postponeDate), notes: postponeNotes || undefined });
-            }} disabled={postponeMutation.isPending} className="bg-amber-600 hover:bg-amber-700 text-white">
+            }} disabled={postponeMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground">
               {postponeMutation.isPending ? "جاري..." : "تأجيل"}
             </Button>
           </DialogFooter>
@@ -722,7 +722,7 @@ function ManagerOrdersTab() {
       {/* Cancel Dialog */}
       <Dialog open={cancelDialog.open} onOpenChange={open => setCancelDialog(d => ({ ...d, open }))}>
         <DialogContent className="max-w-sm" dir="rtl">
-          <DialogHeader><DialogTitle className="flex items-center gap-2"><XCircle className="h-5 w-5 text-red-600" />إلغاء الأوردر</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><XCircle className="h-5 w-5 text-destructive" />إلغاء الأوردر</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div>
               <Label>سبب الإلغاء <span className="text-destructive">*</span></Label>
@@ -780,39 +780,39 @@ function ManagerInventoryTab() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">المخزون</h1>
+      <h1 className="text-2xl font-bold text-foreground">المخزون</h1>
 
       {/* Products Grid */}
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1,2,3].map(i => <div key={i} className="bg-white rounded-xl p-4 animate-pulse border h-32" />)}
+          {[1,2,3].map(i => <div key={i} className="bg-card rounded-xl p-4 animate-pulse border h-32" />)}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {(products ?? []).map((p: any) => {
             const isLow = p.currentStock <= p.minStockLevel;
             return (
-              <Card key={p.id} className={isLow ? "border-red-200 bg-red-50/50" : ""}>
+              <Card key={p.id} className={isLow ? "border-destructive/30 bg-destructive/10/50" : ""}>
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between mb-3">
                     <div>
-                      <p className="font-bold text-gray-900">{p.name}</p>
-                      <p className="text-xs text-gray-400 font-mono">{p.sku}</p>
+                      <p className="font-bold text-foreground">{p.name}</p>
+                      <p className="text-xs text-muted-foreground font-mono">{p.sku}</p>
                     </div>
-                    {isLow && <AlertTriangle className="h-5 w-5 text-red-500" />}
+                    {isLow && <AlertTriangle className="h-5 w-5 text-destructive" />}
                   </div>
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <p className="text-2xl font-bold text-gray-900">{p.currentStock}</p>
-                      <p className="text-xs text-gray-500">الحد الأدنى: {p.minStockLevel}</p>
+                      <p className="text-2xl font-bold text-foreground">{p.currentStock}</p>
+                      <p className="text-xs text-muted-foreground">الحد الأدنى: {p.minStockLevel}</p>
                     </div>
-                    <p className="text-sm font-semibold text-amber-700">{Number(p.price).toLocaleString()} ج.م</p>
+                    <p className="text-sm font-semibold text-[var(--warning)]">{Number(p.price).toLocaleString()} ج.م</p>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" variant="outline" className="flex-1 text-green-700 border-green-300 hover:bg-green-50" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "in" })}>
+                    <Button size="sm" variant="outline" className="flex-1 text-[var(--success)] border-[var(--success)]/40 hover:bg-[var(--success)]/10" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "in" })}>
                       + وارد
                     </Button>
-                    <Button size="sm" variant="outline" className="flex-1 text-red-700 border-red-300 hover:bg-red-50" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "out" })}>
+                    <Button size="sm" variant="outline" className="flex-1 text-destructive border-destructive/40 hover:bg-destructive/10" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "out" })}>
                       - صادر
                     </Button>
                   </div>
@@ -832,14 +832,14 @@ function ManagerInventoryTab() {
               {movements.map((m: any) => (
                 <div key={m.id} className="flex items-center justify-between text-sm py-2 border-b last:border-0">
                   <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${m.type === 'in' ? 'bg-green-500' : 'bg-red-500'}`} />
-                    <span className="text-gray-700">{(products ?? []).find((p: any) => p.id === m.productId)?.name ?? "—"}</span>
+                    <span className={`w-2 h-2 rounded-full ${m.type === 'in' ? 'bg-[var(--success)]/100' : 'bg-destructive/100'}`} />
+                    <span className="text-foreground">{(products ?? []).find((p: any) => p.id === m.productId)?.name ?? "—"}</span>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className={`font-bold ${m.type === 'in' ? 'text-green-600' : 'text-red-600'}`}>
+                    <span className={`font-bold ${m.type === 'in' ? 'text-[var(--success)]' : 'text-destructive'}`}>
                       {m.type === 'in' ? '+' : '-'}{m.quantity}
                     </span>
-                    {m.reason && <span className="text-xs text-gray-400">{m.reason}</span>}
+                    {m.reason && <span className="text-xs text-muted-foreground">{m.reason}</span>}
                   </div>
                 </div>
               ))}
@@ -875,7 +875,7 @@ function ManagerInventoryTab() {
                 quantity: parseInt(movementQty),
                 reason: movementReason || undefined,
               });
-            }} disabled={addMovementMutation.isPending} className={movementDialog.type === "in" ? "bg-green-600 hover:bg-green-700 text-white" : "bg-red-600 hover:bg-red-700 text-white"}>
+            }} disabled={addMovementMutation.isPending} className={movementDialog.type === "in" ? "bg-[var(--success)] hover:bg-[var(--success)] text-white" : "bg-destructive hover:bg-destructive text-white"}>
               {addMovementMutation.isPending ? "جاري..." : "تأكيد"}
             </Button>
           </DialogFooter>
@@ -905,7 +905,7 @@ function ManagerReportsTab() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-gray-900">التقارير</h1>
+        <h1 className="text-2xl font-bold text-foreground">التقارير</h1>
         <div className="flex gap-2">
           {[
             { key: "today", label: "اليوم" },
@@ -916,7 +916,7 @@ function ManagerReportsTab() {
               key={d.key}
               onClick={() => setDateRange(d.key as any)}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                dateRange === d.key ? "bg-amber-600 text-white" : "bg-white text-gray-600 border hover:border-amber-300"
+                dateRange === d.key ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground border hover:border-primary/40"
               }`}
             >
               {d.label}
@@ -933,7 +933,7 @@ function ManagerReportsTab() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b text-gray-500">
+                  <tr className="border-b text-muted-foreground">
                     <th className="text-right py-2 px-3">الموظف</th>
                     <th className="text-center py-2 px-3">الإجمالي</th>
                     <th className="text-center py-2 px-3">مؤكد</th>
@@ -944,14 +944,14 @@ function ManagerReportsTab() {
                 </thead>
                 <tbody>
                   {performance.map((p: any, i: number) => (
-                    <tr key={i} className="border-b last:border-0 hover:bg-gray-50">
+                    <tr key={i} className="border-b last:border-0 hover:bg-muted/50">
                       <td className="py-2 px-3 font-medium">{p.employeeName}</td>
                       <td className="text-center py-2 px-3">{p.total}</td>
-                      <td className="text-center py-2 px-3 text-green-600 font-semibold">{p.confirmed}</td>
-                      <td className="text-center py-2 px-3 text-red-600">{p.cancelled}</td>
-                      <td className="text-center py-2 px-3 text-amber-600">{p.postponed}</td>
+                      <td className="text-center py-2 px-3 text-[var(--success)] font-semibold">{p.confirmed}</td>
+                      <td className="text-center py-2 px-3 text-destructive">{p.cancelled}</td>
+                      <td className="text-center py-2 px-3 text-[var(--warning)]">{p.postponed}</td>
                       <td className="text-center py-2 px-3">
-                        <span className={`font-bold ${p.confirmRate >= 50 ? 'text-green-600' : 'text-red-600'}`}>
+                        <span className={`font-bold ${p.confirmRate >= 50 ? 'text-[var(--success)]' : 'text-destructive'}`}>
                           {p.confirmRate}%
                         </span>
                       </td>
@@ -977,11 +977,11 @@ function ManagerReportsTab() {
                 return (
                   <div key={i}>
                     <div className="flex items-center justify-between text-sm mb-1">
-                      <span className="text-gray-700">{reasonLabel}</span>
-                      <span className="font-bold text-gray-900">{c.count} ({pct}%)</span>
+                      <span className="text-foreground">{reasonLabel}</span>
+                      <span className="font-bold text-foreground">{c.count} ({pct}%)</span>
                     </div>
-                    <div className="w-full bg-gray-100 rounded-full h-2">
-                      <div className="bg-red-400 h-2 rounded-full" style={{ width: `${pct}%` }} />
+                    <div className="w-full bg-muted rounded-full h-2">
+                      <div className="bg-destructive/70 h-2 rounded-full" style={{ width: `${pct}%` }} />
                     </div>
                   </div>
                 );
@@ -1038,17 +1038,17 @@ function ManagerEmployeesTab() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">الموظفين</h1>
-        <Button onClick={() => setAddDialog(true)} className="bg-amber-600 hover:bg-amber-700 text-white">
+        <h1 className="text-2xl font-bold text-foreground">الموظفين</h1>
+        <Button onClick={() => setAddDialog(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground">
           <UserPlus className="h-4 w-4 ml-2" />
           إضافة موظف
         </Button>
       </div>
 
       {/* Employee Login Link */}
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-        <p className="text-sm text-amber-800 font-medium mb-1">رابط دخول الموظفين:</p>
-        <code className="text-sm bg-white px-3 py-1 rounded border border-amber-200 text-amber-900 select-all" dir="ltr">
+      <div className="bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-xl p-4">
+        <p className="text-sm text-[var(--warning)] font-medium mb-1">رابط دخول الموظفين:</p>
+        <code className="text-sm bg-card px-3 py-1 rounded border border-[var(--warning)]/30 text-[var(--warning)] select-all" dir="ltr">
           {window.location.origin}/employee-login
         </code>
       </div>
@@ -1056,7 +1056,7 @@ function ManagerEmployeesTab() {
       {/* Employees List */}
       {isLoading ? (
         <div className="space-y-3">
-          {[1,2,3].map(i => <div key={i} className="bg-white rounded-xl p-4 animate-pulse border h-20" />)}
+          {[1,2,3].map(i => <div key={i} className="bg-card rounded-xl p-4 animate-pulse border h-20" />)}
         </div>
       ) : (
         <div className="space-y-3">
@@ -1072,7 +1072,7 @@ function ManagerEmployeesTab() {
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-gray-900">{emp.name}</span>
+                        <span className="font-bold text-foreground">{emp.name}</span>
                         <Badge variant={emp.isActive ? "default" : "secondary"} className="text-xs">
                           {emp.isActive ? "نشط" : "موقوف"}
                         </Badge>
@@ -1080,9 +1080,9 @@ function ManagerEmployeesTab() {
                           {ROLE_LABELS[emp.role] ?? emp.role}
                         </Badge>
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
+                      <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
                         {emp.phone && <span>{emp.phone}</span>}
-                        {emp.username && <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded">@{emp.username}</span>}
+                        {emp.username && <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">@{emp.username}</span>}
                       </div>
                     </div>
                   </div>
@@ -1150,7 +1150,7 @@ function ManagerEmployeesTab() {
             <Button onClick={() => {
               if (!newEmp.name.trim()) { toast.error("أدخل اسم الموظف"); return; }
               createMutation.mutate({ name: newEmp.name, phone: newEmp.phone || undefined, role: newEmp.role });
-            }} disabled={createMutation.isPending} className="bg-amber-600 hover:bg-amber-700 text-white">
+            }} disabled={createMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground">
               {createMutation.isPending ? "جاري..." : "إضافة"}
             </Button>
           </DialogFooter>
@@ -1176,7 +1176,7 @@ function ManagerEmployeesTab() {
                   className="pl-10"
                   dir="ltr"
                 />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-muted-foreground">
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
@@ -1188,7 +1188,7 @@ function ManagerEmployeesTab() {
               if (!credUsername.trim() || !credPassword.trim()) { toast.error("أدخل اسم المستخدم وكلمة المرور"); return; }
               if (!credDialog.empId) return;
               setCredMutation.mutate({ id: credDialog.empId, username: credUsername.trim(), password: credPassword });
-            }} disabled={setCredMutation.isPending} className="bg-amber-600 hover:bg-amber-700 text-white">
+            }} disabled={setCredMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground">
               {setCredMutation.isPending ? "جاري..." : "حفظ"}
             </Button>
           </DialogFooter>
@@ -1235,16 +1235,16 @@ function ManagerTasksTab() {
   });
 
   const TASK_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-    new: { label: "جديدة", color: "text-blue-700", bg: "bg-blue-50 border-blue-200" },
-    in_progress: { label: "قيد التنفيذ", color: "text-amber-700", bg: "bg-amber-50 border-amber-200" },
-    done: { label: "تمت", color: "text-green-700", bg: "bg-green-50 border-green-200" },
+    new: { label: "جديدة", color: "text-primary", bg: "bg-accent border-primary/30" },
+    in_progress: { label: "قيد التنفيذ", color: "text-[var(--warning)]", bg: "bg-[var(--warning)]/10 border-[var(--warning)]/30" },
+    done: { label: "تمت", color: "text-[var(--success)]", bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
   };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-gray-900">توزيع المهام</h1>
-        <Button onClick={() => setShowCreateDialog(true)} className="bg-amber-600 hover:bg-amber-700 text-white">
+        <h1 className="text-2xl font-bold text-foreground">توزيع المهام</h1>
+        <Button onClick={() => setShowCreateDialog(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground">
           <Plus className="h-4 w-4 ml-2" />
           إنشاء مهمة جديدة
         </Button>
@@ -1263,7 +1263,7 @@ function ManagerTasksTab() {
             size="sm"
             variant={statusFilter === f.key ? "default" : "outline"}
             onClick={() => setStatusFilter(f.key)}
-            className={statusFilter === f.key ? "bg-amber-600 hover:bg-amber-700 text-white" : ""}
+            className={statusFilter === f.key ? "bg-primary hover:bg-primary/90 text-primary-foreground" : ""}
           >
             {f.label}
           </Button>
@@ -1273,11 +1273,11 @@ function ManagerTasksTab() {
       {/* Tasks List */}
       {isLoading ? (
         <div className="space-y-3">
-          {[1,2,3].map(i => <div key={i} className="bg-white rounded-xl p-4 animate-pulse border h-24" />)}
+          {[1,2,3].map(i => <div key={i} className="bg-card rounded-xl p-4 animate-pulse border h-24" />)}
         </div>
       ) : (tasksList ?? []).length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <FileText className="h-12 w-12 mx-auto mb-3 text-gray-300" />
+        <div className="text-center py-12 text-muted-foreground">
+          <FileText className="h-12 w-12 mx-auto mb-3 text-muted-foreground/60" />
           <p className="font-medium">لا توجد مهام</p>
           <p className="text-sm">أنشئ مهمة جديدة لتوزيعها على الموظفين</p>
         </div>
@@ -1291,15 +1291,15 @@ function ManagerTasksTab() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <h3 className="font-bold text-gray-900">{task.title}</h3>
+                        <h3 className="font-bold text-foreground">{task.title}</h3>
                         <Badge className={`${statusConf.bg} ${statusConf.color} border text-xs`}>
                           {statusConf.label}
                         </Badge>
                       </div>
                       {task.description && (
-                        <p className="text-sm text-gray-600 mb-2 leading-relaxed">{task.description}</p>
+                        <p className="text-sm text-muted-foreground mb-2 leading-relaxed">{task.description}</p>
                       )}
-                      <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
+                      <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                         <span className="flex items-center gap-1">
                           <User className="h-3 w-3" />
                           {task.assignedToName ?? "جميع الموظفين"}
@@ -1308,7 +1308,7 @@ function ManagerTasksTab() {
                           <Calendar className="h-3 w-3" />
                           {new Date(task.createdAt).toLocaleDateString('ar-EG')}
                         </span>
-                        <span className="text-gray-400">بواسطة: {task.createdByName}</span>
+                        <span className="text-muted-foreground">بواسطة: {task.createdByName}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -1329,7 +1329,7 @@ function ManagerTasksTab() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="text-red-600 border-red-200 hover:bg-red-50 h-8"
+                        className="text-destructive border-destructive/30 hover:bg-destructive/10 h-8"
                         onClick={() => {
                           if (confirm("هل أنت متأكد من حذف هذه المهمة؟")) {
                             deleteMutation.mutate({ taskId: task.id });
@@ -1401,7 +1401,7 @@ function ManagerTasksTab() {
                 });
               }}
               disabled={createMutation.isPending}
-              className="bg-amber-600 hover:bg-amber-700 text-white"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {createMutation.isPending ? "جاري..." : "إنشاء المهمة"}
             </Button>

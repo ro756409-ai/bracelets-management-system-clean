@@ -1224,7 +1224,7 @@ export default function FacebookEntry() {
                       </div>
                     )}
                     {/* Action buttons */}
-                    <div className="flex items-center gap-2 pt-1.5 border-t border-gray-100 mt-1.5">
+                    <div className="flex items-center gap-2 pt-1.5 border-t border-border mt-1.5">
                       <Button
                         size="sm"
                         variant="outline"
@@ -1261,7 +1261,7 @@ export default function FacebookEntry() {
               تأكيد الحذف
             </DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-muted-foreground">
             هل أنت متأكد من حذف هذا الأوردر؟ لا يمكن التراجع عن هذا الإجراء.
           </p>
           <DialogFooter className="flex gap-2 sm:gap-2">
@@ -1392,7 +1392,7 @@ export default function FacebookEntry() {
                   <p className="text-xs font-semibold">حدّد عدد القطع لكل نوع:</p>
                   {editForm.selectedProducts.map((p, idx) => (
                     <div key={idx} className="flex items-center justify-between gap-2">
-                      <span className="text-sm text-gray-700 flex-1 truncate">{p.productName}</span>
+                      <span className="text-sm text-foreground flex-1 truncate">{p.productName}</span>
                       <div className="flex items-center gap-1">
                         <button type="button" onClick={() => setEditItemQuantityAt(idx, p.quantity - 1)} className="h-7 w-7 rounded-[var(--radius-brand-sm)] border border-border bg-card font-bold leading-none hover:bg-accent">−</button>
                         <Input
@@ -1428,7 +1428,7 @@ export default function FacebookEntry() {
                       value={editForm.size || ""}
                       onValueChange={(v) => setEditForm((f) => ({ ...f, size: v, color: undefined, variantId: undefined }))}
                     >
-                      <SelectTrigger className="h-10 border-blue-300 bg-white">
+                      <SelectTrigger className="h-10 border-blue-300 bg-card">
                         <SelectValue placeholder="اختر المقاس" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1445,7 +1445,7 @@ export default function FacebookEntry() {
                       onValueChange={(v) => setEditForm((f) => ({ ...f, color: v }))}
                       disabled={!editForm.size}
                     >
-                      <SelectTrigger className="h-10 border-blue-300 bg-white">
+                      <SelectTrigger className="h-10 border-blue-300 bg-card">
                         <SelectValue placeholder={editForm.size ? "اختر اللون" : "اختر المقاس أولا"} />
                       </SelectTrigger>
                       <SelectContent>

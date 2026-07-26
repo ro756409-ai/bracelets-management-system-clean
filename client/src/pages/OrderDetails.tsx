@@ -25,16 +25,16 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  new: "bg-blue-100 text-blue-800",
-  confirmed: "bg-green-100 text-green-800",
-  postponed: "bg-yellow-100 text-yellow-800",
-  cancelled: "bg-red-100 text-red-800",
-  preparing: "bg-purple-100 text-purple-800",
-  shipped: "bg-indigo-100 text-indigo-800",
-  delivered: "bg-emerald-100 text-emerald-800",
-  no_answer: "bg-orange-100 text-orange-800",
-  returned: "bg-gray-100 text-gray-800",
-  printed: "bg-teal-100 text-teal-800",
+  new: "bg-accent text-accent-foreground",
+  confirmed: "bg-[var(--success)]/10 text-[var(--success)]",
+  postponed: "bg-[var(--warning)]/10 text-[var(--warning)]",
+  cancelled: "bg-destructive/10 text-destructive",
+  preparing: "bg-[var(--info)]/10 text-[var(--info)]",
+  shipped: "bg-[var(--info)]/10 text-[var(--info)]",
+  delivered: "bg-[var(--success)]/10 text-[var(--success)]",
+  no_answer: "bg-[var(--warning)]/10 text-[var(--warning)]",
+  returned: "bg-muted text-muted-foreground",
+  printed: "bg-[var(--info)]/10 text-[var(--info)]",
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -183,14 +183,14 @@ export default function OrderDetails() {
             {/* زر Bosta - يظهر فقط للأوردرات المؤكدة */}
             {(order.status === 'confirmed' || order.status === 'printed' || order.status === 'preparing' || order.status === 'shipped') && (
               order.bostaShipmentId ? (
-                <Button variant="outline" size="sm" className="text-green-700 border-green-300" disabled>
+                <Button variant="outline" size="sm" className="text-[var(--success)] border-[var(--success)]/40" disabled>
                   <CheckCircle className="h-4 w-4 ml-1" /> مرسل لـ Bosta
                 </Button>
               ) : (
                 <Button
                   variant="outline"
                   size="sm"
-                  className={order.bostaLastError ? "text-red-600 border-red-300" : "text-blue-600 border-blue-300"}
+                  className={order.bostaLastError ? "text-destructive border-destructive/40" : "text-[var(--info)] border-[var(--info)]/40"}
                   onClick={() => sendToBostaMutation.mutate({ orderId: order.id })}
                   disabled={sendToBostaMutation.isPending}
                 >
@@ -225,7 +225,7 @@ export default function OrderDetails() {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
-              <User className="h-5 w-5 text-amber-600" /> بيانات العميل
+              <User className="h-5 w-5 text-[var(--warning)]" /> بيانات العميل
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -268,7 +268,7 @@ export default function OrderDetails() {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
-              <Package className="h-5 w-5 text-amber-600" /> بيانات المنتج
+              <Package className="h-5 w-5 text-[var(--warning)]" /> بيانات المنتج
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -294,18 +294,18 @@ export default function OrderDetails() {
               )}
             </div>
             {Array.isArray((order as any).items) && (order as any).items.length > 0 && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-                <Label className="text-amber-800 text-xs font-semibold">تفصيل الأصناف / الحفر</Label>
+              <div className="rounded-xl border border-[var(--warning)]/30 bg-[var(--warning)]/10/60 p-3">
+                <Label className="text-[var(--warning)] text-xs font-semibold">تفصيل الأصناف / الحفر</Label>
                 <div className="mt-2 space-y-1">
                   {(order as any).items.map((it: any) => (
                     <div key={it.id} className="flex items-center justify-between text-sm">
-                      <span className="text-gray-700">{it.productName}</span>
-                      <span className="font-semibold text-amber-900">× {it.quantity}</span>
+                      <span className="text-foreground">{it.productName}</span>
+                      <span className="font-semibold text-[var(--warning)]">× {it.quantity}</span>
                     </div>
                   ))}
-                  <div className="flex items-center justify-between border-t border-amber-200 pt-1 mt-1">
-                    <span className="text-xs font-semibold text-amber-800">إجمالي القطع</span>
-                    <span className="text-xs font-bold text-amber-900">{(order as any).items.reduce((s: number, it: any) => s + (it.quantity || 0), 0)} قطعة</span>
+                  <div className="flex items-center justify-between border-t border-[var(--warning)]/30 pt-1 mt-1">
+                    <span className="text-xs font-semibold text-[var(--warning)]">إجمالي القطع</span>
+                    <span className="text-xs font-bold text-[var(--warning)]">{(order as any).items.reduce((s: number, it: any) => s + (it.quantity || 0), 0)} قطعة</span>
                   </div>
                 </div>
               </div>
@@ -324,7 +324,7 @@ export default function OrderDetails() {
                 {isEditing ? (
                   <Input type="number" min={0} value={editData.totalAmount} onChange={e => setEditData({ ...editData, totalAmount: parseFloat(e.target.value) || 0 })} />
                 ) : (
-                  <p className="font-medium text-green-700">{Number(order.totalAmount)} ج.م</p>
+                  <p className="font-medium text-[var(--success)]">{Number(order.totalAmount)} ج.م</p>
                 )}
               </div>
             </div>
@@ -343,7 +343,7 @@ export default function OrderDetails() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
-              <Calendar className="h-5 w-5 text-amber-600" /> معلومات النظام
+              <Calendar className="h-5 w-5 text-[var(--warning)]" /> معلومات النظام
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -389,14 +389,14 @@ export default function OrderDetails() {
               {order.cancelReason && (
                 <div>
                   <Label className="text-muted-foreground text-xs">سبب الإلغاء</Label>
-                  <p className="font-medium text-sm text-red-600">{order.cancelReason}</p>
+                  <p className="font-medium text-sm text-destructive">{order.cancelReason}</p>
                 </div>
               )}
               {/* Bosta fields */}
               {order.bostaShipmentId && (
                 <div>
-                  <Label className="text-muted-foreground text-xs flex items-center gap-1"><CheckCircle className="h-3 w-3 text-green-600" /> Bosta Shipment ID</Label>
-                  <p className="font-medium text-sm text-green-700">{order.bostaShipmentId}</p>
+                  <Label className="text-muted-foreground text-xs flex items-center gap-1"><CheckCircle className="h-3 w-3 text-[var(--success)]" /> Bosta Shipment ID</Label>
+                  <p className="font-medium text-sm text-[var(--success)]">{order.bostaShipmentId}</p>
                 </div>
               )}
               {order.bostaTrackingNumber && (
@@ -413,8 +413,8 @@ export default function OrderDetails() {
               )}
               {order.bostaLastError && !order.bostaShipmentId && (
                 <div className="col-span-2">
-                  <Label className="text-muted-foreground text-xs flex items-center gap-1"><AlertCircle className="h-3 w-3 text-red-500" /> خطأ Bosta</Label>
-                  <p className="text-sm text-red-600">{order.bostaLastError}</p>
+                  <Label className="text-muted-foreground text-xs flex items-center gap-1"><AlertCircle className="h-3 w-3 text-destructive" /> خطأ Bosta</Label>
+                  <p className="text-sm text-destructive">{order.bostaLastError}</p>
                 </div>
               )}
               <div>

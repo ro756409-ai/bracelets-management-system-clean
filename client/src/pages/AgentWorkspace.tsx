@@ -22,13 +22,13 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  new: "bg-blue-100 text-blue-700 border-blue-200",
-  confirmed: "bg-green-100 text-green-700 border-green-200",
-  postponed: "bg-yellow-100 text-yellow-700 border-yellow-200",
-  cancelled: "bg-red-100 text-red-700 border-red-200",
-  preparing: "bg-purple-100 text-purple-700 border-purple-200",
-  shipped: "bg-indigo-100 text-indigo-700 border-indigo-200",
-  delivered: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  new: "bg-accent text-accent-foreground border-primary/30",
+  confirmed: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/30",
+  postponed: "bg-[var(--warning)]/10 text-[var(--warning)] border-[var(--warning)]/30",
+  cancelled: "bg-destructive/10 text-destructive border-destructive/30",
+  preparing: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/30",
+  shipped: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/30",
+  delivered: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/30",
 };
 
 const CANCEL_REASONS = [
@@ -145,7 +145,7 @@ export default function AgentWorkspace() {
           >‹</button>
           <div className="text-center min-w-[140px]">
             <p className="text-xs font-semibold text-foreground">{displayDate}</p>
-            {isToday && <span className="text-xs text-green-600 font-medium">• اليوم</span>}
+            {isToday && <span className="text-xs text-[var(--success)] font-medium">• اليوم</span>}
           </div>
           <button
             onClick={() => changeDay(1)}
@@ -165,32 +165,32 @@ export default function AgentWorkspace() {
       {/* Agent Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div
-          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'new' ? 'border-blue-400 bg-blue-50' : 'border-transparent bg-blue-50/50 hover:bg-blue-50'}`}
+          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'new' ? 'border-[var(--info)]/50 bg-[var(--info)]/10' : 'border-transparent bg-[var(--info)]/10/50 hover:bg-[var(--info)]/10'}`}
           onClick={() => setStatusFilter(statusFilter === 'new' ? 'all' : 'new')}
         >
-          <p className="text-2xl font-bold text-blue-700">{newCount}</p>
-          <p className="text-xs font-medium text-blue-600 mt-1">جديدة</p>
+          <p className="text-2xl font-bold text-[var(--info)]">{newCount}</p>
+          <p className="text-xs font-medium text-[var(--info)] mt-1">جديدة</p>
         </div>
         <div
-          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'confirmed' ? 'border-green-400 bg-green-50' : 'border-transparent bg-green-50/50 hover:bg-green-50'}`}
+          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'confirmed' ? 'border-[var(--success)]/50 bg-[var(--success)]/10' : 'border-transparent bg-[var(--success)]/10/50 hover:bg-[var(--success)]/10'}`}
           onClick={() => setStatusFilter(statusFilter === 'confirmed' ? 'all' : 'confirmed')}
         >
-          <p className="text-2xl font-bold text-green-700">{confirmedCount}</p>
-          <p className="text-xs font-medium text-green-600 mt-1">مؤكدة</p>
+          <p className="text-2xl font-bold text-[var(--success)]">{confirmedCount}</p>
+          <p className="text-xs font-medium text-[var(--success)] mt-1">مؤكدة</p>
         </div>
         <div
-          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'postponed' ? 'border-yellow-400 bg-yellow-50' : 'border-transparent bg-yellow-50/50 hover:bg-yellow-50'}`}
+          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'postponed' ? 'border-[var(--warning)]/50 bg-[var(--warning)]/10' : 'border-transparent bg-[var(--warning)]/10/50 hover:bg-[var(--warning)]/10'}`}
           onClick={() => setStatusFilter(statusFilter === 'postponed' ? 'all' : 'postponed')}
         >
-          <p className="text-2xl font-bold text-yellow-700">{postponedCount}</p>
-          <p className="text-xs font-medium text-yellow-600 mt-1">مؤجلة</p>
+          <p className="text-2xl font-bold text-[var(--warning)]">{postponedCount}</p>
+          <p className="text-xs font-medium text-[var(--warning)] mt-1">مؤجلة</p>
         </div>
         <div
-          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'cancelled' ? 'border-red-400 bg-red-50' : 'border-transparent bg-red-50/50 hover:bg-red-50'}`}
+          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'cancelled' ? 'border-destructive/50 bg-destructive/10' : 'border-transparent bg-destructive/10/50 hover:bg-destructive/10'}`}
           onClick={() => setStatusFilter(statusFilter === 'cancelled' ? 'all' : 'cancelled')}
         >
-          <p className="text-2xl font-bold text-red-700">{cancelledCount}</p>
-          <p className="text-xs font-medium text-red-600 mt-1">ملغية</p>
+          <p className="text-2xl font-bold text-destructive">{cancelledCount}</p>
+          <p className="text-xs font-medium text-destructive mt-1">ملغية</p>
         </div>
       </div>
 
@@ -290,7 +290,7 @@ export default function AgentWorkspace() {
                     </span>
                   </div>
                   {order.postponedTo && (
-                    <div className="flex items-center gap-2 text-sm text-yellow-600">
+                    <div className="flex items-center gap-2 text-sm text-[var(--warning)]">
                       <Calendar className="h-3.5 w-3.5 shrink-0" />
                       <span>متابعة: {new Date(order.postponedTo).toLocaleDateString('ar-EG')}</span>
                     </div>
@@ -305,7 +305,7 @@ export default function AgentWorkspace() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 text-xs border-blue-200 text-blue-700 hover:bg-blue-50"
+                    className="h-7 text-xs border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10"
                     onClick={() => {
                       setSelectedOrderId(order.id);
                       setEditQuantity(order.quantity ?? 1);
@@ -324,7 +324,7 @@ export default function AgentWorkspace() {
                 {(order.status === 'new' || order.status === 'postponed') && (
                   <div className="flex gap-2">
                     <Button
-                      className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9"
+                      className="flex-1 bg-[var(--success)] hover:bg-[var(--success)] text-white h-9"
                       size="sm"
                       onClick={() => confirmMutation.mutate({ orderId: order.id })}
                       disabled={confirmMutation.isPending}
@@ -334,7 +334,7 @@ export default function AgentWorkspace() {
                     </Button>
                     <Button
                       variant="outline"
-                      className="flex-1 border-yellow-300 text-yellow-700 hover:bg-yellow-50 h-9"
+                      className="flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 h-9"
                       size="sm"
                       onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}
                     >
@@ -343,7 +343,7 @@ export default function AgentWorkspace() {
                     </Button>
                     <Button
                       variant="outline"
-                      className="flex-1 border-red-300 text-red-700 hover:bg-red-50 h-9"
+                      className="flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 h-9"
                       size="sm"
                       onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}
                     >
@@ -406,7 +406,7 @@ export default function AgentWorkspace() {
                 rows={3}
               />
             </div>
-            <p className="text-xs text-muted-foreground bg-amber-50 border border-amber-200 rounded p-2">
+            <p className="text-xs text-muted-foreground bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded p-2">
               ⚠️ لو كان الأوردر مؤكد، سيتم تعديل الجرد تلقائياً
             </p>
           </div>

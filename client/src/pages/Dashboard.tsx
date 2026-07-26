@@ -204,17 +204,17 @@ export default function Dashboard() {
 
       {/* Merge Alert */}
       {mergeAlert?.hasAlert && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3">
-          <GitMerge className="h-5 w-5 text-amber-600 shrink-0" />
+        <div className="bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-xl p-4 flex items-center gap-3">
+          <GitMerge className="h-5 w-5 text-[var(--warning)] shrink-0" />
           <div className="flex-1">
-            <p className="font-semibold text-amber-800 text-sm">
+            <p className="font-semibold text-[var(--warning)] text-sm">
               تم دمج {mergeAlert.count} أوردر مكرر تلقائياً في آخر 24 ساعة
             </p>
-            <p className="text-xs text-amber-700/80 mt-0.5">
+            <p className="text-xs text-[var(--warning)]/80 mt-0.5">
               إجمالي الكميات المدمجة: {mergeAlert.totalMergedQty} وحدة
             </p>
           </div>
-          <Button variant="outline" size="sm" className="border-amber-300 text-amber-700 hover:bg-amber-100" onClick={() => setLocation("/merge-logs")}>
+          <Button variant="outline" size="sm" className="border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/15" onClick={() => setLocation("/merge-logs")}>
             عرض التقرير
           </Button>
         </div>
@@ -238,7 +238,7 @@ export default function Dashboard() {
 
       {/* Broadcast Message Section */}
       {isAdmin && (
-        <Card className="border-amber-200">
+        <Card className="border-[var(--warning)]/30">
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
               <span className="text-lg">📢</span>
@@ -247,17 +247,17 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="space-y-3">
             {activeBroadcast && (
-              <div className="bg-amber-50 border border-amber-300 rounded-lg p-3">
+              <div className="bg-[var(--warning)]/10 border border-[var(--warning)]/40 rounded-lg p-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1">
-                    <p className="text-xs text-amber-600 font-medium mb-1">الرسالة الحالية:</p>
-                    <p className="text-sm text-gray-800">{activeBroadcast.message}</p>
-                    <p className="text-xs text-gray-500 mt-1">بواسطة: {activeBroadcast.sentByName} • {new Date(activeBroadcast.createdAt).toLocaleString('ar-EG')}</p>
+                    <p className="text-xs text-[var(--warning)] font-medium mb-1">الرسالة الحالية:</p>
+                    <p className="text-sm text-foreground">{activeBroadcast.message}</p>
+                    <p className="text-xs text-muted-foreground mt-1">بواسطة: {activeBroadcast.sentByName} • {new Date(activeBroadcast.createdAt).toLocaleString('ar-EG')}</p>
                   </div>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="text-red-600 border-red-200 hover:bg-red-50 shrink-0"
+                    className="text-destructive border-destructive/30 hover:bg-destructive/10 shrink-0"
                     onClick={() => clearBroadcastMutation.mutate()}
                     disabled={clearBroadcastMutation.isPending}
                   >
@@ -286,7 +286,7 @@ export default function Dashboard() {
                   }
                 }}
                 disabled={!broadcastMsg.trim() || sendBroadcastMutation.isPending}
-                className="bg-amber-700 hover:bg-amber-800 text-white shrink-0"
+                className="bg-[var(--warning)] hover:bg-[var(--warning)] text-white shrink-0"
               >
                 {sendBroadcastMutation.isPending ? 'جاري...' : 'إرسال'}
               </Button>
@@ -476,19 +476,19 @@ export default function Dashboard() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2 flex-wrap">
               <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                <CheckCircle2 className="h-5 w-5 text-[var(--success)]" />
                 مؤكدات اليوم
-                <span className="bg-green-100 text-green-700 text-xs font-bold px-2 py-0.5 rounded-full">
+                <span className="bg-[var(--success)]/15 text-[var(--success)] text-xs font-bold px-2 py-0.5 rounded-full">
                   {todayConfirmedCount}
                 </span>
                 <span className="text-xs text-muted-foreground font-normal">
-                  (<span className="text-green-600 font-semibold">{todayConfirmedOrders.filter(o => o.status === 'confirmed').length} مؤكدة</span>
+                  (<span className="text-[var(--success)] font-semibold">{todayConfirmedOrders.filter(o => o.status === 'confirmed').length} مؤكدة</span>
                   {' • '}
-                  <span className="text-purple-600 font-semibold">{todayConfirmedOrders.filter(o => o.status === 'printed').length} مطبوعة</span>)
+                  <span className="text-primary font-semibold">{todayConfirmedOrders.filter(o => o.status === 'printed').length} مطبوعة</span>)
                 </span>
               </CardTitle>
               {todayConfirmedCount > 0 && (
-                <span className="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 rounded-lg px-2 py-1">
+                <span className="text-xs font-semibold text-[var(--success)] bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-lg px-2 py-1">
                   إجمالي: {todayTotalRevenue.toLocaleString('ar-EG')} ج.م
                 </span>
               )}
@@ -502,7 +502,7 @@ export default function Dashboard() {
                   variant="outline"
                   size="sm"
                   onClick={exportTodayConfirmedToExcel}
-                  className="h-7 text-xs gap-1 border-green-300 text-green-700 hover:bg-green-50"
+                  className="h-7 text-xs gap-1 border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10"
                 >
                   <Download className="h-3.5 w-3.5" />
                   تصدير Excel
@@ -526,15 +526,15 @@ export default function Dashboard() {
           ) : (
             <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
               {todayConfirmedOrders.map((order, idx) => (
-                <div key={order.id} className="flex items-start gap-3 p-3 rounded-lg border border-green-100 bg-green-50/50 hover:bg-green-50 transition-colors">
+                <div key={order.id} className="flex items-start gap-3 p-3 rounded-lg border border-[var(--success)]/20 bg-[var(--success)]/10/50 hover:bg-[var(--success)]/10 transition-colors">
                   {/* رقم تسلسلي */}
-                  <span className="text-xs font-bold text-green-700 bg-green-100 rounded-full w-6 h-6 flex items-center justify-center shrink-0 mt-0.5">
+                  <span className="text-xs font-bold text-[var(--success)] bg-[var(--success)]/15 rounded-full w-6 h-6 flex items-center justify-center shrink-0 mt-0.5">
                     {idx + 1}
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-semibold text-foreground text-sm truncate">{order.customerName}</p>
-                      <span className="text-xs font-bold text-green-700 shrink-0">
+                      <span className="text-xs font-bold text-[var(--success)] shrink-0">
                         {Number(order.totalAmount).toLocaleString('ar-EG')} ج.م
                       </span>
                     </div>
@@ -598,12 +598,14 @@ function StatCard({
   subtitle?: string;
   loading?: boolean;
 }) {
+  // Tokens already carry their own dark-mode values (see :root vs .dark in index.css),
+  // so a single class list works in both themes without a `dark:` override.
   const colorMap = {
-    blue: "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400",
-    green: "bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400",
-    red: "bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400",
-    orange: "bg-orange-50 text-orange-600 dark:bg-orange-900/20 dark:text-orange-400",
-    purple: "bg-purple-50 text-purple-600 dark:bg-purple-900/20 dark:text-purple-400",
+    blue: "bg-[var(--info)]/10 text-[var(--info)]",
+    green: "bg-[var(--success)]/10 text-[var(--success)]",
+    red: "bg-destructive/10 text-destructive",
+    orange: "bg-[var(--warning)]/10 text-[var(--warning)]",
+    purple: "bg-accent text-accent-foreground",
   };
 
   return (

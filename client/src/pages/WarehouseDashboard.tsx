@@ -148,29 +148,29 @@ export default function WarehouseDashboard() {
       <div className="max-w-4xl mx-auto p-4 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white rounded-xl border p-4 text-center shadow-sm">
-            <Box className="h-6 w-6 mx-auto text-amber-600 mb-1" />
+          <div className="bg-card rounded-xl border p-4 text-center shadow-sm">
+            <Box className="h-6 w-6 mx-auto text-[var(--warning)] mb-1" />
             <p className="text-2xl font-bold text-foreground">{totalStock}</p>
             <p className="text-xs text-muted-foreground">إجمالي المخزون</p>
           </div>
-          <div className="bg-white rounded-xl border p-4 text-center shadow-sm">
-            <AlertTriangle className="h-6 w-6 mx-auto text-red-500 mb-1" />
-            <p className="text-2xl font-bold text-red-600">{lowStockCount}</p>
+          <div className="bg-card rounded-xl border p-4 text-center shadow-sm">
+            <AlertTriangle className="h-6 w-6 mx-auto text-destructive mb-1" />
+            <p className="text-2xl font-bold text-destructive">{lowStockCount}</p>
             <p className="text-xs text-muted-foreground">منتجات منخفضة</p>
           </div>
         </div>
 
         {/* Low Stock Alert */}
         {lowStockCount > 0 && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-            <h3 className="font-bold text-red-800 text-sm flex items-center gap-2 mb-2">
+          <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-4">
+            <h3 className="font-bold text-destructive text-sm flex items-center gap-2 mb-2">
               <AlertTriangle className="h-4 w-4" />
               تنبيه: منتجات تحتاج تعبئة
             </h3>
             <div className="space-y-1">
               {lowStock?.map((p: any) => (
                 <div key={p.id} className="flex items-center justify-between text-sm">
-                  <span className="text-red-700">{p.name}</span>
+                  <span className="text-destructive">{p.name}</span>
                   <Badge variant="destructive" className="text-xs">{p.currentStock} قطعة</Badge>
                 </div>
               ))}
@@ -179,10 +179,10 @@ export default function WarehouseDashboard() {
         )}
 
         {/* Products List */}
-        <div className="bg-white rounded-xl border shadow-sm">
+        <div className="bg-card rounded-xl border shadow-sm">
           <div className="p-4 border-b flex items-center justify-between">
             <h2 className="font-bold text-foreground flex items-center gap-2">
-              <Package className="h-5 w-5 text-amber-600" />
+              <Package className="h-5 w-5 text-[var(--warning)]" />
               المنتجات
             </h2>
             <Button
@@ -212,7 +212,7 @@ export default function WarehouseDashboard() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 w-8 p-0 border-green-200 text-green-700 hover:bg-green-50"
+                    className="h-8 w-8 p-0 border-[var(--success)]/30 text-[var(--success)] hover:bg-[var(--success)]/10"
                     onClick={() => {
                       setSelectedProductId(product.id);
                       setMovementType("in");
@@ -224,7 +224,7 @@ export default function WarehouseDashboard() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 w-8 p-0 border-red-200 text-red-700 hover:bg-red-50"
+                    className="h-8 w-8 p-0 border-destructive/30 text-destructive hover:bg-destructive/10"
                     onClick={() => {
                       setSelectedProductId(product.id);
                       setMovementType("out");
@@ -246,9 +246,9 @@ export default function WarehouseDashboard() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {movementType === "in" ? (
-                <><ArrowDownCircle className="h-5 w-5 text-green-600" /> إضافة للمخزن</>
+                <><ArrowDownCircle className="h-5 w-5 text-[var(--success)]" /> إضافة للمخزن</>
               ) : (
-                <><ArrowUpCircle className="h-5 w-5 text-red-600" /> سحب من المخزن</>
+                <><ArrowUpCircle className="h-5 w-5 text-destructive" /> سحب من المخزن</>
               )}
             </DialogTitle>
           </DialogHeader>
@@ -297,7 +297,7 @@ export default function WarehouseDashboard() {
             <Button
               onClick={handleAddMovement}
               disabled={addMovementMutation.isPending}
-              className={movementType === "in" ? "bg-green-600 hover:bg-green-700 text-white" : "bg-red-600 hover:bg-red-700 text-white"}
+              className={movementType === "in" ? "bg-[var(--success)] hover:bg-[var(--success)] text-white" : "bg-destructive hover:bg-destructive text-white"}
             >
               {addMovementMutation.isPending ? "جاري التسجيل..." : "تأكيد"}
             </Button>
@@ -310,7 +310,7 @@ export default function WarehouseDashboard() {
         <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <History className="h-5 w-5 text-amber-600" />
+              <History className="h-5 w-5 text-[var(--warning)]" />
               سجل حركات المخزون
             </DialogTitle>
           </DialogHeader>
@@ -319,9 +319,9 @@ export default function WarehouseDashboard() {
               <div key={i} className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
                 <div className="flex items-center gap-2">
                   {m.type === 'in' ? (
-                    <ArrowDownCircle className="h-4 w-4 text-green-600" />
+                    <ArrowDownCircle className="h-4 w-4 text-[var(--success)]" />
                   ) : (
-                    <ArrowUpCircle className="h-4 w-4 text-red-600" />
+                    <ArrowUpCircle className="h-4 w-4 text-destructive" />
                   )}
                   <div>
                     <p className="text-sm font-medium">{m.productName || "منتج"}</p>

@@ -55,7 +55,7 @@ export default function MergeLogs() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <GitMerge className="h-6 w-6 text-amber-600" />
+            <GitMerge className="h-6 w-6 text-[var(--warning)]" />
             تقرير الدمج التلقائي
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
@@ -72,25 +72,25 @@ export default function MergeLogs() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-4 pb-4">
-            <div className="text-3xl font-bold text-amber-600">{totalMerges}</div>
+            <div className="text-3xl font-bold text-[var(--warning)]">{totalMerges}</div>
             <div className="text-sm text-muted-foreground mt-1">إجمالي عمليات الدمج</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4 pb-4">
-            <div className="text-3xl font-bold text-blue-600">{totalQtyMerged}</div>
+            <div className="text-3xl font-bold text-[var(--info)]">{totalQtyMerged}</div>
             <div className="text-sm text-muted-foreground mt-1">إجمالي الكميات المدمجة</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4 pb-4">
-            <div className="text-3xl font-bold text-green-600">{uniqueCustomers}</div>
+            <div className="text-3xl font-bold text-[var(--success)]">{uniqueCustomers}</div>
             <div className="text-sm text-muted-foreground mt-1">عملاء فريدون</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4 pb-4">
-            <div className="text-3xl font-bold text-orange-600">{todayMerges}</div>
+            <div className="text-3xl font-bold text-[var(--warning)]">{todayMerges}</div>
             <div className="text-sm text-muted-foreground mt-1">دمج اليوم</div>
           </CardContent>
         </Card>
@@ -138,7 +138,7 @@ export default function MergeLogs() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <GitMerge className="h-4 w-4 text-amber-600" />
+            <GitMerge className="h-4 w-4 text-[var(--warning)]" />
             سجل عمليات الدمج
             <Badge variant="secondary" className="mr-2">{filtered.length} عملية</Badge>
           </CardTitle>
@@ -184,7 +184,7 @@ export default function MergeLogs() {
                     <tr key={log.id} className="border-b hover:bg-muted/20 transition-colors">
                       <td className="py-3 px-4 text-muted-foreground">{i + 1}</td>
                       <td className="py-3 px-4">
-                        <Badge variant="outline" className="font-mono text-amber-700 border-amber-300 bg-amber-50">
+                        <Badge variant="outline" className="font-mono text-[var(--warning)] border-[var(--warning)]/40 bg-[var(--warning)]/10">
                           #{log.keptOrderNumber}
                         </Badge>
                       </td>
@@ -196,12 +196,12 @@ export default function MergeLogs() {
                         <span className="text-sm">{log.productName}</span>
                       </td>
                       <td className="py-3 px-4">
-                        <Badge className="bg-blue-100 text-blue-700 border-blue-200">
+                        <Badge className="bg-[var(--info)]/15 text-[var(--info)] border-[var(--info)]/30">
                           +{log.mergedQty}
                         </Badge>
                       </td>
                       <td className="py-3 px-4">
-                        <span className="font-semibold text-green-700">{log.totalQtyAfter}</span>
+                        <span className="font-semibold text-[var(--success)]">{log.totalQtyAfter}</span>
                       </td>
                       <td className="py-3 px-4 text-muted-foreground text-xs">
                         {formatDate(log.createdAt)}

@@ -80,10 +80,10 @@ function ConnectionStatus({ channel }: { channel: any }) {
 
   const config =
     status === "connected"
-      ? { icon: CheckCircle2, cls: "bg-green-100 text-green-700", label: "متصل" }
+      ? { icon: CheckCircle2, cls: "bg-[var(--success)]/15 text-[var(--success)]", label: "متصل" }
       : status === "failed"
-      ? { icon: AlertCircle, cls: "bg-red-100 text-red-700", label: "فشل الاتصال" }
-      : { icon: Clock, cls: "bg-gray-100 text-gray-600", label: "لم يُختبر الاتصال بعد" };
+      ? { icon: AlertCircle, cls: "bg-destructive/15 text-destructive", label: "فشل الاتصال" }
+      : { icon: Clock, cls: "bg-muted text-muted-foreground", label: "لم يُختبر الاتصال بعد" };
   const Icon = config.icon;
 
   return (
@@ -481,10 +481,10 @@ export default function SalesChannels() {
                         <div key={log.id} className="text-xs flex items-start gap-2 p-1.5 rounded bg-background">
                           <Badge
                             className={`text-[10px] shrink-0 border-0 ${
-                              log.status === "success" ? "bg-green-100 text-green-700"
-                              : log.status === "partial" ? "bg-yellow-100 text-yellow-700"
-                              : log.status === "error" ? "bg-red-100 text-red-700"
-                              : "bg-gray-100 text-gray-600"
+                              log.status === "success" ? "bg-[var(--success)]/15 text-[var(--success)]"
+                              : log.status === "partial" ? "bg-[var(--warning)]/15 text-yellow-700"
+                              : log.status === "error" ? "bg-destructive/15 text-destructive"
+                              : "bg-muted text-muted-foreground"
                             }`}
                           >
                             {log.status}

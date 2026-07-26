@@ -15,18 +15,18 @@ const WEBHOOK_SECRET = "engzQ2JMRHB4YQ==";
 const WEBHOOK_URL_WITH_SECRET = `${WEBHOOK_URL}?secret=${WEBHOOK_SECRET}`;
 
 function StatusBadge({ status }: { status: string }) {
-  if (status === "success") return <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">✓ نجح</Badge>;
-  if (status === "duplicate") return <Badge className="bg-yellow-100 text-yellow-800 border-yellow-200 text-xs">⟳ مكرر</Badge>;
-  if (status === "error") return <Badge className="bg-red-100 text-red-800 border-red-200 text-xs">✗ خطأ</Badge>;
-  if (status === "status_update") return <Badge className="bg-blue-100 text-blue-800 border-blue-200 text-xs">↺ تحديث حالة</Badge>;
+  if (status === "success") return <Badge className="bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/30 text-xs">✓ نجح</Badge>;
+  if (status === "duplicate") return <Badge className="bg-[var(--warning)]/15 text-[var(--warning)] border-[var(--warning)]/30 text-xs">⟳ مكرر</Badge>;
+  if (status === "error") return <Badge className="bg-destructive/15 text-destructive border-destructive/30 text-xs">✗ خطأ</Badge>;
+  if (status === "status_update") return <Badge className="bg-[var(--info)]/15 text-[var(--info)] border-[var(--info)]/30 text-xs">↺ تحديث حالة</Badge>;
   return <Badge variant="outline" className="text-xs">{status}</Badge>;
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === "success") return <CheckCircle className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />;
-  if (status === "duplicate") return <AlertCircle className="w-4 h-4 text-yellow-500 shrink-0 mt-0.5" />;
-  if (status === "error") return <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />;
-  if (status === "status_update") return <Zap className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />;
+  if (status === "success") return <CheckCircle className="w-4 h-4 text-[var(--success)] shrink-0 mt-0.5" />;
+  if (status === "duplicate") return <AlertCircle className="w-4 h-4 text-[var(--warning)] shrink-0 mt-0.5" />;
+  if (status === "error") return <XCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />;
+  if (status === "status_update") return <Zap className="w-4 h-4 text-[var(--info)] shrink-0 mt-0.5" />;
   return <Info className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />;
 }
 
@@ -73,7 +73,7 @@ function LogRow({ entry }: { entry: any }) {
               </span>
             )}
             {entry.importedCount != null && entry.importedCount > 0 && (
-              <span className="text-xs text-green-700 bg-green-50 px-1.5 py-0.5 rounded flex items-center gap-0.5">
+              <span className="text-xs text-[var(--success)] bg-[var(--success)]/10 px-1.5 py-0.5 rounded flex items-center gap-0.5">
                 <Package className="w-3 h-3" />{entry.importedCount} أوردر
               </span>
             )}
@@ -185,7 +185,7 @@ export default function WebhookSettings() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <Zap className="w-6 h-6 text-orange-500" />
+            <Zap className="w-6 h-6 text-[var(--warning)]" />
             سجل Easy Order
           </h1>
           <p className="text-muted-foreground mt-1 text-sm">
@@ -219,7 +219,7 @@ export default function WebhookSettings() {
           onClick={() => setStatusFilter(statusFilter === "success" ? "all" : "success")}
         >
           <CardContent className="pt-4 pb-3 text-center">
-            <div className="text-2xl font-bold text-green-600">{stats.success}</div>
+            <div className="text-2xl font-bold text-[var(--success)]">{stats.success}</div>
             <div className="text-xs text-muted-foreground mt-0.5">أوردر استُقبل</div>
           </CardContent>
         </Card>
@@ -228,7 +228,7 @@ export default function WebhookSettings() {
           onClick={() => setStatusFilter(statusFilter === "duplicate" ? "all" : "duplicate")}
         >
           <CardContent className="pt-4 pb-3 text-center">
-            <div className="text-2xl font-bold text-yellow-600">{stats.duplicate}</div>
+            <div className="text-2xl font-bold text-[var(--warning)]">{stats.duplicate}</div>
             <div className="text-xs text-muted-foreground mt-0.5">مكرر (تم تخطيه)</div>
           </CardContent>
         </Card>
@@ -237,7 +237,7 @@ export default function WebhookSettings() {
           onClick={() => setStatusFilter(statusFilter === "error" ? "all" : "error")}
         >
           <CardContent className="pt-4 pb-3 text-center">
-            <div className="text-2xl font-bold text-red-600">{stats.error}</div>
+            <div className="text-2xl font-bold text-destructive">{stats.error}</div>
             <div className="text-xs text-muted-foreground mt-0.5">خطأ</div>
           </CardContent>
         </Card>
@@ -251,7 +251,7 @@ export default function WebhookSettings() {
         >
           <div className="flex items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2">
-              <Zap className="w-4 h-4 text-orange-500" />
+              <Zap className="w-4 h-4 text-[var(--warning)]" />
               إعداد الـ Webhook في Easy Order
             </CardTitle>
             {showSetup ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -266,7 +266,7 @@ export default function WebhookSettings() {
               <li>اختر النوع: <strong>Orders</strong></li>
               <li>احفظ — الأوردرات الجديدة ستصل تلقائيًا</li>
             </ol>
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 mb-2">
+            <div className="p-3 bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-lg text-sm text-[var(--warning)] mb-2">
               <strong>مهم:</strong> انسخ الرابط التالي كاملاً — يتضمن الـ Secret مضمنًا في الرابط نفسه
             </div>
             <div className="flex items-center gap-2 p-3 bg-muted rounded-lg border">
@@ -278,7 +278,7 @@ export default function WebhookSettings() {
                 نسخ
               </Button>
             </div>
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+            <div className="p-3 bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-lg text-sm text-[var(--info)]">
               <strong>ملاحظة:</strong> الـ Secret مدمج في الرابط كـ query parameter — لا تحتاج لإضافة أي إعدادات إضافية.
             </div>
           </CardContent>
