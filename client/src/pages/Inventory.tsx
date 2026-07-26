@@ -568,10 +568,13 @@ export default function Inventory() {
   }, [rawProducts, variantsByProduct, showArchived, searchLower, stockStatusFilter, sortBy, sortDir]);
 
   const totalStockAll = rows.reduce((s, r) => s + r.totalStock, 0);
+  // Products judged on their own stock column: the server now excludes any product whose
+  // stock actually lives on its variants, so these two counts never overlap.
   const lowStockCount = lowStock?.length ?? 0;
   const lowVariantCount = (rawVariants as any[] | undefined)?.filter(
     (v: any) => v.isActive && getStockStatus(true, v.currentStock, v.minStockLevel) !== "available"
   ).length ?? 0;
+  const needsRestockCount = lowStockCount + lowVariantCount;
 
   // Daily log: group movements by date
   const dailyLog = useMemo(() => {
@@ -646,8 +649,8 @@ export default function Inventory() {
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
-            <AlertTriangle className={`h-6 w-6 mx-auto mb-2 ${(lowStockCount + lowVariantCount) > 0 ? 'text-destructive' : 'text-muted-foreground'}`} />
-            <p className={`text-2xl font-bold ${(lowStockCount + lowVariantCount) > 0 ? 'text-destructive' : 'text-foreground'}`}>{lowStockCount + lowVariantCount}</p>
+            <AlertTriangle className={`h-6 w-6 mx-auto mb-2 ${needsRestockCount > 0 ? 'text-destructive' : 'text-muted-foreground'}`} />
+            <p className={`text-2xl font-bold ${needsRestockCount > 0 ? 'text-destructive' : 'text-foreground'}`}>{needsRestockCount}</p>
             <p className="text-xs text-muted-foreground mt-1">صنف يحتاج تخزين</p>
           </CardContent>
         </Card>

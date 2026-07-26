@@ -361,12 +361,27 @@ export async function updateProductStock(productId: number, delta: number) {
     .where(eq(products.id, productId));
 }
 
+/**
+ * Products that need restocking, judged on their OWN stock column.
+ *
+ * A product with active variants does not hold stock itself — the stock lives on each
+ * variant (a bracelet's engravings, a cover's size/colour). Its `currentStock` therefore
+ * sits at 0 permanently and would raise a false "out of stock" alert forever, even with
+ * thousands of pieces across its variants. Such products are excluded here and are covered
+ * per-variant instead, which is also more precise: one engraving running out is a real
+ * alert that a healthy parent total would otherwise hide.
+ */
 export async function getLowStockProducts(businessId?: number, businessIds?: number[]) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [
     eq(products.isActive, true),
-    sql`${products.currentStock} <= ${products.minStockLevel}`
+    sql`${products.currentStock} <= ${products.minStockLevel}`,
+    sql`NOT EXISTS (
+      SELECT 1 FROM ${productVariants}
+      WHERE ${productVariants.productId} = ${products.id}
+        AND ${productVariants.isActive} = TRUE
+    )`,
   ];
   if (businessIds && businessIds.length > 0) {
     conditions.push(inArray(products.businessId, businessIds));
