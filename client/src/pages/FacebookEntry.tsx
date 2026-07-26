@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Plus, Phone, MapPin, Package, Calendar, Megaphone, LogOut, RefreshCw, ClipboardPaste, X, Check, Trash2, Pencil, StickyNote, AlertTriangle } from "lucide-react";
+import { Plus, Phone, MapPin, Package, Calendar, Megaphone, LogOut, RefreshCw, ClipboardPaste, X, Check, Trash2, Pencil, StickyNote, AlertTriangle, Save, Eraser } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -113,6 +113,14 @@ const EMPTY_FORM: FormState = {
   color: undefined,
 };
 
+/**
+ * "حفظ مسودة" is local-only (this browser, this device) — there is no server-side draft
+ * concept for orders, and adding one would be a schema/business-logic change to propose
+ * separately, not something to invent silently inside a UI pass. This only spares an
+ * employee from retyping if they navigate away before submitting.
+ */
+const DRAFT_STORAGE_KEY = "facebookEntryDraft";
+
 export default function FacebookEntry() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [pasteText, setPasteText] = useState("");
@@ -173,10 +181,40 @@ export default function FacebookEntry() {
       setForm(EMPTY_FORM);
       setPasteText("");
       setParseResult(null);
+      localStorage.removeItem(DRAFT_STORAGE_KEY); // the order is saved now — the local draft is stale
       if (showOrders) refetchOrders();
     },
     onError: (e) => toast.error(`خطأ: ${e.message}`),
   });
+
+  // Restore a locally-saved draft once, on first mount only — never overwrites in-progress
+  // typing, and says clearly why fields are pre-filled rather than doing it silently.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (!raw) return;
+      const draft = JSON.parse(raw) as { form: FormState; pasteText: string };
+      setForm(draft.form);
+      setPasteText(draft.pasteText ?? "");
+      toast.info("تم استرجاع مسودة محفوظة");
+    } catch {
+      localStorage.removeItem(DRAFT_STORAGE_KEY); // a corrupt draft is worse than no draft
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveDraft = () => {
+    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ form, pasteText }));
+    toast.success("تم حفظ المسودة على هذا الجهاز");
+  };
+
+  const clearWholeForm = () => {
+    setForm(EMPTY_FORM);
+    setPasteText("");
+    setParseResult(null);
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+    toast.success("تم مسح النموذج");
+  };
 
   const deleteOrderMutation = trpc.facebookEntry.deleteOrder.useMutation({
     onSuccess: () => {
@@ -1061,11 +1099,31 @@ export default function FacebookEntry() {
 
               {/* Sticky action bar — the total stays visible while scrolling a long form */}
               <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-card/95 px-4 py-3 backdrop-blur">
-                <div className="mx-auto flex max-w-lg items-center gap-3">
+                <div className="mx-auto flex max-w-lg items-center gap-2">
                   <div className="leading-tight">
                     <p className="text-[11px] text-muted-foreground">الإجمالي المسجّل</p>
                     <p className="text-base font-bold">{finalTotal.toLocaleString()} ج.م</p>
                   </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-11 w-11 shrink-0"
+                    onClick={saveDraft}
+                    title="حفظ مسودة (على هذا الجهاز فقط)"
+                  >
+                    <Save className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-11 w-11 shrink-0 text-destructive hover:bg-destructive/10"
+                    onClick={clearWholeForm}
+                    title="مسح النموذج بالكامل"
+                  >
+                    <Eraser className="h-4 w-4" />
+                  </Button>
                   <Button
                     type="submit"
                     className="h-11 flex-1 gap-2 text-base font-semibold"
@@ -1073,7 +1131,7 @@ export default function FacebookEntry() {
                   >
                     {addOrderMutation.isPending
                       ? <><RefreshCw className="h-4 w-4 animate-spin" /> جاري الإضافة...</>
-                      : <><Plus className="h-5 w-5" /> إضافة الأوردر</>}
+                      : <><Plus className="h-5 w-5" /> تسجيل الأوردر</>}
                   </Button>
                 </div>
               </div>
