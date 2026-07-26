@@ -392,6 +392,66 @@ export async function getLowStockProducts(businessId?: number, businessIds?: num
 }
 
 // ==================== ORDERS ====================
+export interface OrderStatusCounts {
+  total: number;
+  byStatus: Record<string, number>;
+  /** Created today (Cairo time), regardless of status. */
+  today: number;
+  /** Items the parser/importer/sync could not fully match — needs a human before confirming. */
+  needsReview: number;
+}
+
+/**
+ * Order counts for the Orders page header stat cards. One GROUP BY query plus two small
+ * counts, rather than the page firing a separate `orders.list` call per stat card.
+ */
+export async function getOrderStatusCounts(businessIds?: number[]): Promise<OrderStatusCounts> {
+  const db = await getDb();
+  if (!db) return { total: 0, byStatus: {}, today: 0, needsReview: 0 };
+
+  const scope = businessIds && businessIds.length > 0 ? inArray(orders.businessId, businessIds) : undefined;
+
+  const statusRows = await db
+    .select({ status: orders.status, count: sql<number>`COUNT(*)` })
+    .from(orders)
+    .where(scope)
+    .groupBy(orders.status);
+
+  const byStatus: Record<string, number> = {};
+  let total = 0;
+  for (const row of statusRows) {
+    const count = Number(row.count);
+    byStatus[row.status] = count;
+    total += count;
+  }
+
+  // Cairo offset — matches the convention already used for "today" elsewhere (e.g. the
+  // printed-date filter on the Orders page).
+  const cairoNow = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const todayStart = new Date(cairoNow.toISOString().slice(0, 10) + "T00:00:00Z");
+  const todayEnd = new Date(cairoNow.toISOString().slice(0, 10) + "T23:59:59Z");
+  const todayConditions = [gte(orders.createdAt, todayStart), lte(orders.createdAt, todayEnd)];
+  if (scope) todayConditions.push(scope);
+  const [todayRow] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(orders)
+    .where(and(...todayConditions));
+
+  const reviewConditions = [eq(orders.needsReview, true)];
+  if (scope) reviewConditions.push(scope);
+  const [reviewRow] = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(orders)
+    .where(and(...reviewConditions));
+
+  return {
+    total,
+    byStatus,
+    today: Number(todayRow?.count ?? 0),
+    needsReview: Number(reviewRow?.count ?? 0),
+  };
+}
+
 export async function generateOrderNumber(): Promise<string> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");

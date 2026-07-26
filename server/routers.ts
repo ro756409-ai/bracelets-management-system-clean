@@ -56,7 +56,7 @@ import {
   isSkuTaken, isVariantNameTaken,
   getSyncLogs, getOrdersNeedingReview, getMatchCatalog,
   getLowStockProducts, addInventoryMovement, getInventoryMovements,
-  getOrders, getOrderById, getOrdersByIds, createOrder, updateOrder,
+  getOrders, getOrderStatusCounts, getOrderById, getOrdersByIds, createOrder, updateOrder,
   assignOrderToEmployee, bulkAssignOrders,
   confirmOrder, postponeOrder, cancelOrder,
   editOrderWithInventory,
@@ -376,6 +376,13 @@ export const appRouter = router({
       if (!order) return order;
       const items = await getOrderItems(input.id);
       return { ...order, items };
+    }),
+
+    /** Header stat cards on the Orders page — same business-group scope as `orders.list`. */
+    statusCounts: protectedProcedure.input(z.object({
+      businessIds: z.array(z.number()).optional(),
+    })).query(async ({ input }) => {
+      return getOrderStatusCounts(input.businessIds);
     }),
 
     // جلب أسماء البيدج المميزة (لفلتر البيدج)
