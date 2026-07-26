@@ -249,7 +249,7 @@ export function ResponsiveDataTable<T>({
                   key={col.id}
                   scope="col"
                   className={cn(
-                    "px-3 py-2.5 text-right text-xs font-semibold text-muted-foreground",
+                    "px-4 py-3 text-right text-xs font-semibold text-muted-foreground",
                     col.numeric && "text-left tabular-nums",
                     col.sticky && "sticky left-0 z-10 bg-muted/60",
                     col.headerClassName
@@ -292,7 +292,9 @@ export function ResponsiveDataTable<T>({
                     "border-t border-border transition-colors",
                     ROW_H[density],
                     onRowClick && "cursor-pointer",
-                    isSelected ? "bg-accent/50" : "hover:bg-muted/40"
+                    isSelected
+                      ? "bg-primary/[0.08] hover:bg-primary/[0.12]"
+                      : "hover:bg-muted/60"
                   )}
                 >
                   {selectable && (
@@ -308,7 +310,7 @@ export function ResponsiveDataTable<T>({
                     <td
                       key={col.id}
                       className={cn(
-                        "px-3 py-2 align-middle",
+                        "px-4 py-2.5 align-middle",
                         col.numeric && "text-left tabular-nums",
                         col.sticky && "sticky left-0 z-[1] bg-card",
                         col.className

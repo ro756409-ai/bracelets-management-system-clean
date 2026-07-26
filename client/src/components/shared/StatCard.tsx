@@ -36,6 +36,11 @@ export type StatCardProps = {
   onClick?: () => void;
   /** Renders the card as visually selected; pairs with `onClick` filter tiles. */
   active?: boolean;
+  /**
+   * `compact` trims padding/icon size/font size for dense stat rows (7+ tiles across a
+   * page header) without touching any existing caller — defaults to the original size.
+   */
+  size?: "default" | "compact";
   className?: string;
 };
 
@@ -52,16 +57,19 @@ export function StatCard({
   loading = false,
   onClick,
   active = false,
+  size = "default",
   className,
 }: StatCardProps) {
   const interactive = typeof onClick === "function";
+  const compact = size === "compact";
 
   const body = (
-    <CardContent className="flex items-center gap-3 p-4">
+    <CardContent className={cn("flex items-center gap-3", compact ? "p-3" : "p-4")}>
       {icon && (
         <span
           className={cn(
-            "flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-brand-md)]",
+            "flex shrink-0 items-center justify-center rounded-[var(--radius-brand-md)]",
+            compact ? "h-8 w-8" : "h-10 w-10",
             TONE_ICON_BG[tone]
           )}
         >
@@ -70,13 +78,17 @@ export function StatCard({
       )}
       <div className="min-w-0 space-y-0.5 text-right">
         {loading ? (
-          <Skeleton className="h-7 w-16" />
+          <Skeleton className={compact ? "h-5 w-12" : "h-7 w-16"} />
         ) : (
-          <p className={cn("text-2xl font-bold tabular-nums leading-tight", TONE_TEXT[tone])}>
+          <p className={cn(
+            "font-bold tabular-nums leading-tight",
+            compact ? "text-lg" : "text-2xl",
+            TONE_TEXT[tone]
+          )}>
             {value}
           </p>
         )}
-        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className={cn("text-muted-foreground", compact ? "text-[11px]" : "text-xs")}>{label}</p>
         {hint && !loading && (
           <p className="text-[11px] text-muted-foreground/80">{hint}</p>
         )}

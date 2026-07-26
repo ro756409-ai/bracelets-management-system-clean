@@ -19,7 +19,8 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Plus, Search, CheckCircle, XCircle, Clock, UserPlus, Eye, FileSpreadsheet, Download, Truck,
   Trash2, Printer, Phone, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
-  MoreHorizontal, ListChecks, LayoutGrid, Rows3,
+  MoreHorizontal, ListChecks, LayoutGrid, Rows3, ShoppingCart, CalendarClock, CheckCircle2,
+  Sparkles, AlertOctagon, Ban, Undo2,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import ImportExcelDialog from "@/components/ImportExcelDialog";
@@ -589,9 +590,11 @@ export default function Orders() {
     },
     {
       id: "customer", header: "العميل", alwaysVisible: true,
+      // A customer name is short by nature (a person's name) — it should read as one line,
+      // not wrap because a neighbouring column (address, product) is competing for width.
       cell: (order) => (
-        <div>
-          <p className="font-semibold text-sm">{order.customerName}</p>
+        <div className="min-w-[140px]">
+          <p className="font-semibold text-sm whitespace-nowrap">{order.customerName}</p>
           <p className="text-xs text-muted-foreground font-mono" dir="ltr">{order.customerPhone}</p>
         </div>
       ),
@@ -599,7 +602,7 @@ export default function Orders() {
     {
       id: "address", header: "العنوان",
       cell: (order) => (
-        <div className="max-w-[220px]">
+        <div className="min-w-[220px] max-w-[340px]">
           <p className="text-sm leading-snug break-words">{order.customerAddress || order.governorate || '—'}</p>
           {order.customerAddress && order.governorate && (
             <p className="text-xs text-muted-foreground">{order.governorate}</p>
@@ -627,7 +630,7 @@ export default function Orders() {
     {
       id: "product", header: "المنتج",
       cell: (order) => (
-        <div className="max-w-[200px]">
+        <div className="min-w-[180px] max-w-[280px]">
           <p className="text-sm break-words">{order.productName}</p>
           {order.quantity > 1 && <p className="text-xs text-muted-foreground">الكمية: {order.quantity}</p>}
           {(order.color || order.size) && (
@@ -658,60 +661,79 @@ export default function Orders() {
       ),
     },
     {
+      // Row actions used to stack up to nine buttons per row (confirm/postpone/no-answer/
+      // cancel/return/view/edit/duplicate/delete all inline). The four workflow actions
+      // stay inline because they ARE the primary job on an actionable row; everything else
+      // (edit, duplicate, delete, return) moves into one "⋯" menu — still one click away,
+      // no longer competing for space on every single row.
       id: "actions", header: "إجراءات", alwaysVisible: true, sticky: true,
-      cell: (order) => (
-        <div className="flex gap-1">
-          {(order.status === 'new' || order.status === 'postponed') && (
-            <>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
-                onClick={() => confirmMutation.mutate({ orderId: order.id })} title="تأكيد">
-                <CheckCircle className="h-4 w-4" />
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--warning)] hover:bg-[var(--warning)]/10"
-                onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }} title="تأجيل">
-                <Clock className="h-4 w-4" />
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--warning)] hover:bg-[var(--warning)]/10"
-                onClick={() => noAnswerMutation.mutate({ orderId: order.id })} title="لم يرد">
-                <Phone className="h-4 w-4" />
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
-                onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }} title="إلغاء">
-                <XCircle className="h-4 w-4" />
-              </Button>
-            </>
-          )}
-          {isAdmin && ['confirmed', 'shipped', 'delivered', 'preparing'].includes(order.status) && (
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
-              onClick={() => { setReturnOrderId(order.id); setShowReturnDialog(true); }} title="مرتجع">
-              <RotateCcw className="h-4 w-4" />
+      cell: (order) => {
+        const canReturn = isAdmin && ['confirmed', 'shipped', 'delivered', 'preparing'].includes(order.status);
+        return (
+          <div className="flex items-center gap-1">
+            {(order.status === 'new' || order.status === 'postponed') && (
+              <>
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
+                  onClick={() => confirmMutation.mutate({ orderId: order.id })} title="تأكيد">
+                  <CheckCircle className="h-4 w-4" />
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-[var(--warning)] hover:bg-[var(--warning)]/10"
+                  onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }} title="تأجيل">
+                  <Clock className="h-4 w-4" />
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-[var(--warning)] hover:bg-[var(--warning)]/10"
+                  onClick={() => noAnswerMutation.mutate({ orderId: order.id })} title="لم يرد">
+                  <Phone className="h-4 w-4" />
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10"
+                  onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }} title="إلغاء">
+                  <XCircle className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-primary hover:bg-primary/10"
+              onClick={() => setDetailOrderId(order.id)} title="تفاصيل الأوردر">
+              <Eye className="h-4 w-4" />
             </Button>
-          )}
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-primary hover:bg-primary/10"
-            onClick={() => setDetailOrderId(order.id)} title="تفاصيل الأوردر">
-            <Eye className="h-4 w-4" />
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--info)] hover:bg-[var(--info)]/10"
-            onClick={() => openEditFor(order)} title="تعديل">
-            <Edit2 className="h-4 w-4" />
-          </Button>
-          {isAdmin && (
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
-              disabled={duplicateOrderMutation.isPending}
-              onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: order.id, orderNumber: order.orderNumber, customerName: order.customerName })}
-              title="تكرار الأوردر">
-              <Copy className="h-4 w-4" />
-            </Button>
-          )}
-          {isAdmin && (
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
-              onClick={() => setPendingConfirm({ type: "deleteOrder", orderId: order.id, orderNumber: order.orderNumber })}
-              title="حذف">
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-      ),
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-muted-foreground hover:bg-muted" title="المزيد">
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onClick={() => openEditFor(order)}>
+                  <Edit2 className="h-4 w-4 ml-2 text-[var(--info)]" /> تعديل
+                </DropdownMenuItem>
+                {isAdmin && (
+                  <DropdownMenuItem
+                    disabled={duplicateOrderMutation.isPending}
+                    onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: order.id, orderNumber: order.orderNumber, customerName: order.customerName })}
+                  >
+                    <Copy className="h-4 w-4 ml-2 text-[var(--success)]" /> تكرار الأوردر
+                  </DropdownMenuItem>
+                )}
+                {canReturn && (
+                  <DropdownMenuItem onClick={() => { setReturnOrderId(order.id); setShowReturnDialog(true); }}>
+                    <RotateCcw className="h-4 w-4 ml-2 text-destructive" /> مرتجع
+                  </DropdownMenuItem>
+                )}
+                {isAdmin && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => setPendingConfirm({ type: "deleteOrder", orderId: order.id, orderNumber: order.orderNumber })}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4 ml-2" /> حذف
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        );
+      },
     },
   ];
 
@@ -785,18 +807,28 @@ export default function Orders() {
           </DropdownMenu>
         }
       >
-        {/* Header stat cards — clicking one applies it as a quick filter. */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-          <StatCard label="الكل" value={(statusCounts?.total ?? 0).toLocaleString('ar-EG')}
+        {/* Header stat cards — clicking one applies it as a quick filter. Compact size and
+            a consistent icon per tile keep seven of them from feeling like a wall. */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+          <StatCard size="compact" icon={<ShoppingCart className="h-4 w-4" />}
+            label="الكل" value={(statusCounts?.total ?? 0).toLocaleString('ar-EG')}
             active={statusFilter === 'all'} onClick={() => { setStatusFilter('all'); setPage(1); }} />
-          <StatCard label="اليوم" value={(statusCounts?.today ?? 0).toLocaleString('ar-EG')} tone="info" />
-          <StatCard label="مؤكد" value={(statusCounts?.byStatus?.confirmed ?? 0).toLocaleString('ar-EG')} tone="success"
+          <StatCard size="compact" icon={<CalendarClock className="h-4 w-4" />}
+            label="اليوم" value={(statusCounts?.today ?? 0).toLocaleString('ar-EG')} tone="info" />
+          <StatCard size="compact" icon={<CheckCircle2 className="h-4 w-4" />}
+            label="مؤكد" value={(statusCounts?.byStatus?.confirmed ?? 0).toLocaleString('ar-EG')} tone="success"
             active={statusFilter === 'confirmed'} onClick={() => { setStatusFilter('confirmed'); setPage(1); }} />
-          <StatCard label="جديد" value={(statusCounts?.byStatus?.new ?? 0).toLocaleString('ar-EG')} tone="primary"
+          <StatCard size="compact" icon={<Sparkles className="h-4 w-4" />}
+            label="جديد" value={(statusCounts?.byStatus?.new ?? 0).toLocaleString('ar-EG')} tone="primary"
             active={statusFilter === 'new'} onClick={() => { setStatusFilter('new'); setPage(1); }} />
-          <StatCard label="يحتاج مراجعة" value={(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')} tone="warning" />
-          <StatCard label="ملغي" value={(statusCounts?.byStatus?.cancelled ?? 0).toLocaleString('ar-EG')} tone="danger"
+          <StatCard size="compact" icon={<AlertOctagon className="h-4 w-4" />}
+            label="يحتاج مراجعة" value={(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')} tone="warning" />
+          <StatCard size="compact" icon={<Ban className="h-4 w-4" />}
+            label="ملغي" value={(statusCounts?.byStatus?.cancelled ?? 0).toLocaleString('ar-EG')} tone="danger"
             active={statusFilter === 'cancelled'} onClick={() => { setStatusFilter('cancelled'); setPage(1); }} />
+          <StatCard size="compact" icon={<Undo2 className="h-4 w-4" />}
+            label="مرتجع" value={(statusCounts?.byStatus?.returned ?? 0).toLocaleString('ar-EG')} tone="danger"
+            active={statusFilter === 'returned'} onClick={() => { setStatusFilter('returned'); setPage(1); }} />
         </div>
       </PageHeader>
 
@@ -901,9 +933,11 @@ export default function Orders() {
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters — pinned while the table scrolls beneath it, so changing a filter never
+          requires scrolling back up first. Offset accounts for the mobile app bar (h-14);
+          desktop has no fixed bar above this point, so it sits flush at the top there. */}
       {activeTab === 'all' && (
-        <Card>
+        <Card className="sticky top-14 z-20 lg:top-0">
           <CardContent className="p-4 space-y-3">
             <FilterBar
               search={
