@@ -41,10 +41,10 @@ const STATUS_LABELS: Record<StockStatus, string> = {
   available: "متوفر", low: "منخفض", out: "نفد المخزون", archived: "مؤرشف",
 };
 const STATUS_CLASSES: Record<StockStatus, string> = {
-  available: "bg-green-100 text-green-700 border-0",
-  low: "bg-yellow-100 text-yellow-700 border-0",
-  out: "bg-red-100 text-red-700 border-0",
-  archived: "bg-gray-100 text-gray-600 border-0",
+  available: "bg-[var(--success)]/15 text-[var(--success)] border-0",
+  low: "bg-[var(--warning)]/15 text-[var(--warning)] border-0",
+  out: "bg-destructive/15 text-destructive border-0",
+  archived: "bg-muted text-muted-foreground border-0",
 };
 
 function StatusBadge({ status }: { status: StockStatus }) {
@@ -656,15 +656,15 @@ export default function Inventory() {
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
-            <ArrowDownCircle className="h-6 w-6 text-green-600 mx-auto mb-2" />
-            <p className="text-2xl font-bold text-green-700">+{todayIn}</p>
+            <ArrowDownCircle className="h-6 w-6 text-[var(--success)] mx-auto mb-2" />
+            <p className="text-2xl font-bold text-[var(--success)]">+{todayIn}</p>
             <p className="text-xs text-muted-foreground mt-1">وارد اليوم</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
-            <ArrowUpCircle className="h-6 w-6 text-red-500 mx-auto mb-2" />
-            <p className="text-2xl font-bold text-red-600">-{todayOut}</p>
+            <ArrowUpCircle className="h-6 w-6 text-destructive mx-auto mb-2" />
+            <p className="text-2xl font-bold text-destructive">-{todayOut}</p>
             <p className="text-xs text-muted-foreground mt-1">صادر اليوم</p>
           </CardContent>
         </Card>
@@ -846,13 +846,13 @@ export default function Inventory() {
                             <Plus className="h-3.5 w-3.5 ml-1" />
                             نوع
                           </Button>
-                          <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-blue-600 hover:bg-blue-50" onClick={() => openEditProduct(product)} title="تعديل المنتج">
+                          <Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-[var(--info)] hover:bg-[var(--info)]/10" onClick={() => openEditProduct(product)} title="تعديل المنتج">
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                           <Button
                             size="sm"
                             variant="ghost"
-                            className={`h-8 w-8 p-0 ${product.isActive ? 'text-red-600 hover:bg-red-50' : 'text-green-600 hover:bg-green-50'}`}
+                            className={`h-8 w-8 p-0 ${product.isActive ? 'text-destructive hover:bg-destructive/10' : 'text-[var(--success)] hover:bg-[var(--success)]/10'}`}
                             onClick={() => setArchiveProductTarget(product)}
                             title={product.isActive ? "أرشفة المنتج" : "إعادة تفعيل المنتج"}
                           >
@@ -915,7 +915,7 @@ export default function Inventory() {
                                             <Button
                                               size="sm"
                                               variant="ghost"
-                                              className="h-7 w-7 p-0 text-green-600 hover:bg-green-50"
+                                              className="h-7 w-7 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
                                               onClick={() => handleVariantMovement(variant.id, 'in')}
                                               title="وارد"
                                               disabled={!variant.isActive}
@@ -925,7 +925,7 @@ export default function Inventory() {
                                             <Button
                                               size="sm"
                                               variant="ghost"
-                                              className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
+                                              className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
                                               onClick={() => handleVariantMovement(variant.id, 'out')}
                                               disabled={!variant.isActive || variant.currentStock === 0}
                                               title="صادر"
@@ -936,7 +936,7 @@ export default function Inventory() {
                                             <Button
                                               size="sm"
                                               variant="ghost"
-                                              className="h-7 w-7 p-0 text-blue-600 hover:bg-blue-50"
+                                              className="h-7 w-7 p-0 text-[var(--info)] hover:bg-[var(--info)]/10"
                                               onClick={() => openEditVariant(variant)}
                                               title="تعديل الصنف"
                                             >
@@ -945,7 +945,7 @@ export default function Inventory() {
                                             <Button
                                               size="sm"
                                               variant="ghost"
-                                              className={`h-7 w-7 p-0 ${variant.isActive ? 'text-red-600 hover:bg-red-50' : 'text-green-600 hover:bg-green-50'}`}
+                                              className={`h-7 w-7 p-0 ${variant.isActive ? 'text-destructive hover:bg-destructive/10' : 'text-[var(--success)] hover:bg-[var(--success)]/10'}`}
                                               onClick={() => setDeleteVariantTarget(variant)}
                                               title={variant.isActive ? "أرشفة الصنف" : "إعادة تفعيل الصنف"}
                                             >
@@ -982,7 +982,7 @@ export default function Inventory() {
                                     if (e.key === 'Escape') cancelEditStock();
                                   }}
                                 />
-                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-green-600" onClick={saveEditStock} disabled={updateStockMutation.isPending}>
+                                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--success)]" onClick={saveEditStock} disabled={updateStockMutation.isPending}>
                                   <Save className="h-3.5 w-3.5" />
                                 </Button>
                               </div>
@@ -1006,7 +1006,7 @@ export default function Inventory() {
                           </div>
                           <div className="w-full bg-muted rounded-full h-2.5">
                             <div
-                              className={`h-2.5 rounded-full transition-all ${isLow ? 'bg-destructive' : stockPct > 60 ? 'bg-green-500' : 'bg-yellow-500'}`}
+                              className={`h-2.5 rounded-full transition-all ${isLow ? 'bg-destructive' : stockPct > 60 ? 'bg-[var(--success)]/100' : 'bg-[var(--warning)]'}`}
                               style={{ width: `${stockPct}%` }}
                             />
                           </div>
@@ -1038,7 +1038,7 @@ export default function Inventory() {
                         <div className="flex gap-2">
                           <Button
                             size="sm"
-                            className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9"
+                            className="flex-1 bg-[var(--success)] hover:bg-[var(--success)] text-white h-9"
                             onClick={() => handleMovement(product.id, 'in')}
                             disabled={!product.isActive}
                           >
@@ -1048,7 +1048,7 @@ export default function Inventory() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="flex-1 border-red-300 text-red-600 hover:bg-red-50 h-9"
+                            className="flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 h-9"
                             onClick={() => handleMovement(product.id, 'out')}
                             disabled={!product.isActive || product.currentStock === 0}
                           >
@@ -1112,13 +1112,13 @@ export default function Inventory() {
                     <div className="flex items-center justify-between">
                       <CardTitle className="text-sm font-bold text-foreground">{day.date}</CardTitle>
                       <div className="flex items-center gap-3">
-                        <span className="text-xs font-semibold text-green-700 bg-green-50 px-2 py-1 rounded-full">
+                        <span className="text-xs font-semibold text-[var(--success)] bg-[var(--success)]/10 px-2 py-1 rounded-full">
                           وارد: +{day.inQty}
                         </span>
-                        <span className="text-xs font-semibold text-red-700 bg-red-50 px-2 py-1 rounded-full">
+                        <span className="text-xs font-semibold text-destructive bg-destructive/10 px-2 py-1 rounded-full">
                           صادر: -{day.outQty}
                         </span>
-                        <span className="text-xs font-semibold text-blue-700 bg-blue-50 px-2 py-1 rounded-full">
+                        <span className="text-xs font-semibold text-[var(--info)] bg-[var(--info)]/10 px-2 py-1 rounded-full">
                           صافي: {day.inQty - day.outQty >= 0 ? '+' : ''}{day.inQty - day.outQty}
                         </span>
                       </div>
@@ -1130,7 +1130,7 @@ export default function Inventory() {
                         const productName = rawProducts?.find(p => p.id === m.productId)?.name ?? `صنف #${m.productId}`;
                         return (
                           <div key={m.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-muted/40">
-                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${m.type === 'in' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${m.type === 'in' ? 'bg-[var(--success)]/15 text-[var(--success)]' : 'bg-destructive/15 text-destructive'}`}>
                               {m.type === 'in'
                                 ? <ArrowDownCircle className="h-3.5 w-3.5" />
                                 : <ArrowUpCircle className="h-3.5 w-3.5" />
@@ -1139,7 +1139,7 @@ export default function Inventory() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-xs font-semibold text-foreground">{productName}</span>
-                                <span className={`text-xs font-bold ${m.type === 'in' ? 'text-green-700' : 'text-red-700'}`}>
+                                <span className={`text-xs font-bold ${m.type === 'in' ? 'text-[var(--success)]' : 'text-destructive'}`}>
                                   {m.type === 'in' ? '+' : '-'}{m.quantity} قطعة
                                 </span>
                                 {m.reason && (
@@ -1154,7 +1154,7 @@ export default function Inventory() {
                               </p>
                             </div>
                             <Badge
-                              className={`text-xs shrink-0 ${m.type === 'in' ? 'bg-green-100 text-green-700 border-0' : 'bg-red-100 text-red-700 border-0'}`}
+                              className={`text-xs shrink-0 ${m.type === 'in' ? 'bg-[var(--success)]/15 text-[var(--success)] border-0' : 'bg-destructive/15 text-destructive border-0'}`}
                             >
                               {m.type === 'in' ? 'وارد' : 'صادر'}
                             </Badge>
@@ -1176,12 +1176,12 @@ export default function Inventory() {
           <DialogHeader>
             <DialogTitle>
               {movementType === 'in' ? (
-                <span className="flex items-center gap-2 text-green-700">
+                <span className="flex items-center gap-2 text-[var(--success)]">
                   <ArrowDownCircle className="h-5 w-5" />
                   إضافة وارد للمخزن
                 </span>
               ) : (
-                <span className="flex items-center gap-2 text-red-700">
+                <span className="flex items-center gap-2 text-destructive">
                   <ArrowUpCircle className="h-5 w-5" />
                   تسجيل صادر من المخزن
                 </span>
@@ -1190,7 +1190,7 @@ export default function Inventory() {
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className={`rounded-lg p-3 ${movementType === 'in' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+            <div className={`rounded-lg p-3 ${movementType === 'in' ? 'bg-[var(--success)]/10 border border-[var(--success)]/30' : 'bg-destructive/10 border border-destructive/30'}`}>
               <p className="text-sm font-bold text-foreground">{selectedProduct?.name}</p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 المخزون الحالي: <span className="font-semibold">{selectedProduct?.currentStock}</span> قطعة
@@ -1252,7 +1252,7 @@ export default function Inventory() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowMovementDialog(false)}>إلغاء</Button>
             <Button
-              className={movementType === 'in' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}
+              className={movementType === 'in' ? 'bg-[var(--success)] hover:bg-[var(--success)]' : 'bg-destructive hover:bg-destructive'}
               disabled={
                 !quantity ||
                 Number(quantity) < 1 ||
@@ -1288,12 +1288,12 @@ export default function Inventory() {
           <DialogHeader>
             <DialogTitle>
               {variantMovementType === 'in' ? (
-                <span className="flex items-center gap-2 text-green-700">
+                <span className="flex items-center gap-2 text-[var(--success)]">
                   <ArrowDownCircle className="h-5 w-5" />
                   إضافة وارد
                 </span>
               ) : (
-                <span className="flex items-center gap-2 text-red-700">
+                <span className="flex items-center gap-2 text-destructive">
                   <ArrowUpCircle className="h-5 w-5" />
                   تسجيل صادر
                 </span>
@@ -1302,7 +1302,7 @@ export default function Inventory() {
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className={`rounded-lg p-3 ${variantMovementType === 'in' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+            <div className={`rounded-lg p-3 ${variantMovementType === 'in' ? 'bg-[var(--success)]/10 border border-[var(--success)]/30' : 'bg-destructive/10 border border-destructive/30'}`}>
               <p className="text-sm font-bold text-foreground">
                 {selectedVariant ? variantLabel(selectedVariant) : ''}
               </p>
@@ -1366,7 +1366,7 @@ export default function Inventory() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowVariantMovementDialog(false)}>إلغاء</Button>
             <Button
-              className={variantMovementType === 'in' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}
+              className={variantMovementType === 'in' ? 'bg-[var(--success)] hover:bg-[var(--success)]' : 'bg-destructive hover:bg-destructive'}
               disabled={
                 !variantQuantity ||
                 Number(variantQuantity) < 1 ||
@@ -1418,7 +1418,7 @@ export default function Inventory() {
                 const productName = rawProducts?.find(p => p.id === m.productId)?.name ?? `صنف #${m.productId}`;
                 return (
                   <div key={m.id} className="flex items-center gap-3 p-3 rounded-lg bg-muted/50">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${m.type === 'in' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${m.type === 'in' ? 'bg-[var(--success)]/15 text-[var(--success)]' : 'bg-destructive/15 text-destructive'}`}>
                       {m.type === 'in'
                         ? <ArrowDownCircle className="h-4 w-4" />
                         : <ArrowUpCircle className="h-4 w-4" />
@@ -1427,7 +1427,7 @@ export default function Inventory() {
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs font-semibold text-foreground">{productName}</span>
-                        <span className={`text-sm font-bold ${m.type === 'in' ? 'text-green-700' : 'text-red-700'}`}>
+                        <span className={`text-sm font-bold ${m.type === 'in' ? 'text-[var(--success)]' : 'text-destructive'}`}>
                           {m.type === 'in' ? '+' : '-'}{m.quantity} قطعة
                         </span>
                         {m.reason && (
@@ -1439,7 +1439,7 @@ export default function Inventory() {
                         {new Date(m.createdAt).toLocaleString('ar-EG')}
                       </p>
                     </div>
-                    <Badge className={`text-xs shrink-0 ${m.type === 'in' ? 'bg-green-100 text-green-700 border-0' : 'bg-red-100 text-red-700 border-0'}`}>
+                    <Badge className={`text-xs shrink-0 ${m.type === 'in' ? 'bg-[var(--success)]/15 text-[var(--success)] border-0' : 'bg-destructive/15 text-destructive border-0'}`}>
                       {m.type === 'in' ? 'وارد' : 'صادر'}
                     </Badge>
                   </div>
@@ -1458,7 +1458,7 @@ export default function Inventory() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              {variantFormMode === "create" ? <Plus className="h-5 w-5 text-primary" /> : <Pencil className="h-5 w-5 text-blue-600" />}
+              {variantFormMode === "create" ? <Plus className="h-5 w-5 text-primary" /> : <Pencil className="h-5 w-5 text-[var(--info)]" />}
               {variantFormMode === "create" ? "إضافة صنف جديد" : "تعديل الصنف"}
             </DialogTitle>
           </DialogHeader>
@@ -1608,7 +1608,7 @@ export default function Inventory() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              {productFormMode === "create" ? <Plus className="h-5 w-5 text-primary" /> : <Pencil className="h-5 w-5 text-blue-600" />}
+              {productFormMode === "create" ? <Plus className="h-5 w-5 text-primary" /> : <Pencil className="h-5 w-5 text-[var(--info)]" />}
               {productFormMode === "create" ? "إضافة منتج جديد" : "تعديل المنتج"}
             </DialogTitle>
           </DialogHeader>

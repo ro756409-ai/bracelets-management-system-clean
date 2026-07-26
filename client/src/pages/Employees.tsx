@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Plus, Edit, Trash2, Users, UserCheck, UserX, KeyRound, Eye, EyeOff, Copy, CheckCircle2, CalendarDays, RotateCcw, Package, AlertTriangle } from "lucide-react";
+import { PageHeader } from "@/components/shared";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 
@@ -279,17 +280,17 @@ export default function Employees() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">إدارة الموظفين</h1>
-          <p className="text-muted-foreground text-sm mt-1">إدارة فريق العمل وبيانات الدخول</p>
-        </div>
-        <Button onClick={() => { setEditingId(null); setForm(defaultForm); setShowDialog(true); }}>
-          <Plus className="h-4 w-4 ml-1" />
-          إضافة موظف
-        </Button>
-      </div>
+      <PageHeader
+        title="إدارة الموظفين"
+        description="إدارة فريق العمل وبيانات الدخول"
+        icon={<Users className="h-5 w-5" />}
+        primaryAction={
+          <Button onClick={() => { setEditingId(null); setForm(defaultForm); setShowDialog(true); }}>
+            <Plus className="h-4 w-4 ml-1" />
+            إضافة موظف
+          </Button>
+        }
+      />
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
@@ -301,7 +302,7 @@ export default function Employees() {
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
-            <p className="text-3xl font-bold text-blue-600">{agentCount}</p>
+            <p className="text-3xl font-bold text-primary">{agentCount}</p>
             <p className="text-xs text-muted-foreground mt-1">موظف تأكيدات</p>
           </CardContent>
         </Card>
@@ -329,11 +330,11 @@ export default function Employees() {
                   <tr className="border-b bg-muted/50">
                     <th className="p-3 text-right font-semibold text-muted-foreground">الموظف</th>
                     <th className="p-3 text-center font-semibold text-foreground">إجمالي</th>
-                    <th className="p-3 text-center font-semibold text-blue-600">جديد</th>
-                    <th className="p-3 text-center font-semibold text-green-600">مؤكد</th>
-                    <th className="p-3 text-center font-semibold text-yellow-600">مؤجل</th>
-                    <th className="p-3 text-center font-semibold text-orange-600">لم يرد</th>
-                    <th className="p-3 text-center font-semibold text-red-600">ملغي</th>
+                    <th className="p-3 text-center font-semibold text-primary">جديد</th>
+                    <th className="p-3 text-center font-semibold text-[var(--success)]">مؤكد</th>
+                    <th className="p-3 text-center font-semibold text-[var(--warning)]">مؤجل</th>
+                    <th className="p-3 text-center font-semibold text-[var(--warning)]">لم يرد</th>
+                    <th className="p-3 text-center font-semibold text-destructive">ملغي</th>
                     <th className="p-3 text-center font-semibold text-muted-foreground">تاريخ أول توزيع</th>
                     <th className="p-3 text-center font-semibold text-muted-foreground">آخر توزيع</th>
                     <th className="p-3 text-center font-semibold text-muted-foreground">إجراء</th>
@@ -356,19 +357,19 @@ export default function Employees() {
                           <span className="font-bold text-foreground">{Number(emp.total ?? 0)}</span>
                         </td>
                         <td className="p-3 text-center">
-                          <span className="font-bold text-blue-600">{Number(emp.newOrders ?? 0)}</span>
+                          <span className="font-bold text-primary">{Number(emp.newOrders ?? 0)}</span>
                         </td>
                         <td className="p-3 text-center">
-                          <span className="font-bold text-green-600">{Number(emp.confirmed ?? 0)}</span>
+                          <span className="font-bold text-[var(--success)]">{Number(emp.confirmed ?? 0)}</span>
                         </td>
                         <td className="p-3 text-center">
-                          <span className="font-bold text-yellow-600">{Number(emp.postponed ?? 0)}</span>
+                          <span className="font-bold text-[var(--warning)]">{Number(emp.postponed ?? 0)}</span>
                         </td>
                         <td className="p-3 text-center">
-                          <span className="font-bold text-orange-600">{Number(emp.noAnswer ?? 0)}</span>
+                          <span className="font-bold text-[var(--warning)]">{Number(emp.noAnswer ?? 0)}</span>
                         </td>
                         <td className="p-3 text-center">
-                          <span className="font-bold text-red-600">{Number(emp.cancelled ?? 0)}</span>
+                          <span className="font-bold text-destructive">{Number(emp.cancelled ?? 0)}</span>
                         </td>
                         <td className="p-3 text-center text-xs text-muted-foreground">
                           {emp.firstAssigned ? new Date(emp.firstAssigned).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }) : '—'}
@@ -381,7 +382,7 @@ export default function Employees() {
                             <Button
                               variant="outline"
                               size="sm"
-                              className="h-7 text-xs border-red-200 text-red-700 hover:bg-red-50 gap-1"
+                              className="h-7 text-xs border-destructive/30 text-destructive hover:bg-destructive/10 gap-1"
                               onClick={() => handleOpenReclaimDialog(emp)}
                             >
                               <RotateCcw className="h-3 w-3" />
@@ -397,11 +398,11 @@ export default function Employees() {
                   <tr className="border-t bg-muted/30">
                     <td className="p-3 font-semibold text-foreground">الإجمالي</td>
                     <td className="p-3 text-center font-bold text-foreground">{allInventory.reduce((s, e) => s + Number(e.total ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-blue-600">{allInventory.reduce((s, e) => s + Number(e.newOrders ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-green-600">{allInventory.reduce((s, e) => s + Number(e.confirmed ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-yellow-600">{allInventory.reduce((s, e) => s + Number(e.postponed ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-orange-600">{allInventory.reduce((s, e) => s + Number(e.noAnswer ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-red-600">{allInventory.reduce((s, e) => s + Number(e.cancelled ?? 0), 0)}</td>
+                    <td className="p-3 text-center font-bold text-primary">{allInventory.reduce((s, e) => s + Number(e.newOrders ?? 0), 0)}</td>
+                    <td className="p-3 text-center font-bold text-[var(--success)]">{allInventory.reduce((s, e) => s + Number(e.confirmed ?? 0), 0)}</td>
+                    <td className="p-3 text-center font-bold text-[var(--warning)]">{allInventory.reduce((s, e) => s + Number(e.postponed ?? 0), 0)}</td>
+                    <td className="p-3 text-center font-bold text-[var(--warning)]">{allInventory.reduce((s, e) => s + Number(e.noAnswer ?? 0), 0)}</td>
+                    <td className="p-3 text-center font-bold text-destructive">{allInventory.reduce((s, e) => s + Number(e.cancelled ?? 0), 0)}</td>
                     <td className="p-3" colSpan={3}></td>
                   </tr>
                 </tfoot>
@@ -417,7 +418,7 @@ export default function Employees() {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                <span className="w-2 h-2 rounded-full bg-[var(--success)]/100 animate-pulse"></span>
                 أداء الموظفين (حسب تاريخ الإنشاء)
               </CardTitle>
               <div className="flex items-center gap-2">
@@ -436,9 +437,9 @@ export default function Employees() {
                   <tr className="border-b bg-muted/50">
                     <th className="p-3 text-right font-semibold text-muted-foreground">الموظف</th>
                     <th className="p-3 text-center font-semibold text-muted-foreground">وُزِع عليه</th>
-                    <th className="p-3 text-center font-semibold text-green-700">مؤكد</th>
-                    <th className="p-3 text-center font-semibold text-red-600">ملغي</th>
-                    <th className="p-3 text-center font-semibold text-yellow-600">مؤجل</th>
+                    <th className="p-3 text-center font-semibold text-[var(--success)]">مؤكد</th>
+                    <th className="p-3 text-center font-semibold text-destructive">ملغي</th>
+                    <th className="p-3 text-center font-semibold text-[var(--warning)]">مؤجل</th>
                     <th className="p-3 text-center font-semibold text-muted-foreground">نسبة التأكيد</th>
                   </tr>
                 </thead>
@@ -457,25 +458,25 @@ export default function Employees() {
                         <span className="font-bold text-foreground">{emp.total}</span>
                       </td>
                       <td className="p-3 text-center">
-                        <span className="font-bold text-green-600">{emp.confirmed}</span>
+                        <span className="font-bold text-[var(--success)]">{emp.confirmed}</span>
                       </td>
                       <td className="p-3 text-center">
-                        <span className="font-bold text-red-500">{emp.cancelled}</span>
+                        <span className="font-bold text-destructive">{emp.cancelled}</span>
                       </td>
                       <td className="p-3 text-center">
-                        <span className="font-bold text-yellow-600">{emp.postponed}</span>
+                        <span className="font-bold text-[var(--warning)]">{emp.postponed}</span>
                       </td>
                       <td className="p-3 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <div className="w-16 bg-muted rounded-full h-2">
                             <div
-                              className="bg-green-500 h-2 rounded-full transition-all"
+                              className="bg-[var(--success)]/100 h-2 rounded-full transition-all"
                               style={{ width: `${emp.confirmRate}%` }}
                             />
                           </div>
                           <span className={`text-xs font-bold ${
-                            emp.confirmRate >= 60 ? 'text-green-600' :
-                            emp.confirmRate >= 40 ? 'text-yellow-600' : 'text-red-500'
+                            emp.confirmRate >= 60 ? 'text-[var(--success)]' :
+                            emp.confirmRate >= 40 ? 'text-[var(--warning)]' : 'text-destructive'
                           }`}>{emp.confirmRate}%</span>
                         </div>
                       </td>
@@ -486,9 +487,9 @@ export default function Employees() {
                   <tr className="border-t bg-muted/30">
                     <td className="p-3 font-semibold text-foreground">الإجمالي</td>
                     <td className="p-3 text-center font-bold text-foreground">{todayPerf.reduce((s, e) => s + e.total, 0)}</td>
-                    <td className="p-3 text-center font-bold text-green-600">{todayPerf.reduce((s, e) => s + e.confirmed, 0)}</td>
-                    <td className="p-3 text-center font-bold text-red-500">{todayPerf.reduce((s, e) => s + e.cancelled, 0)}</td>
-                    <td className="p-3 text-center font-bold text-yellow-600">{todayPerf.reduce((s, e) => s + e.postponed, 0)}</td>
+                    <td className="p-3 text-center font-bold text-[var(--success)]">{todayPerf.reduce((s, e) => s + e.confirmed, 0)}</td>
+                    <td className="p-3 text-center font-bold text-destructive">{todayPerf.reduce((s, e) => s + e.cancelled, 0)}</td>
+                    <td className="p-3 text-center font-bold text-[var(--warning)]">{todayPerf.reduce((s, e) => s + e.postponed, 0)}</td>
                     <td className="p-3 text-center">
                       <span className="text-xs font-bold text-muted-foreground">
                         {todayPerf.reduce((s, e) => s + e.total, 0) > 0
@@ -505,17 +506,17 @@ export default function Employees() {
       )}
 
       {/* Login link info */}
-      <Card className="border-amber-200 bg-amber-50/50">
+      <Card className="border-[var(--warning)]/30 bg-[var(--warning)]/10/50">
         <CardContent className="p-4 flex items-center gap-3">
-          <KeyRound className="h-5 w-5 text-amber-600 shrink-0" />
+          <KeyRound className="h-5 w-5 text-[var(--warning)] shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-amber-800">رابط تسجيل دخول الموظفين</p>
-            <p className="text-xs text-amber-700 mt-0.5 font-mono" dir="ltr">{window.location.origin}/employee-login</p>
+            <p className="text-sm font-medium text-[var(--warning)]">رابط تسجيل دخول الموظفين</p>
+            <p className="text-xs text-[var(--warning)] mt-0.5 font-mono" dir="ltr">{window.location.origin}/employee-login</p>
           </div>
           <Button
             variant="outline"
             size="sm"
-            className="border-amber-300 text-amber-700 hover:bg-amber-100 shrink-0"
+            className="border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/15 shrink-0"
             onClick={() => {
               navigator.clipboard.writeText(`${window.location.origin}/employee-login`);
               toast.success("تم نسخ الرابط");
@@ -585,12 +586,12 @@ export default function Employees() {
                         <Badge variant="outline" className="text-xs text-muted-foreground">غير نشط</Badge>
                       )}
                       {(emp as any).username ? (
-                        <Badge variant="outline" className="text-xs text-green-600 border-green-300 bg-green-50">
+                        <Badge variant="outline" className="text-xs text-[var(--success)] border-[var(--success)]/40 bg-[var(--success)]/10">
                           <CheckCircle2 className="h-3 w-3 ml-1" />
                           {(emp as any).username}
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="text-xs text-orange-600 border-orange-300 bg-orange-50">
+                        <Badge variant="outline" className="text-xs text-[var(--warning)] border-[var(--warning)]/40 bg-[var(--warning)]/10">
                           بدون بيانات دخول
                         </Badge>
                       )}
@@ -615,7 +616,7 @@ export default function Employees() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-8 w-8 p-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                      className="h-8 w-8 p-0 text-[var(--warning)] hover:text-[var(--warning)] hover:bg-[var(--warning)]/10"
                       onClick={() => handleOpenPasswordDialog(emp)}
                       title="تعيين بيانات الدخول"
                     >
@@ -633,7 +634,7 @@ export default function Employees() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className={`h-8 w-8 p-0 ${emp.isActive ? 'text-destructive hover:text-destructive hover:bg-destructive/10' : 'text-green-600 hover:text-green-700 hover:bg-green-50'}`}
+                      className={`h-8 w-8 p-0 ${emp.isActive ? 'text-destructive hover:text-destructive hover:bg-destructive/10' : 'text-[var(--success)] hover:text-[var(--success)] hover:bg-[var(--success)]/10'}`}
                       onClick={() => toggleActiveMutation.mutate({ id: emp.id, isActive: !emp.isActive })}
                       title={emp.isActive ? "تعطيل" : "تفعيل"}
                     >
@@ -642,7 +643,7 @@ export default function Employees() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                      className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
                       onClick={() => handleOpenDeleteDialog(emp)}
                       title="حذف نهائي"
                     >
@@ -732,17 +733,17 @@ export default function Employees() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <KeyRound className="h-5 w-5 text-amber-600" />
+              <KeyRound className="h-5 w-5 text-[var(--warning)]" />
               بيانات دخول: {passwordEmpName}
             </DialogTitle>
           </DialogHeader>
 
           {credSaved ? (
             <div className="space-y-4">
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
-                <CheckCircle2 className="h-8 w-8 text-green-600 mx-auto mb-2" />
-                <p className="font-semibold text-green-800">تم حفظ بيانات الدخول بنجاح!</p>
-                <p className="text-sm text-green-700 mt-1">يمكن للموظف الآن تسجيل الدخول</p>
+              <div className="bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-lg p-4 text-center">
+                <CheckCircle2 className="h-8 w-8 text-[var(--success)] mx-auto mb-2" />
+                <p className="font-semibold text-[var(--success)]">تم حفظ بيانات الدخول بنجاح!</p>
+                <p className="text-sm text-[var(--success)] mt-1">يمكن للموظف الآن تسجيل الدخول</p>
               </div>
               <div className="bg-muted rounded-lg p-3 space-y-2 text-sm font-mono">
                 <div className="flex justify-between items-center">
@@ -823,7 +824,7 @@ export default function Employees() {
               <Button
                 onClick={handleSaveCredentials}
                 disabled={setCredentialsMutation.isPending}
-                className="bg-amber-600 hover:bg-amber-700 text-white"
+                className="bg-[var(--warning)] hover:bg-[var(--warning)] text-white"
               >
                 {setCredentialsMutation.isPending ? "جاري الحفظ..." : "حفظ بيانات الدخول"}
               </Button>
@@ -837,16 +838,16 @@ export default function Employees() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Trash2 className="h-5 w-5 text-red-500" />
+              <Trash2 className="h-5 w-5 text-destructive" />
               حذف الموظف: {deleteEmpName}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <p className="text-sm text-red-800 font-medium">
+            <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4">
+              <p className="text-sm text-destructive font-medium">
                 سيتم حذف بيانات <strong>{deleteEmpName}</strong> نهائياً من النظام.
               </p>
-              <p className="text-xs text-red-700 mt-2">
+              <p className="text-xs text-destructive mt-2">
                 تأكد أنك سحبت جميع أوردراته أولاً قبل الحذف. هذا الإجراء لا يمكن التراجع عنه.
               </p>
             </div>
@@ -858,7 +859,7 @@ export default function Employees() {
             <Button
               onClick={() => deleteEmpId && deleteMutation.mutate({ id: deleteEmpId })}
               disabled={deleteMutation.isPending}
-              className="bg-red-600 hover:bg-red-700 text-white"
+              className="bg-destructive hover:bg-destructive text-white"
             >
               {deleteMutation.isPending ? "جاري الحذف..." : "حذف نهائي"}
             </Button>
@@ -871,16 +872,16 @@ export default function Employees() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-orange-500" />
+              <AlertTriangle className="h-5 w-5 text-[var(--warning)]" />
               استرداد أوردرات: {reclaimEmpName}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <p className="text-sm text-red-800 font-medium">
+            <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4">
+              <p className="text-sm text-destructive font-medium">
                 سيتم سحب كل الأوردرات من هذا الموظف (بما فيها المؤكدة والمطبوعة) وإرجاعها للوحة التحكم بدون توزيع.
               </p>
-              <p className="text-xs text-red-700 mt-2">
+              <p className="text-xs text-destructive mt-2">
                 هذا الإجراء لا يمكن التراجع عنه.
               </p>
             </div>
@@ -892,7 +893,7 @@ export default function Employees() {
             <Button
               onClick={handleReclaim}
               disabled={reclaimMutation.isPending}
-              className="bg-red-600 hover:bg-red-700 text-white"
+              className="bg-destructive hover:bg-destructive text-white"
             >
               {reclaimMutation.isPending ? "جاري السحب..." : "تأكيد سحب الكل"}
             </Button>
