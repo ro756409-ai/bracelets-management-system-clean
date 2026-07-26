@@ -46,6 +46,7 @@ import { normalizeEgyptianPhone } from "../shared/phone";
 import { getDb, createOrder, replaceOrderItems } from "../server/db";
 import { orders, products, productVariants, importBatches } from "../drizzle/schema";
 import { eq, and, sql as drizzleSql } from "drizzle-orm";
+import { matchExternalItem, type MatchCatalog } from "../server/productMatching";
 
 // ==================== Parent product / variant matching (2026-07-25 refactor) ====================
 // "أسورة نحاس" is one product with engraving-type variants (آية الكرسي, عين حورس, ...) — NOT
@@ -89,6 +90,8 @@ export function matchByName<T extends { name: string | null }>(target: string, c
 export interface SegmentResolution {
   ok: boolean;
   reason?: string;
+  /** True when the lookup found several equally-plausible candidates rather than none. */
+  ambiguous?: boolean;
   productId?: number;
   productName?: string;
   variantId?: number;
@@ -103,33 +106,46 @@ export function resolveSegment(
   parentProduct: CatalogProduct | undefined,
   parentVariants: CatalogVariant[]
 ): SegmentResolution {
-  if (isBraceletItem(text)) {
-    if (!parentProduct) {
-      return { ok: false, reason: `لا يوجد منتج أب "${PARENT_PRODUCT_NAME}" في الكتالوج` };
-    }
-    const variantName = text.replace(BRACELET_PREFIX_RE, "").trim();
-    if (!variantName) {
-      return { ok: false, reason: `تعذّر استخراج اسم النوع من "${text}"` };
-    }
-    const match = matchByName(variantName, parentVariants);
-    if (!match) {
-      return { ok: false, reason: `لا يوجد نوع مطابق لـ "${variantName}" تحت "${PARENT_PRODUCT_NAME}"` };
-    }
-    return {
-      ok: true,
-      productId: parentProduct.id,
-      productName: parentProduct.name,
-      variantId: match.id,
-      variantLabel: match.name ?? undefined,
-      unitPrice: match.price,
-    };
+  // Keep the specific diagnostic for a missing parent product — "the catalog has no
+  // أسورة نحاس" is far more actionable than the generic "nothing matched" the shared
+  // matcher would return, and it points straight at an unbootstrapped catalog.
+  if (isBraceletItem(text) && !parentProduct) {
+    return { ok: false, reason: `لا يوجد منتج أب "${PARENT_PRODUCT_NAME}" في الكتالوج` };
   }
 
-  const match = matchByName(text, standaloneProducts);
-  if (!match) {
-    return { ok: false, reason: `لا يوجد منتج مطابق لـ "${text}"` };
+  // Delegates to the shared matcher used by the EasyOrder webhook and manual sync, so the
+  // legacy import and live imports resolve products identically. Its Arabic normalization
+  // (alef/hamza/ta-marbuta/alef-maqsura/diacritics) is what lets legacy spellings like
+  // "اية الكرسي" / "فالله خير حافظا" match the catalog's "آية الكرسي" / "فالله خير حافظاً".
+  const catalog: MatchCatalog = {
+    products: [
+      ...(parentProduct ? [{ id: parentProduct.id, name: parentProduct.name, sku: null, price: parentProduct.price }] : []),
+      ...standaloneProducts.map(p => ({ id: p.id, name: p.name, sku: null, price: p.price })),
+    ],
+    variants: parentProduct
+      ? parentVariants.map(v => ({
+          id: v.id,
+          productId: parentProduct.id,
+          name: v.name,
+          sku: null,
+          price: v.price,
+          isActive: true,
+        }))
+      : [],
+  };
+
+  const result = matchExternalItem({ name: text }, catalog);
+  if (!result.matched) {
+    return { ok: false, reason: result.reason, ambiguous: result.ambiguous };
   }
-  return { ok: true, productId: match.id, productName: match.name, unitPrice: match.price };
+  return {
+    ok: true,
+    productId: result.productId,
+    productName: result.productName,
+    variantId: result.variantId,
+    variantLabel: result.variantName,
+    unitPrice: result.unitPrice,
+  };
 }
 
 // ==================== CLI args ====================
@@ -143,6 +159,14 @@ function argValue(name: string, def?: string): string | undefined {
 }
 const FILE = argValue("file", "/Users/apple/Downloads/كل_الأوردرات.xlsx")!;
 const SHEET_NAME_ARG = argValue("sheet");
+/**
+ * Optional path to a JSON catalog snapshot, so a DRY RUN can produce the full
+ * product/variant matching report without a live database connection:
+ *   { "products": [{ "id", "name", "price" }], "variants": [{ "id", "name", "price" }] }
+ * Variants are assumed to belong to the PARENT_PRODUCT_NAME product. Ignored in --commit
+ * mode, which always reads the real catalog from the database.
+ */
+const CATALOG_JSON = argValue("catalog-json");
 const COMMIT = args.includes("--commit");
 const BUSINESS_ID = Number(argValue("business-id", "1"));
 const PERFORMED_BY = argValue("performed-by");
@@ -551,7 +575,17 @@ async function main() {
   let standaloneProducts: CatalogProduct[] = [];
   let parentProduct: CatalogProduct | undefined;
   let parentVariants: CatalogVariant[] = [];
-  let unresolvableOrders: { legacyOrderNumber: string; productRaw: string; reasons: string[] }[] = [];
+  let unresolvableOrders: { legacyOrderNumber: string; productRaw: string; reasons: string[]; ambiguous: boolean }[] = [];
+  // Quantity roll-up across every order that would actually import, keyed by
+  // "product" or "product — variant", so the totals can be sanity-checked against
+  // real-world expectations before any write.
+  const qtyByProduct = new Map<string, { orders: number; pieces: number }>();
+  let expectedOrderItems = 0;
+  let fullyResolvedOrders = 0;
+  let ambiguousOrderCount = 0;
+  // Catalog source: the live DB when available, otherwise an explicitly-supplied JSON
+  // snapshot so the dry-run report is complete even without database access.
+  let catalogLoaded = false;
   if (dbAvailable) {
     const db = await getDb();
     if (db) {
@@ -562,14 +596,49 @@ async function main() {
         parentVariants = await db.select().from(productVariants)
           .where(and(eq(productVariants.productId, parentProduct.id), eq(productVariants.isActive, true)));
       }
+      catalogLoaded = true;
+    }
+  } else if (CATALOG_JSON && !COMMIT) {
+    const snapshot = JSON.parse(fs.readFileSync(CATALOG_JSON, "utf-8"));
+    const snapProducts: any[] = snapshot.products ?? [];
+    parentProduct = snapProducts.find((p: any) => String(p.name).trim() === PARENT_PRODUCT_NAME);
+    standaloneProducts = snapProducts.filter((p: any) => p.id !== parentProduct?.id);
+    parentVariants = (snapshot.variants ?? []) as CatalogVariant[];
+    catalogLoaded = true;
+    console.log(`[import-legacy-orders] Catalog: snapshot من ${CATALOG_JSON} (${snapProducts.length} منتج، ${parentVariants.length} نوع)`);
+  }
+
+  if (catalogLoaded) {
+    {
       for (const v of importable) {
         const segments = splitCompoundProduct(v.productRaw);
-        const failures = segments
-          .map(s => resolveSegment(s.text, standaloneProducts, parentProduct, parentVariants))
-          .filter(r => !r.ok)
-          .map(r => r.reason!);
+        const resolutions = segments.map(s => ({
+          qty: s.qty,
+          res: resolveSegment(s.text, standaloneProducts, parentProduct, parentVariants),
+        }));
+        const failures = resolutions.filter(r => !r.res.ok);
+
         if (failures.length > 0) {
-          unresolvableOrders.push({ legacyOrderNumber: v.legacyOrderNumber, productRaw: v.productRaw, reasons: failures });
+          const isAmbiguous = failures.some(f => f.res.ambiguous);
+          if (isAmbiguous) ambiguousOrderCount++;
+          unresolvableOrders.push({
+            legacyOrderNumber: v.legacyOrderNumber,
+            productRaw: v.productRaw,
+            reasons: failures.map(f => f.res.reason!),
+            ambiguous: isAmbiguous,
+          });
+          continue;
+        }
+
+        // Fully resolved → this is what a real import would write.
+        fullyResolvedOrders++;
+        expectedOrderItems += resolutions.length;
+        for (const { qty, res } of resolutions) {
+          const key = res.variantLabel ? `${res.productName} — ${res.variantLabel}` : res.productName!;
+          const acc = qtyByProduct.get(key) ?? { orders: 0, pieces: 0 };
+          acc.orders += 1;
+          acc.pieces += qty;
+          qtyByProduct.set(key, acc);
         }
       }
     }
@@ -592,8 +661,18 @@ async function main() {
   console.log(`اتصال بقاعدة البيانات متاح؟ ${dbAvailable ? "نعم" : "لا (تم تخطي فحص التكرار مقابل القاعدة الحية)"}`);
   if (dbAvailable) {
     console.log(`أوردرات موجودة بالفعل في القاعدة (externalOrderId مطابق): ${alreadyInDb.length}`);
+  } else {
+    console.log(`⚠️ فحص التكرار مقابل القاعدة الحية لم يُنفَّذ — شغّل هذا الأمر على بيئة بها DATABASE_URL لمعرفة عدد الأوردرات الموجودة بالفعل.`);
+  }
+  if (catalogLoaded) {
     console.log(`منتج أب "${PARENT_PRODUCT_NAME}" موجود في الكتالوج؟ ${parentProduct ? `نعم (#${parentProduct.id}، ${parentVariants.length} نوع نشط)` : "لا"}`);
     console.log(`أوردرات (من الصالحة تمامًا) لن تُستورد تلقائيًا بسبب عدم تطابق منتج/نوع: ${unresolvableOrders.length}`);
+    console.log(`  منها غامضة (يطابق أكثر من منتج/نوع): ${ambiguousOrderCount}`);
+    console.log(`  منها بلا أي تطابق: ${unresolvableOrders.length - ambiguousOrderCount}`);
+    console.log(`✅ أوردرات ستُستورد فعليًا (كل أصنافها مُطابَقة): ${fullyResolvedOrders}`);
+    console.log(`✅ إجمالي صفوف order_items المتوقَّعة: ${expectedOrderItems}`);
+  } else {
+    console.log(`⚠️ مطابقة المنتج/النوع لم تُنفَّذ — لا قاعدة بيانات ولا --catalog-json.`);
   }
   console.log(`منتج مفقود: ${missingProduct.length}`);
   console.log(`حالات (status) غير معروفة: ${unknownStatuses.length}`);
@@ -618,6 +697,23 @@ async function main() {
   if (unknownGovs.length) {
     console.log("\n--- قيم محافظة غير معروفة (فريدة، أول 20) ---");
     console.log([...new Set(unknownGovs.map(v => v.governorateRaw))].slice(0, 20));
+  }
+
+  if (qtyByProduct.size > 0) {
+    console.log("\n" + "=".repeat(70));
+    console.log("إجمالي الكميات حسب المنتج/النوع (للأوردرات التي ستُستورد فعليًا)");
+    console.log("=".repeat(70));
+    const rows = [...qtyByProduct.entries()].sort((a, b) => b[1].pieces - a[1].pieces);
+    const nameWidth = Math.min(50, Math.max(...rows.map(([k]) => k.length)));
+    console.log(`${"المنتج / النوع".padEnd(nameWidth)} | ${"عدد الأوردرات".padStart(13)} | ${"عدد القطع".padStart(10)}`);
+    console.log("-".repeat(nameWidth + 30));
+    for (const [key, val] of rows) {
+      console.log(`${key.padEnd(nameWidth)} | ${String(val.orders).padStart(13)} | ${String(val.pieces).padStart(10)}`);
+    }
+    console.log("-".repeat(nameWidth + 30));
+    const totalOrders = rows.reduce((s, [, v]) => s + v.orders, 0);
+    const totalPieces = rows.reduce((s, [, v]) => s + v.pieces, 0);
+    console.log(`${"الإجمالي".padEnd(nameWidth)} | ${String(totalOrders).padStart(13)} | ${String(totalPieces).padStart(10)}`);
   }
 
   // ==================== CSV exports ====================
@@ -736,6 +832,10 @@ async function main() {
         variantId: first.variantId,
         quantity: totalQuantity,
         totalAmount: String(v.total ?? 0),
+        // NOTE: the legacy workbook has no shipping column — the reconstructed fields are
+        // name/phone/address/governorate/product/qty/total/status/source/bosta/dates only.
+        // shippingFees is therefore left at the column default (0) rather than inventing a
+        // value; the recorded totalAmount is the figure the source actually stated.
         status: v.status as any,
         source: v.source as any,
         notes: v.notes || null,
@@ -744,6 +844,25 @@ async function main() {
         createdAt: v.createdAt ?? new Date(),
         externalOrderId: v.legacyOrderNumber,
         importBatchId: batchId,
+        // Original source row preserved verbatim for audit / re-processing.
+        externalRawPayload: JSON.stringify({
+          sourceRows: v.sourceRowNumbers,
+          mergedRowCount: v.mergedRowCount,
+          legacyOrderNumber: v.legacyOrderNumber,
+          customerName: v.customerName,
+          customerPhoneRaw: v.customerPhoneRaw,
+          customerAddress: v.customerAddress,
+          governorateRaw: v.governorateRaw,
+          productRaw: v.productRaw,
+          quantityRaw: v.quantityRaw,
+          totalRaw: v.totalRaw,
+          statusRaw: v.statusRaw,
+          sourceRaw: v.sourceRaw,
+          bostaStatusRaw: v.bostaStatusRaw,
+          createdAtRaw: v.createdAtRaw,
+          confirmedAtRaw: v.confirmedAtRaw,
+          notes: v.notes,
+        }),
       } as any);
       if (orderId) {
         await replaceOrderItems(orderId, resolved.map(r => ({
