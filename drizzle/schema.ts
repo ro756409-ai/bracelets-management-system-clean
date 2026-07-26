@@ -243,11 +243,18 @@ export const salesChannels = mysqlTable("sales_channels", {
   // Base URL for this channel's API (EasyOrder etc.). Null = use the provider default.
   apiBaseUrl: varchar("apiBaseUrl", { length: 300 }),
   isActive: boolean("isActive").default(true).notNull(),
-  // ---- Connection / sync status (surfaced in the Sales Channels UI) ----
+  // ---- Sync status (set by an actual order sync) ----
   lastSyncAt: timestamp("lastSyncAt"),
   lastSyncStatus: mysqlEnum("lastSyncStatus", ["never", "success", "error"]).default("never").notNull(),
   lastSyncError: text("lastSyncError"),
   lastSyncedOrderCount: int("lastSyncedOrderCount").default(0).notNull(),
+  // ---- Connection-test status (set by the read-only credential check; kept separate from
+  // sync status so a failed import never looks like broken credentials, and vice versa) ----
+  lastConnectionTestAt: timestamp("lastConnectionTestAt"),
+  lastConnectionStatus: mysqlEnum("lastConnectionStatus", ["never", "connected", "failed"]).default("never").notNull(),
+  lastConnectionError: text("lastConnectionError"),
+  /** Store name/identifier reported by the provider, when the endpoint exposes one. */
+  externalStoreName: varchar("externalStoreName", { length: 200 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

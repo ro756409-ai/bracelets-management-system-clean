@@ -306,6 +306,83 @@ describe("salesChannels — secret lifecycle", () => {
   });
 });
 
+describe("salesChannels — connection test", () => {
+  it("is admin-only", async () => {
+    const userCaller = appRouter.createCaller(createUserContext());
+    const noUserCaller = appRouter.createCaller(createNoUserContext());
+    await expect(userCaller.salesChannels.testConnection({ id: 1 })).rejects.toThrow();
+    await expect(noUserCaller.salesChannels.testConnection({ id: 1 })).rejects.toThrow();
+  });
+
+  it("reports NO_TOKEN (rather than throwing) for a channel with no credentials", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    let created;
+    try {
+      created = await caller.salesChannels.create({
+        businessId: 1,
+        name: "قناة بلا توكن " + Date.now(),
+        platform: "easyorder",
+      });
+    } catch (err) {
+      if (isNoDbError(err)) return;
+      throw err;
+    }
+
+    const result = await caller.salesChannels.testConnection({ id: created.id });
+    expect(result.connected).toBe(false);
+    expect(result.errorCode).toBe("NO_TOKEN");
+
+    // The failed test must be recorded on the channel...
+    const after = await caller.salesChannels.get({ id: created.id });
+    expect(after!.lastConnectionStatus).toBe("failed");
+    expect(after!.lastConnectionTestAt).toBeTruthy();
+  });
+
+  it("never returns raw credentials in the result", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    const secret = "connection-test-secret-" + Date.now();
+    let created;
+    try {
+      created = await caller.salesChannels.create({
+        businessId: 1,
+        name: "قناة اختبار اتصال " + Date.now(),
+        platform: "easyorder",
+        apiToken: secret,
+      });
+    } catch (err) {
+      if (isNoDbError(err)) return;
+      throw err;
+    }
+
+    // Will fail to reach the (nonexistent) provider, which is fine — we only assert
+    // that nothing sensitive comes back regardless of outcome.
+    const result = await caller.salesChannels.testConnection({ id: created.id });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(result).not.toHaveProperty("apiToken");
+  });
+
+  it("does not create any order while testing a connection", async () => {
+    const caller = appRouter.createCaller(createAdminContext());
+    let created;
+    try {
+      created = await caller.salesChannels.create({
+        businessId: 1,
+        name: "قناة بدون استيراد " + Date.now(),
+        platform: "easyorder",
+        apiToken: "some-token-value",
+      });
+    } catch (err) {
+      if (isNoDbError(err)) return;
+      throw err;
+    }
+
+    const before = (await caller.orders.list({ limit: 1 })).total;
+    await caller.salesChannels.testConnection({ id: created.id });
+    const after = (await caller.orders.list({ limit: 1 })).total;
+    expect(after).toBe(before);
+  });
+});
+
 describe("salesChannels — archive / reactivate", () => {
   it("delete() soft-deletes (isActive=false) without removing the row, and reactivate() restores it", async () => {
     const caller = appRouter.createCaller(createAdminContext());

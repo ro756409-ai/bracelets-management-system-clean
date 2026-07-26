@@ -6,6 +6,9 @@ import {
   isRetryableHttpError,
   EasyOrderClient,
   EasyOrderApiError,
+  extractStoreIdentity,
+  connectionErrorCode,
+  sanitizeErrorMessage,
   type EasyOrderPayload,
   type FetchLike,
 } from "./easyorder.service";
@@ -253,12 +256,132 @@ describe("EasyOrderClient", () => {
     });
   });
 
-  it("testConnection reports ok / error without throwing", async () => {
-    const good = new EasyOrderClient({ apiToken: "t", fetchImpl: makeFetch([{ ok: true, status: 200, body: [] }]).fn });
-    expect(await good.testConnection()).toEqual({ ok: true });
+});
 
-    const bad = new EasyOrderClient({ apiToken: "t", fetchImpl: makeFetch([{ ok: false, status: 401, body: {} }]).fn });
-    const result = await bad.testConnection();
-    expect(result.ok).toBe(false);
+// ==================== Connection test ====================
+
+describe("extractStoreIdentity", () => {
+  it("prefers a human-readable name over an id", () => {
+    expect(extractStoreIdentity({ store_name: "متجر فرحات", id: 7 })).toBe("متجر فرحات");
+    expect(extractStoreIdentity({ name: "Matjarak" })).toBe("Matjarak");
+  });
+  it("unwraps a data/store envelope", () => {
+    expect(extractStoreIdentity({ data: { name: "من داخل data" } })).toBe("من داخل data");
+    expect(extractStoreIdentity({ store: { title: "من داخل store" } })).toBe("من داخل store");
+  });
+  it("falls back to an id when no name is present", () => {
+    expect(extractStoreIdentity({ store_id: "abc123" })).toBe("#abc123");
+    expect(extractStoreIdentity({ id: 42 })).toBe("#42");
+  });
+  it("returns null when nothing identifying is present", () => {
+    expect(extractStoreIdentity({ unrelated: true })).toBeNull();
+    expect(extractStoreIdentity(null)).toBeNull();
+    expect(extractStoreIdentity([])).toBeNull();
+  });
+});
+
+describe("connectionErrorCode", () => {
+  it("maps auth failures to INVALID_CREDENTIALS", () => {
+    expect(connectionErrorCode(401)).toBe("INVALID_CREDENTIALS");
+    expect(connectionErrorCode(403)).toBe("INVALID_CREDENTIALS");
+  });
+  it("maps the remaining statuses to stable codes", () => {
+    expect(connectionErrorCode(404)).toBe("ENDPOINT_NOT_FOUND");
+    expect(connectionErrorCode(429)).toBe("RATE_LIMITED");
+    expect(connectionErrorCode(500)).toBe("PROVIDER_ERROR");
+    expect(connectionErrorCode(418)).toBe("REQUEST_FAILED");
+    expect(connectionErrorCode(undefined)).toBe("NETWORK_ERROR");
+  });
+});
+
+describe("sanitizeErrorMessage", () => {
+  it("redacts the channel's own token wherever it appears", () => {
+    const token = "sk-live-abcdef123456";
+    const out = sanitizeErrorMessage(`request failed with ${token} in the url`, token);
+    expect(out).not.toContain(token);
+    expect(out).toContain("«محذوف»");
+  });
+  it("redacts bearer tokens and api-key style values it was not given", () => {
+    expect(sanitizeErrorMessage("Authorization: Bearer abcdefgh12345678")).not.toContain("abcdefgh12345678");
+    expect(sanitizeErrorMessage('{"api_key":"zyxwvut987654321"}')).not.toContain("zyxwvut987654321");
+  });
+  it("truncates very long provider errors", () => {
+    expect(sanitizeErrorMessage("x".repeat(2000)).length).toBeLessThanOrEqual(401);
+  });
+  it("leaves a harmless message intact", () => {
+    expect(sanitizeErrorMessage("store not found")).toBe("store not found");
+  });
+});
+
+describe("EasyOrderClient.testConnection", () => {
+  it("reports connected and surfaces the store name", async () => {
+    const client = new EasyOrderClient({
+      apiToken: "t",
+      fetchImpl: makeFetch([{ ok: true, status: 200, body: { store_name: "متجر الاختبار" } }]).fn,
+    });
+    const r = await client.testConnection();
+    expect(r.connected).toBe(true);
+    expect(r.storeName).toBe("متجر الاختبار");
+  });
+
+  it("still reports connected when the endpoint exposes no store identity", async () => {
+    const client = new EasyOrderClient({
+      apiToken: "t",
+      fetchImpl: makeFetch([{ ok: true, status: 200, body: { unrelated: 1 } }]).fn,
+    });
+    const r = await client.testConnection();
+    expect(r.connected).toBe(true);
+    expect(r.storeName).toBeNull();
+  });
+
+  it("uses only GET requests — a connection test can never mutate anything", async () => {
+    const methods: string[] = [];
+    const fetchImpl: FetchLike = async (_url, init) => {
+      methods.push(init?.method ?? "GET");
+      return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    };
+    await new EasyOrderClient({ apiToken: "t", fetchImpl }).testConnection();
+    expect(methods.every((m) => m === "GET")).toBe(true);
+  });
+
+  it("falls through to the next candidate path on 404", async () => {
+    const { fn, calls } = makeFetch([
+      { ok: false, status: 404, body: {} },           // /store missing
+      { ok: true, status: 200, body: { name: "متجر" } }, // /me works
+    ]);
+    const r = await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).testConnection();
+    expect(r.connected).toBe(true);
+    expect(calls.length).toBe(2);
+  });
+
+  it("stops immediately on 401 — a rejected credential is conclusive", async () => {
+    const { fn, calls } = makeFetch([{ ok: false, status: 401, body: { message: "unauthorized" } }]);
+    const r = await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).testConnection();
+    expect(r.connected).toBe(false);
+    expect(r.errorCode).toBe("INVALID_CREDENTIALS");
+    expect(calls.length).toBe(1); // did NOT try the other paths
+  });
+
+  it("returns a structured failure with code, message and status", async () => {
+    const client = new EasyOrderClient({
+      apiToken: "t",
+      fetchImpl: makeFetch([{ ok: false, status: 500, body: { message: "boom" } }]).fn,
+    });
+    const r = await client.testConnection();
+    expect(r.connected).toBe(false);
+    expect(r.errorCode).toBe("PROVIDER_ERROR");
+    expect(r.status).toBe(500);
+    expect(typeof r.errorMessage).toBe("string");
+  });
+
+  it("never leaks the API token in a connection-test failure", async () => {
+    const secret = "super-secret-token-abcdef";
+    const client = new EasyOrderClient({
+      apiToken: secret,
+      // Provider echoes the token back in its error body — worst case.
+      fetchImpl: makeFetch([{ ok: false, status: 500, body: { message: `bad token ${secret}` } }]).fn,
+    });
+    const r = await client.testConnection();
+    expect(JSON.stringify(r)).not.toContain(secret);
   });
 });

@@ -323,6 +323,31 @@ already guarded for null; the stock paths (`editOrderWithInventory`, `markOrderA
   retry/backoff behaviour, envelope-shape tolerance, and an assertion that the API token
   never appears in an error message.
 
+### Connection test (read-only credential check)
+
+Migration **`drizzle/0026_curly_iceman.sql`** adds `sales_channels.lastConnectionTestAt`,
+`lastConnectionStatus` (never/connected/failed), `lastConnectionError`, `externalStoreName`.
+
+Deliberately **separate from sync status**: a failed import must not look like broken
+credentials, and valid credentials must not imply a successful import. The Sales Channels
+card shows the two independently.
+
+- `testChannelConnection(channelId)` issues **GET requests only** and writes **nothing**
+  except that channel's own four connection columns — no order, product, or `sync_logs`
+  row is created or updated.
+- It tries the configured harmless read-only paths in order. A **404** means "this provider
+  doesn't expose that path" so it falls through to the next candidate; any other failure
+  (401/403/429/5xx/network) is conclusive and returned immediately rather than repeating a
+  rejection against more paths.
+- Returns a structured `ConnectionTestResult`: `connected`, `storeName` (when the endpoint
+  exposes one), a stable `errorCode` (`NO_TOKEN`, `INVALID_CREDENTIALS`, `ENDPOINT_NOT_FOUND`,
+  `RATE_LIMITED`, `PROVIDER_ERROR`, `REQUEST_FAILED`, `NETWORK_ERROR`), and a sanitized
+  `errorMessage`.
+- `sanitizeErrorMessage()` redacts the channel's own token plus anything matching
+  bearer/api-key/secret patterns and truncates to 400 chars, so even a provider that echoes
+  the credential back in its error body cannot leak it to the client. Covered by a test that
+  does exactly that.
+
 ⚠️ **Known limitation — the pull API contract is unverified.** No EasyOrder API key or
 documentation was available, so the endpoint path, date-range query-param names and auth
 header in `EASYORDER_ENDPOINT` are assumptions. They are isolated in one constant and

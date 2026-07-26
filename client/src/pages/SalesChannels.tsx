@@ -66,17 +66,24 @@ const emptyForm: ChannelForm = {
   businessId: null,
 };
 
-/** Connection status derived from the channel's last sync outcome. */
+const fmtDateTime = (d: Date) =>
+  d.toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+/**
+ * Credential/connection health, from the read-only connection test.
+ * Deliberately separate from sync status: a failed import must not look like broken
+ * credentials, and working credentials must not imply a successful import.
+ */
 function ConnectionStatus({ channel }: { channel: any }) {
-  const status = channel.lastSyncStatus as "never" | "success" | "error" | undefined;
-  const lastSync = channel.lastSyncAt ? new Date(channel.lastSyncAt) : null;
+  const status = channel.lastConnectionStatus as "never" | "connected" | "failed" | undefined;
+  const testedAt = channel.lastConnectionTestAt ? new Date(channel.lastConnectionTestAt) : null;
 
   const config =
-    status === "success"
+    status === "connected"
       ? { icon: CheckCircle2, cls: "bg-green-100 text-green-700", label: "متصل" }
-      : status === "error"
-      ? { icon: AlertCircle, cls: "bg-red-100 text-red-700", label: "خطأ" }
-      : { icon: Clock, cls: "bg-gray-100 text-gray-600", label: "لم تتم المزامنة بعد" };
+      : status === "failed"
+      ? { icon: AlertCircle, cls: "bg-red-100 text-red-700", label: "فشل الاتصال" }
+      : { icon: Clock, cls: "bg-gray-100 text-gray-600", label: "لم يُختبر الاتصال بعد" };
   const Icon = config.icon;
 
   return (
@@ -86,9 +93,42 @@ function ConnectionStatus({ channel }: { channel: any }) {
           <Icon className="h-3 w-3" />
           {config.label}
         </Badge>
+        {channel.externalStoreName && (
+          <Badge variant="outline" className="text-xs gap-1">
+            <Globe className="h-3 w-3" />
+            {channel.externalStoreName}
+          </Badge>
+        )}
+        {testedAt && (
+          <span className="text-xs text-muted-foreground">آخر اختبار: {fmtDateTime(testedAt)}</span>
+        )}
+      </div>
+      {status === "failed" && channel.lastConnectionError && (
+        <p className="text-xs text-destructive line-clamp-2">{channel.lastConnectionError}</p>
+      )}
+    </div>
+  );
+}
+
+/** Order-sync outcome — distinct from credential health above. */
+function SyncStatus({ channel }: { channel: any }) {
+  const status = channel.lastSyncStatus as "never" | "success" | "error" | undefined;
+  const lastSync = channel.lastSyncAt ? new Date(channel.lastSyncAt) : null;
+  if (!lastSync && status === "never") return null;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge
+          variant="outline"
+          className={`text-xs gap-1 ${status === "error" ? "text-destructive border-destructive/40" : ""}`}
+        >
+          <RefreshCw className="h-3 w-3" />
+          {status === "success" ? "آخر مزامنة ناجحة" : status === "error" ? "فشلت آخر مزامنة" : "لم تتم مزامنة"}
+        </Badge>
         {lastSync && (
           <span className="text-xs text-muted-foreground">
-            آخر مزامنة: {lastSync.toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            {fmtDateTime(lastSync)}
             {channel.lastSyncedOrderCount > 0 && ` — ${channel.lastSyncedOrderCount} أوردر`}
           </span>
         )}
@@ -118,6 +158,7 @@ export default function SalesChannels() {
   const [syncDialogChannel, setSyncDialogChannel] = useState<any | null>(null);
   const [syncRange, setSyncRange] = useState(defaultSyncRange);
   const [logsChannelId, setLogsChannelId] = useState<number | null>(null);
+  const [testingChannelId, setTestingChannelId] = useState<number | null>(null);
   const utils = trpc.useUtils();
   // Which stored secrets the currently-edited channel already has (the values themselves
   // are never sent to the client, so we only ever know "configured / not configured").
@@ -201,8 +242,15 @@ export default function SalesChannels() {
 
   const testConnectionMutation = trpc.salesChannels.testConnection.useMutation({
     onSuccess: (r) => {
-      if (r.ok) toast.success("الاتصال ناجح — بيانات الاعتماد صحيحة");
-      else toast.error(`فشل الاتصال: ${r.error}`);
+      if (r.connected) {
+        toast.success(
+          r.storeName
+            ? `الاتصال ناجح — المتجر: ${r.storeName}`
+            : "الاتصال ناجح — بيانات الاعتماد صحيحة"
+        );
+      } else {
+        toast.error(`فشل الاتصال [${r.errorCode ?? "UNKNOWN"}]: ${r.errorMessage ?? ""}`);
+      }
       refetch();
     },
     onError: (err) => toast.error(err.message),
@@ -400,8 +448,9 @@ export default function SalesChannels() {
                     <Badge variant="outline" className="text-xs text-muted-foreground">بدون Webhook Secret</Badge>
                   )}
                 </div>
-                <div className="pt-2 border-t">
+                <div className="pt-2 border-t space-y-1.5">
                   <ConnectionStatus channel={channel} />
+                  <SyncStatus channel={channel} />
                 </div>
 
                 {channel.platform === "easyorder" && channel.isActive && (
@@ -420,11 +469,24 @@ export default function SalesChannels() {
                       variant="outline"
                       size="sm"
                       className="gap-1 h-8"
-                      onClick={() => testConnectionMutation.mutate({ id: channel.id })}
-                      disabled={testConnectionMutation.isPending}
+                      onClick={() => {
+                        setTestingChannelId(channel.id);
+                        testConnectionMutation.mutate({ id: channel.id });
+                      }}
+                      disabled={testingChannelId === channel.id && testConnectionMutation.isPending}
+                      title="فحص بيانات الاعتماد بقراءة فقط — لا يستورد أي أوردر"
                     >
-                      <PlugZap className="h-3.5 w-3.5" />
-                      اختبار الاتصال
+                      {testingChannelId === channel.id && testConnectionMutation.isPending ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                          جاري الاختبار...
+                        </>
+                      ) : (
+                        <>
+                          <PlugZap className="h-3.5 w-3.5" />
+                          اختبار الاتصال
+                        </>
+                      )}
                     </Button>
                     <Button
                       variant="ghost"

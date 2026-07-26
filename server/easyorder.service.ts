@@ -27,6 +27,7 @@ import {
   createSyncLog,
   finishSyncLog,
   updateSalesChannelSyncStatus,
+  updateSalesChannelConnectionStatus,
   getSalesChannelWithSecrets,
 } from "./db";
 import { matchExternalItem, type MatchCatalog } from "./productMatching";
@@ -41,9 +42,70 @@ const EASYORDER_ENDPOINT = {
   fromParam: "created_at_min",
   toParam: "created_at_max",
   pageParam: "page",
+  /**
+   * Read-only endpoints tried, in order, by the connection test. The first one that
+   * answers 2xx wins. All are GETs that never mutate anything. ⚠️ PATHS UNVERIFIED —
+   * the list is ordered cheapest-and-most-informative first, falling back to a
+   * single-page order read which is still read-only and harmless.
+   */
+  connectionTestPaths: ["/external-apps/store", "/external-apps/me", "/external-apps/orders"] as const,
   /** Builds the auth headers. ⚠️ UNVERIFIED (assumes an Api-Key header). */
   authHeaders: (token: string): Record<string, string> => ({ "Api-Key": token }),
 } as const;
+
+/** Pulls a human-readable store name/id out of whatever shape the provider returns. */
+export function extractStoreIdentity(body: any): string | null {
+  if (!body || typeof body !== "object") return null;
+  const source = body.data ?? body.store ?? body;
+  if (!source || typeof source !== "object") return null;
+  for (const key of ["store_name", "storeName", "name", "title", "slug", "domain"]) {
+    const v = (source as any)[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  for (const key of ["store_id", "storeId", "id", "_id"]) {
+    const v = (source as any)[key];
+    if (typeof v === "string" || typeof v === "number") return `#${v}`;
+  }
+  return null;
+}
+
+/**
+ * Removes credential material from an error string before it can reach a client.
+ * Redacts the channel's own token plus anything that looks like a bearer/api-key value,
+ * and truncates, so a verbose provider error can't smuggle a secret through.
+ */
+export function sanitizeErrorMessage(message: string, token?: string): string {
+  let out = message;
+  if (token && token.trim().length >= 4) {
+    out = out.split(token).join("«محذوف»");
+  }
+  out = out
+    .replace(/(bearer\s+)[A-Za-z0-9._\-]{8,}/gi, "$1«محذوف»")
+    .replace(/((?:api[-_]?key|token|secret|authorization)["'\s:=]+)[A-Za-z0-9._\-]{8,}/gi, "$1«محذوف»");
+  return out.length > 400 ? out.slice(0, 400) + "…" : out;
+}
+
+/** Maps an HTTP status to a stable, non-sensitive code the UI can branch on. */
+export function connectionErrorCode(status: number | undefined): string {
+  if (status === undefined) return "NETWORK_ERROR";
+  if (status === 401 || status === 403) return "INVALID_CREDENTIALS";
+  if (status === 404) return "ENDPOINT_NOT_FOUND";
+  if (status === 429) return "RATE_LIMITED";
+  if (status >= 500) return "PROVIDER_ERROR";
+  return "REQUEST_FAILED";
+}
+
+export interface ConnectionTestResult {
+  connected: boolean;
+  /** Store name/identifier when the provider exposes one. */
+  storeName?: string | null;
+  /** Stable machine-readable code — never contains secrets. */
+  errorCode?: string;
+  /** Human-readable message, sanitized of any credential material. */
+  errorMessage?: string;
+  /** HTTP status of the failing call, when there was one. */
+  status?: number;
+}
 
 // ==================== Payload types (VERIFIED — mirrors real webhook traffic) ====================
 export interface EasyOrderCartItem {
@@ -424,14 +486,44 @@ export class EasyOrderClient {
     return res.json();
   }
 
-  /** Verifies credentials by making the smallest possible authenticated call. */
-  async testConnection(): Promise<{ ok: true } | { ok: false; error: string }> {
-    try {
-      await this.request(EASYORDER_ENDPOINT.ordersPath, { [EASYORDER_ENDPOINT.pageParam]: "1" });
-      return { ok: true };
-    } catch (err: any) {
-      return { ok: false, error: String(err?.message ?? err) };
+  /**
+   * Verifies credentials with a read-only GET. Imports nothing and mutates nothing.
+   *
+   * Tries each configured harmless path in turn: a 404 only means "this provider doesn't
+   * expose that path", so we fall through to the next. Any OTHER failure (401/429/5xx/
+   * network) is conclusive and returned immediately — retrying those against more paths
+   * would just repeat the same rejection.
+   */
+  async testConnection(): Promise<ConnectionTestResult> {
+    let lastFailure: ConnectionTestResult | null = null;
+
+    for (const path of EASYORDER_ENDPOINT.connectionTestPaths) {
+      try {
+        const params: Record<string, string> =
+          path === EASYORDER_ENDPOINT.ordersPath ? { [EASYORDER_ENDPOINT.pageParam]: "1" } : {};
+        const body = await this.request(path, params);
+        return { connected: true, storeName: extractStoreIdentity(body) };
+      } catch (err: any) {
+        const status: number | undefined = err?.status;
+        const failure: ConnectionTestResult = {
+          connected: false,
+          status,
+          errorCode: connectionErrorCode(status),
+          errorMessage: sanitizeErrorMessage(String(err?.message ?? err), this.token),
+        };
+        // Only a missing endpoint is worth trying the next candidate for.
+        if (status !== 404) return failure;
+        lastFailure = failure;
+      }
     }
+
+    return (
+      lastFailure ?? {
+        connected: false,
+        errorCode: "ENDPOINT_NOT_FOUND",
+        errorMessage: "لم يُعثر على أي endpoint صالح للاختبار",
+      }
+    );
   }
 
   async fetchOrdersByDateRange(from: Date, to: Date): Promise<EasyOrderPayload[]> {
@@ -567,17 +659,48 @@ export async function syncOrdersByDateRange(opts: {
   };
 }
 
-/** Tests a channel's stored credentials without importing anything. */
-export async function testChannelConnection(channelId: number, fetchImpl?: FetchLike) {
+/**
+ * Tests a channel's stored credentials with a read-only call.
+ *
+ * Guarantees: imports nothing, and writes nothing except this channel's own
+ * connection-status columns (lastConnectionTestAt / lastConnectionStatus /
+ * lastConnectionError / externalStoreName). No order, product or sync_logs row is touched.
+ * The API token is read server-side only and never appears in the returned value.
+ */
+export async function testChannelConnection(
+  channelId: number,
+  fetchImpl?: FetchLike
+): Promise<ConnectionTestResult> {
   const channel = await getSalesChannelWithSecrets(channelId);
   if (!channel) throw new Error(`قناة البيع #${channelId} غير موجودة`);
+
   if (!channel.apiToken?.trim()) {
-    return { ok: false as const, error: "لا يوجد API Token مضبوط لهذه القناة" };
+    const result: ConnectionTestResult = {
+      connected: false,
+      errorCode: "NO_TOKEN",
+      errorMessage: "لا يوجد API Token مضبوط لهذه القناة",
+    };
+    await updateSalesChannelConnectionStatus(channelId, result);
+    return result;
   }
-  const client = new EasyOrderClient({
-    apiToken: channel.apiToken,
-    baseUrl: channel.apiBaseUrl,
-    fetchImpl,
-  });
-  return client.testConnection();
+
+  let result: ConnectionTestResult;
+  try {
+    const client = new EasyOrderClient({
+      apiToken: channel.apiToken,
+      baseUrl: channel.apiBaseUrl,
+      fetchImpl,
+    });
+    result = await client.testConnection();
+  } catch (err: any) {
+    // Covers non-HTTP failures (bad base URL, DNS, aborted socket).
+    result = {
+      connected: false,
+      errorCode: "NETWORK_ERROR",
+      errorMessage: sanitizeErrorMessage(String(err?.message ?? err), channel.apiToken),
+    };
+  }
+
+  await updateSalesChannelConnectionStatus(channelId, result);
+  return result;
 }

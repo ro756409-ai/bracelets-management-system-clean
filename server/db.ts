@@ -1496,6 +1496,28 @@ export async function updateSalesChannelSyncStatus(
   }).where(eq(salesChannels.id, id));
 }
 
+/**
+ * Records the outcome of a read-only connection test. This is the ONLY write a connection
+ * test performs — it never touches orders, products or sync logs.
+ */
+export async function updateSalesChannelConnectionStatus(
+  id: number,
+  result: { connected: boolean; storeName?: string | null; errorCode?: string; errorMessage?: string }
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(salesChannels).set({
+    lastConnectionTestAt: new Date(),
+    lastConnectionStatus: result.connected ? "connected" : "failed",
+    lastConnectionError: result.connected
+      ? null
+      : [result.errorCode, result.errorMessage].filter(Boolean).join(": ") || null,
+    // Only overwrite the stored store name when the provider actually reported one, so a
+    // later endpoint that omits it doesn't erase a previously-discovered value.
+    ...(result.connected && result.storeName ? { externalStoreName: result.storeName } : {}),
+  }).where(eq(salesChannels.id, id));
+}
+
 // ==================== SYNC LOGS ====================
 export async function createSyncLog(data: InsertSyncLog): Promise<number> {
   const db = await getDb();
