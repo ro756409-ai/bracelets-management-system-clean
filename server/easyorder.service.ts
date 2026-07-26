@@ -2,18 +2,27 @@
  * EasyOrder integration service — API client, order normalization, and the shared
  * idempotent upsert pipeline used by BOTH the webhook and the manual "Sync Now" button.
  *
- * ⚠️ API CONTRACT STATUS (read before enabling manual sync)
- * The *payload* shape below is verified — it mirrors the real webhook payloads this app has
- * been receiving in production (see the EasyOrderPayload interface that has been in
- * easyorderWebhook.ts). What is NOT verified is the *pull* API: the endpoint path, its
- * query-parameter names for a date range, its auth header, and its response envelope were
- * not available when this was written (no API key or docs were provided).
+ * API CONTRACT STATUS — checked against the official public API docs
+ * (https://public-api-docs.easy-orders.net, July 2026):
  *
- * Everything provider-specific is therefore isolated in EASYORDER_ENDPOINT below and is
- * configurable per channel (apiBaseUrl/apiToken) or via env. `syncOrdersByDateRange` will
- * refuse to run rather than guess when a channel has no token configured. Verify the three
- * marked constants against real EasyOrder docs before relying on manual sync; the webhook
- * path needs none of this and works today.
+ *   VERIFIED  base URL      https://api.easy-orders.net/api/v1
+ *   VERIFIED  auth header   `Api-Key: <key>` (NOT Authorization: Bearer)
+ *   VERIFIED  read test     GET /external-apps/products            (needs products:read)
+ *   VERIFIED  single order  GET /external-apps/orders/:order_id     (needs orders:read)
+ *
+ *   ⚠️ NOT AVAILABLE: the public API documents NO list/search endpoint for orders — only
+ *   fetch-one-by-id. `fetchOrdersByDateRange` therefore has no documented endpoint to call
+ *   and manual "Sync Now" cannot work as designed; orders arrive via webhook instead. The
+ *   ordersPath/fromParam/toParam constants below remain unverified guesses and are kept
+ *   only so the code compiles and can be pointed at a private endpoint if one is granted.
+ *
+ * The *payload* shape is verified — it mirrors the real webhook payloads this app has been
+ * receiving in production (see EasyOrderPayload in easyorderWebhook.ts).
+ *
+ * Everything provider-specific stays isolated in EASYORDER_ENDPOINT below and is
+ * configurable per channel (apiBaseUrl/apiToken) or via env. `syncOrdersByDateRange` refuses
+ * to run rather than guess when a channel has no token configured. The webhook path needs
+ * none of this and works today.
  */
 import { normalizeEgyptianPhone } from "../shared/phone";
 import {
@@ -34,22 +43,30 @@ import { matchExternalItem, type MatchCatalog } from "./productMatching";
 
 // ==================== Provider contract (VERIFY against real docs) ====================
 const EASYORDER_ENDPOINT = {
-  /** Default base URL; overridden per channel via sales_channels.apiBaseUrl or EASYORDER_API_BASE_URL. */
+  /**
+   * Default base URL; overridden per channel via sales_channels.apiBaseUrl or
+   * EASYORDER_API_BASE_URL. VERIFIED against the public API docs.
+   */
   defaultBaseUrl: process.env.EASYORDER_API_BASE_URL || "https://api.easy-orders.net/api/v1",
-  /** Path appended to the base URL to list orders. ⚠️ UNVERIFIED. */
+  /**
+   * Path for listing orders. ⚠️ UNVERIFIED — the public API documents no list endpoint
+   * (only GET /external-apps/orders/:order_id). Kept for a private/undocumented endpoint.
+   */
   ordersPath: "/external-apps/orders",
-  /** Query param names for the date range. ⚠️ UNVERIFIED. */
+  /** Query param names for the date range. ⚠️ UNVERIFIED (see ordersPath). */
   fromParam: "created_at_min",
   toParam: "created_at_max",
   pageParam: "page",
   /**
-   * Read-only endpoints tried, in order, by the connection test. The first one that
-   * answers 2xx wins. All are GETs that never mutate anything. ⚠️ PATHS UNVERIFIED —
-   * the list is ordered cheapest-and-most-informative first, falling back to a
-   * single-page order read which is still read-only and harmless.
+   * Read-only endpoint used by the connection test. VERIFIED: documented as
+   * `GET /external-apps/products`, requires the `products:read` permission on the key.
+   * It never mutates anything and is the cheapest way to prove base URL + token are valid.
    */
-  connectionTestPaths: ["/external-apps/store", "/external-apps/me", "/external-apps/orders"] as const,
-  /** Builds the auth headers. ⚠️ UNVERIFIED (assumes an Api-Key header). */
+  connectionTestPaths: ["/external-apps/products"] as const,
+  /**
+   * Builds the auth headers. VERIFIED: the docs use a custom `Api-Key` header, explicitly
+   * NOT `Authorization: Bearer`.
+   */
   authHeaders: (token: string): Record<string, string> => ({ "Api-Key": token }),
 } as const;
 
@@ -88,7 +105,11 @@ export function sanitizeErrorMessage(message: string, token?: string): string {
 /** Maps an HTTP status to a stable, non-sensitive code the UI can branch on. */
 export function connectionErrorCode(status: number | undefined): string {
   if (status === undefined) return "NETWORK_ERROR";
-  if (status === 401 || status === 403) return "INVALID_CREDENTIALS";
+  if (status === 401) return "INVALID_CREDENTIALS";
+  // 403 means the key itself is accepted but lacks the scope the call needs (the
+  // connection test needs `products:read`). Kept distinct so a permissions problem is not
+  // mistaken for a bad token.
+  if (status === 403) return "INSUFFICIENT_PERMISSIONS";
   if (status === 404) return "ENDPOINT_NOT_FOUND";
   if (status === 429) return "RATE_LIMITED";
   if (status >= 500) return "PROVIDER_ERROR";
@@ -499,9 +520,9 @@ export class EasyOrderClient {
 
     for (const path of EASYORDER_ENDPOINT.connectionTestPaths) {
       try {
-        const params: Record<string, string> =
-          path === EASYORDER_ENDPOINT.ordersPath ? { [EASYORDER_ENDPOINT.pageParam]: "1" } : {};
-        const body = await this.request(path, params);
+        // No query params: the documented test endpoint needs none, and paging a product
+        // list would only make the check more expensive without proving anything more.
+        const body = await this.request(path);
         return { connected: true, storeName: extractStoreIdentity(body) };
       } catch (err: any) {
         const status: number | undefined = err?.status;

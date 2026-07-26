@@ -281,9 +281,10 @@ describe("extractStoreIdentity", () => {
 });
 
 describe("connectionErrorCode", () => {
-  it("maps auth failures to INVALID_CREDENTIALS", () => {
+  it("maps auth failures, separating a bad key from a missing scope", () => {
     expect(connectionErrorCode(401)).toBe("INVALID_CREDENTIALS");
-    expect(connectionErrorCode(403)).toBe("INVALID_CREDENTIALS");
+    // 403 = key valid, scope missing (e.g. no products:read) — a different fix entirely
+    expect(connectionErrorCode(403)).toBe("INSUFFICIENT_PERMISSIONS");
   });
   it("maps the remaining statuses to stable codes", () => {
     expect(connectionErrorCode(404)).toBe("ENDPOINT_NOT_FOUND");
@@ -344,14 +345,40 @@ describe("EasyOrderClient.testConnection", () => {
     expect(methods.every((m) => m === "GET")).toBe(true);
   });
 
-  it("falls through to the next candidate path on 404", async () => {
-    const { fn, calls } = makeFetch([
-      { ok: false, status: 404, body: {} },           // /store missing
-      { ok: true, status: 200, body: { name: "متجر" } }, // /me works
-    ]);
+  // The endpoint is no longer guessed: the public API docs specify
+  // GET /api/v1/external-apps/products with an `Api-Key` header.
+  it("calls the documented products endpoint on the documented base URL", async () => {
+    const { fn, calls } = makeFetch([{ ok: true, status: 200, body: {} }]);
+    await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).testConnection();
+    expect(calls.length).toBe(1); // one verified path, no guessing
+    expect(calls[0]).toBe("https://api.easy-orders.net/api/v1/external-apps/products");
+  });
+
+  it("authenticates with the Api-Key header, not Authorization: Bearer", async () => {
+    let headers: Record<string, string> = {};
+    const fetchImpl: FetchLike = async (_url, init) => {
+      headers = (init?.headers ?? {}) as Record<string, string>;
+      return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    };
+    await new EasyOrderClient({ apiToken: "secret-token", fetchImpl }).testConnection();
+    expect(headers["Api-Key"]).toBe("secret-token");
+    expect(headers["Authorization"]).toBeUndefined();
+  });
+
+  it("reports a 404 as ENDPOINT_NOT_FOUND — the documented path moved", async () => {
+    const { fn, calls } = makeFetch([{ ok: false, status: 404, body: {} }]);
     const r = await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).testConnection();
-    expect(r.connected).toBe(true);
-    expect(calls.length).toBe(2);
+    expect(r.connected).toBe(false);
+    expect(r.errorCode).toBe("ENDPOINT_NOT_FOUND");
+    expect(calls.length).toBe(1);
+  });
+
+  it("reports a 403 as a missing scope, not a bad token", async () => {
+    const { fn } = makeFetch([{ ok: false, status: 403, body: { message: "forbidden" } }]);
+    const r = await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).testConnection();
+    expect(r.connected).toBe(false);
+    // The key is valid; it just lacks products:read — a different fix for the user.
+    expect(r.errorCode).toBe("INSUFFICIENT_PERMISSIONS");
   });
 
   it("stops immediately on 401 — a rejected credential is conclusive", async () => {
@@ -359,7 +386,7 @@ describe("EasyOrderClient.testConnection", () => {
     const r = await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).testConnection();
     expect(r.connected).toBe(false);
     expect(r.errorCode).toBe("INVALID_CREDENTIALS");
-    expect(calls.length).toBe(1); // did NOT try the other paths
+    expect(calls.length).toBe(1); // conclusive — no retry
   });
 
   it("returns a structured failure with code, message and status", async () => {
