@@ -23,14 +23,14 @@ import jsQR from "jsqr";
 import { BrandMark } from "@/components/BrandMark";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
-  new:       { label: "جديد",    color: "text-blue-700",   bg: "bg-blue-50 border-blue-200" },
-  confirmed: { label: "مؤكد",    color: "text-green-700",  bg: "bg-green-50 border-green-200" },
-  postponed: { label: "مؤجل",    color: "text-amber-700",  bg: "bg-amber-50 border-amber-200" },
-  cancelled: { label: "ملغي",    color: "text-red-700",    bg: "bg-red-50 border-red-200" },
-  preparing: { label: "جاري التجهيز", color: "text-purple-700", bg: "bg-purple-50 border-purple-200" },
-  shipped:   { label: "تم الشحن", color: "text-indigo-700", bg: "bg-indigo-50 border-indigo-200" },
-  delivered: { label: "تم التسليم", color: "text-teal-700", bg: "bg-teal-50 border-teal-200" },
-  no_answer: { label: "لم يرد",  color: "text-orange-700", bg: "bg-orange-50 border-orange-200" },
+  new:       { label: "جديد",         color: "text-primary",            bg: "bg-accent border-primary/30" },
+  confirmed: { label: "مؤكد",         color: "text-[var(--success)]",   bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
+  postponed: { label: "مؤجل",         color: "text-[var(--warning)]",   bg: "bg-[var(--warning)]/10 border-[var(--warning)]/30" },
+  cancelled: { label: "ملغي",         color: "text-destructive",        bg: "bg-destructive/10 border-destructive/30" },
+  preparing: { label: "جاري التجهيز", color: "text-primary",            bg: "bg-accent border-primary/30" },
+  shipped:   { label: "تم الشحن",     color: "text-primary",            bg: "bg-accent border-primary/30" },
+  delivered: { label: "تم التسليم",   color: "text-[var(--success)]",   bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
+  no_answer: { label: "لم يرد",       color: "text-[var(--warning)]",   bg: "bg-[var(--warning)]/10 border-[var(--warning)]/30" },
 };
 
 const CANCEL_REASONS = [
@@ -56,14 +56,17 @@ type Order = {
   postponedTo?: Date | null;
   isDuplicate?: boolean;
   createdAt?: string | null;
+  /** Set when an order arrived with items that could not be mapped to the catalog. */
+  needsReview?: boolean | null;
+  reviewReason?: string | null;
 };
 
 const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
-  easyorder: { label: "Easy Order", color: "bg-blue-100 text-blue-700" },
-  facebook:  { label: "فيسبوك", color: "bg-indigo-100 text-indigo-700" },
-  whatsapp:  { label: "واتسآب", color: "bg-green-100 text-green-700" },
-  shopify:   { label: "Shopify", color: "bg-purple-100 text-purple-700" },
-  manual:    { label: "يدوي", color: "bg-gray-100 text-gray-600" },
+  easyorder: { label: "Easy Order", color: "bg-muted text-muted-foreground" },
+  facebook:  { label: "فيسبوك", color: "bg-muted text-muted-foreground" },
+  whatsapp:  { label: "واتسآب", color: "bg-muted text-muted-foreground" },
+  shopify:   { label: "Shopify", color: "bg-muted text-muted-foreground" },
+  manual:    { label: "يدوي", color: "bg-muted text-muted-foreground" },
 };
 
 export default function EmployeeDashboard() {
@@ -183,7 +186,8 @@ export default function EmployeeDashboard() {
   // Build query params with optional date filter + business group filter
   const dateFilterParams = useMemo(() => {
     const params: { status?: string; limit: number; dateFrom?: Date; dateTo?: Date; businessIds?: number[] } = {
-      status: activeTab === "all" ? undefined : activeTab,
+      // needs_review is a flag, not a status — fetch unfiltered and narrow client-side
+      status: activeTab === "all" || activeTab === "needs_review" ? undefined : activeTab,
       limit: 200,
     };
     if (dateFrom) params.dateFrom = new Date(dateFrom + 'T00:00:00');
@@ -488,7 +492,10 @@ export default function EmployeeDashboard() {
     });
   };
 
-  const filteredOrders = (ordersData?.orders ?? []).filter(o => {
+  const reviewCount = (ordersData?.orders ?? []).filter((o: any) => o.needsReview).length;
+
+  const filteredOrders = (ordersData?.orders ?? []).filter((o: any) => {
+    if (activeTab === "needs_review" && !o.needsReview) return false;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (
@@ -506,12 +513,13 @@ export default function EmployeeDashboard() {
     { key: "confirmed", label: "مؤكد",    count: displayStats?.confirmed ?? 0 },
     { key: "no_answer", label: "لم يرد",  count: displayStats?.no_answer ?? 0 },
     { key: "cancelled", label: "ملغي",    count: displayStats?.cancelled ?? 0 },
+    { key: "needs_review", label: "تحتاج مراجعة", count: reviewCount },
   ];
 
   const employeeName = meData?.name ?? empSession?.name ?? "الموظف";
 
   return (
-    <div className="min-h-screen bg-gray-50" dir="rtl">
+    <div className="min-h-screen bg-background" dir="rtl">
       {/* Header */}
       <header
         className="sticky top-0 z-40 shadow-md"
@@ -1003,26 +1011,26 @@ export default function EmployeeDashboard() {
         {/* Stats Row */}
         <div className="grid grid-cols-4 gap-2">
           {[
-            { label: "الكل", value: displayStats?.total ?? 0, color: "text-gray-700" },
-            { label: "جديد", value: displayStats?.new ?? 0, color: "text-blue-600" },
-            { label: "مؤكد", value: displayStats?.confirmed ?? 0, color: "text-green-600" },
-            { label: "مؤجل", value: displayStats?.postponed ?? 0, color: "text-amber-600" },
+            { label: "الكل", value: displayStats?.total ?? 0, color: "text-foreground" },
+            { label: "جديد", value: displayStats?.new ?? 0, color: "text-primary" },
+            { label: "مؤكد", value: displayStats?.confirmed ?? 0, color: "text-[var(--success)]" },
+            { label: "مؤجل", value: displayStats?.postponed ?? 0, color: "text-[var(--warning)]" },
           ].map(s => (
-            <div key={s.label} className="bg-white rounded-xl p-3 text-center shadow-sm border border-gray-100">
+            <div key={s.label} className="rounded-[var(--radius-brand-md)] border border-border bg-card p-3 text-center shadow-[var(--shadow-card)]">
               <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{s.label}</p>
             </div>
           ))}
         </div>
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="بحث بالاسم أو الهاتف أو رقم الأوردر..."
-            className="pr-10 bg-white border-gray-200"
+            className="pr-10 bg-card"
           />
         </div>
 
@@ -1034,14 +1042,14 @@ export default function EmployeeDashboard() {
               onClick={() => setActiveTab(tab.key)}
               className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-1.5 ${
                 activeTab === tab.key
-                  ? "bg-amber-700 text-white shadow-sm"
-                  : "bg-white text-gray-600 border border-gray-200 hover:border-amber-300"
+                  ? "bg-primary text-primary-foreground shadow-[var(--shadow-card)]"
+                  : "bg-card text-muted-foreground border border-border hover:border-primary/40"
               }`}
             >
               {tab.label}
               {tab.count > 0 && (
                 <span className={`text-xs rounded-full px-1.5 py-0.5 ${
-                  activeTab === tab.key ? "bg-white/20 text-white" : "bg-gray-100 text-gray-500"
+                  activeTab === tab.key ? "bg-white/20" : "bg-muted"
                 }`}>
                   {tab.count}
                 </span>
@@ -1054,17 +1062,17 @@ export default function EmployeeDashboard() {
         {isLoading ? (
           <div className="space-y-3">
             {[1,2,3].map(i => (
-              <div key={i} className="bg-white rounded-xl p-4 animate-pulse border border-gray-100">
-                <div className="h-4 bg-gray-200 rounded w-3/4 mb-2" />
-                <div className="h-3 bg-gray-100 rounded w-1/2" />
+              <div key={i} className="animate-pulse rounded-[var(--radius-brand-md)] border border-border bg-card p-4">
+                <div className="mb-2 h-4 w-3/4 rounded bg-muted" />
+                <div className="h-3 w-1/2 rounded bg-muted/60" />
               </div>
             ))}
           </div>
         ) : filteredOrders.length === 0 ? (
-          <div className="bg-white rounded-xl p-10 text-center border border-gray-100 shadow-sm">
-            <ShoppingBag className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 font-medium">لا توجد أوردرات</p>
-            <p className="text-gray-400 text-sm mt-1">
+          <div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-10 text-center shadow-[var(--shadow-card)]">
+            <ShoppingBag className="mx-auto mb-3 h-10 w-10 text-muted-foreground/40" />
+            <p className="font-medium text-muted-foreground">لا توجد أوردرات</p>
+            <p className="mt-1 text-sm text-muted-foreground/70">
               {search ? "جرب بحثاً مختلفاً" : "لم يتم تعيين أوردرات لك بعد"}
             </p>
           </div>
@@ -1078,7 +1086,7 @@ export default function EmployeeDashboard() {
               return (
                 <div
                   key={order.id}
-                  className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden"
+                  className="overflow-hidden rounded-[var(--radius-brand-md)] border border-border bg-card shadow-[var(--shadow-card)]"
                 >
                   {/* Order Header */}
                   <div
@@ -1088,7 +1096,7 @@ export default function EmployeeDashboard() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-gray-900">{order.customerName}</span>
+                          <span className="font-bold">{order.customerName}</span>
                           <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusConf.bg} ${statusConf.color}`}>
                             {statusConf.label}
                           </span>
@@ -1097,8 +1105,16 @@ export default function EmployeeDashboard() {
                               {SOURCE_LABELS[order.source].label}
                             </span>
                           )}
+                          {/* Orders whose items could not be mapped to the catalog need a
+                              human before they are confirmed — say so up front. */}
+                          {order.needsReview && (
+                            <span className="flex items-center gap-1 rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/15 px-2 py-0.5 text-xs font-medium text-[var(--warning)]">
+                              <AlertCircle className="h-3 w-3" />
+                              تحتاج مراجعة
+                            </span>
+                          )}
                         </div>
-                        <div className="flex items-center gap-3 mt-1.5 text-sm text-gray-500">
+                        <div className="flex items-center gap-3 mt-1.5 text-sm text-muted-foreground">
                           <span className="flex items-center gap-1">
                             <Phone className="h-3.5 w-3.5" />
                             <span dir="ltr">{order.customerPhone}</span>
@@ -1110,11 +1126,11 @@ export default function EmployeeDashboard() {
                         </div>
                         {/* العنوان الكامل - ظاهر دائماً */}
                         <div className="flex items-start gap-1.5 mt-1.5 text-sm">
-                          <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-500" />
-                          <span className="text-gray-700 leading-snug">{order.customerAddress}</span>
+                          <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
+                          <span className="leading-snug">{order.customerAddress}</span>
                         </div>
                         <div className="flex items-center gap-3 mt-1 text-sm">
-                          <span className="flex items-center gap-1 text-gray-600">
+                          <span className="flex items-center gap-1 text-muted-foreground">
                             <Package className="h-3.5 w-3.5" />
                             {order.productName}
                             {((order as any).color || (order as any).size) && (
@@ -1123,7 +1139,7 @@ export default function EmployeeDashboard() {
                               </span>
                             )}
                           </span>
-                          <span className="font-semibold text-amber-700">
+                          <span className="font-semibold">
                             {Number(order.totalAmount).toLocaleString()} ج.م
                           </span>
                         </div>
@@ -1144,17 +1160,31 @@ export default function EmployeeDashboard() {
 
                   {/* Expanded Details */}
                   {isExpanded && (
-                    <div className="border-t border-gray-100 bg-gray-50 px-4 py-3 space-y-3">
+                    <div className="border-t border-border bg-muted/40 px-4 py-3 space-y-3">
+                      {/* Why this order was flagged, verbatim from the import/parse step */}
+                      {order.needsReview && order.reviewReason && (
+                        <div className="flex items-start gap-2 rounded-[var(--radius-brand-md)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3">
+                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--warning)]" />
+                          <div className="space-y-0.5">
+                            <p className="text-xs font-semibold">سبب المراجعة</p>
+                            <p className="text-xs text-muted-foreground">{order.reviewReason}</p>
+                            <p className="text-[11px] text-muted-foreground">
+                              صحّح الصنف من «تعديل بيانات» قبل التأكيد.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Address */}
                       <div>
-                        <p className="text-xs text-gray-400 mb-1">العنوان الكامل</p>
-                        <p className="text-sm text-gray-700">{order.customerAddress}</p>
+                        <p className="mb-1 text-xs text-muted-foreground">العنوان الكامل</p>
+                        <p className="text-sm">{order.customerAddress}</p>
                       </div>
 
                       {/* Notes - قابلة للتعديل */}
                       <div>
                         <div className="flex items-center justify-between mb-1">
-                          <p className="text-xs text-gray-400 flex items-center gap-1">
+                          <p className="flex items-center gap-1 text-xs text-muted-foreground">
                             <MessageSquare className="h-3 w-3" />
                             ملاحظات الموظف
                           </p>
@@ -1162,7 +1192,7 @@ export default function EmployeeDashboard() {
                             <button
                               onClick={() => handleSaveNotes(order.id)}
                               disabled={updateNotesMutation.isPending}
-                              className="text-xs text-green-600 hover:text-green-700 flex items-center gap-1 font-medium"
+                              className="flex items-center gap-1 text-xs font-medium text-[var(--success)] hover:opacity-80"
                             >
                               <Save className="h-3 w-3" />
                               {updateNotesMutation.isPending ? 'جاري...' : 'حفظ'}
@@ -1173,14 +1203,14 @@ export default function EmployeeDashboard() {
                           value={editingNotes[order.id] ?? order.notes ?? ''}
                           onChange={e => setEditingNotes(prev => ({ ...prev, [order.id]: e.target.value }))}
                           placeholder="اكتب ملاحظة على الأوردر..."
-                          className="text-sm min-h-[60px] bg-amber-50/50 border-amber-100 focus:border-amber-300"
+                          className="min-h-[60px] bg-card text-sm"
                           rows={2}
                         />
                       </div>
 
                       {/* Postponed date */}
                       {order.status === "postponed" && order.postponedTo && (
-                        <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                        <div className="flex items-center gap-2 rounded-[var(--radius-brand-md)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-sm text-[var(--warning)]">
                           <Clock className="h-4 w-4" />
                           مؤجل لـ: {new Date(order.postponedTo).toLocaleDateString("ar-EG")}
                         </div>
@@ -1191,7 +1221,7 @@ export default function EmployeeDashboard() {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-8 text-xs border-blue-200 text-blue-700 hover:bg-blue-50 gap-1"
+                          className="h-8 gap-1 text-xs"
                           onClick={() => {
                             setEditDialog({ open: true, orderId: order.id });
                             setEditProductName(order.productName ?? "");
@@ -1217,7 +1247,7 @@ export default function EmployeeDashboard() {
                         </Button>
                         {order.isDuplicate ? (
                           <button
-                            className="flex items-center gap-1 text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-md px-2 py-1 hover:bg-orange-100"
+                            className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-1 text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20"
                             onClick={() => unmarkDuplicateMutation.mutate({ orderId: order.id })}
                             disabled={unmarkDuplicateMutation.isPending}
                             title="إلغاء تعليم التكرار"
@@ -1226,7 +1256,7 @@ export default function EmployeeDashboard() {
                           </button>
                         ) : (
                           <button
-                            className="flex items-center gap-1 text-xs text-gray-500 border border-gray-200 rounded-md px-2 py-1 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+                            className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-border px-2 py-1 text-xs text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
                             onClick={() => markDuplicateMutation.mutate({ orderId: order.id })}
                             disabled={markDuplicateMutation.isPending}
                             title="تعليم كمكرر"
@@ -1241,7 +1271,7 @@ export default function EmployeeDashboard() {
                         <div className="flex gap-2 pt-1">
                           <Button
                             size="sm"
-                            className="flex-1 bg-green-600 hover:bg-green-700 text-white h-9"
+                            className="h-9 flex-1 bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90"
                             onClick={() => confirmMutation.mutate({ orderId: order.id })}
                             disabled={confirmMutation.isPending}
                           >
@@ -1251,7 +1281,7 @@ export default function EmployeeDashboard() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="flex-1 border-amber-300 text-amber-700 hover:bg-amber-50 h-9"
+                            className="h-9 flex-1 border-[var(--warning)]/50 text-[var(--warning)] hover:bg-[var(--warning)]/10"
                             onClick={() => {
                               setPostponeDialog({ open: true, orderId: order.id });
                               setPostponeDate("");
@@ -1264,7 +1294,7 @@ export default function EmployeeDashboard() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="border-orange-300 text-orange-600 hover:bg-orange-50 h-9 px-3"
+                            className="h-9 px-3"
                             onClick={() => noAnswerMutation.mutate({ orderId: order.id })}
                             disabled={noAnswerMutation.isPending}
                             title="لم يرد"
@@ -1274,7 +1304,7 @@ export default function EmployeeDashboard() {
                           <Button
                             size="sm"
                             variant="outline"
-                            className="flex-1 border-red-300 text-red-600 hover:bg-red-50 h-9"
+                            className="h-9 flex-1 border-destructive/50 text-destructive hover:bg-destructive/10"
                             onClick={() => {
                               setCancelDialog({ open: true, orderId: order.id });
                               setCancelReason("");
