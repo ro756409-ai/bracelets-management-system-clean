@@ -36,6 +36,8 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --color-error: var(--error);
   --color-error-foreground: var(--error-foreground);
   --color-border: var(--border);
@@ -64,6 +66,13 @@
   --radius-brand-xl: 24px;
   --radius-brand-pill: 32px;
   --radius: var(--radius-brand-md);
+
+  /* Layout scale — one source of truth for card padding, section gaps and table row
+     heights, so pages stop inventing their own spacing. */
+  --space-card: 1.25rem;
+  --space-section: 1.5rem;
+  --row-h-comfortable: 3.5rem;
+  --row-h-compact: 2.5rem;
   --font-brand: 'IBM Plex Sans Arabic', 'Inter', 'Cairo', 'Tajawal', sans-serif;
   --font-brand-en: 'Inter', 'IBM Plex Sans Arabic', sans-serif;
 
@@ -95,6 +104,10 @@
   --success-foreground: #FFFFFF;
   --warning: #F59E0B;
   --warning-foreground: #1E293B;
+  /* Informational (neutral-positive) — distinct from success and warning so a hint is not
+     mistaken for a problem. Matches --chart-2 so charts and callouts agree. */
+  --info: #3B82F6;
+  --info-foreground: #FFFFFF;
   --error: #EF4444;
   --error-foreground: #FFFFFF;
   --border: #E2E8F0;
@@ -139,6 +152,8 @@
   --success-foreground: #052E1E;
   --warning: #FBBF24;
   --warning-foreground: #221604;
+  --info: #60A5FA;
+  --info-foreground: #04203F;
   --error: #EF4444;
   --error-foreground: #FFFFFF;
   --border: #334155;
@@ -167,6 +182,36 @@
     @apply bg-background text-foreground;
     font-family: var(--font-brand);
     direction: rtl;
+    /* Arabic needs more leading than Latin at the same size; 1.75 keeps long
+       governorate/address strings readable instead of cramped. */
+    line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Headings ride tighter than body copy so they read as one block. */
+  h1, h2, h3, h4, h5, h6 {
+    line-height: 1.4;
+    text-wrap: balance;
+  }
+
+  /* Money and counts must line up column-to-column in RTL tables. Applied via the
+     .tabular-nums utility on numeric cells rather than globally, so Arabic text keeps
+     its proportional forms. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* Latin/Arabic-Indic digits inside an RTL run must not reorder. */
+  .force-ltr {
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+
+  /* Nothing may push the page sideways — wide content scrolls in its own container. */
+  html, body {
+    overflow-x: hidden;
+    max-width: 100%;
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
