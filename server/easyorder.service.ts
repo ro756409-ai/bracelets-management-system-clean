@@ -58,6 +58,11 @@ const EASYORDER_ENDPOINT = {
   toParam: "created_at_max",
   pageParam: "page",
   /**
+   * Single-order read. VERIFIED: `GET /external-apps/orders/:order_id`, needs `orders:read`.
+   * This is the only documented way to pull an order — there is no list endpoint.
+   */
+  orderByIdPath: (orderId: string) => `/external-apps/orders/${encodeURIComponent(orderId)}`,
+  /**
    * Read-only endpoint used by the connection test. VERIFIED: documented as
    * `GET /external-apps/products`, requires the `products:read` permission on the key.
    * It never mutates anything and is the cheapest way to prove base URL + token are valid.
@@ -159,6 +164,24 @@ export interface EasyOrderPayload {
   payment_method?: string;
   cart_items: EasyOrderCartItem[];
   short_id?: number;
+}
+
+/**
+ * True when a value carries the minimum an order needs to be stored: an id, a customer
+ * name, and at least one cart item. Used to decide whether an API response is worth
+ * preferring over a webhook payload we already have.
+ */
+export function isUsableOrderPayload(value: any): value is EasyOrderPayload {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    value.id != null &&
+    String(value.id).trim() &&
+    typeof value.full_name === "string" &&
+    value.full_name.trim() &&
+    Array.isArray(value.cart_items) &&
+    value.cart_items.length > 0
+  );
 }
 
 /** Fetch function seam so tests can drive the client without real network access. */
@@ -547,6 +570,20 @@ export class EasyOrderClient {
     );
   }
 
+  /**
+   * Fetches one order by its EasyOrder id via the documented single-order endpoint.
+   *
+   * Returns null when the response does not carry a usable order, so a caller that already
+   * holds a webhook payload can fall back to it instead of discarding a real order.
+   * Throws only on transport/HTTP failures, which the caller decides how to treat.
+   */
+  async fetchOrderById(orderId: string): Promise<EasyOrderPayload | null> {
+    const data = await this.request(EASYORDER_ENDPOINT.orderByIdPath(orderId));
+    // Accept the common envelope shapes rather than assuming exactly one.
+    const order = data?.data ?? data?.order ?? data;
+    return isUsableOrderPayload(order) ? (order as EasyOrderPayload) : null;
+  }
+
   async fetchOrdersByDateRange(from: Date, to: Date): Promise<EasyOrderPayload[]> {
     const data = await this.request(EASYORDER_ENDPOINT.ordersPath, {
       [EASYORDER_ENDPOINT.fromParam]: from.toISOString(),
@@ -569,6 +606,36 @@ export interface SyncSummary {
   needsReview: number;
   failed: number;
   error?: string;
+}
+
+/**
+ * Re-reads an order from EasyOrder by id, for callers that only have an id (a status-update
+ * webhook) or that want the provider's canonical copy rather than the pushed one.
+ *
+ * Never throws: every failure resolves to `{ order: null, error }` so a webhook can log the
+ * reason and carry on with whatever payload it already has. Losing a real order because a
+ * secondary API call failed would be strictly worse than storing the pushed copy.
+ */
+export async function fetchEasyOrderById(
+  orderId: string,
+  options: { apiToken?: string | null; baseUrl?: string | null; fetchImpl?: FetchLike } = {}
+): Promise<{ order: EasyOrderPayload | null; error?: string }> {
+  const token = options.apiToken?.trim();
+  if (!token) return { order: null, error: "لا يوجد مفتاح API لهذه القناة" };
+  if (!orderId?.trim()) return { order: null, error: "معرّف الأوردر فارغ" };
+  try {
+    const client = new EasyOrderClient({
+      apiToken: token,
+      baseUrl: options.baseUrl ?? null,
+      fetchImpl: options.fetchImpl,
+    });
+    const order = await client.fetchOrderById(orderId.trim());
+    return order
+      ? { order }
+      : { order: null, error: "استجابة الـ API لا تحتوي بيانات أوردر صالحة" };
+  } catch (err: any) {
+    return { order: null, error: sanitizeErrorMessage(String(err?.message ?? err), token) };
+  }
 }
 
 /**

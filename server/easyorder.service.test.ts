@@ -9,6 +9,8 @@ import {
   extractStoreIdentity,
   connectionErrorCode,
   sanitizeErrorMessage,
+  isUsableOrderPayload,
+  fetchEasyOrderById,
   type EasyOrderPayload,
   type FetchLike,
 } from "./easyorder.service";
@@ -410,5 +412,77 @@ describe("EasyOrderClient.testConnection", () => {
     });
     const r = await client.testConnection();
     expect(JSON.stringify(r)).not.toContain(secret);
+  });
+});
+
+
+// ==================== Single-order read (the only documented order pull) ====================
+const FULL_ORDER = {
+  id: "eo-1",
+  full_name: "منى سيد",
+  phone: "01012345678",
+  cart_items: [{ price: 180, quantity: 2, product: { name: "آية الكرسي" } }],
+};
+
+describe("isUsableOrderPayload", () => {
+  it("accepts a payload with id, name and at least one item", () => {
+    expect(isUsableOrderPayload(FULL_ORDER)).toBe(true);
+  });
+
+  it("rejects anything missing the essentials", () => {
+    expect(isUsableOrderPayload(null)).toBe(false);
+    expect(isUsableOrderPayload({})).toBe(false);
+    expect(isUsableOrderPayload({ ...FULL_ORDER, cart_items: [] })).toBe(false);
+    expect(isUsableOrderPayload({ ...FULL_ORDER, full_name: "  " })).toBe(false);
+    expect(isUsableOrderPayload({ ...FULL_ORDER, id: "" })).toBe(false);
+  });
+});
+
+describe("EasyOrderClient.fetchOrderById", () => {
+  it("calls the documented single-order path with the id encoded", async () => {
+    const { fn, calls } = makeFetch([{ ok: true, status: 200, body: FULL_ORDER }]);
+    await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).fetchOrderById("a/b 1");
+    expect(calls[0]).toBe("https://api.easy-orders.net/api/v1/external-apps/orders/a%2Fb%201");
+  });
+
+  it("unwraps a data envelope", async () => {
+    const { fn } = makeFetch([{ ok: true, status: 200, body: { data: FULL_ORDER } }]);
+    const order = await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).fetchOrderById("eo-1");
+    expect(order?.full_name).toBe("منى سيد");
+  });
+
+  it("returns null rather than a half-built order when the response is unusable", async () => {
+    const { fn } = makeFetch([{ ok: true, status: 200, body: { id: "eo-1" } }]);
+    const order = await new EasyOrderClient({ apiToken: "t", fetchImpl: fn }).fetchOrderById("eo-1");
+    expect(order).toBeNull();
+  });
+});
+
+describe("fetchEasyOrderById", () => {
+  it("returns the order on success", async () => {
+    const { fn } = makeFetch([{ ok: true, status: 200, body: FULL_ORDER }]);
+    const r = await fetchEasyOrderById("eo-1", { apiToken: "t", fetchImpl: fn });
+    expect(r.order?.id).toBe("eo-1");
+    expect(r.error).toBeUndefined();
+  });
+
+  it("never throws on an HTTP failure — the caller must be able to fall back", async () => {
+    const { fn } = makeFetch([{ ok: false, status: 500, body: { message: "boom" } }]);
+    const r = await fetchEasyOrderById("eo-1", { apiToken: "t", fetchImpl: fn });
+    expect(r.order).toBeNull();
+    expect(typeof r.error).toBe("string");
+  });
+
+  it("reports a missing token instead of attempting a call", async () => {
+    const { fn, calls } = makeFetch([{ ok: true, status: 200, body: FULL_ORDER }]);
+    const r = await fetchEasyOrderById("eo-1", { apiToken: null, fetchImpl: fn });
+    expect(r.order).toBeNull();
+    expect(calls.length).toBe(0);
+  });
+
+  it("never leaks the token into the error message", async () => {
+    const { fn } = makeFetch([{ ok: false, status: 401, body: { message: "bad key super-secret-token" } }]);
+    const r = await fetchEasyOrderById("eo-1", { apiToken: "super-secret-token", fetchImpl: fn });
+    expect(r.error).not.toContain("super-secret-token");
   });
 });
