@@ -277,17 +277,14 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                 </Select>
               </div>
             )}
-            {visibleGroups.map((group, groupIndex) => (
-              <SidebarGroup
-                key={group.label}
-                className={`px-2 py-1 ${groupIndex > 0 ? "mt-1" : ""}`}
-              >
-                <SidebarGroupLabel className="gap-1.5 px-2">
+            {visibleGroups.map(group => (
+              <SidebarGroup key={group.label} className="px-2 py-0.5">
+                <SidebarGroupLabel className="gap-1.5">
                   <group.icon className="h-3.5 w-3.5" />
                   {group.label}
                 </SidebarGroupLabel>
                 <SidebarGroupContent>
-                  <SidebarMenu className="gap-0.5">
+                  <SidebarMenu>
                     {group.items.map(item => {
                       const isActive = location === item.path || location.startsWith(item.path + '/');
                       const showBadge = item.path === '/inventory' && lowStockCount > 0;
@@ -297,9 +294,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                             isActive={isActive}
                             onClick={() => setLocation(item.path)}
                             tooltip={item.label}
-                            className={`relative h-10 transition-all font-medium ${
-                              isActive ? "before:absolute before:right-0 before:top-1/2 before:h-5 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-sidebar-primary" : ""
-                            }`}
+                            className="h-10 transition-all font-medium"
                           >
                             <item.icon className={`h-4 w-4 shrink-0 ${isActive ? "text-sidebar-primary" : ""}`} />
                             <span className="flex-1 truncate">{item.label}</span>

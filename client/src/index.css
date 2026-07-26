@@ -71,8 +71,8 @@
      heights, so pages stop inventing their own spacing. */
   --space-card: 1.25rem;
   --space-section: 1.5rem;
-  --row-h-comfortable: 4rem;
-  --row-h-compact: 2.75rem;
+  --row-h-comfortable: 3.5rem;
+  --row-h-compact: 2.5rem;
   --font-brand: 'IBM Plex Sans Arabic', 'Inter', 'Cairo', 'Tajawal', sans-serif;
   --font-brand-en: 'Inter', 'IBM Plex Sans Arabic', sans-serif;
 

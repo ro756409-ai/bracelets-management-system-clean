@@ -1093,42 +1093,13 @@ export default function EmployeeDashboard() {
               </div>
             </div>
             {(dateFrom || dateTo) && (
-              <p className="text-xs text-[var(--warning)] bg-[var(--warning)]/10 rounded-lg px-3 py-2 mt-2 flex items-center gap-1">
+              <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-2 flex items-center gap-1">
                 <Filter className="h-3 w-3" />
                 يتم عرض الأوردرات المسندة في الفترة المحددة
               </p>
             )}
           </div>
         )}
-
-        {/* Confirmation progress — how much of today's assigned queue is actually done,
-            computed from stats already fetched above (no new query). */}
-        {(displayStats?.total ?? 0) > 0 && (() => {
-          const doneCount = (displayStats?.confirmed ?? 0) + (displayStats?.cancelled ?? 0);
-          const pct = Math.round((doneCount / (displayStats?.total ?? 1)) * 100);
-          return (
-            <div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-3 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-medium">تقدّم اليوم</span>
-                <span className="text-muted-foreground tabular-nums">{doneCount} من {displayStats?.total ?? 0} ({pct}%)</span>
-              </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-[var(--success)] transition-all" style={{ width: `${pct}%` }} />
-              </div>
-              {meData?.role === 'manager' && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 w-full justify-center gap-1 text-xs text-muted-foreground"
-                  onClick={() => setLocation('/manager-dashboard')}
-                >
-                  <TrendingUp className="h-3.5 w-3.5" />
-                  أداء الفريق الكامل
-                </Button>
-              )}
-            </div>
-          );
-        })()}
 
         {/* Stats Row — each tile doubles as a quick filter into the tab it names */}
         <div className="grid grid-cols-4 gap-2">

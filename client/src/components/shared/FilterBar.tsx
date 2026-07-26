@@ -87,14 +87,6 @@ export type FilterBarProps = {
   onClearChip?: (key: string) => void;
   onReset?: () => void;
   activeCount?: number;
-  /**
-   * Keeps the bar pinned to the top of its scroll container while the page scrolls past
-   * it — useful above a long table. Opt-in and off by default so existing callers are
-   * unaffected; pass the same offset used by any fixed page header above it (e.g. a
-   * sticky app bar) via `stickyOffset` if one exists, otherwise it pins to 0.
-   */
-  sticky?: boolean;
-  stickyOffset?: number;
   className?: string;
 };
 
@@ -112,17 +104,12 @@ export function FilterBar({
   onClearChip,
   onReset,
   activeCount = 0,
-  sticky = false,
-  stickyOffset = 0,
   className,
 }: FilterBarProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
-    <div
-      className={cn("space-y-3", sticky && "sticky z-20 bg-background/95 backdrop-blur", className)}
-      style={sticky ? { top: stickyOffset } : undefined}
-    >
+    <div className={cn("space-y-3", className)}>
       <div className="flex items-center gap-2">
         {search && <div className="min-w-0 flex-1">{search}</div>}
 
