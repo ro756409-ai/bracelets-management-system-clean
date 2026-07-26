@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,40 +36,54 @@ const EGYPT_GOVERNORATES = [
   "شمال سيناء", "سوهاج",
 ];
 
-// Product name mapping for paste parsing
-const PRODUCT_NAME_MAP: Record<string, string> = {
-  "ايه الكرسي": "آية الكرسي",
-  "اية الكرسي": "آية الكرسي",
-  "آية الكرسي": "آية الكرسي",
-  "ذكر التحصين": "ذكر التحصين",
-  "تحصين": "ذكر التحصين",
-  "عين حورس": "عين حورس",
-  "حورس": "عين حورس",
-  "فالله خير حافظا": "فالله خير حافظاً",
-  "فالله خير حافظ": "فالله خير حافظاً",
-  "الله خير حافظا": "فالله خير حافظاً",
-  "قل اعوذ برب الفلق": "قل أعوذ برب الفلق",
-  "سورة الفلق": "قل أعوذ برب الفلق",
-  "الفلق": "قل أعوذ برب الفلق",
-  "كهيعص": "كهيعص",
-  "انه من سليمان": "إنه من سليمان",
-  "إنه من سليمان": "إنه من سليمان",
-  "سليمان": "إنه من سليمان",
-  "سادة": "سادة",
-  "ساده": "سادة",
-  "منقوش": "منقوش",
-  "منقوشه": "منقوش",
-};
-
 // ID منتج كفر مرتبة ووتر بروف
 const WATERPROOF_PRODUCT_ID = 60001;
+
+/** Colour + label for the parsing-confidence meter. */
+function confidenceTone(pct: number) {
+  if (pct >= 75) return { label: "عالية", text: "text-emerald-700", bar: "bg-emerald-500" };
+  if (pct >= 45) return { label: "متوسطة", text: "text-amber-700", bar: "bg-amber-500" };
+  return { label: "منخفضة — راجع كل الحقول", text: "text-red-700", bar: "bg-red-500" };
+}
+
+/** Arabic labels for the fields the confidence meter reports on. */
+const FIELD_LABELS: Record<string, string> = {
+  customerName: "اسم العميل",
+  phone: "رقم الهاتف",
+  governorate: "المحافظة",
+  address: "العنوان",
+  city: "المنطقة",
+  orderTotal: "الإجمالي",
+  shipping: "الشحن",
+};
+
+/** A field needs a human look when the parser was unsure or found nothing at all. */
+const LOW_CONFIDENCE = new Set(["low", "missing"]);
+
+/**
+ * One line item on the entry form. `productId` is optional so an item the parser could not
+ * match is still shown (and saved for review) instead of being silently dropped.
+ */
+type FormItem = {
+  productId?: number;
+  productName: string;
+  quantity: number;
+  variantId?: number;
+  variantName?: string;
+  /** Set by the paste parser; absent for manually-picked items (always matched). */
+  status?: "matched" | "ambiguous" | "unmatched";
+  candidates?: { id: number; name: string }[];
+  /** Original phrase from the pasted message, kept so the reviewer can see the source. */
+  rawText?: string;
+};
 
 type FormState = {
   customerName: string;
   customerPhone: string;
   governorate: string;
   customerAddress: string;
-  selectedProducts: { productId: number; productName: string; quantity: number }[];
+  city: string;
+  selectedProducts: FormItem[];
   quantity: number;
   totalAmount: number;
   shippingCost: number;
@@ -78,6 +92,8 @@ type FormState = {
   variantId?: number;
   size?: string;
   color?: string;
+  /** Verbatim pasted message, submitted with the order for audit. */
+  rawText?: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -85,6 +101,7 @@ const EMPTY_FORM: FormState = {
   customerPhone: "",
   governorate: "",
   customerAddress: "",
+  city: "",
   selectedProducts: [],
   quantity: 1,
   totalAmount: 0,
@@ -100,6 +117,9 @@ export default function FacebookEntry() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [pasteText, setPasteText] = useState("");
   const [showPaste, setShowPaste] = useState(false);
+  /** Full parser result — drives the confidence meter and field highlighting. */
+  const [parseResult, setParseResult] = useState<any>(null);
+  const [autoParse, setAutoParse] = useState(true);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showOrders, setShowOrders] = useState(false);
@@ -116,6 +136,8 @@ export default function FacebookEntry() {
 
   // Products list
   const { data: products = [] } = trpc.facebookEntry.products.useQuery();
+  /** Active products + variants — engraving types live in variants, so both are needed. */
+  const { data: catalog } = trpc.facebookEntry.catalog.useQuery();
 
   // هل تم اختيار كفر وتر بروف في الفورم الرئيسي؟
   const isWaterproofSelected = form.selectedProducts.some(p => p.productId === WATERPROOF_PRODUCT_ID);
@@ -149,6 +171,8 @@ export default function FacebookEntry() {
     onSuccess: (data) => {
       toast.success(`✅ تم إضافة الأوردر بنجاح — رقم: ${data.orderNumber}`);
       setForm(EMPTY_FORM);
+      setPasteText("");
+      setParseResult(null);
       if (showOrders) refetchOrders();
     },
     onError: (e) => toast.error(`خطأ: ${e.message}`),
@@ -171,6 +195,26 @@ export default function FacebookEntry() {
     },
     onError: (e) => toast.error(`خطأ: ${e.message}`),
   });
+
+  /** Field keys the parser flagged low/missing — drives highlighting on the review form. */
+  const lowConfidenceFields = useMemo(() => {
+    const set = new Set<string>();
+    if (!parseResult) return set;
+    for (const key of Object.keys(FIELD_LABELS)) {
+      const field = parseResult[key];
+      if (field && LOW_CONFIDENCE.has(field.confidence)) set.add(key);
+    }
+    return set;
+  }, [parseResult]);
+
+  const needsAttention = useMemo(
+    () => Array.from(lowConfidenceFields).map((k) => FIELD_LABELS[k]),
+    [lowConfidenceFields]
+  );
+
+  /** Ring styling applied to any input the parser was unsure about. */
+  const fieldClass = (key: string) =>
+    lowConfidenceFields.has(key) ? "border-amber-500 bg-amber-50 ring-1 ring-amber-300" : "";
 
   // العدد الإجمالي للقطع = مجموع كميات البنود
   const totalPieces = useMemo(
@@ -196,45 +240,41 @@ export default function FacebookEntry() {
   }, [editForm.selectedProducts, editTotalPieces, editForm.shippingCost, products]);
 
   // Toggle product selection (يضيف/يشيل بند، الكمية الافتراضية 1)
+  // Manual picker toggles the plain parent product only. Parsed items carrying a variantId
+  // are left alone — several of them can share the same productId (all bracelet engravings
+  // hang off one parent), so they must never be matched by productId alone.
   const toggleProduct = (productId: number, productName: string) => {
     setForm((f) => {
-      const exists = f.selectedProducts.find((p) => p.productId === productId);
+      const exists = f.selectedProducts.find((p) => p.productId === productId && !p.variantId);
       const newProducts = exists
-        ? f.selectedProducts.filter((p) => p.productId !== productId)
-        : [...f.selectedProducts, { productId, productName, quantity: 1 }];
+        ? f.selectedProducts.filter((p) => !(p.productId === productId && !p.variantId))
+        : [...f.selectedProducts, { productId, productName, quantity: 1, status: "matched" as const }];
       return { ...f, selectedProducts: newProducts };
     });
-  };
-
-  // تغيير كمية بند معيّن في الفورم الرئيسي
-  const setProductQuantity = (productId: number, quantity: number) => {
-    setForm((f) => ({
-      ...f,
-      selectedProducts: f.selectedProducts.map((p) =>
-        p.productId === productId ? { ...p, quantity: Math.max(1, quantity || 1) } : p
-      ),
-    }));
   };
 
   // Toggle product selection for edit form
   const toggleEditProduct = (productId: number, productName: string) => {
     setEditForm((f) => {
-      const exists = f.selectedProducts.find((p) => p.productId === productId);
+      const exists = f.selectedProducts.find((p) => p.productId === productId && !p.variantId);
       const newProducts = exists
-        ? f.selectedProducts.filter((p) => p.productId !== productId)
-        : [...f.selectedProducts, { productId, productName, quantity: 1 }];
+        ? f.selectedProducts.filter((p) => !(p.productId === productId && !p.variantId))
+        : [...f.selectedProducts, { productId, productName, quantity: 1, status: "matched" as const }];
       return { ...f, selectedProducts: newProducts };
     });
   };
 
-  // تغيير كمية بند في فورم التعديل
-  const setEditProductQuantity = (productId: number, quantity: number) => {
-    setEditForm((f) => ({
-      ...f,
-      selectedProducts: f.selectedProducts.map((p) =>
-        p.productId === productId ? { ...p, quantity: Math.max(1, quantity || 1) } : p
-      ),
-    }));
+  // تغيير كمية بند في فورم التعديل — بالفهرس، لأن أكثر من نقش قد يشترك في نفس المنتج الأب
+  const setEditItemQuantityAt = (index: number, quantity: number) => {
+    setEditForm((f) => {
+      const items = [...f.selectedProducts];
+      items[index] = { ...items[index], quantity: Math.max(1, quantity || 1) };
+      return { ...f, selectedProducts: items };
+    });
+  };
+
+  const removeEditItemAt = (index: number) => {
+    setEditForm((f) => ({ ...f, selectedProducts: f.selectedProducts.filter((_, i) => i !== index) }));
   };
 
   // Open edit dialog with order data
@@ -267,6 +307,7 @@ export default function FacebookEntry() {
       customerPhone: order.customerPhone || "",
       governorate: order.governorate || "",
       customerAddress: order.customerAddress || "",
+      city: order.city || "",
       selectedProducts: matchedProducts.length > 0 ? matchedProducts : [],
       quantity: order.quantity || 1,
       totalAmount: Number(order.totalAmount) || 0,
@@ -277,136 +318,135 @@ export default function FacebookEntry() {
     setEditingOrder(order);
   };
 
-  // Parse pasted order text
-  const parsePastedOrder = () => {
+  // ==================== Paste parsing ====================
+  // Parsing runs on the SERVER so it always uses the live catalog (active products +
+  // variants) and the same tested parser module. It only fills a review form — it never
+  // submits, and never invents values the message did not contain.
+  const parseQuery = trpc.facebookEntry.parseOrder.useQuery(
+    { text: pasteText },
+    { enabled: false, retry: false }
+  );
+
+  const applyParsed = (parsed: any) => {
+    setForm((f) => ({
+      ...f,
+      customerName: parsed.customerName?.value ?? f.customerName,
+      customerPhone: parsed.phone?.value ?? f.customerPhone,
+      governorate: parsed.governorate?.value ?? f.governorate,
+      customerAddress: parsed.address?.value ?? f.customerAddress,
+      city: parsed.city?.value ?? f.city,
+      selectedProducts: parsed.items?.length
+        ? parsed.items.map((i: any) => ({
+            productId: i.productId,
+            productName: i.variantName
+              ? `${i.productName} - ${i.variantName}`
+              : (i.productName ?? i.rawText),
+            quantity: i.quantity,
+            variantId: i.variantId,
+            variantName: i.variantName,
+            status: i.status,
+            candidates: i.candidates,
+            rawText: i.rawText,
+          }))
+        : f.selectedProducts,
+      quantity: parsed.totalQuantity || f.quantity,
+      // Absent values stay absent — never coerced to 0.
+      totalAmount: parsed.orderTotal?.value ?? f.totalAmount,
+      shippingCost: parsed.shipping?.value ?? f.shippingCost,
+      adName: parsed.adName?.value ?? f.adName,
+      notes: parsed.notes?.value ?? f.notes,
+      rawText: parsed.rawText,
+    }));
+    setParseResult(parsed);
+  };
+
+  const parsePastedOrder = async () => {
     if (!pasteText.trim()) {
       toast.error("الصق نص الأوردر أولاً");
       return;
     }
-
-    const text = pasteText;
-    const parsed: Partial<FormState> = {};
-
-    // Extract بيدج (page name)
-    const pageMatch = text.match(/بيدج\s*[:\s]*([^\n\r]+)/i) || text.match(/البيدج\s*[:\s]*([^\n\r]+)/i);
-    if (pageMatch) {
-      let pageName = pageMatch[1].trim();
-      pageName = pageName.replace(/التاريخ.*$/i, "").trim();
-      parsed.adName = pageName;
-    }
-
-    // Extract اسم (name)
-    const nameMatch = text.match(/الاسم\s*[:\s]*([^\n\r]+)/i) || text.match(/اسم\s*[:\s]*([^\n\r]+)/i);
-    if (nameMatch) {
-      parsed.customerName = nameMatch[1].trim();
-    }
-
-    // Extract عنوان (address)
-    const addressMatch = text.match(/العنوان\s*[:\s]*([^\n\r]+)/i) || text.match(/عنوان\s*[:\s]*([^\n\r]+)/i);
-    if (addressMatch) {
-      const fullAddress = addressMatch[1].trim();
-      let foundGov = "";
-      for (const gov of EGYPT_GOVERNORATES) {
-        if (fullAddress.includes(gov)) {
-          foundGov = gov;
-          break;
-        }
+    try {
+      const parsed = await parseQuery.refetch().then((r) => r.data);
+      if (!parsed) {
+        toast.error("تعذّر تحليل النص");
+        return;
       }
-      if (!foundGov) {
-        if (fullAddress.includes("شرقية") || fullAddress.includes("الشرقيه")) foundGov = "الشرقية";
-        else if (fullAddress.includes("قاهرة") || fullAddress.includes("القاهره")) foundGov = "القاهرة";
-        else if (fullAddress.includes("جيزة") || fullAddress.includes("الجيزه")) foundGov = "الجيزة";
-        else if (fullAddress.includes("اسكندرية") || fullAddress.includes("الاسكندريه")) foundGov = "الإسكندرية";
-        else if (fullAddress.includes("دقهلية") || fullAddress.includes("الدقهليه")) foundGov = "الدقهلية";
-        else if (fullAddress.includes("غربية") || fullAddress.includes("الغربيه")) foundGov = "الغربية";
-        else if (fullAddress.includes("منوفية") || fullAddress.includes("المنوفيه")) foundGov = "المنوفية";
-        else if (fullAddress.includes("بحيرة") || fullAddress.includes("البحيره")) foundGov = "البحيرة";
-        else if (fullAddress.includes("قليوبية") || fullAddress.includes("القليوبيه")) foundGov = "القليوبية";
-        else if (fullAddress.includes("فيوم") || fullAddress.includes("الفيوم")) foundGov = "الفيوم";
-        else if (fullAddress.includes("منيا") || fullAddress.includes("المنيا")) foundGov = "المنيا";
-        else if (fullAddress.includes("بني سويف")) foundGov = "بني سويف";
-        else if (fullAddress.includes("اسيوط") || fullAddress.includes("أسيوط")) foundGov = "أسيوط";
-        else if (fullAddress.includes("سوهاج")) foundGov = "سوهاج";
-        else if (fullAddress.includes("اسوان") || fullAddress.includes("أسوان")) foundGov = "أسوان";
-        else if (fullAddress.includes("اقصر") || fullAddress.includes("الأقصر")) foundGov = "الأقصر";
-        else if (fullAddress.includes("قنا")) foundGov = "قنا";
-        else if (fullAddress.includes("دمياط")) foundGov = "دمياط";
-        else if (fullAddress.includes("بورسعيد")) foundGov = "بورسعيد";
-        else if (fullAddress.includes("سويس") || fullAddress.includes("السويس")) foundGov = "السويس";
-        else if (fullAddress.includes("اسماعيلية") || fullAddress.includes("الإسماعيلية")) foundGov = "الإسماعيلية";
-        else if (fullAddress.includes("كفر الشيخ")) foundGov = "كفر الشيخ";
-        else if (fullAddress.includes("مطروح")) foundGov = "مطروح";
+      applyParsed(parsed);
+      const unresolved = parsed.items.filter((i: any) => i.status !== "matched").length;
+      if (parsed.items.length === 0) {
+        toast.warning("لم يتم التعرّف على أي صنف — أكمل الاختيار يدويًا");
+      } else if (unresolved > 0) {
+        toast.warning(`تم التحليل — ${unresolved} صنف يحتاج تأكيد يدوي`);
+      } else {
+        toast.success("تم التحليل — راجع البيانات قبل الحفظ");
       }
-      if (foundGov) parsed.governorate = foundGov;
-      parsed.customerAddress = fullAddress.replace(/^محافظة\s*/i, "").trim();
+    } catch (err: any) {
+      toast.error(err?.message ?? "تعذّر تحليل النص");
     }
-
-    // Extract phone
-    const phoneMatch = text.match(/رقم الفون\s*\(?[١1]\)?\s*[:\s]*([0-9٠-٩]+)/i) || text.match(/الفون\s*[:\s]*([0-9٠-٩]+)/i) || text.match(/التليفون\s*[:\s]*([0-9٠-٩]+)/i);
-    if (phoneMatch) {
-      let phone = phoneMatch[1].replace(/[٠-٩]/g, (d: string) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-      parsed.customerPhone = phone;
-    }
-
-    // Extract product type
-    const productMatch = text.match(/نوع المنتج\s*[:\s]*([^\n\r]+)/i) || text.match(/المنتج\s*[:\s]*([^\n\r]+)/i);
-    if (productMatch) {
-      let rawProduct = productMatch[1].trim();
-      rawProduct = rawProduct.replace(/عدد القطع.*$/i, "").trim();
-      const matchedProducts: { productId: number; productName: string; quantity: number }[] = [];
-      const rawLower = rawProduct.toLowerCase();
-      for (const [key, canonical] of Object.entries(PRODUCT_NAME_MAP)) {
-        if (rawLower.includes(key.toLowerCase()) || rawLower.includes(canonical.toLowerCase())) {
-          const product = products.find((p: any) => p.name.includes(canonical));
-          if (product && !matchedProducts.find(mp => mp.productId === product.id)) {
-            matchedProducts.push({ productId: product.id, productName: product.name, quantity: 1 });
-          }
-        }
-      }
-      if (matchedProducts.length > 0) {
-        parsed.selectedProducts = matchedProducts;
-      }
-    }
-
-    // Extract quantity
-    const qtyMatch = text.match(/عدد القطع\s*[:\s]*([0-9٠-٩]+)/i) || text.match(/الكمية\s*[:\s]*([0-9٠-٩]+)/i);
-    if (qtyMatch) {
-      let qty = qtyMatch[1].replace(/[٠-٩]/g, (d: string) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-      parsed.quantity = parseInt(qty) || 1;
-    }
-
-    // Extract shipping cost
-    const shippingMatch = text.match(/الشحن\s*[:\s]*([0-9٠-٩]+)/i);
-    if (shippingMatch) {
-      let shipping = shippingMatch[1].replace(/[٠-٩]/g, (d: string) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-      parsed.shippingCost = parseInt(shipping) || 0;
-    }
-
-    // Extract total if available
-    const totalMatch = text.match(/الاجمالي\s*[:\s]*([0-9٠-٩]+)/i) || text.match(/الإجمالي\s*[:\s]*([0-9٠-٩]+)/i);
-    if (totalMatch) {
-      let total = totalMatch[1].replace(/[٠-٩]/g, (d: string) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
-      parsed.totalAmount = parseInt(total) || 0;
-    }
-
-    // Apply parsed data
-    setForm((f) => ({
-      ...f,
-      customerName: parsed.customerName || f.customerName,
-      customerPhone: parsed.customerPhone || f.customerPhone,
-      governorate: parsed.governorate || f.governorate,
-      customerAddress: parsed.customerAddress || f.customerAddress,
-      selectedProducts: parsed.selectedProducts || f.selectedProducts,
-      quantity: parsed.quantity || f.quantity,
-      shippingCost: parsed.shippingCost ?? f.shippingCost,
-      totalAmount: parsed.totalAmount || 0,
-      adName: parsed.adName || f.adName,
-    }));
-
-    setShowPaste(false);
-    setPasteText("");
-    toast.success("✅ تم تحليل الأوردر بنجاح — راجع البيانات وأكمل الناقص");
   };
+
+  // Auto-parse shortly after the employee stops typing/pasting. Debounced so it does not
+  // fire on every keystroke; it still only fills the form and never submits.
+  useEffect(() => {
+    if (!autoParse || !pasteText.trim() || pasteText.trim().length < 12) return;
+    const t = setTimeout(() => { void parsePastedOrder(); }, 900);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pasteText, autoParse]);
+
+  /** Resolves an ambiguous item once the employee picks a candidate variant. */
+  const chooseCandidate = (index: number, candidateId: number) => {
+    setForm((f) => {
+      const items = [...f.selectedProducts];
+      const item = items[index];
+      const chosen = item.candidates?.find((c) => c.id === candidateId);
+      const variant = (catalog?.variants ?? []).find((v: any) => v.id === candidateId);
+      const parent = (catalog?.products ?? []).find((p: any) => p.id === variant?.productId);
+      items[index] = {
+        ...item,
+        productId: parent?.id ?? item.productId,
+        variantId: candidateId,
+        variantName: chosen?.name ?? variant?.name ?? undefined,
+        productName: parent && chosen ? `${parent.name} - ${chosen.name}` : item.productName,
+        status: "matched",
+        candidates: undefined,
+      };
+      return { ...f, selectedProducts: items };
+    });
+  };
+
+  /** Assigns a product/variant to an item the parser could not match. */
+  const assignItemVariant = (index: number, variantId: number) => {
+    const variant = (catalog?.variants ?? []).find((v: any) => v.id === variantId);
+    const parent = (catalog?.products ?? []).find((p: any) => p.id === variant?.productId);
+    if (!variant || !parent) return;
+    setForm((f) => {
+      const items = [...f.selectedProducts];
+      items[index] = {
+        ...items[index],
+        productId: parent.id,
+        variantId: variant.id,
+        variantName: variant.name ?? undefined,
+        productName: `${parent.name} - ${variant.name}`,
+        status: "matched",
+        candidates: undefined,
+      };
+      return { ...f, selectedProducts: items };
+    });
+  };
+
+  const removeItemAt = (index: number) => {
+    setForm((f) => ({ ...f, selectedProducts: f.selectedProducts.filter((_, i) => i !== index) }));
+  };
+
+  const setItemQuantityAt = (index: number, quantity: number) => {
+    setForm((f) => {
+      const items = [...f.selectedProducts];
+      items[index] = { ...items[index], quantity: Math.max(1, quantity || 1) };
+      return { ...f, selectedProducts: items };
+    });
+  };
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -430,9 +470,19 @@ export default function FacebookEntry() {
       customerPhone: form.customerPhone,
       governorate: form.governorate,
       customerAddress: form.customerAddress,
-      selectedProducts: form.selectedProducts,
+      city: form.city || undefined,
+      // Unresolved items are sent through as-is (productId undefined). The server flags the
+      // order needsReview instead of dropping the line, so nothing is lost silently.
+      selectedProducts: form.selectedProducts.map((p) => ({
+        productId: p.productId,
+        productName: p.productName,
+        quantity: p.quantity,
+        variantId: p.variantId,
+      })),
       quantity: totalPieces || form.quantity,
       totalAmount: finalTotal,
+      shippingCost: form.shippingCost || undefined,
+      rawText: form.rawText,
       adName: form.adName || undefined,
       notes: form.notes || undefined,
       variantId,
@@ -463,7 +513,11 @@ export default function FacebookEntry() {
       customerPhone: editForm.customerPhone,
       governorate: editForm.governorate,
       customerAddress: editForm.customerAddress,
-      selectedProducts: editForm.selectedProducts,
+      // The edit dialog only ever holds resolved items, but narrow explicitly rather than
+      // asserting — an unresolved line is skipped here instead of being sent with no product.
+      selectedProducts: editForm.selectedProducts.flatMap((p) =>
+        p.productId ? [{ productId: p.productId, productName: p.productName, quantity: p.quantity }] : []
+      ),
       quantity: editTotalPieces || editForm.quantity,
       totalAmount: finalTotal,
       adName: editForm.adName || undefined,
@@ -554,21 +608,63 @@ export default function FacebookEntry() {
               />
               <div className="flex gap-2">
                 <Button
+                  type="button"
                   className="flex-1 bg-amber-600 hover:bg-amber-700 text-white gap-1"
                   onClick={parsePastedOrder}
+                  disabled={parseQuery.isFetching}
                 >
-                  <Check className="h-4 w-4" />
-                  تحليل وتعبئة
+                  {parseQuery.isFetching
+                    ? <><RefreshCw className="h-4 w-4 animate-spin" /> جاري التحليل…</>
+                    : <><Check className="h-4 w-4" /> مسح النص وتحليل الأوردر</>}
                 </Button>
                 <Button
+                  type="button"
                   variant="outline"
                   className="gap-1"
-                  onClick={() => { setShowPaste(false); setPasteText(""); }}
+                  onClick={() => { setShowPaste(false); setPasteText(""); setParseResult(null); }}
                 >
                   <X className="h-4 w-4" />
                   إلغاء
                 </Button>
               </div>
+
+              <label className="flex items-center gap-2 text-xs text-amber-800">
+                <input
+                  type="checkbox"
+                  checked={autoParse}
+                  onChange={(e) => setAutoParse(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-amber-600"
+                />
+                تحليل تلقائي بعد التوقف عن الكتابة
+              </label>
+
+              {/* Confidence meter. Parsing only fills the form — saving stays a separate,
+                  deliberate action by the employee. */}
+              {parseResult && (
+                <div className="space-y-2 rounded-lg border border-amber-200 bg-white p-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-amber-900">دقة التحليل</span>
+                    <span className={confidenceTone(parseResult.confidence).text}>
+                      {parseResult.confidence}% — {confidenceTone(parseResult.confidence).label}
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200">
+                    <div
+                      className={`h-full ${confidenceTone(parseResult.confidence).bar}`}
+                      style={{ width: `${parseResult.confidence}%` }}
+                    />
+                  </div>
+                  {needsAttention.length > 0 && (
+                    <p className="flex items-start gap-1 text-[11px] text-amber-800">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                      راجع يدويًا: {needsAttention.join("، ")}
+                    </p>
+                  )}
+                  <p className="text-[11px] text-gray-500">
+                    التحليل يملأ النموذج فقط — لن يُحفظ الأوردر إلا بضغطك على زر الحفظ.
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -590,7 +686,7 @@ export default function FacebookEntry() {
                   placeholder="اسم العميل الكامل"
                   value={form.customerName}
                   onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
-                  className="h-10"
+                  className={`h-10 ${fieldClass("customerName")}`}
                   required
                 />
               </div>
@@ -604,7 +700,7 @@ export default function FacebookEntry() {
                   placeholder="01xxxxxxxxx"
                   value={form.customerPhone}
                   onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
-                  className="h-10"
+                  className={`h-10 ${fieldClass("phone")}`}
                   dir="ltr"
                   required
                 />
@@ -619,7 +715,7 @@ export default function FacebookEntry() {
                   value={form.governorate}
                   onValueChange={(v) => setForm((f) => ({ ...f, governorate: v }))}
                 >
-                  <SelectTrigger className="h-10">
+                  <SelectTrigger className={`h-10 ${fieldClass("governorate")}`}>
                     <SelectValue placeholder="اختر المحافظة" />
                   </SelectTrigger>
                   <SelectContent>
@@ -637,8 +733,19 @@ export default function FacebookEntry() {
                   placeholder="الشارع، المنطقة، الحي..."
                   value={form.customerAddress}
                   onChange={(e) => setForm((f) => ({ ...f, customerAddress: e.target.value }))}
-                  className="h-10"
+                  className={`h-10 ${fieldClass("address")}`}
                   required
+                />
+              </div>
+
+              {/* City / area — optional, filled by the parser when the message names one */}
+              <div className="space-y-1.5">
+                <Label className="text-sm font-medium">المدينة / المنطقة</Label>
+                <Input
+                  placeholder="مثال: ابو حماد"
+                  value={form.city}
+                  onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
+                  className={`h-10 ${fieldClass("city")}`}
                 />
               </div>
 
@@ -670,21 +777,61 @@ export default function FacebookEntry() {
                 {form.selectedProducts.length > 0 && (
                   <div className="mt-2 space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
                     <p className="text-xs font-semibold text-amber-800">حدّد عدد القطع لكل نوع:</p>
-                    {form.selectedProducts.map((p) => (
-                      <div key={p.productId} className="flex items-center justify-between gap-2">
-                        <span className="text-sm text-gray-700 flex-1 truncate">{p.productName}</span>
-                        <div className="flex items-center gap-1">
-                          <button type="button" onClick={() => setProductQuantity(p.productId, p.quantity - 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">−</button>
-                          <Input
-                            type="number"
-                            min={1}
-                            value={p.quantity}
-                            onChange={(e) => setProductQuantity(p.productId, Number(e.target.value) || 1)}
-                            className="h-7 w-16 text-center"
-                          />
-                          <button type="button" onClick={() => setProductQuantity(p.productId, p.quantity + 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">+</button>
-                          <button type="button" onClick={() => toggleProduct(p.productId, p.productName)} className="h-7 w-7 rounded-md border border-red-200 bg-white text-red-500 leading-none hover:bg-red-50" title="إزالة">×</button>
+                    {form.selectedProducts.map((p, idx) => (
+                      <div key={idx} className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm text-gray-700 flex-1 truncate">
+                            {p.productName}
+                            {p.status === "ambiguous" && <Badge variant="outline" className="mr-1 border-amber-400 text-amber-700 text-[10px]">يحتاج تحديد</Badge>}
+                            {p.status === "unmatched" && <Badge variant="outline" className="mr-1 border-red-400 text-red-700 text-[10px]">غير معروف</Badge>}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button type="button" onClick={() => setItemQuantityAt(idx, p.quantity - 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">−</button>
+                            <Input
+                              type="number"
+                              min={1}
+                              value={p.quantity}
+                              onChange={(e) => setItemQuantityAt(idx, Number(e.target.value) || 1)}
+                              className="h-7 w-16 text-center"
+                            />
+                            <button type="button" onClick={() => setItemQuantityAt(idx, p.quantity + 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">+</button>
+                            <button type="button" onClick={() => removeItemAt(idx)} className="h-7 w-7 rounded-md border border-red-200 bg-white text-red-500 leading-none hover:bg-red-50" title="إزالة">×</button>
+                          </div>
                         </div>
+
+                        {/* Ambiguous: the parser found more than one plausible engraving — the
+                            employee must choose; nothing is guessed on their behalf. */}
+                        {p.status === "ambiguous" && p.candidates && p.candidates.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 rounded-md bg-amber-100/70 p-2">
+                            <span className="text-[11px] text-amber-800">هل تقصد:</span>
+                            {p.candidates.map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => chooseCandidate(idx, c.id)}
+                                className="rounded-md border border-amber-400 bg-white px-2 py-0.5 text-[11px] text-amber-900 hover:bg-amber-50"
+                              >
+                                {c.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Unmatched: keep the original phrase visible and let the employee
+                            pick from the live catalog. Nothing is created automatically. */}
+                        {p.status === "unmatched" && (
+                          <div className="space-y-1 rounded-md bg-red-50 p-2">
+                            {p.rawText && <p className="text-[11px] text-red-800">النص الأصلي: «{p.rawText}»</p>}
+                            <Select onValueChange={(v) => assignItemVariant(idx, Number(v))}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="اختر النوع الصحيح يدويًا" /></SelectTrigger>
+                              <SelectContent>
+                                {(catalog?.variants ?? []).map((v: any) => (
+                                  <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
                       </div>
                     ))}
                     <div className="flex items-center justify-between border-t border-amber-200 pt-2">
@@ -756,7 +903,7 @@ export default function FacebookEntry() {
                     placeholder={calculatedTotal > 0 ? `مقترح: ${calculatedTotal}` : "اكتب الإجمالي"}
                     value={form.totalAmount || ""}
                     onChange={(e) => setForm((f) => ({ ...f, totalAmount: Number(e.target.value) || 0 }))}
-                    className="h-10 font-semibold"
+                    className={`h-10 font-semibold ${fieldClass("orderTotal")}`}
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -766,7 +913,7 @@ export default function FacebookEntry() {
                     min={0}
                     value={form.shippingCost}
                     onChange={(e) => setForm((f) => ({ ...f, shippingCost: Number(e.target.value) || 0 }))}
-                    className="h-10"
+                    className={`h-10 ${fieldClass("shipping")}`}
                   />
                 </div>
               </div>
@@ -1083,20 +1230,20 @@ export default function FacebookEntry() {
               {editForm.selectedProducts.length > 0 && (
                 <div className="mt-2 space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
                   <p className="text-xs font-semibold text-amber-800">حدّد عدد القطع لكل نوع:</p>
-                  {editForm.selectedProducts.map((p) => (
-                    <div key={p.productId} className="flex items-center justify-between gap-2">
+                  {editForm.selectedProducts.map((p, idx) => (
+                    <div key={idx} className="flex items-center justify-between gap-2">
                       <span className="text-sm text-gray-700 flex-1 truncate">{p.productName}</span>
                       <div className="flex items-center gap-1">
-                        <button type="button" onClick={() => setEditProductQuantity(p.productId, p.quantity - 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">−</button>
+                        <button type="button" onClick={() => setEditItemQuantityAt(idx, p.quantity - 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">−</button>
                         <Input
                           type="number"
                           min={1}
                           value={p.quantity}
-                          onChange={(e) => setEditProductQuantity(p.productId, Number(e.target.value) || 1)}
+                          onChange={(e) => setEditItemQuantityAt(idx, Number(e.target.value) || 1)}
                           className="h-7 w-16 text-center"
                         />
-                        <button type="button" onClick={() => setEditProductQuantity(p.productId, p.quantity + 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">+</button>
-                        <button type="button" onClick={() => toggleEditProduct(p.productId, p.productName)} className="h-7 w-7 rounded-md border border-red-200 bg-white text-red-500 leading-none hover:bg-red-50" title="إزالة">×</button>
+                        <button type="button" onClick={() => setEditItemQuantityAt(idx, p.quantity + 1)} className="h-7 w-7 rounded-md border border-amber-300 bg-white text-amber-700 font-bold leading-none hover:bg-amber-100">+</button>
+                        <button type="button" onClick={() => removeEditItemAt(idx)} className="h-7 w-7 rounded-md border border-red-200 bg-white text-red-500 leading-none hover:bg-red-50" title="إزالة">×</button>
                       </div>
                     </div>
                   ))}

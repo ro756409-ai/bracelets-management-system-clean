@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabled } from "./bosta.service";
 import { syncOrdersByDateRange, testChannelConnection } from "./easyorder.service";
+import { parseFacebookOrder } from "../shared/facebookOrderParser";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -53,7 +54,7 @@ import {
   searchEmployees, countActiveAdminTierEmployees,
   getAllProducts, getProductById, createProduct, updateProduct,
   isSkuTaken, isVariantNameTaken,
-  getSyncLogs, getOrdersNeedingReview,
+  getSyncLogs, getOrdersNeedingReview, getMatchCatalog,
   getLowStockProducts, addInventoryMovement, getInventoryMovements,
   getOrders, getOrderById, getOrdersByIds, createOrder, updateOrder,
   assignOrderToEmployee, bulkAssignOrders,
@@ -1566,16 +1567,27 @@ export const appRouter = router({
       customerPhone: z.string().min(5),
       governorate: z.string().min(1),
       customerAddress: z.string().min(1),
+      /** City / area within the governorate, when the message mentioned one. */
+      city: z.string().optional(),
       selectedProducts: z.array(z.object({
-        productId: z.number().int().min(1),
+        // Optional: an item the parser could not match is still recorded (with its raw
+        // text) and the order is flagged for review, rather than being dropped or
+        // silently attached to an arbitrary product.
+        productId: z.number().int().min(1).optional(),
         productName: z.string().min(1),
         quantity: z.number().int().min(1).optional(),
+        /** Engraving type / variant for this specific item. */
+        variantId: z.number().int().optional(),
+        unitPrice: z.number().min(0).optional(),
       })).min(1),
       quantity: z.number().int().min(1).optional(),
       totalAmount: z.number().min(0),
+      shippingCost: z.number().min(0).optional(),
       adName: z.string().optional(),
       pageName: z.string().optional(),
       notes: z.string().optional(),
+      /** Original pasted message, kept verbatim for audit when the parser was used. */
+      rawText: z.string().optional(),
       // حقول كفر مرتبة ووتر بروف
       variantId: z.number().int().optional(),
       size: z.string().optional(),
@@ -1596,7 +1608,17 @@ export const appRouter = router({
       const productNames = itemsWithQty
         .map(p => p.quantity > 1 ? `${p.productName} ×${p.quantity}` : p.productName)
         .join(' + ');
-      const firstProductId = itemsWithQty[0].productId;
+
+      // Any item without a resolved product means the order needs a human to finish
+      // mapping it. It is still created — never dropped — but flagged, and the header
+      // productId points at the first RESOLVED item (or null when none resolved) rather
+      // than at an arbitrary product.
+      const unresolved = itemsWithQty.filter(p => !p.productId);
+      const needsReview = unresolved.length > 0;
+      const firstResolved = itemsWithQty.find(p => p.productId);
+      const headerProductId = firstResolved?.productId ?? null;
+      const headerVariantId = firstResolved?.variantId ?? input.variantId ?? null;
+
       const normalizedCustomerPhone = normalizeEgyptianPhone(input.customerPhone) || input.customerPhone;
       const [res] = await db.insert(orders).values({
         orderNumber,
@@ -1604,19 +1626,27 @@ export const appRouter = router({
         customerPhone: normalizedCustomerPhone,
         governorate: input.governorate,
         customerAddress: input.customerAddress,
-        productId: firstProductId,
+        city: input.city ?? null,
+        productId: headerProductId,
         productName: productNames,
         quantity: totalQty,
         totalAmount: input.totalAmount.toString(),
+        shippingFees: input.shippingCost != null ? input.shippingCost.toString() : undefined,
         source: 'facebook',
         adName: input.adName ?? null,
         pageName: input.pageName ?? null,
         notes: input.notes ?? null,
         status: 'new',
         lastUpdatedBy: ctx.employee.id,
-        variantId: input.variantId ?? null,
+        variantId: headerVariantId,
         size: input.size ?? null,
         color: input.color ?? null,
+        needsReview,
+        reviewReason: needsReview
+          ? `أصناف غير مطابقة تحتاج تعيين منتج يدويًا: ${unresolved.map(u => u.productName).join(' | ')}`
+          : null,
+        // Verbatim pasted message for audit, when the paste parser was used.
+        externalRawPayload: input.rawText ?? null,
       }).$returningId();
       // تخزين البنود المتعددة
       const newOrderId = (res as any)?.id;
@@ -1625,12 +1655,15 @@ export const appRouter = router({
           productId: p.productId,
           productName: p.productName,
           quantity: p.quantity,
-          variantId: p.productId === firstProductId ? (input.variantId ?? undefined) : undefined,
-          size: p.productId === firstProductId ? (input.size ?? undefined) : undefined,
-          color: p.productId === firstProductId ? (input.color ?? undefined) : undefined,
+          unitPrice: p.unitPrice,
+          // Each item carries its OWN variant now (previously only the first product could
+          // have one, which made multi-engraving orders impossible to represent).
+          variantId: p.variantId,
+          size: p.productId === headerProductId ? (input.size ?? undefined) : undefined,
+          color: p.productId === headerProductId ? (input.color ?? undefined) : undefined,
         })));
       }
-      return { success: true, orderNumber };
+      return { success: true, orderNumber, needsReview };
     }),
 
     // جلب أوردرات الموظف الحالي (فيسبوك)
@@ -1760,7 +1793,27 @@ export const appRouter = router({
       const db = await getDb();
       if (!db) return [];
       const { products } = await import('../drizzle/schema');
-      return db.select().from(products).orderBy(products.name);
+      return db.select().from(products).where(eq(products.isActive, true)).orderBy(products.name);
+    }),
+
+    /**
+     * Active catalog (products + their variants) for the paste parser and the item picker.
+     * Since the parent/variant refactor, `products` alone is only the parent + standalones —
+     * the engraving types live in product_variants, so both are needed to select an item.
+     */
+    catalog: employeePortalProcedure.query(async () => {
+      return getMatchCatalog();
+    }),
+
+    /**
+     * Parses a pasted customer message into a REVIEW DRAFT using the live catalog.
+     * Read-only: creates nothing and never submits. The employee reviews and confirms.
+     */
+    parseOrder: employeePortalProcedure.input(z.object({
+      text: z.string().min(1),
+    })).query(async ({ input }) => {
+      const catalog = await getMatchCatalog();
+      return parseFacebookOrder(input.text, catalog);
     }),
 
     // جلب variants منتج معين (للكفر ووتر بروف)
