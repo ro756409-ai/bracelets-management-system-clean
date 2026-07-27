@@ -1,4 +1,4 @@
-import { eq, desc, asc, and, or, gte, lte, sql, inArray, isNull, getTableColumns } from "drizzle-orm";
+import { eq, desc, asc, and, or, gte, lte, sql, inArray, isNull, isNotNull, getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   InsertUser, users,
@@ -553,6 +553,127 @@ export async function getOrders(filters: OrderFilters = {}) {
   }));
 
   return { orders: ordersWithWebsite, total: Number(countResult[0]?.count ?? 0) };
+}
+
+// ==================== Bosta Orders View ====================
+// Categorizes orders by their Bosta shipping state, using only existing columns
+// (bostaShipmentId/bostaStatus/bostaSentAt/bostaLastError) — no schema change.
+// bostaStatus holds either the literal "sent" placeholder (set the moment a shipment is
+// created, before any webhook arrives) or one of the Arabic strings from
+// BOSTA_STATUS_MAP in bostaWebhook.ts.
+
+export type BostaOrderCategory = "sent_today" | "awaiting_update" | "in_transit" | "delivered" | "returned" | "send_failed";
+
+const BOSTA_IN_TRANSIT_STATUSES = ["تم الاستلام", "في المستودع", "في مستودع الفرع", "في مستودع المنطقة", "في طريق التسليم"];
+const BOSTA_DELIVERED_STATUSES = ["تم التسليم", "تم التسليم جزئياً"];
+const BOSTA_RETURNED_STATUSES = [
+  "مرتجع - لم يُستلم", "مرتجع - رُفض", "مرتجع - عنوان خاطئ", "مرتجع - لم يُتصل به", "مرتجع - تالف",
+  "مرتجع", "مرتجع - تأجيل", "مرتجع - طلب العميل", "مرتجع - مشكلة في الدفع",
+  "في طريق الإرجاع", "تم الإرجاع",
+];
+
+export type BostaOrdersFilters = {
+  businessIds?: number[];
+  category?: BostaOrderCategory;
+  governorate?: string;
+  search?: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  websiteId?: number;
+  page?: number;
+  limit?: number;
+};
+
+/** Base condition: orders that ever touched Bosta — either a shipment exists, or sending
+ *  one failed outright (bostaLastError set, no shipmentId). Anything else (never attempted)
+ *  is excluded — that's just a regular order, not "a Bosta order". */
+function bostaOrdersBaseCondition() {
+  return or(
+    isNotNull(orders.bostaShipmentId),
+    and(isNotNull(orders.bostaLastError), isNull(orders.bostaShipmentId))
+  )!;
+}
+
+function bostaCategoryCondition(category: BostaOrderCategory) {
+  switch (category) {
+    case "sent_today":
+      return and(gte(orders.bostaSentAt, cairoStartOfDay(new Date())), lte(orders.bostaSentAt, cairoEndOfDay(new Date())))!;
+    case "send_failed":
+      return and(isNotNull(orders.bostaLastError), isNull(orders.bostaShipmentId))!;
+    case "awaiting_update":
+      return and(isNotNull(orders.bostaShipmentId), eq(orders.bostaStatus, "sent"))!;
+    case "in_transit":
+      return and(isNotNull(orders.bostaShipmentId), inArray(orders.bostaStatus, BOSTA_IN_TRANSIT_STATUSES))!;
+    case "delivered":
+      return and(isNotNull(orders.bostaShipmentId), inArray(orders.bostaStatus, BOSTA_DELIVERED_STATUSES))!;
+    case "returned":
+      return and(isNotNull(orders.bostaShipmentId), inArray(orders.bostaStatus, BOSTA_RETURNED_STATUSES))!;
+  }
+}
+
+export async function getBostaOrders(filters: BostaOrdersFilters = {}) {
+  const db = await getDb();
+  if (!db) return { orders: [], total: 0 };
+
+  const conditions = [bostaOrdersBaseCondition()];
+  if (filters.businessIds && filters.businessIds.length > 0) conditions.push(inArray(orders.businessId, filters.businessIds));
+  if (filters.governorate) conditions.push(eq(orders.governorate, filters.governorate));
+  if (filters.websiteId) conditions.push(eq(orders.websiteId, filters.websiteId));
+  if (filters.dateFrom) conditions.push(gte(orders.bostaSentAt, cairoStartOfDay(filters.dateFrom)));
+  if (filters.dateTo) conditions.push(lte(orders.bostaSentAt, cairoEndOfDay(filters.dateTo)));
+  if (filters.search) {
+    conditions.push(sql`(${orders.bostaTrackingNumber} LIKE ${`%${filters.search}%`} OR ${orders.customerPhone} LIKE ${`%${filters.search}%`} OR ${orders.orderNumber} LIKE ${`%${filters.search}%`})`);
+  }
+  if (filters.category) conditions.push(bostaCategoryCondition(filters.category));
+
+  const whereClause = and(...conditions);
+  const page = filters.page ?? 1;
+  const limit = filters.limit ?? 50;
+  const offset = (page - 1) * limit;
+
+  const [rows, countResult] = await Promise.all([
+    db.select().from(orders)
+      .leftJoin(salesChannels, eq(orders.websiteId, salesChannels.id))
+      .where(whereClause)
+      .orderBy(desc(orders.bostaSentAt))
+      .limit(limit)
+      .offset(offset),
+    db.select({ count: sql<number>`COUNT(*)` }).from(orders).where(whereClause),
+  ]);
+
+  const ordersWithWebsite = rows.map((row: any) => ({
+    ...row.orders,
+    websiteName: row.sales_channels?.name || null,
+  }));
+
+  return { orders: ordersWithWebsite, total: Number(countResult[0]?.count ?? 0) };
+}
+
+export async function getBostaOrdersSummary(businessIds?: number[]) {
+  const db = await getDb();
+  if (!db) return { sentToday: 0, inTransit: 0, delivered: 0, returned: 0, sendFailed: 0, awaitingUpdate: 0 };
+
+  const scope = businessIds && businessIds.length > 0 ? inArray(orders.businessId, businessIds) : undefined;
+  const combine = (extra: NonNullable<ReturnType<typeof bostaCategoryCondition>>) =>
+    scope ? and(scope, extra) : extra;
+
+  const [sentToday, inTransit, delivered, returned, sendFailed, awaitingUpdate] = await Promise.all([
+    db.select({ c: sql<number>`COUNT(*)` }).from(orders).where(combine(bostaCategoryCondition("sent_today"))),
+    db.select({ c: sql<number>`COUNT(*)` }).from(orders).where(combine(bostaCategoryCondition("in_transit"))),
+    db.select({ c: sql<number>`COUNT(*)` }).from(orders).where(combine(bostaCategoryCondition("delivered"))),
+    db.select({ c: sql<number>`COUNT(*)` }).from(orders).where(combine(bostaCategoryCondition("returned"))),
+    db.select({ c: sql<number>`COUNT(*)` }).from(orders).where(combine(bostaCategoryCondition("send_failed"))),
+    db.select({ c: sql<number>`COUNT(*)` }).from(orders).where(combine(bostaCategoryCondition("awaiting_update"))),
+  ]);
+
+  return {
+    sentToday: Number(sentToday[0]?.c ?? 0),
+    inTransit: Number(inTransit[0]?.c ?? 0),
+    delivered: Number(delivered[0]?.c ?? 0),
+    returned: Number(returned[0]?.c ?? 0),
+    sendFailed: Number(sendFailed[0]?.c ?? 0),
+    awaitingUpdate: Number(awaitingUpdate[0]?.c ?? 0),
+  };
 }
 
 export async function getOrderById(id: number) {

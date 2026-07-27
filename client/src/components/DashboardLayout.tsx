@@ -26,7 +26,7 @@ import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
-  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings,
+  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -75,6 +75,7 @@ const MENU_GROUPS: MenuGroup[] = [
     icon: ShoppingCart,
     items: [
       { icon: ShoppingCart, label: "الأوردرات", path: "/orders" },
+      { icon: Truck, label: "طلبات بوسطة", path: "/bosta-orders" },
       { icon: RotateCcw, label: "المرتجعات", path: "/returns", adminOnly: true },
       { icon: AlertTriangle, label: "المكررات", path: "/duplicates", adminOnly: true },
     ],

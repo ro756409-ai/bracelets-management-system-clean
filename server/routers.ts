@@ -57,6 +57,7 @@ import {
   getSyncLogs, getOrdersNeedingReview, getMatchCatalog,
   getLowStockProducts, addInventoryMovement, getInventoryMovements,
   getOrders, getOrderStatusCounts, getOrderById, getOrdersByIds, createOrder, updateOrder,
+  getBostaOrders, getBostaOrdersSummary,
   assignOrderToEmployee, bulkAssignOrders,
   confirmOrder, postponeOrder, cancelOrder,
   editOrderWithInventory,
@@ -383,6 +384,28 @@ export const appRouter = router({
       businessIds: z.array(z.number()).optional(),
     })).query(async ({ input }) => {
       return getOrderStatusCounts(input.businessIds);
+    }),
+
+    /** Orders that ever touched Bosta (shipment created, or send attempt failed), grouped
+     *  by shipping-pipeline stage. Uses only existing bosta* columns — no schema change. */
+    bostaOrders: protectedProcedure.input(z.object({
+      category: z.enum(['sent_today', 'awaiting_update', 'in_transit', 'delivered', 'returned', 'send_failed']).optional(),
+      governorate: z.string().optional(),
+      search: z.string().optional(),
+      dateFrom: z.date().optional(),
+      dateTo: z.date().optional(),
+      websiteId: z.number().optional(),
+      page: z.number().default(1),
+      limit: z.number().default(50),
+      businessIds: z.array(z.number()).optional(),
+    })).query(async ({ input }) => {
+      return getBostaOrders(input);
+    }),
+
+    bostaOrdersSummary: protectedProcedure.input(z.object({
+      businessIds: z.array(z.number()).optional(),
+    }).optional()).query(async ({ input }) => {
+      return getBostaOrdersSummary(input?.businessIds);
     }),
 
     // جلب أسماء البيدج المميزة (لفلتر البيدج)

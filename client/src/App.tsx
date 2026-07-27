@@ -32,6 +32,7 @@ import SalesChannels from "./pages/SalesChannels";
 import Businesses from "./pages/Businesses";
 import PrintedOrders from "./pages/PrintedOrders";
 import ScanLogs from "./pages/ScanLogs";
+import BostaOrders from "./pages/BostaOrders";
 import DashboardLayout from "./components/DashboardLayout";
 import { useAuth } from "./_core/hooks/useAuth";
 import { BusinessProvider } from "./contexts/BusinessContext";
@@ -107,6 +108,9 @@ function Router() {
       </Route>
       <Route path="/scan-logs">
         <ProtectedLayout><ScanLogs /></ProtectedLayout>
+      </Route>
+      <Route path="/bosta-orders">
+        <ProtectedLayout><BostaOrders /></ProtectedLayout>
       </Route>
       <Route path={"/facebook-entry"} component={FacebookEntry} />
       <Route path={"/scan-orders"}>
