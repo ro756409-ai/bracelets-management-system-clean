@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -1635,7 +1635,16 @@ export default function Orders() {
               )}
 
               <Card>
-                <CardHeader className="pb-2 pt-3"><CardTitle className="text-sm text-muted-foreground">بيانات العميل</CardTitle></CardHeader>
+                <CardHeader className="pb-2 pt-3">
+                  <CardTitle className="text-sm text-muted-foreground">بيانات العميل</CardTitle>
+                  <CardAction className="flex items-center gap-1.5">
+                    <WhatsAppButton phone={order.customerPhone} size="sm" />
+                    <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
+                      onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}>
+                      <PhoneCall className="h-3.5 w-3.5" /> اتصال
+                    </Button>
+                  </CardAction>
+                </CardHeader>
                 <CardContent className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-muted-foreground">الاسم:</span> <span className="font-semibold">{order.customerName}</span></div>
                   <div><span className="text-muted-foreground">الهاتف:</span> <span className="font-mono font-semibold" dir="ltr">{order.customerPhone}</span></div>
@@ -1683,6 +1692,14 @@ export default function Orders() {
                         {order.bostaShipmentId ? 'تم الإرسال لـ بوسطة' : 'خطأ بوسطة'}
                       </span>
                     </CardTitle>
+                    {order.bostaShipmentId && (
+                      <CardAction>
+                        <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
+                          onClick={() => window.open(`/api/orders/${order.id}/bosta-awb`, "_blank", "noopener,noreferrer")}>
+                          <Printer className="h-3.5 w-3.5" /> طباعة AWB
+                        </Button>
+                      </CardAction>
+                    )}
                   </CardHeader>
                   <CardContent className="grid grid-cols-2 gap-3 text-sm">
                     {order.bostaShipmentId && <div className="col-span-2"><span className="text-muted-foreground">رقم الشحنة:</span> <span className="font-mono font-bold text-[var(--info)]">{order.bostaShipmentId}</span></div>}
