@@ -15,7 +15,7 @@ import { employees } from "../drizzle/schema";
 import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
 import { orders as ordersTable } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
-import { isAdminTierRole, EMPLOYEE_ROLE_VALUES } from "./permissions";
+import { isAdminTierRole, hasPermission, EMPLOYEE_ROLE_VALUES, type Permission } from "./permissions";
 
 const EMP_JWT_SECRET = process.env.JWT_SECRET;
 const EMP_COOKIE = "employee_token";
@@ -38,12 +38,33 @@ const employeePortalProcedure = publicProcedure.use(async ({ ctx, next }) => {
   return next({ ctx: { ...ctx, employee: emp } });
 });
 
-// Manager employee procedure - requires manager role
+// Manager-tier employee procedure — requires an admin-tier role (super_admin/admin/
+// manager), matching requireAdminOrManager's fix in authMiddleware.ts: this used to check
+// the literal role "manager" only, wrongly rejecting an admin/super_admin employee.
 const managerPortalProcedure = employeePortalProcedure.use(async ({ ctx, next }) => {
   const emp = (ctx as any).employee;
-  if (emp.role !== 'manager') throw new TRPCError({ code: 'FORBIDDEN', message: 'هذا الإجراء متاح للمديرين فقط' });
+  if (!isAdminTierRole(emp.role)) throw new TRPCError({ code: 'FORBIDDEN', message: 'هذا الإجراء متاح للمديرين فقط' });
   return next({ ctx });
 });
+
+/**
+ * Employee-portal procedure gated by the role→permission table in permissions.ts.
+ * `employeePortalProcedure` alone only checks "is this an active employee" — it does not
+ * check *what kind* of employee, so a viewer/accountant/scanner/etc. could otherwise call
+ * confirm/cancel/edit exactly like an order_confirmation agent. This closes that gap using
+ * the existing permission set (no new permissions, no new roles) — pairs with the
+ * per-order ownership checks already inline in each mutation below (that check is "is this
+ * order yours"; this one is "can your role do this kind of thing at all").
+ */
+function requireEmployeePermission(permission: Permission) {
+  return employeePortalProcedure.use(({ ctx, next }) => {
+    const emp = (ctx as any).employee;
+    if (!hasPermission(emp.role, permission)) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'ليس لديك صلاحية لتنفيذ هذا الإجراء' });
+    }
+    return next({ ctx });
+  });
+}
 import {
   groupOrdersByAgent, getAgentsForGovernorateOnDay,
   getTodaySchedule, DAY_NAMES_AR, SHIPPING_SCHEDULES,
@@ -879,7 +900,7 @@ export const appRouter = router({
       };
     }),
 
-    myOrders: employeePortalProcedure.input(z.object({
+    myOrders: requireEmployeePermission('orders.view').input(z.object({
       status: z.string().optional(),
       page: z.number().default(1),
       limit: z.number().default(200),
@@ -910,7 +931,7 @@ export const appRouter = router({
       return getOrders({ ...input, assignedEmployeeId: emp.id, assignedDateFrom, assignedDateTo, businessIds: filterBusinessIds });
     }),
 
-    confirm: employeePortalProcedure.input(z.object({
+    confirm: requireEmployeePermission('orders.confirm').input(z.object({
       orderId: z.number(),
     })).mutation(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
@@ -934,7 +955,7 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    postpone: employeePortalProcedure.input(z.object({
+    postpone: requireEmployeePermission('orders.update').input(z.object({
       orderId: z.number(),
       postponedTo: z.date(),
       notes: z.string().optional(),
@@ -961,7 +982,7 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    cancel: employeePortalProcedure.input(z.object({
+    cancel: requireEmployeePermission('orders.cancel').input(z.object({
       orderId: z.number(),
       cancelReason: z.enum(['price', 'not_serious', 'wrong_number', 'duplicate']),
       notes: z.string().optional(),
@@ -988,7 +1009,7 @@ export const appRouter = router({
       return { success: true };
     }),
 
-    markNoAnswer: employeePortalProcedure.input(z.object({
+    markNoAnswer: requireEmployeePermission('orders.update').input(z.object({
       orderId: z.number(),
     })).mutation(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
@@ -1003,7 +1024,7 @@ export const appRouter = router({
     }),
 
     // إضافة/تعديل ملاحظات الموظف على الأوردر
-    updateNotes: employeePortalProcedure.input(z.object({
+    updateNotes: requireEmployeePermission('orders.update').input(z.object({
       orderId: z.number(),
       notes: z.string(),
     })).mutation(async ({ ctx, input }) => {
@@ -1020,7 +1041,7 @@ export const appRouter = router({
     }),
 
     // تعديل بيانات العميل (المحافظة والعنوان) — للموظف على أوردراته فقط
-    updateCustomerInfo: employeePortalProcedure.input(z.object({
+    updateCustomerInfo: requireEmployeePermission('orders.update').input(z.object({
       orderId: z.number(),
       governorate: z.string().optional(),
       customerAddress: z.string().optional(),
@@ -1058,7 +1079,7 @@ export const appRouter = router({
       return getAllVariantsWithProduct(undefined, input?.businessIds);
     }),
 
-    stats: employeePortalProcedure.input(z.object({
+    stats: requireEmployeePermission('dashboard.view').input(z.object({
       businessIds: z.array(z.number()).optional(),
     }).optional()).query(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
@@ -1085,7 +1106,7 @@ export const appRouter = router({
     }),
 
     // تعديل بيانات الأوردر بالكامل (للموظف العادي - بدون OAuth)
-    editOrder: employeePortalProcedure.input(z.object({
+    editOrder: requireEmployeePermission('orders.update').input(z.object({
       orderId: z.number(),
       customerName: z.string().optional(),
       customerPhone: z.string().optional(),
@@ -1119,7 +1140,7 @@ export const appRouter = router({
     }),
 
     // جلب سجل تعديلات أوردر
-    getOrderEditHistory: employeePortalProcedure.input(z.object({
+    getOrderEditHistory: requireEmployeePermission('orders.view').input(z.object({
       orderId: z.number(),
     })).query(async ({ input }) => {
       return getOrderEditLogs(input.orderId);
@@ -1523,7 +1544,7 @@ export const appRouter = router({
 
     // ==================== الأوردرات المكررة ====================
     // تعليم أوردر كمكرر (من الموظف)
-    markDuplicate: employeePortalProcedure.input(z.object({
+    markDuplicate: requireEmployeePermission('orders.update').input(z.object({
       orderId: z.number(),
     })).mutation(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
@@ -1541,7 +1562,7 @@ export const appRouter = router({
     }),
 
     // إلغاء تعليم التكرار (من الموظف)
-    unmarkDuplicate: employeePortalProcedure.input(z.object({
+    unmarkDuplicate: requireEmployeePermission('orders.update').input(z.object({
       orderId: z.number(),
     })).mutation(async ({ ctx, input }) => {
       const db = await getDb();
@@ -1708,7 +1729,7 @@ export const appRouter = router({
     }),
 
     // جلب أوردرات الموظف الحالي (فيسبوك)
-    myOrders: employeePortalProcedure.input(z.object({
+    myOrders: requireEmployeePermission('orders.view').input(z.object({
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
     })).query(async ({ ctx, input }) => {

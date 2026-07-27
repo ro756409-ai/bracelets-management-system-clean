@@ -137,7 +137,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
     );
     // Find the confirm mutation section
-    const confirmIdx = portalSection.indexOf("confirm: employeePortalProcedure");
+    const confirmIdx = portalSection.indexOf("confirm: requireEmployeePermission");
     const confirmSection = portalSection.substring(confirmIdx, confirmIdx + 500);
     expect(confirmSection).toContain("Ownership check");
     expect(confirmSection).toContain("emp.role !== 'manager'");
@@ -150,7 +150,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
     const portalSection = content.substring(
       content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
     );
-    const postponeIdx = portalSection.indexOf("postpone: employeePortalProcedure");
+    const postponeIdx = portalSection.indexOf("postpone: requireEmployeePermission");
     const postponeSection = portalSection.substring(postponeIdx, postponeIdx + 500);
     expect(postponeSection).toContain("Ownership check");
     expect(postponeSection).toContain("emp.role !== 'manager'");
@@ -162,7 +162,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
     const portalSection = content.substring(
       content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
     );
-    const cancelIdx = portalSection.indexOf("cancel: employeePortalProcedure");
+    const cancelIdx = portalSection.indexOf("cancel: requireEmployeePermission");
     const cancelSection = portalSection.substring(cancelIdx, cancelIdx + 500);
     expect(cancelSection).toContain("Ownership check");
     expect(cancelSection).toContain("emp.role !== 'manager'");
@@ -174,7 +174,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
     const portalSection = content.substring(
       content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
     );
-    const notesIdx = portalSection.indexOf("updateNotes: employeePortalProcedure");
+    const notesIdx = portalSection.indexOf("updateNotes: requireEmployeePermission");
     const notesSection = portalSection.substring(notesIdx, notesIdx + 500);
     expect(notesSection).toContain("Ownership check");
     expect(notesSection).toContain("emp.role !== 'manager'");
@@ -187,9 +187,28 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
     );
     // All ownership checks should check emp.role !== 'manager' (i.e., managers bypass)
-    const confirmIdx = portalSection.indexOf("confirm: employeePortalProcedure");
+    const confirmIdx = portalSection.indexOf("confirm: requireEmployeePermission");
     const confirmSection = portalSection.substring(confirmIdx, confirmIdx + 500);
     expect(confirmSection).toContain("if (emp.role !== 'manager')");
+  });
+
+  it("employeePortal write actions require a role permission, not just an active session", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const portalSection = content.substring(
+      content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
+    );
+    for (const [proc, perm] of [
+      ["confirm", "orders.confirm"],
+      ["postpone", "orders.update"],
+      ["cancel", "orders.cancel"],
+      ["markNoAnswer", "orders.update"],
+      ["updateNotes", "orders.update"],
+      ["updateCustomerInfo", "orders.update"],
+      ["editOrder", "orders.update"],
+    ] as const) {
+      expect(portalSection).toContain(`${proc}: requireEmployeePermission('${perm}')`);
+    }
   });
 });
 
@@ -369,5 +388,147 @@ describe("Auth middleware module", () => {
     const content = fs.readFileSync("server/authMiddleware.ts", "utf-8");
     expect(content).toContain("403");
     expect(content).toContain("هذا الإجراء متاح للمديرين فقط");
+  });
+});
+
+// ============================================================
+// Fix 3: employeePortal role → permission enforcement
+// (requireEmployeePermission wired onto orders.confirm/update/cancel/etc.)
+// ============================================================
+describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
+  it("admin-tier roles (super_admin, admin, manager) can do everything, unchanged", async () => {
+    const { hasPermission, ALL_PERMISSIONS } = await import("./permissions");
+    for (const role of ["super_admin", "admin", "manager"] as const) {
+      for (const permission of ALL_PERMISSIONS) {
+        expect(hasPermission(role, permission)).toBe(true);
+      }
+    }
+  });
+
+  it("order_confirmation employees can view, confirm, cancel and update orders", async () => {
+    const { hasPermission } = await import("./permissions");
+    expect(hasPermission("order_confirmation", "orders.view")).toBe(true);
+    expect(hasPermission("order_confirmation", "orders.confirm")).toBe(true);
+    expect(hasPermission("order_confirmation", "orders.cancel")).toBe(true);
+    expect(hasPermission("order_confirmation", "orders.update")).toBe(true);
+    expect(hasPermission("order_confirmation", "dashboard.view")).toBe(true);
+  });
+
+  it("order_confirmation employees must NOT gain settings, employees, or audit access", async () => {
+    const { hasPermission } = await import("./permissions");
+    expect(hasPermission("order_confirmation", "settings.view")).toBe(false);
+    expect(hasPermission("order_confirmation", "settings.manage")).toBe(false);
+    expect(hasPermission("order_confirmation", "employees.view")).toBe(false);
+    expect(hasPermission("order_confirmation", "employees.manage")).toBe(false);
+    expect(hasPermission("order_confirmation", "audit.view")).toBe(false);
+    expect(hasPermission("order_confirmation", "orders.export")).toBe(false);
+    expect(hasPermission("order_confirmation", "orders.import")).toBe(false);
+  });
+
+  it("agent role matches order_confirmation's confirm/cancel/update access", async () => {
+    const { hasPermission } = await import("./permissions");
+    expect(hasPermission("agent", "orders.confirm")).toBe(true);
+    expect(hasPermission("agent", "orders.cancel")).toBe(true);
+    expect(hasPermission("agent", "orders.update")).toBe(true);
+    expect(hasPermission("agent", "settings.manage")).toBe(false);
+    expect(hasPermission("agent", "employees.manage")).toBe(false);
+  });
+
+  it("accountant can view/export orders and view settings/audit, but cannot confirm/cancel orders or manage anything", async () => {
+    const { hasPermission } = await import("./permissions");
+    expect(hasPermission("accountant", "orders.view")).toBe(true);
+    expect(hasPermission("accountant", "orders.export")).toBe(true);
+    expect(hasPermission("accountant", "settings.view")).toBe(true);
+    expect(hasPermission("accountant", "audit.view")).toBe(true);
+    expect(hasPermission("accountant", "orders.confirm")).toBe(false);
+    expect(hasPermission("accountant", "orders.cancel")).toBe(false);
+    expect(hasPermission("accountant", "orders.update")).toBe(false);
+    expect(hasPermission("accountant", "settings.manage")).toBe(false);
+    expect(hasPermission("accountant", "employees.manage")).toBe(false);
+  });
+
+  it("warehouse can view dashboard/orders only — no confirm/cancel/update/settings", async () => {
+    const { hasPermission } = await import("./permissions");
+    expect(hasPermission("warehouse", "dashboard.view")).toBe(true);
+    expect(hasPermission("warehouse", "orders.view")).toBe(true);
+    expect(hasPermission("warehouse", "orders.confirm")).toBe(false);
+    expect(hasPermission("warehouse", "orders.cancel")).toBe(false);
+    expect(hasPermission("warehouse", "orders.update")).toBe(false);
+    expect(hasPermission("warehouse", "settings.view")).toBe(false);
+    expect(hasPermission("warehouse", "employees.view")).toBe(false);
+  });
+
+  it("data_entry (and facebook_entry) can only view and create orders", async () => {
+    const { hasPermission } = await import("./permissions");
+    for (const role of ["data_entry", "facebook_entry"] as const) {
+      expect(hasPermission(role, "orders.view")).toBe(true);
+      expect(hasPermission(role, "orders.create")).toBe(true);
+      expect(hasPermission(role, "orders.confirm")).toBe(false);
+      expect(hasPermission(role, "orders.cancel")).toBe(false);
+      expect(hasPermission(role, "orders.update")).toBe(false);
+      expect(hasPermission(role, "dashboard.view")).toBe(false);
+    }
+  });
+
+  it("shipping can view and export orders only", async () => {
+    const { hasPermission } = await import("./permissions");
+    expect(hasPermission("shipping", "orders.view")).toBe(true);
+    expect(hasPermission("shipping", "orders.export")).toBe(true);
+    expect(hasPermission("shipping", "orders.confirm")).toBe(false);
+    expect(hasPermission("shipping", "orders.update")).toBe(false);
+    expect(hasPermission("shipping", "dashboard.view")).toBe(false);
+  });
+
+  it("viewer can only view dashboard and orders — read-only, no mutations", async () => {
+    const { hasPermission } = await import("./permissions");
+    expect(hasPermission("viewer", "dashboard.view")).toBe(true);
+    expect(hasPermission("viewer", "orders.view")).toBe(true);
+    for (const permission of [
+      "orders.create", "orders.update", "orders.confirm", "orders.cancel",
+      "orders.export", "orders.import", "employees.view", "employees.manage",
+      "settings.view", "settings.manage", "audit.view",
+    ] as const) {
+      expect(hasPermission("viewer", permission)).toBe(false);
+    }
+  });
+
+  it("scanner can only view orders", async () => {
+    const { hasPermission } = await import("./permissions");
+    expect(hasPermission("scanner", "orders.view")).toBe(true);
+    expect(hasPermission("scanner", "orders.confirm")).toBe(false);
+    expect(hasPermission("scanner", "orders.update")).toBe(false);
+    expect(hasPermission("scanner", "dashboard.view")).toBe(false);
+  });
+
+  it("routers.ts defines requireEmployeePermission and applies it (not a broad any-employee fallback) to every sensitive employeePortal mutation", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    expect(content).toContain("function requireEmployeePermission(permission: Permission)");
+    expect(content).toContain("hasPermission(emp.role, permission)");
+    for (const [proc, permission] of [
+      ["confirm", "orders.confirm"],
+      ["postpone", "orders.update"],
+      ["cancel", "orders.cancel"],
+      ["markNoAnswer", "orders.update"],
+      ["updateNotes", "orders.update"],
+      ["updateCustomerInfo", "orders.update"],
+      ["editOrder", "orders.update"],
+      ["markDuplicate", "orders.update"],
+      ["unmarkDuplicate", "orders.update"],
+      ["myOrders", "orders.view"],
+      ["getOrderEditHistory", "orders.view"],
+      ["stats", "dashboard.view"],
+    ] as const) {
+      expect(content).toContain(`${proc}: requireEmployeePermission('${permission}')`);
+    }
+  });
+
+  it("managerPortalProcedure requires an admin-tier role, not the literal string 'manager'", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const idx = content.indexOf("const managerPortalProcedure");
+    const section = content.substring(idx, idx + 400);
+    expect(section).toContain("isAdminTierRole(emp.role)");
+    expect(section).not.toContain("emp.role !== 'manager'");
   });
 });
