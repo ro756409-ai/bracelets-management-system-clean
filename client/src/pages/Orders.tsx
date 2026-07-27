@@ -18,8 +18,8 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   Plus, Search, CheckCircle, XCircle, Clock, UserPlus, Eye, FileSpreadsheet, Download, Truck,
-  Trash2, Printer, Phone, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
-  MoreHorizontal, ListChecks, LayoutGrid, Rows3,
+  Trash2, Printer, PhoneCall, PhoneOff, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
+  MoreHorizontal, MoreVertical, ListChecks, LayoutGrid, Rows3,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import ImportExcelDialog from "@/components/ImportExcelDialog";
@@ -39,6 +39,7 @@ import {
   Pagination,
   Drawer,
   ConfirmDialog,
+  WhatsAppButton,
   toast,
   buildFilterChips,
   countActiveFilters,
@@ -661,59 +662,88 @@ export default function Orders() {
     },
     {
       id: "actions", header: "إجراءات", alwaysVisible: true, sticky: true,
-      cell: (order) => (
-        <div className="flex gap-1">
-          {(order.status === 'new' || order.status === 'postponed') && (
-            <>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
-                onClick={() => confirmMutation.mutate({ orderId: order.id })} title="تأكيد">
-                <CheckCircle className="h-4 w-4" />
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--warning)] hover:bg-[var(--warning)]/10"
-                onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }} title="تأجيل">
-                <Clock className="h-4 w-4" />
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--warning)] hover:bg-[var(--warning)]/10"
-                onClick={() => noAnswerMutation.mutate({ orderId: order.id })} title="لم يرد">
-                <Phone className="h-4 w-4" />
-              </Button>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
-                onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }} title="إلغاء">
-                <XCircle className="h-4 w-4" />
-              </Button>
-            </>
-          )}
-          {isAdmin && ['confirmed', 'shipped', 'delivered', 'preparing'].includes(order.status) && (
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
-              onClick={() => { setReturnOrderId(order.id); setShowReturnDialog(true); }} title="مرتجع">
-              <RotateCcw className="h-4 w-4" />
+      cell: (order) => {
+        const isActionable = order.status === 'new' || order.status === 'postponed';
+        const canReturn = isAdmin && ['confirmed', 'shipped', 'delivered', 'preparing'].includes(order.status);
+        return (
+          <div className="flex items-center gap-1">
+            {/* أزرار أساسية — ظاهرة دايمًا، لون ثابت لكل معنى، بحد أقصى 3-4 عشان الصف ميبقاش مزدحم */}
+            {isActionable && (
+              <>
+                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
+                  onClick={() => confirmMutation.mutate({ orderId: order.id })}
+                  title="تأكيد الأوردر" aria-label="تأكيد الأوردر">
+                  <CheckCircle className="h-4 w-4" />
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
+                  onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}
+                  title="إلغاء الأوردر" aria-label="إلغاء الأوردر">
+                  <XCircle className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-7 w-7" />
+            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--info)] hover:bg-[var(--info)]/10"
+              onClick={() => setDetailOrderId(order.id)}
+              title="عرض تفاصيل الأوردر" aria-label="عرض تفاصيل الأوردر">
+              <Eye className="h-4 w-4" />
             </Button>
-          )}
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-primary hover:bg-primary/10"
-            onClick={() => setDetailOrderId(order.id)} title="تفاصيل الأوردر">
-            <Eye className="h-4 w-4" />
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--info)] hover:bg-[var(--info)]/10"
-            onClick={() => openEditFor(order)} title="تعديل">
-            <Edit2 className="h-4 w-4" />
-          </Button>
-          {isAdmin && (
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
-              disabled={duplicateOrderMutation.isPending}
-              onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: order.id, orderNumber: order.orderNumber, customerName: order.customerName })}
-              title="تكرار الأوردر">
-              <Copy className="h-4 w-4" />
-            </Button>
-          )}
-          {isAdmin && (
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
-              onClick={() => setPendingConfirm({ type: "deleteOrder", orderId: order.id, orderNumber: order.orderNumber })}
-              title="حذف">
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-      ),
+
+            {/* باقي الإجراءات — أقل استخدامًا، جوه قائمة منسدلة بدل ما تزاحم الصف */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted"
+                  title="إجراءات أخرى" aria-label="إجراءات أخرى لهذا الأوردر">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                {isActionable && (
+                  <>
+                    <DropdownMenuItem onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}>
+                      <Clock className="h-4 w-4 ml-2 text-[var(--warning)]" /> جدولة اتصال لاحق
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => noAnswerMutation.mutate({ orderId: order.id })}>
+                      <PhoneOff className="h-4 w-4 ml-2 text-[var(--warning)]" /> لم يرد
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}>
+                  <PhoneCall className="h-4 w-4 ml-2 text-[var(--info)]" /> اتصال بالعميل
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openEditFor(order)}>
+                  <Edit2 className="h-4 w-4 ml-2 text-[var(--info)]" /> تعديل
+                </DropdownMenuItem>
+                {isAdmin && (
+                  <DropdownMenuItem
+                    disabled={duplicateOrderMutation.isPending}
+                    onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: order.id, orderNumber: order.orderNumber, customerName: order.customerName })}
+                  >
+                    <Copy className="h-4 w-4 ml-2 text-muted-foreground" /> تكرار الأوردر
+                  </DropdownMenuItem>
+                )}
+                {canReturn && (
+                  <DropdownMenuItem onClick={() => { setReturnOrderId(order.id); setShowReturnDialog(true); }}>
+                    <RotateCcw className="h-4 w-4 ml-2 text-primary" /> مرتجع
+                  </DropdownMenuItem>
+                )}
+                {isAdmin && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() => setPendingConfirm({ type: "deleteOrder", orderId: order.id, orderNumber: order.orderNumber })}
+                    >
+                      <Trash2 className="h-4 w-4 ml-2" /> حذف
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        );
+      },
     },
   ];
 
@@ -1069,26 +1099,42 @@ export default function Orders() {
                         onClick={() => confirmMutation.mutate({ orderId: order.id })}>
                         <CheckCircle className="h-3.5 w-3.5" /> تأكيد
                       </Button>
-                      <Button size="sm" variant="outline" className="h-8 gap-1 border-[var(--warning)]/40 text-[var(--warning)]"
-                        onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}>
-                        <Clock className="h-3.5 w-3.5" /> تأجيل
-                      </Button>
-                      <Button size="sm" variant="outline" className="h-8 gap-1"
-                        onClick={() => noAnswerMutation.mutate({ orderId: order.id })}>
-                        <Phone className="h-3.5 w-3.5" /> لم يرد
-                      </Button>
                       <Button size="sm" variant="outline" className="h-8 gap-1 border-destructive/30 text-destructive"
                         onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}>
                         <XCircle className="h-3.5 w-3.5" /> إلغاء
                       </Button>
                     </>
                   )}
-                  <Button size="sm" variant="outline" className="h-8 gap-1" onClick={() => setDetailOrderId(order.id)}>
+                  <WhatsAppButton phone={order.customerPhone} size="sm" className="h-8" />
+                  <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30" onClick={() => setDetailOrderId(order.id)}>
                     <Eye className="h-3.5 w-3.5" /> تفاصيل
                   </Button>
-                  <Button size="sm" variant="outline" className="h-8 gap-1" onClick={() => openEditFor(order)}>
-                    <Edit2 className="h-3.5 w-3.5" /> تعديل
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" variant="outline" className="h-8 gap-1 text-muted-foreground" aria-label="إجراءات أخرى لهذا الأوردر">
+                        <MoreVertical className="h-3.5 w-3.5" /> المزيد
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-52">
+                      {(order.status === 'new' || order.status === 'postponed') && (
+                        <>
+                          <DropdownMenuItem onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}>
+                            <Clock className="h-4 w-4 ml-2 text-[var(--warning)]" /> جدولة اتصال لاحق
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => noAnswerMutation.mutate({ orderId: order.id })}>
+                            <PhoneOff className="h-4 w-4 ml-2 text-[var(--warning)]" /> لم يرد
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                        </>
+                      )}
+                      <DropdownMenuItem onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}>
+                        <PhoneCall className="h-4 w-4 ml-2 text-[var(--info)]" /> اتصال بالعميل
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => openEditFor(order)}>
+                        <Edit2 className="h-4 w-4 ml-2 text-[var(--info)]" /> تعديل
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
               </div>
             }

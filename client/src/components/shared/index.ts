@@ -54,3 +54,4 @@ export { MultiSelect, MultiSelectChips, type MultiSelectOption } from "./MultiSe
 export { Drawer, type DrawerProps, type DrawerWidth } from "./Drawer";
 export { toast } from "./toast";
 export { InfoTooltip } from "./InfoTooltip";
+export { WhatsAppButton, type WhatsAppButtonProps } from "./WhatsAppButton";
