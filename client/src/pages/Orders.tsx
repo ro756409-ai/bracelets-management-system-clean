@@ -1686,6 +1686,9 @@ export default function Orders() {
                 <CardContent className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-muted-foreground">تاريخ الإنشاء:</span> <span className="font-semibold">{new Date(order.createdAt).toLocaleString('ar-EG')}</span></div>
                   {order.confirmedAt && <div><span className="text-muted-foreground">تاريخ التأكيد:</span> <span className="font-semibold">{new Date(order.confirmedAt).toLocaleString('ar-EG')}</span></div>}
+                  {order.confirmedAt && (
+                    <div><span className="text-muted-foreground">أكّده:</span> <span className="font-semibold">{order.confirmedByEmployeeName || 'موظف التأكيد غير مسجل'}</span></div>
+                  )}
                   {order.adName && <div><span className="text-muted-foreground">البيدج:</span> <span className="font-semibold">{order.adName}</span></div>}
                   {order.assignedEmployeeId && <div><span className="text-muted-foreground">موزع لموظف:</span> <span className="font-semibold">#{order.assignedEmployeeId}</span></div>}
                   {order.assignedAt && <div><span className="text-muted-foreground">تاريخ التوزيع:</span> <span className="font-semibold">{new Date(order.assignedAt).toLocaleString('ar-EG')}</span></div>}

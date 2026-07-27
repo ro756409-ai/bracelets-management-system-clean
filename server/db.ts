@@ -724,9 +724,39 @@ export async function createOrder(data: InsertOrder): Promise<number | undefined
   return insertId;
 }
 
+/**
+ * Which status a raw status write is allowed to move an order into, keyed by its current
+ * status. Only guards the generic update path — the dedicated functions (confirmOrder,
+ * postponeOrder, cancelOrder, markOrdersAsPrinted, markOrderAsReturned) already encode
+ * their own correct transitions and are unaffected by this map.
+ */
+const STATUS_TRANSITIONS: Record<string, string[]> = {
+  new: ["confirmed", "postponed", "cancelled", "no_answer"],
+  postponed: ["confirmed", "cancelled", "no_answer", "new"],
+  no_answer: ["new", "confirmed", "postponed", "cancelled"],
+  confirmed: ["preparing", "cancelled"],
+  printed: ["preparing", "shipped", "cancelled"],
+  preparing: ["shipped", "cancelled"],
+  shipped: ["delivered"],
+  delivered: [],
+  cancelled: ["new"],
+  returned: [],
+};
+
+export function isValidOrderStatusTransition(from: string, to: string): boolean {
+  if (from === to) return true;
+  return STATUS_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
 export async function updateOrder(id: number, data: Partial<InsertOrder>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  if (data.status) {
+    const [current] = await db.select({ status: orders.status }).from(orders).where(eq(orders.id, id)).limit(1);
+    if (current && !isValidOrderStatusTransition(current.status, data.status)) {
+      throw new Error(`لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${data.status}" مباشرة`);
+    }
+  }
   await db.update(orders).set(withNormalizedPhoneFields(data)).where(eq(orders.id, id));
 }
 
@@ -880,7 +910,7 @@ export async function bulkAssignOrders(orderIds: number[], employeeId: number, u
   }).where(inArray(orders.id, orderIds));
 }
 
-export async function confirmOrder(orderId: number, updatedBy: number) {
+export async function confirmOrder(orderId: number, updatedBy: number, confirmedByName?: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -912,6 +942,12 @@ export async function confirmOrder(orderId: number, updatedBy: number) {
     status: 'confirmed',
     confirmedAt: new Date(),
     lastUpdatedBy: updatedBy,
+    // Preserve whatever confirmation record already exists (e.g. a legacy-imported
+    // order) rather than overwriting it — this function only ever runs once per order
+    // anyway (guarded by the early return above), but keep the intent explicit.
+    ...(order.confirmedByEmployeeId == null && updatedBy
+      ? { confirmedByEmployeeId: updatedBy, confirmedByEmployeeName: confirmedByName ?? null }
+      : {}),
   }).where(eq(orders.id, orderId));
 
   if (order.productId) {

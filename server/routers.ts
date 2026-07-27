@@ -98,6 +98,17 @@ async function resolveActingEmployeeId(ctx: any): Promise<number | undefined> {
   return emp?.id;
 }
 
+/** Same resolution as resolveActingEmployeeId, plus a display name for denormalized
+ *  "who did this" fields — falls back to the admin/owner's own account name when the
+ *  acting session has no linked employee record. */
+async function resolveActingEmployeeIdAndName(ctx: any): Promise<{ id: number | undefined; name: string | undefined }> {
+  const emps = await getAllEmployees();
+  const emp = ctx.realEmployeeId
+    ? emps.find((e: any) => e.id === ctx.realEmployeeId)
+    : emps.find((e: any) => e.userId === ctx.user?.id);
+  return { id: emp?.id, name: emp?.name ?? ctx.user?.name ?? undefined };
+}
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -491,8 +502,8 @@ export const appRouter = router({
     confirm: protectedProcedure.input(z.object({
       orderId: z.number(),
     })).mutation(async ({ ctx, input }) => {
-      const actingEmpId = await resolveActingEmployeeId(ctx);
-      await confirmOrder(input.orderId, actingEmpId ?? 0);
+      const { id: actingEmpId, name: actingEmpName } = await resolveActingEmployeeIdAndName(ctx);
+      await confirmOrder(input.orderId, actingEmpId ?? 0, actingEmpName);
       await addActivityLog({
         action: 'confirm_order',
         entityType: 'order',
@@ -910,7 +921,7 @@ export const appRouter = router({
           throw new TRPCError({ code: 'FORBIDDEN', message: 'هذا الأوردر غير مخصص لك' });
         }
       }
-      await confirmOrder(input.orderId, emp.id);
+      await confirmOrder(input.orderId, emp.id, emp.name);
       await addActivityLog({
         action: 'confirm_order',
         entityType: 'order',

@@ -159,6 +159,11 @@ export const orders = mysqlTable("orders", {
   assignedEmployeeId: int("assignedEmployeeId"),
   assignedAt: timestamp("assignedAt"),
   confirmedAt: timestamp("confirmedAt"),
+  // Who actually confirmed the order — set once, at confirm time, from the acting
+  // session server-side (never trusts a frontend-supplied name). Denormalized name
+  // so the record stays readable even if the employee row is later deleted.
+  confirmedByEmployeeId: int("confirmedByEmployeeId"),
+  confirmedByEmployeeName: varchar("confirmedByEmployeeName", { length: 100 }),
   cancelledAt: timestamp("cancelledAt"),
   shippedAt: timestamp("shippedAt"),
   deliveredAt: timestamp("deliveredAt"),
