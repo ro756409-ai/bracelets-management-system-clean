@@ -4,9 +4,11 @@
  * Requires env: BOSTA_API_KEY, BOSTA_BASE_URL (optional), BOSTA_PICKUP_ADDRESS_ID (optional)
  */
 
+import { Request, Response, Express } from "express";
 import { getDb, getBusinessIdsByGroupSlug } from "./db";
 import { orders, orderItems } from "../drizzle/schema";
-import { eq, and, isNotNull, ne } from "drizzle-orm";
+import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
+import { requireAdminOrManager } from "./authMiddleware";
 
 // Clean up any accidental "KEY=value" format from env
 const BOSTA_BASE_URL = (process.env.BOSTA_BASE_URL || "https://app.bosta.co/api/v0")
@@ -356,4 +358,132 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
  */
 export function isBostaEnabled(): boolean {
   return Boolean(BOSTA_API_KEY);
+}
+
+// ==================== Official Bosta AWB (Air Waybill) ====================
+//
+// يجلب بوليصة الشحن الرسمية من Bosta نفسها (مش الملصق الداخلي البديل في exportExcel.ts).
+// يستخدم نفس endpoint لحالة الطلب الفردي والمجموعة (Bosta يقبل معرّفات شحنات مفصولة بفاصلة).
+//
+// ⚠️ ملحوظة مهمة: هذا الـ endpoint (`/deliveries/business/awb?deliveries=...`) هو الأكثر
+// توثيقًا في تكاملات Bosta المعروفة، لكن معنديش وصول لشبكة الإنترنت ولا لمفتاح Bosta حقيقي
+// من هنا عشان أختبره فعليًا. لازم يتجرّب على السيرفر الحقيقي بمفتاح صالح قبل الاعتماد عليه؛
+// لو Bosta رجّعت شكل استجابة مختلف، الكود تحت بيتعامل مع احتمالين (PDF مباشر، أو JSON فيه
+// رابط) ويرجع رسالة خطأ واضحة بدل ما يكسر لو الشكل مختلف تمامًا عن المتوقع.
+
+export type BostaAwbFetchResult =
+  | { ok: true; kind: "pdf"; contentType: string; buffer: Buffer }
+  | { ok: true; kind: "redirect"; url: string }
+  | { ok: false; error: string };
+
+export async function fetchBostaAwb(shipmentIds: string[]): Promise<BostaAwbFetchResult> {
+  if (!BOSTA_API_KEY) return { ok: false, error: "BOSTA_API_KEY غير مضبوط" };
+  if (shipmentIds.length === 0) return { ok: false, error: "لا توجد شحنات بوسطة صالحة لطباعة AWB لها" };
+
+  const query = encodeURIComponent(shipmentIds.join(","));
+  const url = `${BOSTA_BASE_URL}/deliveries/business/awb?deliveries=${query}`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: BOSTA_API_KEY },
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+
+    if (!response.ok) {
+      const bodyText = await response.text();
+      console.error("[Bosta AWB] Request failed:", response.status, bodyText.slice(0, 500));
+      return { ok: false, error: `فشل جلب AWB من Bosta (HTTP ${response.status})` };
+    }
+
+    if (contentType.includes("application/pdf")) {
+      const arrayBuffer = await response.arrayBuffer();
+      return { ok: true, kind: "pdf", contentType, buffer: Buffer.from(arrayBuffer) };
+    }
+
+    // بعض أشكال استجابة Bosta المحتملة بترجع JSON فيه رابط الملف بدل الملف نفسه
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const possibleUrl =
+      (body?.awbUrl as string | undefined) ||
+      (body?.url as string | undefined) ||
+      (body?.deliveryLabelUrl as string | undefined) ||
+      (body?.link as string | undefined);
+    if (typeof possibleUrl === "string" && possibleUrl.startsWith("http")) {
+      return { ok: true, kind: "redirect", url: possibleUrl };
+    }
+
+    console.error("[Bosta AWB] Unexpected response shape:", JSON.stringify(body).slice(0, 500));
+    return { ok: false, error: "استجابة غير متوقعة من Bosta عند جلب AWB — راجع الـ logs" };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("[Bosta AWB] Error:", errMsg);
+    return { ok: false, error: errMsg };
+  }
+}
+
+function sendAwbResult(res: Response, result: BostaAwbFetchResult) {
+  if (!result.ok) return res.status(502).json({ error: result.error });
+  if (result.kind === "redirect") return res.redirect(result.url);
+  res.setHeader("Content-Type", result.contentType);
+  res.setHeader("Content-Disposition", 'inline; filename="bosta-awb.pdf"');
+  return res.send(result.buffer);
+}
+
+async function handleSingleAwb(req: Request, res: Response) {
+  try {
+    const orderId = Number(req.params.id);
+    if (!orderId) return res.status(400).json({ error: "معرّف الأوردر غير صالح" });
+
+    const db = await getDb();
+    if (!db) return res.status(500).json({ error: "قاعدة البيانات غير متاحة" });
+
+    const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!order) return res.status(404).json({ error: "الأوردر غير موجود" });
+    if (!order.bostaShipmentId) {
+      return res.status(400).json({ error: "لم يتم إرسال هذا الأوردر لبوسطة بعد" });
+    }
+
+    const result = await fetchBostaAwb([order.bostaShipmentId]);
+    return sendAwbResult(res, result);
+  } catch (err) {
+    console.error("[Bosta AWB] single order error:", err);
+    return res.status(500).json({ error: "خطأ في جلب AWB" });
+  }
+}
+
+async function handleBulkAwb(req: Request, res: Response) {
+  try {
+    const idsParam = req.query.ids;
+    if (!idsParam) return res.status(400).json({ error: "يرجى تحديد أوردرات" });
+
+    const ids = String(idsParam).split(",").map(Number).filter(Boolean);
+    if (ids.length === 0) return res.status(400).json({ error: "لم يتم تحديد أوردرات صالحة" });
+
+    const db = await getDb();
+    if (!db) return res.status(500).json({ error: "قاعدة البيانات غير متاحة" });
+
+    const rows = await db.select().from(orders).where(inArray(orders.id, ids));
+    const shipmentIds = rows
+      .map((o) => o.bostaShipmentId)
+      .filter((v): v is string => Boolean(v));
+
+    if (shipmentIds.length === 0) {
+      return res.status(400).json({
+        error: "لا يوجد من ضمن الأوردرات المحددة أي أوردر تم إرساله لبوسطة",
+      });
+    }
+
+    const result = await fetchBostaAwb(shipmentIds);
+    return sendAwbResult(res, result);
+  } catch (err) {
+    console.error("[Bosta AWB] bulk error:", err);
+    return res.status(500).json({ error: "خطأ في جلب AWB" });
+  }
+}
+
+/** يسجّل مسارات طباعة/تحميل AWB الرسمية — فردي وجماعي، بنفس صلاحية أدمن/مدير الموجودة على باقي مسارات التصدير. */
+export function registerBostaAwbRoutes(app: Express) {
+  app.get("/api/orders/:id/bosta-awb", requireAdminOrManager, handleSingleAwb);
+  app.get("/api/orders/bosta-awb", requireAdminOrManager, handleBulkAwb);
 }

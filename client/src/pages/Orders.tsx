@@ -1132,6 +1132,14 @@ export default function Orders() {
               disabled={bulkSendToBostaMutation.isPending} onClick={() => setShowBostaDialog(true)}>
               <Truck className="h-3.5 w-3.5 ml-1" /> {bulkSendToBostaMutation.isPending ? 'جاري الإرسال...' : 'Bosta'}
             </Button>
+            <Button size="sm" variant="ghost" className="h-8 px-3 text-[var(--info)] hover:bg-background/20 text-xs font-medium"
+              onClick={() => {
+                const params = new URLSearchParams();
+                params.set('ids', selectedOrderIds.join(','));
+                window.open(`/api/orders/bosta-awb?${params.toString()}`, '_blank', 'noopener,noreferrer');
+              }}>
+              <Printer className="h-3.5 w-3.5 ml-1" /> AWB بوسطة
+            </Button>
             <Button size="sm" variant="ghost" className="h-8 px-3 text-red-400 hover:bg-background/20 text-xs font-medium"
               onClick={() => setPendingConfirm({ type: "bulkDelete" })}>
               <Trash2 className="h-3.5 w-3.5 ml-1" /> حذف

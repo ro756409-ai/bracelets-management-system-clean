@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowRight, Save, Edit2, X, Package, User, MapPin, Phone, FileText, Calendar, Hash, Truck, RefreshCw, CheckCircle, AlertCircle } from "lucide-react";
+import { ArrowRight, Save, Edit2, X, Package, User, MapPin, Phone, FileText, Calendar, Hash, Truck, RefreshCw, CheckCircle, AlertCircle, Printer } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -183,9 +183,19 @@ export default function OrderDetails() {
             {/* زر Bosta - يظهر فقط للأوردرات المؤكدة */}
             {(order.status === 'confirmed' || order.status === 'printed' || order.status === 'preparing' || order.status === 'shipped') && (
               order.bostaShipmentId ? (
-                <Button variant="outline" size="sm" className="text-[var(--success)] border-[var(--success)]/40" disabled>
-                  <CheckCircle className="h-4 w-4 ml-1" /> مرسل لـ Bosta
-                </Button>
+                <>
+                  <Button variant="outline" size="sm" className="text-[var(--success)] border-[var(--success)]/40" disabled>
+                    <CheckCircle className="h-4 w-4 ml-1" /> مرسل لـ Bosta
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-[var(--info)] border-[var(--info)]/40"
+                    onClick={() => window.open(`/api/orders/${order.id}/bosta-awb`, "_blank", "noopener,noreferrer")}
+                  >
+                    <Printer className="h-4 w-4 ml-1" /> طباعة AWB
+                  </Button>
+                </>
               ) : (
                 <Button
                   variant="outline"

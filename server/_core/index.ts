@@ -8,6 +8,7 @@ import { registerImportRoutes, registerWhatsAppImportRoutes } from "../importExc
 import { registerExportRoutes } from "../exportExcel";
 import { registerWebhookRoutes } from "../easyorderWebhook";
 import { registerBostaWebhookRoutes } from "../bostaWebhook";
+import { registerBostaAwbRoutes } from "../bosta.service";
 import employeeAuthRouter from "../employeeAuth";
 import cookieParser from "cookie-parser";
 import { appRouter } from "../routers";
@@ -52,6 +53,8 @@ async function startServer() {
   registerWebhookRoutes(app);
   // Bosta Webhook routes
   registerBostaWebhookRoutes(app);
+  // Bosta AWB (official shipping label) print/download routes
+  registerBostaAwbRoutes(app);
   // Employee auth routes
   app.use("/api/employee", employeeAuthRouter);
   // tRPC API
