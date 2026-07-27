@@ -197,6 +197,13 @@
       "when": 1785169013731,
       "tag": "0027_cloudy_microbe",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1785181015646,
+      "tag": "0028_next_grandmaster",
+      "breakpoints": true
     }
   ]
 }

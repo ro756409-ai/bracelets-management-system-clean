@@ -9,6 +9,26 @@ import {
   boolean,
 } from "drizzle-orm/mysql-core";
 
+// ==================== TENANTS ====================
+// حساب التاجر المستقل — طبقة عزل البيانات بين التجار (multi-tenancy). كل tenant ممكن يملك
+// أكتر من business (براند) تحته، زي الحساب الحالي اللي عنده براندين (مفروشات السعد / غطي)
+// تحت مالك واحد. الحساب الحقيقي الحالي بيتحول لـ tenant #1 في خطوة الـbackfill المنفصلة
+// (data migration)، مش جزء من هذا التعديل الإضافي على الـschema.
+export const tenants = mysqlTable("tenants", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 150 }).notNull(),
+  slug: varchar("slug", { length: 60 }).notNull().unique(),
+  status: mysqlEnum("status", ["trialing", "active", "past_due", "canceled"]).default("trialing").notNull(),
+  trialEndsAt: timestamp("trialEndsAt"),
+  ownerName: varchar("ownerName", { length: 150 }),
+  ownerEmail: varchar("ownerEmail", { length: 320 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Tenant = typeof tenants.$inferSelect;
+export type InsertTenant = typeof tenants.$inferInsert;
+
 // ==================== BUSINESS GROUPS ====================
 export const businessGroups = mysqlTable("business_groups", {
   id: int("id").autoincrement().primaryKey(),
@@ -25,6 +45,10 @@ export type InsertBusinessGroup = typeof businessGroups.$inferInsert;
 // ==================== BUSINESSES ====================
 export const businesses = mysqlTable("businesses", {
   id: int("id").autoincrement().primaryKey(),
+  // Existing single real business/brand rows backfill to tenant #1 in the data-migration step
+  // (see comment on `tenants` above) — same "default(1)" convention already used across this
+  // schema (products.businessId, orders.businessId, etc.) for additive NOT NULL columns.
+  tenantId: int("tenantId").notNull().default(1),
   name: varchar("name", { length: 100 }).notNull(),
   slug: varchar("slug", { length: 50 }).notNull().unique(),
   groupId: int("groupId"),
@@ -35,6 +59,60 @@ export const businesses = mysqlTable("businesses", {
 
 export type Business = typeof businesses.$inferSelect;
 export type InsertBusiness = typeof businesses.$inferInsert;
+
+// ==================== SUBSCRIPTION PLANS ====================
+export const subscriptionPlans = mysqlTable("subscription_plans", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  slug: varchar("slug", { length: 50 }).notNull().unique(),
+  priceMonthly: decimal("priceMonthly", { precision: 10, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 10 }).default("EGP").notNull(),
+  maxEmployees: int("maxEmployees"),
+  maxOrdersPerMonth: int("maxOrdersPerMonth"),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
+export type InsertSubscriptionPlan = typeof subscriptionPlans.$inferInsert;
+
+// ==================== SUBSCRIPTIONS ====================
+export const subscriptions = mysqlTable("subscriptions", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenantId").notNull(),
+  planId: int("planId").notNull(),
+  status: mysqlEnum("status", ["trialing", "active", "past_due", "canceled"]).default("trialing").notNull(),
+  currentPeriodStart: timestamp("currentPeriodStart"),
+  currentPeriodEnd: timestamp("currentPeriodEnd"),
+  cancelAtPeriodEnd: boolean("cancelAtPeriodEnd").default(false).notNull(),
+  canceledAt: timestamp("canceledAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Subscription = typeof subscriptions.$inferSelect;
+export type InsertSubscription = typeof subscriptions.$inferInsert;
+
+// ==================== PAYMENT GATEWAY CONFIGS ====================
+// إعدادات بوابة الدفع الخاصة بكل tenant — كل تاجر يختار ويربط بوابته بنفسه من الإعدادات.
+// نفس نمط الإخفاء/التأمين المستخدم فعلاً في sales_channels.apiToken/webhookSecret.
+export const paymentGatewayConfigs = mysqlTable("payment_gateway_configs", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenantId").notNull(),
+  provider: mysqlEnum("provider", ["paymob", "stripe", "fawry", "other"]).notNull(),
+  displayName: varchar("displayName", { length: 100 }),
+  credentials: text("credentials"),
+  isActive: boolean("isActive").default(false).notNull(),
+  lastVerifiedAt: timestamp("lastVerifiedAt"),
+  lastVerificationStatus: mysqlEnum("lastVerificationStatus", ["never", "connected", "failed"]).default("never").notNull(),
+  lastVerificationError: text("lastVerificationError"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type PaymentGatewayConfig = typeof paymentGatewayConfigs.$inferSelect;
+export type InsertPaymentGatewayConfig = typeof paymentGatewayConfigs.$inferInsert;
 
 // ==================== CATEGORIES ====================
 export const categories = mysqlTable("categories", {
