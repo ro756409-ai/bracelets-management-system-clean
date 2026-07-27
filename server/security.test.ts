@@ -345,7 +345,9 @@ describe("Auth middleware module", () => {
     const content = fs.readFileSync("server/authMiddleware.ts", "utf-8");
     expect(content).toContain("export async function requireAdminOrManager");
     expect(content).toContain("isActiveManagerSession");
-    expect(content).toContain('role !== "manager"');
+    // Employee-token fallback must accept the whole admin tier (super_admin/admin/manager),
+    // not just a literal "manager" role — a plain admin employee should not be locked out.
+    expect(content).toContain("isAdminTierRole(emp.role)");
   });
 
   it("authMiddleware.ts checks for JWT_SECRET", async () => {

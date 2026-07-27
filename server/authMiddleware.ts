@@ -71,7 +71,7 @@ export async function requireAdminOrManager(
       return res.status(401).json({ error: "الحساب غير نشط أو غير موجود" });
     }
 
-    if (emp.role !== "manager") {
+    if (!isAdminTierRole(emp.role)) {
       return res.status(403).json({ error: "هذا الإجراء متاح للمديرين فقط" });
     }
 
