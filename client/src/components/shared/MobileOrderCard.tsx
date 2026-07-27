@@ -88,7 +88,7 @@ export function MobileOrderCard({
         </div>
 
         <div className="flex items-center justify-between gap-2 text-sm">
-          <span className="min-w-0 flex-1 text-muted-foreground">{productSummary}</span>
+          <span className="min-w-0 flex-1 truncate text-muted-foreground" title={productSummary}>{productSummary}</span>
           <span className="shrink-0 font-semibold tabular-nums">{total}</span>
         </div>
 

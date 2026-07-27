@@ -579,7 +579,7 @@ export default function Orders() {
               <span className="flex items-center gap-0.5 text-[10px] bg-destructive/10 text-destructive border border-destructive/20 px-1.5 py-0.5 rounded-full w-fit font-bold">
                 ⚠️ فشل بوسطة
               </span>
-              <span className="text-[10px] leading-tight text-destructive bg-destructive/5 border border-destructive/10 rounded px-1.5 py-0.5 break-words" title={order.bostaLastError}>
+              <span className="text-[10px] leading-tight text-destructive bg-destructive/5 border border-destructive/10 rounded px-1.5 py-0.5 break-words line-clamp-2" title={order.bostaLastError}>
                 {order.bostaLastError}
               </span>
             </div>
@@ -600,7 +600,9 @@ export default function Orders() {
       id: "address", header: "العنوان",
       cell: (order) => (
         <div className="max-w-[220px]">
-          <p className="text-sm leading-snug break-words">{order.customerAddress || order.governorate || '—'}</p>
+          <p className="text-sm leading-snug break-words line-clamp-2" title={order.customerAddress || order.governorate || undefined}>
+            {order.customerAddress || order.governorate || '—'}
+          </p>
           {order.customerAddress && order.governorate && (
             <p className="text-xs text-muted-foreground">{order.governorate}</p>
           )}
@@ -628,7 +630,7 @@ export default function Orders() {
       id: "product", header: "المنتج",
       cell: (order) => (
         <div className="max-w-[200px]">
-          <p className="text-sm break-words">{order.productName}</p>
+          <p className="text-sm break-words line-clamp-2" title={order.productName}>{order.productName}</p>
           {order.quantity > 1 && <p className="text-xs text-muted-foreground">الكمية: {order.quantity}</p>}
           {(order.color || order.size) && (
             <p className="text-xs text-muted-foreground">
