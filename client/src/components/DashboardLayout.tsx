@@ -25,7 +25,7 @@ import {
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
-  LayoutDashboard, LogOut, PanelLeft, Users, ShoppingCart,
+  LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
   Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -83,7 +83,7 @@ const MENU_GROUPS: MenuGroup[] = [
     label: "التشغيل",
     icon: PackageCheck,
     items: [
-      { icon: PackageCheck, label: "التجهيز والطباعة", path: "/preparation" },
+      { icon: PackageCheck, label: "التجهيز", path: "/preparation" },
       { icon: Printer, label: "المطبوعات", path: "/printed-orders" },
       { icon: Clock, label: "سجل الطباعات", path: "/print-logs" },
       { icon: QrCode, label: "مسح QR الأوردرات", path: "/scan-orders" },
@@ -217,8 +217,10 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
-      const sidebarLeft = sidebarRef.current?.getBoundingClientRect().left ?? 0;
-      const newWidth = e.clientX - sidebarLeft;
+      // Sidebar is docked on the right (RTL) — its right edge is fixed to the viewport
+      // edge, so width grows as the mouse moves left, away from that fixed edge.
+      const sidebarRight = sidebarRef.current?.getBoundingClientRect().right ?? 0;
+      const newWidth = sidebarRight - e.clientX;
       if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) setSidebarWidth(newWidth);
     };
     const handleMouseUp = () => setIsResizing(false);
@@ -239,7 +241,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   return (
     <>
       <div className="relative" ref={sidebarRef}>
-        <Sidebar collapsible="icon" className="border-r-0" disableTransition={isResizing}>
+        <Sidebar side="right" collapsible="icon" disableTransition={isResizing}>
           <SidebarHeader className="h-16 justify-center border-b border-sidebar-border">
             <div className="flex items-center gap-3 px-2 w-full">
               <button
@@ -247,7 +249,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                 className="h-8 w-8 flex items-center justify-center hover:bg-sidebar-accent rounded-lg transition-colors shrink-0"
                 aria-label="Toggle navigation"
               >
-                <PanelLeft className="h-4 w-4 text-sidebar-foreground/60" />
+                <PanelRight className="h-4 w-4 text-sidebar-foreground/60" />
               </button>
               {!isCollapsed && (
                 <div className="min-w-0">
