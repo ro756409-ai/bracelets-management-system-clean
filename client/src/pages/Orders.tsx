@@ -146,6 +146,15 @@ export default function Orders() {
   const [adNameFilter, setAdNameFilter] = useState<string>("all");
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(() => {
+    const saved = Number(localStorage.getItem('orders-page-size'));
+    return [25, 50, 100].includes(saved) ? saved : 50;
+  });
+  const handlePageSizeChange = (size: number) => {
+    setPageSize(size);
+    setPage(1);
+    localStorage.setItem('orders-page-size', String(size));
+  };
   const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
   const [expandedMobileId, setExpandedMobileId] = useState<number | null>(null);
@@ -260,9 +269,9 @@ export default function Orders() {
     adName: adNameFilter !== "all" ? adNameFilter : undefined,
     unassignedOnly: hideAssigned ? true : undefined,
     page,
-    limit: 100,
+    limit: pageSize,
     businessIds: currentBusinessIds,
-  }), [search, statusFilter, sourceFilter, websiteFilter, governorateFilter, dateRange, printedDateRange, adNameFilter, hideAssigned, page, currentBusinessIds]);
+  }), [search, statusFilter, sourceFilter, websiteFilter, governorateFilter, dateRange, printedDateRange, adNameFilter, hideAssigned, page, pageSize, currentBusinessIds]);
 
   const { data, isLoading, refetch } = trpc.orders.list.useQuery(queryParams);
   const { data: statusCounts } = trpc.orders.statusCounts.useQuery({ businessIds: currentBusinessIds });
@@ -428,7 +437,7 @@ export default function Orders() {
 
   const orders = activeOrders;
   const total = activeTotal;
-  const totalPages = Math.ceil(total / 100);
+  const totalPages = Math.ceil(total / pageSize);
   // Sequence number shown in the table — fixed to match the actual page size (100); the
   // previous constant (20) desynced the displayed "#" from the real page boundary on any
   // page after the first.
@@ -666,24 +675,24 @@ export default function Orders() {
         const isActionable = order.status === 'new' || order.status === 'postponed';
         const canReturn = isAdmin && ['confirmed', 'shipped', 'delivered', 'preparing'].includes(order.status);
         return (
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             {/* أزرار أساسية — ظاهرة دايمًا، لون ثابت لكل معنى، بحد أقصى 3-4 عشان الصف ميبقاش مزدحم */}
             {isActionable && (
               <>
-                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-md text-[var(--success)] hover:bg-[var(--success)]/15 hover:text-[var(--success)]"
                   onClick={() => confirmMutation.mutate({ orderId: order.id })}
                   title="تأكيد الأوردر" aria-label="تأكيد الأوردر">
                   <CheckCircle className="h-4 w-4" />
                 </Button>
-                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-md text-destructive hover:bg-destructive/15 hover:text-destructive"
                   onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}
                   title="إلغاء الأوردر" aria-label="إلغاء الأوردر">
                   <XCircle className="h-4 w-4" />
                 </Button>
               </>
             )}
-            <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-7 w-7" />
-            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-[var(--info)] hover:bg-[var(--info)]/10"
+            <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-8 w-8 rounded-md hover:bg-[var(--success)]/15" />
+            <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-md text-[var(--info)] hover:bg-[var(--info)]/15 hover:text-[var(--info)]"
               onClick={() => setDetailOrderId(order.id)}
               title="عرض تفاصيل الأوردر" aria-label="عرض تفاصيل الأوردر">
               <Eye className="h-4 w-4" />
@@ -692,7 +701,7 @@ export default function Orders() {
             {/* باقي الإجراءات — أقل استخدامًا، جوه قائمة منسدلة بدل ما تزاحم الصف */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted"
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                   title="إجراءات أخرى" aria-label="إجراءات أخرى لهذا الأوردر">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
@@ -1142,8 +1151,15 @@ export default function Orders() {
         )}
       />
 
-      {activeTab === 'all' && totalPages > 1 && (
-        <Pagination page={page} pageSize={100} total={total} onPageChange={setPage} />
+      {activeTab === 'all' && total > 0 && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+          pageSizeOptions={[25, 50, 100]}
+          onPageSizeChange={handlePageSizeChange}
+        />
       )}
 
       {/* Floating selection bar */}

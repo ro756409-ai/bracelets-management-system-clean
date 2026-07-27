@@ -111,7 +111,7 @@ export function FilterBar({
   return (
     <div className={cn("space-y-3", className)}>
       <div className="flex items-center gap-2">
-        {search && <div className="min-w-0 flex-1">{search}</div>}
+        {search && <div className="min-w-0 flex-1 lg:max-w-xs">{search}</div>}
 
         {children && (
           <>

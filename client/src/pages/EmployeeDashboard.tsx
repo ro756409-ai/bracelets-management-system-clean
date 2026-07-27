@@ -21,7 +21,7 @@ import {
 import QRCodeLib from "qrcode";
 import jsQR from "jsqr";
 import { BrandMark } from "@/components/BrandMark";
-import { StatCard, ConfirmDialog } from "@/components/shared";
+import { StatCard, ConfirmDialog, WhatsAppButton } from "@/components/shared";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getMissingConfirmationFields } from "@/lib/orderConfirmationValidation";
 
@@ -1205,6 +1205,7 @@ export default function EmployeeDashboard() {
                             <Phone className="h-3.5 w-3.5" />
                             <span dir="ltr">{order.customerPhone}</span>
                           </span>
+                          <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-7 w-7" />
                           <span className="flex items-center gap-1">
                             <MapPin className="h-3.5 w-3.5" />
                             {order.governorate}

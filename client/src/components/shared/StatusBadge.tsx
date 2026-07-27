@@ -22,6 +22,17 @@ const TONE_CLASS: Record<StatusTone, string> = {
   info: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/30",
 };
 
+/** The dot uses the solid tone colour (not the 10%-opacity background) so it stays a
+ *  clear anchor even for two statuses that share a tone (e.g. "مؤجل"/"لم يرد" both warning). */
+const TONE_DOT_CLASS: Record<StatusTone, string> = {
+  neutral: "bg-muted-foreground",
+  primary: "bg-primary",
+  success: "bg-[var(--success)]",
+  warning: "bg-[var(--warning)]",
+  danger: "bg-destructive",
+  info: "bg-[var(--info)]",
+};
+
 type StatusDef = { label: string; tone: StatusTone };
 
 /** Canonical order statuses. Labels match the wording staff already read on screen. */
@@ -89,12 +100,13 @@ export function StatusBadge({
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-brand-pill)] border font-medium whitespace-nowrap",
-        size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs",
+        "inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-brand-pill)] border font-semibold whitespace-nowrap",
+        size === "sm" ? "px-2.5 py-0.5 text-[11px]" : "px-3 py-1 text-xs",
         TONE_CLASS[resolvedTone],
         className
       )}
     >
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", TONE_DOT_CLASS[resolvedTone])} />
       {text}
     </span>
   );
