@@ -81,6 +81,9 @@ export default function EmployeeDashboard() {
   // Action dialogs
   const [postponeDialog, setPostponeDialog] = useState<{ open: boolean; orderId: number | null }>({ open: false, orderId: null });
   const [cancelDialog, setCancelDialog] = useState<{ open: boolean; orderId: number | null }>({ open: false, orderId: null });
+  // استبيان "لم يرد": كام مرة اتصل الموظف قبل ما يعلّم الحالة — نفس نمط حواري الإلغاء والتأجيل.
+  const [noAnswerDialog, setNoAnswerDialog] = useState<{ open: boolean; orderId: number | null }>({ open: false, orderId: null });
+  const [noAnswerAttempts, setNoAnswerAttempts] = useState("");
   const [postponeDate, setPostponeDate] = useState("");
   const [postponeNotes, setPostponeNotes] = useState("");
   const [cancelReason, setCancelReason] = useState<string>("");
@@ -258,11 +261,18 @@ export default function EmployeeDashboard() {
   const noAnswerMutation = trpc.employeePortal.markNoAnswer.useMutation({
     onSuccess: () => {
       toast.success("تم تسجيل لم يرد");
+      setNoAnswerDialog({ open: false, orderId: null });
+      setNoAnswerAttempts("");
       utils.employeePortal.myOrders.invalidate();
       utils.employeePortal.stats.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
+
+  const openNoAnswerDialog = (orderId: number) => {
+    setNoAnswerAttempts("");
+    setNoAnswerDialog({ open: true, orderId });
+  };
 
   const updateNotesMutation = trpc.employeePortal.updateNotes.useMutation({
     onSuccess: () => {
@@ -565,7 +575,7 @@ export default function EmployeeDashboard() {
           handleConfirmOrder(order);
           break;
         case "n":
-          noAnswerMutation.mutate({ orderId: order.id });
+          openNoAnswerDialog(order.id);
           break;
         case "p":
           setPostponeDialog({ open: true, orderId: order.id });
@@ -1402,7 +1412,7 @@ export default function EmployeeDashboard() {
                             size="sm"
                             variant="outline"
                             className="h-9 px-3"
-                            onClick={() => noAnswerMutation.mutate({ orderId: order.id })}
+                            onClick={() => openNoAnswerDialog(order.id)}
                             disabled={noAnswerMutation.isPending}
                             title="لم يرد"
                           >
@@ -1824,6 +1834,51 @@ export default function EmployeeDashboard() {
               variant="destructive"
             >
               {cancelMutation.isPending ? "جاري..." : "تأكيد الإلغاء"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* استبيان "لم يرد" — كام مرة اتصل الموظف بالعميل قبل تسجيل الحالة */}
+      <Dialog open={noAnswerDialog.open} onOpenChange={open => setNoAnswerDialog(d => ({ ...d, open }))}>
+        <DialogContent className="max-w-sm" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Phone className="h-5 w-5 text-[var(--warning)]" />
+              تسجيل "لم يرد"
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Label>كام مرة اتصلت بالعميل؟</Label>
+            <div className="grid grid-cols-4 gap-2">
+              {[1, 2, 3, 4].map(n => (
+                <Button
+                  key={n}
+                  type="button"
+                  variant={noAnswerAttempts === String(n) ? "default" : "outline"}
+                  className="h-10"
+                  onClick={() => setNoAnswerAttempts(String(n))}
+                >
+                  {n}
+                </Button>
+              ))}
+            </div>
+            <Input
+              type="number" min={1} max={20} placeholder="أو رقم مختلف..."
+              value={noAnswerAttempts} onChange={e => setNoAnswerAttempts(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNoAnswerDialog({ open: false, orderId: null })}>رجوع</Button>
+            <Button
+              disabled={noAnswerMutation.isPending}
+              onClick={() => {
+                if (!noAnswerDialog.orderId) return;
+                const attempts = noAnswerAttempts ? Number(noAnswerAttempts) : undefined;
+                noAnswerMutation.mutate({ orderId: noAnswerDialog.orderId, callAttempts: attempts });
+              }}
+            >
+              {noAnswerMutation.isPending ? "جاري..." : 'تأكيد "لم يرد"'}
             </Button>
           </DialogFooter>
         </DialogContent>

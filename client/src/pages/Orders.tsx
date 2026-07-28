@@ -1009,6 +1009,36 @@ export default function Orders() {
       {activeTab === 'all' && (
         <Card>
           <CardContent className="p-4 space-y-3">
+            {/* شريط تبويبات الحالة — بديل هادي لقائمة "الحالة" المنسدلة: كل الحالات ظاهرة
+                بعدادها، ضغطة واحدة بتفلتر، والتبويب النشط بخط سفلي بس بدون صناديق ملونة. */}
+            <div className="-mx-4 -mt-4 mb-1 overflow-x-auto border-b border-border px-4">
+              <div className="flex w-max items-center gap-1">
+                {(["all", "new", "confirmed", "no_answer", "postponed", "printed", "preparing", "shipped", "delivered", "cancelled", "returned"] as const).map(v => {
+                  const active = statusFilter === v;
+                  const count = v === 'all' ? statusCounts?.total : statusCounts?.byStatus?.[v];
+                  return (
+                    <button
+                      key={v}
+                      onClick={() => { setStatusFilter(v); setPage(1); }}
+                      className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm transition-colors ${
+                        active ? 'font-bold text-primary' : 'font-medium text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {v === 'all' ? 'كل الأوردرات' : STATUS_LABEL(v)}
+                      {count != null && count > 0 && (
+                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
+                          active ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'
+                        }`}>
+                          {Number(count).toLocaleString('ar-EG')}
+                        </span>
+                      )}
+                      {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <FilterBar
               search={
                 <SearchInput
@@ -1022,16 +1052,6 @@ export default function Orders() {
               onReset={resetAllFilters}
               activeCount={activeFilterCount}
             >
-              <Select value={statusFilter} onValueChange={v => { setStatusFilter(v); setPage(1); }}>
-                <SelectTrigger className="w-40 h-10"><SelectValue placeholder="الحالة" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل الحالات</SelectItem>
-                  {["new", "confirmed", "printed", "postponed", "cancelled", "preparing", "shipped", "delivered", "no_answer", "returned"].map(v => (
-                    <SelectItem key={v} value={v}>{STATUS_LABEL(v)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
               {statusFilter === 'printed' && (
                 <div className="flex items-center gap-1.5 bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-lg px-2 py-1">
                   <span className="text-xs text-[var(--info)] font-medium whitespace-nowrap">مطبوع:</span>
