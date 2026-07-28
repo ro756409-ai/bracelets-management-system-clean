@@ -65,6 +65,61 @@ function requireEmployeePermission(permission: Permission) {
     return next({ ctx });
   });
 }
+
+/**
+ * An employee's tenant, read directly off their own row — never derived, never defaulted.
+ * Throws if the employees.tenantId backfill hasn't reached this row yet, exactly like
+ * context.ts does for the admin-tier session path (see rejectUnresolvedTenant there).
+ */
+function requireTenantId(emp: { tenantId: number | null }): number {
+  if (emp.tenantId == null) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'لا يوجد حساب تاجر مرتبط بهذا المستخدم — يرجى مراجعة الدعم الفني' });
+  }
+  return emp.tenantId;
+}
+
+/**
+ * Multi-tenancy: clamps a client-supplied businessId/businessIds filter to the ids that
+ * actually belong to the caller's tenant, so a session can never read another tenant's data
+ * just by passing an arbitrary id — the id list must never be trusted as-is from the client.
+ * No filter supplied = the full set the tenant owns (today's default "show everything"
+ * behaviour, unchanged for the single existing tenant until real multi-tenant signup exists).
+ *
+ * If the database itself is unreachable, `getBusinessIdsForTenant` returns `null` rather than
+ * `[]` — that's "couldn't verify", not "verified: zero businesses". Clamping is skipped in that
+ * case (the request falls through to whatever downstream query will fail with its own clear
+ * "Database not available" error) instead of asserting a false FORBIDDEN.
+ */
+async function scopeBusinessIds(
+  tenantId: number,
+  requested?: { businessId?: number | null; businessIds?: number[] | null }
+): Promise<number[] | undefined> {
+  const allowed = await getBusinessIdsForTenant(tenantId);
+  const requestedIds = requested?.businessIds && requested.businessIds.length > 0
+    ? requested.businessIds
+    : requested?.businessId != null ? [requested.businessId] : undefined;
+  if (allowed == null) return requestedIds;
+  if (!requestedIds) return allowed;
+  const allowedSet = new Set(allowed);
+  return requestedIds.filter(id => allowedSet.has(id));
+}
+
+/**
+ * Same idea for procedures that only accept a single businessId (categories, warehouses,
+ * sales channels, print logs, returns stats, activity log). Validates the id belongs to the
+ * tenant instead of silently trusting any id; `undefined` (no filter) is left untouched. Skips
+ * the check (same "couldn't verify" reasoning as scopeBusinessIds above) when the database is
+ * unreachable.
+ */
+async function scopeBusinessId(tenantId: number, businessId?: number | null): Promise<number | undefined> {
+  if (businessId == null) return undefined;
+  const allowed = await getBusinessIdsForTenant(tenantId);
+  if (allowed == null) return businessId;
+  if (!allowed.includes(businessId)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'لا يمكنك الوصول لبيانات هذا الفرع/النشاط' });
+  }
+  return businessId;
+}
 import {
   groupOrdersByAgent, getAgentsForGovernorateOnDay,
   getTodaySchedule, DAY_NAMES_AR, SHIPPING_SCHEDULES,
@@ -93,6 +148,7 @@ import {
   getBusinessGroupsWithBusinesses, getBusinessIdsByGroupId, getActiveBusinessGroups,
   editOrderFull, getOrderEditLogs,
   scanOrderBySerial, getScanLogs,
+  getBusinessIdsForTenant,
 } from "./db";
 
 // Helper: admin check
@@ -158,13 +214,15 @@ export const appRouter = router({
       search: z.string().optional(),
       role: z.enum(EMPLOYEE_ROLE_VALUES).optional(),
       isActive: z.boolean().optional(),
-    }).optional()).query(async ({ input }) => {
-      return searchEmployees(input ?? {});
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input?.businessId);
+      return searchEmployees({ ...(input ?? {}), businessId });
     }),
     activeList: protectedProcedure.input(z.object({
       businessId: z.number().optional(),
-    }).optional()).query(async ({ input }) => {
-      return getActiveEmployees(input?.businessId);
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input?.businessId);
+      return getActiveEmployees(businessId);
     }),
     get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
       return getEmployeeById(input.id);
@@ -175,8 +233,9 @@ export const appRouter = router({
       email: z.string().email().optional(),
       role: z.enum(EMPLOYEE_ROLE_VALUES).default('agent'),
       businessId: z.number().optional(),
-    })).mutation(async ({ input }) => {
-      await createEmployee(input);
+    })).mutation(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input.businessId);
+      await createEmployee({ ...input, businessId, tenantId: ctx.tenantId });
       return { success: true };
     }),
     update: adminProcedure.input(z.object({
@@ -298,8 +357,9 @@ export const appRouter = router({
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
       includeInactive: z.boolean().optional(),
-    }).optional()).query(async ({ input }) => {
-      return getAllProducts(input?.businessId, input?.businessIds, { includeInactive: input?.includeInactive });
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getAllProducts(undefined, businessIds, { includeInactive: input?.includeInactive });
     }),
     get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
       return getProductById(input.id);
@@ -342,8 +402,9 @@ export const appRouter = router({
     lowStock: protectedProcedure.input(z.object({
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
-    }).optional()).query(async ({ input }) => {
-      return getLowStockProducts(input?.businessId, input?.businessIds);
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getLowStockProducts(undefined, businessIds);
     }),
     addMovement: adminProcedure.input(z.object({
       productId: z.number(),
@@ -366,8 +427,9 @@ export const appRouter = router({
       limit: z.number().default(50),
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
-    })).query(async ({ input }) => {
-      return getInventoryMovements(input.productId, input.limit, input.businessId, input.businessIds, input.variantId);
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getInventoryMovements(input.productId, input.limit, undefined, businessIds, input.variantId);
     }),
   }),
 
@@ -393,15 +455,16 @@ export const appRouter = router({
       businessIds: z.array(z.number()).optional(),
       websiteId: z.number().optional(),
     })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
       // Agents can only see their own orders
       if (ctx.user.role !== 'admin') {
         const emps = await getAllEmployees();
         const emp = emps.find(e => e.userId === ctx.user.id);
         if (emp) {
-          return getOrders({ ...input, assignedEmployeeId: emp.id });
+          return getOrders({ ...input, businessId: undefined, businessIds, assignedEmployeeId: emp.id });
         }
       }
-      return getOrders(input);
+      return getOrders({ ...input, businessId: undefined, businessIds });
     }),
 
     get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
@@ -414,8 +477,9 @@ export const appRouter = router({
     /** Header stat cards on the Orders page — same business-group scope as `orders.list`. */
     statusCounts: protectedProcedure.input(z.object({
       businessIds: z.array(z.number()).optional(),
-    })).query(async ({ input }) => {
-      return getOrderStatusCounts(input.businessIds);
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getOrderStatusCounts(businessIds);
     }),
 
     /** Orders that ever touched Bosta (shipment created, or send attempt failed), grouped
@@ -430,14 +494,16 @@ export const appRouter = router({
       page: z.number().default(1),
       limit: z.number().default(50),
       businessIds: z.array(z.number()).optional(),
-    })).query(async ({ input }) => {
-      return getBostaOrders(input);
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getBostaOrders({ ...input, businessIds });
     }),
 
     bostaOrdersSummary: protectedProcedure.input(z.object({
       businessIds: z.array(z.number()).optional(),
-    }).optional()).query(async ({ input }) => {
-      return getBostaOrdersSummary(input?.businessIds);
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getBostaOrdersSummary(businessIds);
     }),
 
     // جلب أسماء البيدج المميزة (لفلتر البيدج)
@@ -863,7 +929,7 @@ export const appRouter = router({
       date: z.string().optional(), // YYYY-MM-DD, defaults to today Cairo time
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
-    })).query(async ({ input }) => {
+    })).query(async ({ ctx, input }) => {
       const db = await getDb();
       if (!db) return { orders: [], total: 0 };
       const { from, to } = input.date ? cairoParseDateRange(input.date) : cairoTodayRange();
@@ -875,11 +941,8 @@ export const appRouter = router({
       if (input.confirmedByEmployeeId) {
         conditions.push(eq(ordersTable.assignedEmployeeId, input.confirmedByEmployeeId));
       }
-      if (input.businessIds && input.businessIds.length > 0) {
-        conditions.push(inArray(ordersTable.businessId, input.businessIds));
-      } else if (input.businessId) {
-        conditions.push(eq(ordersTable.businessId, input.businessId));
-      }
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      if (businessIds) conditions.push(inArray(ordersTable.businessId, businessIds));
       const rows = await db.select().from(ordersTable)
         .where(and(...conditions))
         .orderBy(desc(ordersTable.confirmedAt));
@@ -912,8 +975,9 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
       // الموظف يشوف كل الأوردرات الموزعة عليه بغض النظر عن الـ business
-      // لكن لو اختار مجموعة معينة نفلتر بيها
-      const filterBusinessIds = input.businessIds && input.businessIds.length > 0 ? input.businessIds : undefined;
+      // لكن لو اختار مجموعة معينة نفلتر بيها (بعد التأكد إنها تبع نفس الـ tenant)
+      const tenantId = requireTenantId(emp);
+      const filterBusinessIds = await scopeBusinessIds(tenantId, input);
       // إذا كان فيه فلتر تاريخ مخصص، نستخدمه مباشرة
       if (input.dateFrom || input.dateTo) {
         return getOrders({
@@ -1068,22 +1132,29 @@ export const appRouter = router({
     // عرض المخزون المتبقي للموظفين (قراءة فقط)
     stockLevels: employeePortalProcedure.input(z.object({
       businessIds: z.array(z.number()).optional(),
-    }).optional()).query(async ({ input }) => {
-      return getAllProducts(undefined, input?.businessIds);
+    }).optional()).query(async ({ ctx, input }) => {
+      const emp = (ctx as any).employee;
+      const tenantId = requireTenantId(emp);
+      const businessIds = await scopeBusinessIds(tenantId, input);
+      return getAllProducts(undefined, businessIds);
     }),
 
     // عرض variants المنتجات للموظف (مع الأسعار والمخزون)
     stockVariants: employeePortalProcedure.input(z.object({
       businessIds: z.array(z.number()).optional(),
-    }).optional()).query(async ({ input }) => {
-      return getAllVariantsWithProduct(undefined, input?.businessIds);
+    }).optional()).query(async ({ ctx, input }) => {
+      const emp = (ctx as any).employee;
+      const tenantId = requireTenantId(emp);
+      const businessIds = await scopeBusinessIds(tenantId, input);
+      return getAllVariantsWithProduct(undefined, businessIds);
     }),
 
     stats: requireEmployeePermission('dashboard.view').input(z.object({
       businessIds: z.array(z.number()).optional(),
     }).optional()).query(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
-      const filterBusinessIds = input?.businessIds && input.businessIds.length > 0 ? input.businessIds : undefined;
+      const tenantId = requireTenantId(emp);
+      const filterBusinessIds = await scopeBusinessIds(tenantId, input);
       // تفلتر بتاريخ التوزيع اليوم بتوقيت القاهرة
       const cairoOffset = 2 * 60 * 60 * 1000;
       const cairoNow = new Date(Date.now() + cairoOffset);
@@ -1236,7 +1307,9 @@ export const appRouter = router({
       businessIds: z.array(z.number()).optional(),
     })).query(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
-      return getDashboardStats(input.dateFrom, input.dateTo, emp.businessId ?? undefined, input.businessIds);
+      const tenantId = requireTenantId(emp);
+      const businessIds = await scopeBusinessIds(tenantId, input);
+      return getDashboardStats(input.dateFrom, input.dateTo, undefined, businessIds);
     }),
 
     // All orders for manager (not just assigned)
@@ -1254,9 +1327,9 @@ export const appRouter = router({
       page: z.number().default(1),
       limit: z.number().default(50),
     })).query(async ({ ctx, input }) => {
-      // If employee has a businessId, filter by it
       const emp = (ctx as any).employee;
-      const effectiveBusinessIds = input.businessIds ?? (input.businessId ? [input.businessId] : (emp.businessId ? [emp.businessId] : undefined));
+      const tenantId = requireTenantId(emp);
+      const effectiveBusinessIds = await scopeBusinessIds(tenantId, input);
       return getOrders({ ...input, businessId: undefined, businessIds: effectiveBusinessIds });
     }),
 
@@ -1304,7 +1377,10 @@ export const appRouter = router({
     })).mutation(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
       const orderNumber = await generateOrderNumber();
-      const effectiveBusinessId = input.businessId ?? emp.businessId ?? undefined;
+      const tenantId = requireTenantId(emp);
+      const effectiveBusinessId = input.businessId != null
+        ? await scopeBusinessId(tenantId, input.businessId)
+        : (emp.businessId ?? undefined);
       // تجهيز البنود؛ لو مفيش selectedProducts نستخدم المنتج المفرد
       const items = (input.selectedProducts && input.selectedProducts.length > 0)
         ? input.selectedProducts.map(p => ({ ...p, quantity: p.quantity ?? 1 }))
@@ -1443,8 +1519,10 @@ export const appRouter = router({
       phone: z.string().optional(),
       email: z.string().email().optional(),
       role: z.enum(['agent', 'warehouse', 'manager', 'facebook_entry', 'scanner']).default('agent'),
-    })).mutation(async ({ input }) => {
-      await createEmployee(input);
+    })).mutation(async ({ ctx, input }) => {
+      const emp = (ctx as any).employee;
+      const tenantId = requireTenantId(emp);
+      await createEmployee({ ...input, businessId: emp.businessId ?? undefined, tenantId });
       return { success: true };
     }),
 
@@ -2003,8 +2081,9 @@ export const appRouter = router({
       dateTo: z.date().optional(),
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
-    })).query(async ({ input }) => {
-      return getDashboardStats(input.dateFrom, input.dateTo, input.businessId, input.businessIds);
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getDashboardStats(input.dateFrom, input.dateTo, undefined, businessIds);
     }),
 
     employeePerformance: adminProcedure.input(z.object({
@@ -2012,10 +2091,12 @@ export const appRouter = router({
       dateTo: z.date().optional(),
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
-    })).query(async ({ input }) => {
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      const businessId = await scopeBusinessId(ctx.tenantId, input.businessId);
       const [perf, emps] = await Promise.all([
-        getEmployeePerformance(input.dateFrom, input.dateTo, input.businessId, input.businessIds),
-        getAllEmployees(input.businessId),
+        getEmployeePerformance(input.dateFrom, input.dateTo, undefined, businessIds),
+        getAllEmployees(businessId),
       ]);
       return perf.map(p => {
         const emp = emps.find(e => e.id === p.employeeId);
@@ -2038,16 +2119,18 @@ export const appRouter = router({
       dateTo: z.date().optional(),
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
-    })).query(async ({ input }) => {
-      return getCancellationReasons(input.dateFrom, input.dateTo, input.businessId, input.businessIds);
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getCancellationReasons(input.dateFrom, input.dateTo, undefined, businessIds);
     }),
 
     dailyChart: adminProcedure.input(z.object({
       days: z.number().default(30),
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
-    })).query(async ({ input }) => {
-      return getDailyOrdersChart(input.days, input.businessId, input.businessIds);
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getDailyOrdersChart(input.days, undefined, businessIds);
     }),
 
     // تقرير الدمج التلقائي للأوردرات المكررة
@@ -2166,8 +2249,9 @@ export const appRouter = router({
         dateTo: z.date().optional(),
         businessId: z.number().optional(),
       }))
-      .query(async ({ input }) => {
-        return getReturnsList(input);
+      .query(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx.tenantId, input.businessId);
+        return getReturnsList({ ...input, businessId });
       }),
 
     // إحصائيات المرتجعات
@@ -2177,8 +2261,9 @@ export const appRouter = router({
         dateTo: z.date().optional(),
         businessId: z.number().optional(),
       }))
-      .query(async ({ input }) => {
-        return getReturnsStats(input.dateFrom, input.dateTo, input.businessId);
+      .query(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx.tenantId, input.businessId);
+        return getReturnsStats(input.dateFrom, input.dateTo, businessId);
       }),
   }),
 
@@ -2291,8 +2376,9 @@ export const appRouter = router({
     list: protectedProcedure.input(z.object({
       limit: z.number().min(1).max(100).optional(),
       businessId: z.number().optional(),
-    }).optional()).query(async ({ input }) => {
-      const logs = await getPrintLogs(input?.limit ?? 50, input?.businessId);
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input?.businessId);
+      const logs = await getPrintLogs(input?.limit ?? 50, businessId);
       return logs;
     }),
 
@@ -2317,7 +2403,8 @@ export const appRouter = router({
       dateFrom: z.string().optional(),
       dateTo: z.string().optional(),
       businessId: z.number().optional(),
-    }).optional()).query(async ({ input }) => {
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input?.businessId);
       return getActivityLogs({
         page: input?.page ?? 1,
         limit: input?.limit ?? 50,
@@ -2327,18 +2414,20 @@ export const appRouter = router({
         performedBy: input?.performedBy,
         dateFrom: input?.dateFrom ? new Date(input.dateFrom) : undefined,
         dateTo: input?.dateTo ? new Date(input.dateTo) : undefined,
-        businessId: input?.businessId,
+        businessId,
       });
     }),
   }),
 
   // ==================== الأنشطة (Businesses) ====================
   businesses: router({
-    list: protectedProcedure.query(async () => {
-      return getAllBusinesses();
+    list: protectedProcedure.query(async ({ ctx }) => {
+      const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
+      return getAllBusinesses(businessIds ?? undefined);
     }),
-    activeList: protectedProcedure.query(async () => {
-      return getActiveBusinesses();
+    activeList: protectedProcedure.query(async ({ ctx }) => {
+      const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
+      return getActiveBusinesses(businessIds ?? undefined);
     }),
     // Business Groups
     groups: protectedProcedure.query(async () => {
@@ -2349,11 +2438,16 @@ export const appRouter = router({
     }),
     businessIdsByGroup: protectedProcedure.input(z.object({
       groupId: z.number(),
-    })).query(async ({ input }) => {
-      return getBusinessIdsByGroupId(input.groupId);
+    })).query(async ({ ctx, input }) => {
+      const ids = await getBusinessIdsByGroupId(input.groupId);
+      const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+      if (allowed == null) return ids;
+      const allowedSet = new Set(allowed);
+      return ids.filter(id => allowedSet.has(id));
     }),
-    get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
-      return getBusinessById(input.id);
+    get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ ctx, input }) => {
+      const id = await scopeBusinessId(ctx.tenantId, input.id);
+      return id != null ? getBusinessById(id) : undefined;
     }),
     create: adminProcedure.input(z.object({
       name: z.string().min(2),
@@ -2375,8 +2469,9 @@ export const appRouter = router({
     // التصنيفات
     categories: protectedProcedure.input(z.object({
       businessId: z.number(),
-    })).query(async ({ input }) => {
-      return getCategoriesByBusiness(input.businessId);
+    })).query(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input.businessId);
+      return getCategoriesByBusiness(businessId!);
     }),
     createCategory: adminProcedure.input(z.object({
       businessId: z.number(),
@@ -2397,8 +2492,9 @@ export const appRouter = router({
     // المخازن
     warehouses: protectedProcedure.input(z.object({
       businessId: z.number(),
-    })).query(async ({ input }) => {
-      return getWarehousesByBusiness(input.businessId);
+    })).query(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input.businessId);
+      return getWarehousesByBusiness(businessId!);
     }),
     createWarehouse: adminProcedure.input(z.object({
       businessId: z.number(),
@@ -2427,13 +2523,15 @@ export const appRouter = router({
     list: adminProcedure.input(z.object({
       businessId: z.number().optional(),
       includeInactive: z.boolean().optional(),
-    }).optional()).query(async ({ input }) => {
-      return getAllSalesChannels(input?.businessId, { includeInactive: input?.includeInactive ?? true });
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input?.businessId);
+      return getAllSalesChannels(businessId, { includeInactive: input?.includeInactive ?? true });
     }),
     activeList: adminProcedure.input(z.object({
       businessId: z.number().optional(),
-    }).optional()).query(async ({ input }) => {
-      return getActiveSalesChannels(input?.businessId);
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessId = await scopeBusinessId(ctx.tenantId, input?.businessId);
+      return getActiveSalesChannels(businessId);
     }),
     get: adminProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
       return getSalesChannelById(input.id);
@@ -2446,7 +2544,8 @@ export const appRouter = router({
       apiToken: z.string().trim().min(1).optional(),
       webhookSecret: z.string().trim().min(8, 'سر الـ webhook يجب أن يكون 8 أحرف على الأقل').optional(),
       webhookUrl: z.string().trim().url('صيغة رابط الـ webhook غير صحيحة').optional().or(z.literal('')),
-    })).mutation(async ({ input }) => {
+    })).mutation(async ({ ctx, input }) => {
+      input.businessId = (await scopeBusinessId(ctx.tenantId, input.businessId))!;
       if (await isSalesChannelNameTaken(input.businessId, input.name)) {
         throw new TRPCError({ code: 'CONFLICT', message: `يوجد بالفعل قناة نشطة بنفس الاسم "${input.name}" لهذا العمل` });
       }
@@ -2562,8 +2661,9 @@ export const appRouter = router({
       businessId: z.number().optional(),
       businessIds: z.array(z.number()).optional(),
       includeInactive: z.boolean().optional(),
-    }).optional()).query(async ({ input }) => {
-      return getAllVariantsWithProduct(input?.businessId, input?.businessIds, { includeInactive: input?.includeInactive });
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getAllVariantsWithProduct(undefined, businessIds, { includeInactive: input?.includeInactive });
     }),
     get: protectedProcedure.input(z.object({ id: z.number() })).query(async ({ input }) => {
       return getVariantById(input.id);

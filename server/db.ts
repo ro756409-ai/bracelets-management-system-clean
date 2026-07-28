@@ -113,16 +113,48 @@ export async function getBusinessIdsByGroupSlug(slug: string): Promise<number[]>
 }
 
 // ==================== BUSINESSES ====================
-export async function getAllBusinesses() {
+export async function getAllBusinesses(businessIds?: number[]) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(businesses).orderBy(asc(businesses.name));
+  const where = businessIds && businessIds.length > 0 ? inArray(businesses.id, businessIds) : undefined;
+  return db.select().from(businesses).where(where).orderBy(asc(businesses.name));
 }
 
-export async function getActiveBusinesses() {
+export async function getActiveBusinesses(businessIds?: number[]) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(businesses).where(eq(businesses.isActive, true)).orderBy(asc(businesses.name));
+  const conditions = [eq(businesses.isActive, true)];
+  if (businessIds && businessIds.length > 0) conditions.push(inArray(businesses.id, businessIds));
+  return db.select().from(businesses).where(and(...conditions)).orderBy(asc(businesses.name));
+}
+
+// ==================== TENANTS (multi-tenancy) ====================
+/**
+ * Every business id that belongs to a given tenant — the allow-list a session may ever
+ * read/write. Returns `null` (not `[]`) when the database itself is unreachable, so callers can
+ * tell "verified: this tenant owns zero businesses" apart from "couldn't verify at all" —
+ * treating the latter as an empty allow-list would fail closed for the wrong reason and mask
+ * the real "database unavailable" error every other query in this file already surfaces.
+ */
+export async function getBusinessIdsForTenant(tenantId: number): Promise<number[] | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({ id: businesses.id }).from(businesses).where(eq(businesses.tenantId, tenantId));
+  return rows.map(r => r.id);
+}
+
+/**
+ * Tenant a business group belongs to. Returns null/undefined if the group doesn't exist, the
+ * database is unavailable, OR the group's own tenantId hasn't been backfilled yet (still null)
+ * — all three are treated identically by callers: "cannot verify, so reject the cross-tenant
+ * group assignment" rather than assume it's fine.
+ */
+async function getBusinessGroupTenantId(groupId: number): Promise<number | null | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [group] = await db.select({ tenantId: businessGroups.tenantId }).from(businessGroups)
+    .where(eq(businessGroups.id, groupId)).limit(1);
+  return group?.tenantId;
 }
 
 export async function getBusinessById(id: number) {
@@ -135,12 +167,26 @@ export async function getBusinessById(id: number) {
 export async function createBusiness(data: InsertBusiness) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  if (data.groupId != null) {
+    const groupTenantId = await getBusinessGroupTenantId(data.groupId);
+    if (groupTenantId == null || groupTenantId !== (data.tenantId ?? 1)) {
+      throw new Error("Business group belongs to a different tenant");
+    }
+  }
   await db.insert(businesses).values(data);
 }
 
 export async function updateBusiness(id: number, data: Partial<InsertBusiness>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  if (data.groupId != null) {
+    const [biz] = await db.select({ tenantId: businesses.tenantId }).from(businesses).where(eq(businesses.id, id)).limit(1);
+    const effectiveTenantId = data.tenantId ?? biz?.tenantId;
+    const groupTenantId = await getBusinessGroupTenantId(data.groupId);
+    if (effectiveTenantId == null || groupTenantId == null || groupTenantId !== effectiveTenantId) {
+      throw new Error("Business group belongs to a different tenant");
+    }
+  }
   await db.update(businesses).set(data).where(eq(businesses.id, id));
 }
 

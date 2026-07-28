@@ -1,6 +1,7 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import type { Employee, User } from "../../drizzle/schema";
 import jwt from "jsonwebtoken";
+import { TRPCError } from "@trpc/server";
 import { getDb } from "../db";
 import { employees } from "../../drizzle/schema";
 import { eq } from "drizzle-orm";
@@ -19,7 +20,23 @@ export type TrpcContext = {
   user: User | null;
   employeeManager?: boolean; // flag to indicate this is a manager employee session (not the true owner login)
   realEmployeeId?: number; // the actual employee ID when a manager employee is acting
+  // The tenant (merchant account) this session belongs to — every business-scoped query must be
+  // clamped to this tenant's businesses, never trust a client-supplied businessId alone. `null`
+  // only for a genuinely anonymous request (no session at all — protectedProcedure already
+  // rejects those via `ctx.user`). There is NO fallback to tenant #1 or any other tenant: an
+  // authenticated session whose employee record has no resolvable tenantId is rejected outright
+  // in createContext() below, never silently treated as belonging to some default tenant.
+  tenantId: number | null;
 };
+
+/** Thrown when an authenticated employee has no resolvable tenant membership yet (e.g. the
+ *  employees.tenantId backfill migration hasn't run against this row). Never silently defaulted. */
+function rejectUnresolvedTenant(): never {
+  throw new TRPCError({
+    code: "UNAUTHORIZED",
+    message: "لا يوجد حساب تاجر مرتبط بهذا المستخدم — يرجى مراجعة الدعم الفني",
+  });
+}
 
 /** A manager-role employee is treated as a full admin user throughout the app. */
 function buildSyntheticAdminUser(emp: Employee): User {
@@ -57,16 +74,19 @@ export async function createContext(
       if (payload?.employeeId) {
         const emp = await findActiveManagerById(payload.employeeId);
         if (emp) {
+          if (emp.tenantId == null) rejectUnresolvedTenant();
           return {
             req: opts.req,
             res: opts.res,
             user: buildSyntheticAdminUser(emp),
             realEmployeeId: emp.id,
+            tenantId: emp.tenantId,
           };
         }
       }
     }
   } catch (error) {
+    if (error instanceof TRPCError) throw error;
     // Invalid/expired session; fall through to the employee-token check.
   }
 
@@ -80,23 +100,27 @@ export async function createContext(
       if (payload?.employeeId) {
         const emp = await findActiveManagerById(payload.employeeId);
         if (emp) {
+          if (emp.tenantId == null) rejectUnresolvedTenant();
           return {
             req: opts.req,
             res: opts.res,
             user: buildSyntheticAdminUser(emp),
             employeeManager: true,
             realEmployeeId: emp.id,
+            tenantId: emp.tenantId,
           };
         }
       }
     }
   } catch (error) {
+    if (error instanceof TRPCError) throw error;
     // Employee token invalid, continue without user
   }
 
   return {
     req: opts.req,
     res: opts.res,
+    tenantId: null,
     user: null,
   };
 }
