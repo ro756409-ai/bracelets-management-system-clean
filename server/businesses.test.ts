@@ -18,6 +18,7 @@ function createAdminContext(): TrpcContext {
   };
   return {
     user,
+    tenantId: 1,
     req: {
       protocol: "https",
       headers: {},
@@ -42,6 +43,7 @@ function createUserContext(): TrpcContext {
   };
   return {
     user,
+    tenantId: 1,
     req: {
       protocol: "https",
       headers: {},

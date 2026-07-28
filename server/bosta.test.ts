@@ -20,6 +20,7 @@ function createAdminContext(): TrpcContext {
   };
   return {
     user,
+    tenantId: 1,
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
     res: { clearCookie: () => {} } as TrpcContext["res"],
   };
@@ -39,6 +40,7 @@ function createUserContext(): TrpcContext {
   };
   return {
     user,
+    tenantId: 1,
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
     res: { clearCookie: () => {} } as TrpcContext["res"],
   };

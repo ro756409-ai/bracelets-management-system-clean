@@ -13,6 +13,7 @@ const managerEmployee = {
   role: "manager" as const,
   isActive: true,
   passwordHash: "hashed",
+  tenantId: 1,
   createdAt: new Date("2026-01-01"),
   updatedAt: new Date("2026-01-01"),
 };
@@ -109,6 +110,42 @@ describe("createContext (local auth, replaces Manus OAuth)", () => {
     const ctx = await createContext({ req: fakeReqRes({ [COOKIE_NAME]: token }).req, res: fakeReqRes().res } as any);
 
     expect(JSON.stringify(ctx.user)).not.toContain("passwordHash");
+  });
+
+  // Multi-tenancy: no fallback allowed. An admin-tier employee whose tenantId hasn't been
+  // backfilled yet must be rejected outright — never silently treated as tenant #1 or any
+  // other tenant.
+  it("rejects an admin-tier employee with no resolvable tenantId (/login cookie) instead of defaulting to tenant #1", async () => {
+    mockGetDb.mockResolvedValue(mockDbReturning({ ...managerEmployee, tenantId: null }));
+    const token = jwt.sign({ employeeId: managerEmployee.id, role: "manager" }, JWT_SECRET);
+
+    await expect(
+      createContext({ req: fakeReqRes({ [COOKIE_NAME]: token }).req, res: fakeReqRes().res } as any)
+    ).rejects.toThrow(TRPCError);
+  });
+
+  it("rejects an admin-tier employee with no resolvable tenantId (employee_token cookie) instead of defaulting to tenant #1", async () => {
+    mockGetDb.mockResolvedValue(mockDbReturning({ ...managerEmployee, tenantId: null }));
+    const token = jwt.sign({ employeeId: managerEmployee.id, role: "manager" }, JWT_SECRET);
+
+    await expect(
+      createContext({ req: fakeReqRes({ employee_token: token }).req, res: fakeReqRes().res } as any)
+    ).rejects.toThrow(TRPCError);
+  });
+
+  it("a genuinely anonymous request (no cookies at all) gets tenantId: null, not a default tenant", async () => {
+    const ctx = await createContext({ req: fakeReqRes().req, res: fakeReqRes().res } as any);
+    expect(ctx.user).toBeNull();
+    expect(ctx.tenantId).toBeNull();
+  });
+
+  it("a resolved admin-tier session carries the employee's actual tenantId, not a hardcoded constant", async () => {
+    mockGetDb.mockResolvedValue(mockDbReturning({ ...managerEmployee, tenantId: 42 }));
+    const token = jwt.sign({ employeeId: managerEmployee.id, role: "manager" }, JWT_SECRET);
+
+    const ctx = await createContext({ req: fakeReqRes({ [COOKIE_NAME]: token }).req, res: fakeReqRes().res } as any);
+
+    expect(ctx.tenantId).toBe(42);
   });
 });
 
