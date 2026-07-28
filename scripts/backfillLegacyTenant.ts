@@ -52,7 +52,19 @@ async function main() {
       slug: LEGACY_TENANT_SLUG,
       status: "active",
     });
-    legacyTenantId = (result as any).insertId as number;
+    // Root cause of the "No values to set" crash: `result.insertId` isn't reliably present on
+    // every driver/result shape — on some it's `result[0].insertId` instead. Silently getting
+    // `undefined` here (via the old `as number` cast) let every later `.set({ tenantId:
+    // undefined })` call reach drizzle with nothing to set. Check both shapes and fail loudly
+    // and immediately instead of proceeding with an unresolved tenantId.
+    const insertedId = (result as any).insertId ?? (Array.isArray(result) ? (result as any)[0]?.insertId : undefined);
+    if (insertedId == null) {
+      throw new Error(
+        "Could not resolve the inserted tenant's id from the insert result — refusing to " +
+        "continue with an undefined tenantId. Check the driver's insert result shape."
+      );
+    }
+    legacyTenantId = insertedId as number;
     console.log(`Created legacy tenant: id=${legacyTenantId}, slug="${LEGACY_TENANT_SLUG}"`);
   } else {
     console.log(`[DRY RUN] Would create legacy tenant with slug="${LEGACY_TENANT_SLUG}" (id not yet known)`);
@@ -67,7 +79,13 @@ async function main() {
   console.log(`\n-- businesses needing tenantId backfill: ${businessesNeedingBackfill.length}`);
   for (const b of businessesNeedingBackfill) {
     console.log(`  business #${b.id} (${b.name}): tenantId ${b.tenantId ?? "NULL"} -> ${legacyTenantId}`);
-    if (COMMIT) await db.update(businesses).set({ tenantId: legacyTenantId }).where(eq(businesses.id, b.id));
+    if (COMMIT) {
+      if (legacyTenantId == null) {
+        console.log(`  [SKIPPED] business #${b.id}: resolved tenantId is missing — no update performed (safe to re-run)`);
+      } else {
+        await db.update(businesses).set({ tenantId: legacyTenantId }).where(eq(businesses.id, b.id));
+      }
+    }
   }
 
   // ---- Step C (Migration C, part 2): backfill employees.tenantId ----
@@ -87,7 +105,13 @@ async function main() {
       const inheritedTenantId = businessTenantMap.get(e.businessId) ?? legacyTenantId;
       console.log(`  employee #${e.id} (${e.name}): tenantId -> ${inheritedTenantId} (inherited from business #${e.businessId})`);
       resolvedViaBusiness++;
-      if (COMMIT) await db.update(employees).set({ tenantId: inheritedTenantId }).where(eq(employees.id, e.id));
+      if (COMMIT) {
+        if (inheritedTenantId == null) {
+          console.log(`  [SKIPPED] employee #${e.id}: resolved tenantId is missing — no update performed (safe to re-run)`);
+        } else {
+          await db.update(employees).set({ tenantId: inheritedTenantId }).where(eq(employees.id, e.id));
+        }
+      }
     } else {
       // No businessId at all (the normal shape for every current admin-tier employee). Before
       // this migration the whole system had exactly one tenant, so an employee with no specific
@@ -95,7 +119,13 @@ async function main() {
       // historical fact from this script, never a runtime fallback in application code.
       console.log(`  employee #${e.id} (${e.name}): tenantId -> ${legacyTenantId} (no businessId — single pre-existing tenant)`);
       resolvedViaLegacy++;
-      if (COMMIT) await db.update(employees).set({ tenantId: legacyTenantId }).where(eq(employees.id, e.id));
+      if (COMMIT) {
+        if (legacyTenantId == null) {
+          console.log(`  [SKIPPED] employee #${e.id}: resolved tenantId is missing — no update performed (safe to re-run)`);
+        } else {
+          await db.update(employees).set({ tenantId: legacyTenantId }).where(eq(employees.id, e.id));
+        }
+      }
     }
   }
   console.log(`  summary: ${resolvedViaBusiness} resolved via business, ${resolvedViaLegacy} resolved via legacy tenant, ${unresolved} UNRESOLVED (needs manual review before Migration D)`);
@@ -111,7 +141,13 @@ async function main() {
       `  business_group #${g.id} (${g.name}): tenantId -> ${resolvedTenantId}` +
       (owningBusiness ? ` (via business #${owningBusiness.id})` : " (no owning business — single pre-existing tenant)")
     );
-    if (COMMIT) await db.update(businessGroups).set({ tenantId: resolvedTenantId }).where(eq(businessGroups.id, g.id));
+    if (COMMIT) {
+      if (resolvedTenantId == null) {
+        console.log(`  [SKIPPED] business_group #${g.id}: resolved tenantId is missing — no update performed (safe to re-run)`);
+      } else {
+        await db.update(businessGroups).set({ tenantId: resolvedTenantId }).where(eq(businessGroups.id, g.id));
+      }
+    }
   }
 
   // ---- Step E (Migration C, part 4 — only if import_batches.tenantId is approved/present) ----
@@ -127,7 +163,13 @@ async function main() {
         `  import_batch #${batch.id} (${batch.label}): tenantId -> ${resolvedTenantId}` +
         (viaEmployee ? ` (via performedBy employee #${batch.performedBy})` : " (performedBy employee unresolved — single pre-existing tenant)")
       );
-      if (COMMIT) await db.update(importBatches).set({ tenantId: resolvedTenantId } as any).where(eq(importBatches.id, batch.id));
+      if (COMMIT) {
+        if (resolvedTenantId == null) {
+          console.log(`  [SKIPPED] import_batch #${batch.id}: resolved tenantId is missing — no update performed (safe to re-run)`);
+        } else {
+          await db.update(importBatches).set({ tenantId: resolvedTenantId } as any).where(eq(importBatches.id, batch.id));
+        }
+      }
     }
   } catch (err) {
     console.log("  skipped:", (err as Error).message);
