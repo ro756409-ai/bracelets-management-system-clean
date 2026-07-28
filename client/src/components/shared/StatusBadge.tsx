@@ -11,7 +11,12 @@ import { cn } from "@/lib/utils";
  * finished-well status reads success, a failure reads danger. Statuses that are merely
  * stages in a healthy pipeline stay neutral so the screen is not a wall of colour.
  */
-export type StatusTone = "neutral" | "primary" | "success" | "warning" | "danger" | "info";
+export type StatusTone =
+  | "neutral" | "primary" | "success" | "warning" | "danger" | "info"
+  // Extra order-status hues — used only for the specific statuses that need to be visually
+  // distinct from one another (new/no_answer/postponed/shipped/delivered no longer share a
+  // color the way they used to under the original 6-tone set).
+  | "purple" | "cyan" | "amber" | "orange" | "delivered";
 
 const TONE_CLASS: Record<StatusTone, string> = {
   neutral: "bg-muted text-muted-foreground border-border",
@@ -20,6 +25,11 @@ const TONE_CLASS: Record<StatusTone, string> = {
   warning: "bg-[var(--warning)]/10 text-[var(--warning)] border-[var(--warning)]/30",
   danger: "bg-destructive/10 text-destructive border-destructive/30",
   info: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/30",
+  purple: "bg-[var(--purple)]/10 text-[var(--purple)] border-[var(--purple)]/30",
+  cyan: "bg-[var(--cyan)]/10 text-[var(--cyan)] border-[var(--cyan)]/30",
+  amber: "bg-[var(--amber)]/10 text-[var(--amber)] border-[var(--amber)]/30",
+  orange: "bg-[var(--orange)]/10 text-[var(--orange)] border-[var(--orange)]/30",
+  delivered: "bg-[var(--delivered)]/10 text-[var(--delivered)] border-[var(--delivered)]/30",
 };
 
 /** The dot uses the solid tone colour (not the 10%-opacity background) so it stays a
@@ -31,20 +41,32 @@ const TONE_DOT_CLASS: Record<StatusTone, string> = {
   warning: "bg-[var(--warning)]",
   danger: "bg-destructive",
   info: "bg-[var(--info)]",
+  purple: "bg-[var(--purple)]",
+  cyan: "bg-[var(--cyan)]",
+  amber: "bg-[var(--amber)]",
+  orange: "bg-[var(--orange)]",
+  delivered: "bg-[var(--delivered)]",
 };
 
 type StatusDef = { label: string; tone: StatusTone };
 
-/** Canonical order statuses. Labels match the wording staff already read on screen. */
+/**
+ * Canonical order statuses. Labels match the wording staff already read on screen.
+ *
+ * Colors (2026 Orders redesign): new=blue(info), confirmed=green(success), no_answer=yellow
+ * (amber), postponed=orange, cancelled/returned=red(danger), shipped=cyan, delivered=dark
+ * green. printed/preparing stay neutral — genuine pipeline stages, not one of the eight
+ * meaningful colors, so they don't compete for attention with the statuses that need it.
+ */
 export const ORDER_STATUS: Record<string, StatusDef> = {
-  new: { label: "جديد", tone: "primary" },
+  new: { label: "جديد", tone: "info" },
   confirmed: { label: "مؤكد", tone: "success" },
-  printed: { label: "مطبوع", tone: "info" },
-  preparing: { label: "قيد التحضير", tone: "info" },
-  shipped: { label: "تم الشحن", tone: "info" },
-  delivered: { label: "تم التوصيل", tone: "success" },
-  postponed: { label: "مؤجل", tone: "warning" },
-  no_answer: { label: "لم يرد", tone: "warning" },
+  printed: { label: "مطبوع", tone: "neutral" },
+  preparing: { label: "قيد التحضير", tone: "neutral" },
+  shipped: { label: "تم الشحن", tone: "cyan" },
+  delivered: { label: "تم التوصيل", tone: "delivered" },
+  postponed: { label: "مؤجل", tone: "orange" },
+  no_answer: { label: "لم يرد", tone: "amber" },
   cancelled: { label: "ملغي", tone: "danger" },
   returned: { label: "مرتجع", tone: "danger" },
 };

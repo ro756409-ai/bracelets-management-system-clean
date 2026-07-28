@@ -31,6 +31,12 @@ export type StatCardProps = {
   tone?: StatTone;
   /** Small caption under the value (e.g. a comparison or unit). */
   hint?: string;
+  /**
+   * Optional trend vs. a prior period — only render this when a real comparison value exists.
+   * A positive `value` reads as an increase (green + up arrow), negative as a decrease (red +
+   * down arrow); `label` is the comparison period (e.g. "عن أمس").
+   */
+  trend?: { value: number; label?: string };
   loading?: boolean;
   /** Makes the whole card a button — used for stat tiles that apply a filter. */
   onClick?: () => void;
@@ -49,6 +55,7 @@ export function StatCard({
   icon,
   tone = "default",
   hint,
+  trend,
   loading = false,
   onClick,
   active = false,
@@ -72,13 +79,28 @@ export function StatCard({
         {loading ? (
           <Skeleton className="h-7 w-16" />
         ) : (
-          <p className={cn("text-2xl font-bold tabular-nums leading-tight", TONE_TEXT[tone])}>
-            {value}
-          </p>
+          <div className="flex items-baseline gap-1.5">
+            <p className={cn("text-2xl font-bold tabular-nums leading-tight", TONE_TEXT[tone])}>
+              {value}
+            </p>
+            {trend && (
+              <span
+                className={cn(
+                  "text-[11px] font-semibold tabular-nums",
+                  trend.value > 0 ? "text-[var(--success)]" : trend.value < 0 ? "text-destructive" : "text-muted-foreground"
+                )}
+              >
+                {trend.value > 0 ? "↑" : trend.value < 0 ? "↓" : "–"} {Math.abs(trend.value)}%
+              </span>
+            )}
+          </div>
         )}
         <p className="text-xs text-muted-foreground">{label}</p>
         {hint && !loading && (
           <p className="text-[11px] text-muted-foreground/80">{hint}</p>
+        )}
+        {trend?.label && !loading && (
+          <p className="text-[11px] text-muted-foreground/80">{trend.label}</p>
         )}
       </div>
     </CardContent>

@@ -40,6 +40,17 @@
   --color-info-foreground: var(--info-foreground);
   --color-error: var(--error);
   --color-error-foreground: var(--error-foreground);
+  /* Extra status hues — order-status badges only (StatusBadge), not general semantic tones. */
+  --color-purple: var(--purple);
+  --color-purple-foreground: var(--purple-foreground);
+  --color-cyan: var(--cyan);
+  --color-cyan-foreground: var(--cyan-foreground);
+  --color-amber: var(--amber);
+  --color-amber-foreground: var(--amber-foreground);
+  --color-orange: var(--orange);
+  --color-orange-foreground: var(--orange-foreground);
+  --color-delivered: var(--delivered);
+  --color-delivered-foreground: var(--delivered-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -71,8 +82,8 @@
      heights, so pages stop inventing their own spacing. */
   --space-card: 1.25rem;
   --space-section: 1.5rem;
-  --row-h-comfortable: 3.5rem;
-  --row-h-compact: 2.5rem;
+  --row-h-comfortable: 3.75rem;
+  --row-h-compact: 2.75rem;
   --font-brand: 'IBM Plex Sans Arabic', 'Inter', 'Cairo', 'Tajawal', sans-serif;
   --font-brand-en: 'Inter', 'IBM Plex Sans Arabic', sans-serif;
 
@@ -110,6 +121,18 @@
   --info-foreground: #FFFFFF;
   --error: #EF4444;
   --error-foreground: #FFFFFF;
+  /* Extra order-status hues (StatusBadge only) — new/shipped keep --info's blue; these fill
+     out the remaining distinct colors the status palette needs (purple/cyan/yellow/orange/dark-green). */
+  --purple: #8B5CF6;
+  --purple-foreground: #FFFFFF;
+  --cyan: #06B6D4;
+  --cyan-foreground: #FFFFFF;
+  --amber: #EAB308;
+  --amber-foreground: #1E293B;
+  --orange: #F97316;
+  --orange-foreground: #FFFFFF;
+  --delivered: #047857;
+  --delivered-foreground: #FFFFFF;
   --border: #E2E8F0;
   --input: #E2E8F0;
   --ring: #5B3DF5;
@@ -156,6 +179,16 @@
   --info-foreground: #04203F;
   --error: #EF4444;
   --error-foreground: #FFFFFF;
+  --purple: #A78BFA;
+  --purple-foreground: #2E1065;
+  --cyan: #22D3EE;
+  --cyan-foreground: #083344;
+  --amber: #FDE047;
+  --amber-foreground: #422006;
+  --orange: #FB923C;
+  --orange-foreground: #431407;
+  --delivered: #10B981;
+  --delivered-foreground: #052E1E;
   --border: #334155;
   --input: #334155;
   --ring: #7C63F7;

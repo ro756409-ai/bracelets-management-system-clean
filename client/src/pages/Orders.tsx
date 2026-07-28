@@ -13,7 +13,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -303,6 +303,14 @@ export default function Orders() {
     currentBusinessIds && currentBusinessIds.length === 1 ? { businessId: currentBusinessIds[0] } : undefined
   );
 
+  // اسم الموظف المسؤول لعمود "الموظف" — lookup محلي فقط من قائمة الموظفين المُحمّلة أصلاً
+  // لفلتر "مؤكدات اليوم"، بدون أي استعلام جديد (الـAPI بيرجّع assignedEmployeeId رقم فقط).
+  const employeeNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    employees?.forEach((emp: any) => map.set(emp.id, emp.name));
+    return map;
+  }, [employees]);
+
   // البيانات حسب التاب النشط
   const activeOrders = activeTab === 'today_confirmed'
     ? (todayConfirmedData?.orders ?? [])
@@ -557,12 +565,12 @@ export default function Orders() {
       className: "w-10",
     },
     {
-      id: "seq", header: "#", alwaysVisible: true,
+      id: "seq", header: "#", defaultHidden: true,
       cell: (order) => <span className="text-xs text-muted-foreground font-semibold">{seqByOrderId.get(order.id)}</span>,
       className: "text-center w-12",
     },
     {
-      id: "identifier", header: "المعرّف", alwaysVisible: true,
+      id: "identifier", header: "رقم الأوردر", alwaysVisible: true,
       cell: (order) => (
         <div>
           {order.easyOrderShortId ? (
@@ -573,26 +581,15 @@ export default function Orders() {
           ) : (
             <span className="font-mono text-sm font-bold px-2 py-0.5 rounded bg-muted">{order.orderNumber}</span>
           )}
-          {order.status === 'new' && <span className="block mt-0.5 text-xs bg-[var(--success)] text-[var(--success-foreground)] px-1.5 py-0.5 rounded-full w-fit">جديد</span>}
-          {order.needsReview && (
-            <span className="block mt-0.5 text-[10px] font-bold text-[var(--warning)] bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded px-1.5 py-0.5 w-fit">
-              ⚠️ يحتاج مراجعة
-            </span>
-          )}
           {order.bostaShipmentId && (
             <span className="flex items-center gap-0.5 mt-0.5 text-[10px] bg-[var(--info)] text-white px-1.5 py-0.5 rounded-full w-fit font-bold" title={`شحنة Bosta: ${order.bostaTrackingNumber || order.bostaShipmentId}`}>
               <PackageCheck className="h-2.5 w-2.5" /> بوسطة
             </span>
           )}
           {order.bostaLastError && !order.bostaShipmentId && (
-            <div className="mt-0.5 flex flex-col gap-0.5 max-w-[220px]">
-              <span className="flex items-center gap-0.5 text-[10px] bg-destructive/10 text-destructive border border-destructive/20 px-1.5 py-0.5 rounded-full w-fit font-bold">
-                ⚠️ فشل بوسطة
-              </span>
-              <span className="text-[10px] leading-tight text-destructive bg-destructive/5 border border-destructive/10 rounded px-1.5 py-0.5 break-words line-clamp-2" title={order.bostaLastError}>
-                {order.bostaLastError}
-              </span>
-            </div>
+            <span className="block mt-0.5 text-[10px] bg-destructive/10 text-destructive border border-destructive/20 px-1.5 py-0.5 rounded-full w-fit font-bold">
+              ⚠️ فشل بوسطة
+            </span>
           )}
         </div>
       ),
@@ -607,7 +604,7 @@ export default function Orders() {
       ),
     },
     {
-      id: "address", header: "العنوان",
+      id: "address", header: "العنوان", defaultHidden: true,
       cell: (order) => (
         <div className="max-w-[220px]">
           <p className="text-sm leading-snug break-words line-clamp-2" title={order.customerAddress || order.governorate || undefined}>
@@ -620,14 +617,44 @@ export default function Orders() {
       ),
     },
     {
-      id: "total", header: "المبلغ الإجمالي", numeric: true, alwaysVisible: true,
-      cell: (order) => <span className="font-bold text-sm">{Number(order.totalAmount).toLocaleString('ar-EG')}</span>,
+      id: "product", header: "المنتج", alwaysVisible: true,
+      cell: (order) => {
+        // ملخص المنتج: اسم — عدد القطع، وسطر تخصيص (لون/مقاس) لو موجود. أيقونة تحذير لو
+        // فيه أكتر من قطعة ومعاها تخصيص — أقرب دليل متاح من بيانات الأوردر الحالية بدون أي
+        // تعديل في الـ backend (مفيش items[] منفصل مرجّع من orders.list).
+        const hasCustomization = Boolean(order.color || order.size);
+        const multipleCustomized = order.quantity > 1 && hasCustomization;
+        return (
+          <div className="max-w-[220px]">
+            <p className="text-sm font-medium break-words line-clamp-1" title={order.productName}>
+              {order.productName}{order.quantity > 1 ? ` – ${order.quantity} قطعة` : ''}
+            </p>
+            {hasCustomization && (
+              <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                {multipleCustomized && (
+                  <span title="أكتر من قطعة مخصصة — راجع التفاصيل قبل التجهيز">⚠️</span>
+                )}
+                <span className="truncate">
+                  {order.color && `اللون: ${order.color}`}
+                  {order.color && order.size && ' · '}
+                  {order.size && `المقاس: ${order.size}`}
+                </span>
+              </p>
+            )}
+          </div>
+        );
+      },
     },
     {
       id: "status", header: "الحالة", alwaysVisible: true,
       cell: (order) => (
         <div className="flex flex-col gap-1">
           <StatusBadge status={order.status} kind="order" size="sm" />
+          {order.needsReview && (
+            <span className="text-[10px] font-bold text-[var(--purple)] bg-[var(--purple)]/10 border border-[var(--purple)]/30 rounded px-1.5 py-0.5 text-center w-fit">
+              ⚠️ يحتاج مراجعة
+            </span>
+          )}
           {order.status === 'confirmed' && (
             <span className="text-[10px] font-bold text-[var(--warning)] bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded px-1.5 py-0.5 text-center w-fit">
               لسه مطبعش
@@ -637,23 +664,22 @@ export default function Orders() {
       ),
     },
     {
-      id: "product", header: "المنتج",
-      cell: (order) => (
-        <div className="max-w-[200px]">
-          <p className="text-sm break-words line-clamp-2" title={order.productName}>{order.productName}</p>
-          {order.quantity > 1 && <p className="text-xs text-muted-foreground">الكمية: {order.quantity}</p>}
-          {(order.color || order.size) && (
-            <p className="text-xs text-muted-foreground">
-              {order.color && <span>اللون: {order.color}</span>}
-              {order.color && order.size && <span> · </span>}
-              {order.size && <span>المقاس: {order.size}</span>}
-            </p>
-          )}
-        </div>
-      ),
+      id: "assignedEmployee", header: "الموظف المسؤول", alwaysVisible: true,
+      cell: (order) => {
+        const name = order.assignedEmployeeId ? employeeNameById.get(order.assignedEmployeeId) : undefined;
+        return name ? (
+          <span className="text-sm font-medium">{name}</span>
+        ) : (
+          <span className="text-sm text-muted-foreground">غير موزع</span>
+        );
+      },
     },
     {
-      id: "website", header: "الموقع",
+      id: "total", header: "الإجمالي", numeric: true, alwaysVisible: true,
+      cell: (order) => <span className="font-bold text-sm">{Number(order.totalAmount).toLocaleString('ar-EG')}</span>,
+    },
+    {
+      id: "website", header: "الموقع", defaultHidden: true,
       cell: (order) => order.websiteName ? (
         <span className="inline-block bg-accent text-accent-foreground px-2 py-1 rounded text-xs font-medium">
           {order.websiteName}
@@ -661,7 +687,7 @@ export default function Orders() {
       ) : <span className="text-muted-foreground">—</span>,
     },
     {
-      id: "date", header: "تاريخ الطلب",
+      id: "date", header: "تاريخ الطلب", alwaysVisible: true,
       cell: (order) => (
         <div className="text-xs text-muted-foreground whitespace-nowrap">
           <p>{new Date(order.createdAt).toLocaleDateString('ar-EG', { year: 'numeric', month: 'numeric', day: 'numeric' })}</p>
@@ -670,12 +696,22 @@ export default function Orders() {
       ),
     },
     {
+      // أقرب حقل موجود فعليًا لمفهوم "آخر متابعة" — لا يوجد عمود بهذا المعنى تحديدًا في قاعدة
+      // البيانات، والاتفاق كان استخدام تاريخ آخر تعديل للأوردر بدل إضافة أي حقل جديد بالباك إند.
+      id: "lastFollowUp", header: "آخر متابعة", alwaysVisible: true,
+      cell: (order) => (
+        <span className="text-xs text-muted-foreground whitespace-nowrap">
+          {order.updatedAt ? new Date(order.updatedAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }) : '—'}
+        </span>
+      ),
+    },
+    {
       id: "actions", header: "إجراءات", alwaysVisible: true, sticky: true,
       cell: (order) => {
         const isActionable = order.status === 'new' || order.status === 'postponed';
         const canReturn = isAdmin && ['confirmed', 'shipped', 'delivered', 'preparing'].includes(order.status);
         return (
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
             {/* أزرار أساسية — ظاهرة دايمًا، لون ثابت لكل معنى، بحد أقصى 3-4 عشان الصف ميبقاش مزدحم */}
             {isActionable && (
               <>
@@ -762,7 +798,7 @@ export default function Orders() {
     <div className="space-y-6">
       <PageHeader
         title="الأوردرات"
-        description={`إجمالي: ${total.toLocaleString('ar-EG')} أوردر`}
+        description={`إدارة ومتابعة كل الأوردرات — الإجمالي: ${total.toLocaleString('ar-EG')} أوردر`}
         primaryAction={
           <Button onClick={() => setShowCreateDialog(true)}>
             <Plus className="h-4 w-4 ml-1" />
@@ -774,16 +810,28 @@ export default function Orders() {
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className="gap-1">
                 <MoreHorizontal className="h-4 w-4" />
-                إجراءات أخرى
+                المزيد
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">استيراد</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => setShowImportDialog(true)}>
+                <FileSpreadsheet className="h-4 w-4 ml-2 text-[var(--success)]" /> استيراد Easy Order
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowWhatsAppImportDialog(true)}>
+                <svg className="h-4 w-4 ml-2" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
+                استيراد واتساب
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-xs text-muted-foreground">تصدير</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => { setExportType('confirmed'); setShowExportDialog(true); }}>
                 <Download className="h-4 w-4 ml-2" /> تصدير المؤكدة
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => { setExportType('shipping'); setShowExportDialog(true); }}>
                 <Truck className="h-4 w-4 ml-2" /> شيت الشحن
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-xs text-muted-foreground">إجراءات جماعية</DropdownMenuLabel>
               <DropdownMenuItem
                 disabled={selectedOrderIds.length === 0}
                 onClick={() => {
@@ -801,15 +849,6 @@ export default function Orders() {
                 <Printer className="h-4 w-4 ml-2" />
                 تصدير للطباعة {selectedOrderIds.length > 0 ? `(${selectedOrderIds.length})` : ''}
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setShowImportDialog(true)}>
-                <FileSpreadsheet className="h-4 w-4 ml-2 text-[var(--success)]" /> استيراد Easy Order
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setShowWhatsAppImportDialog(true)}>
-                <svg className="h-4 w-4 ml-2" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" /></svg>
-                استيراد واتساب
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={convertNoAnswerMutation.isPending}
                 onClick={() => setPendingConfirm({ type: "convertNoAnswer" })}
@@ -826,18 +865,18 @@ export default function Orders() {
           </DropdownMenu>
         }
       >
-        {/* Header stat cards — clicking one applies it as a quick filter. */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {/* Header stat cards — clicking one applies it as a quick filter. Five, not six: كل
+            حالة إحصائية فيها أهمية عملية يومية؛ الحالات الأقل استخدامًا (زي "ملغي") متاحة زي أي
+            حالة تانية من فلتر "الحالة" العادي بدل ما تاخد مكان كارت دايم. */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           <StatCard label="الكل" value={(statusCounts?.total ?? 0).toLocaleString('ar-EG')}
             active={statusFilter === 'all'} onClick={() => { setStatusFilter('all'); setPage(1); }} />
           <StatCard label="اليوم" value={(statusCounts?.today ?? 0).toLocaleString('ar-EG')} tone="info" />
           <StatCard label="مؤكد" value={(statusCounts?.byStatus?.confirmed ?? 0).toLocaleString('ar-EG')} tone="success"
             active={statusFilter === 'confirmed'} onClick={() => { setStatusFilter('confirmed'); setPage(1); }} />
-          <StatCard label="جديد" value={(statusCounts?.byStatus?.new ?? 0).toLocaleString('ar-EG')} tone="primary"
+          <StatCard label="جديد" value={(statusCounts?.byStatus?.new ?? 0).toLocaleString('ar-EG')} tone="info"
             active={statusFilter === 'new'} onClick={() => { setStatusFilter('new'); setPage(1); }} />
           <StatCard label="يحتاج مراجعة" value={(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')} tone="warning" />
-          <StatCard label="ملغي" value={(statusCounts?.byStatus?.cancelled ?? 0).toLocaleString('ar-EG')} tone="danger"
-            active={statusFilter === 'cancelled'} onClick={() => { setStatusFilter('cancelled'); setPage(1); }} />
         </div>
       </PageHeader>
 
@@ -996,7 +1035,7 @@ export default function Orders() {
               </Select>
 
               <Select value={websiteFilter} onValueChange={v => { setWebsiteFilter(v); setPage(1); }}>
-                <SelectTrigger className="w-44 h-10"><SelectValue placeholder="الموقع" /></SelectTrigger>
+                <SelectTrigger className="w-40 h-10"><SelectValue placeholder="الموقع" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل المواقع</SelectItem>
                   {salesChannels?.map((ch: any) => <SelectItem key={ch.id} value={String(ch.id)}>{ch.name}</SelectItem>)}
@@ -1009,11 +1048,11 @@ export default function Orders() {
                 onChange={(vals) => { setGovernorateFilter(vals); setPage(1); }}
                 placeholder="كل المحافظات"
                 countLabel={(n) => `${n} محافظات`}
-                className="w-48"
+                className="w-40"
               />
 
               <Select value={adNameFilter} onValueChange={v => { setAdNameFilter(v); setPage(1); }}>
-                <SelectTrigger className="w-44 h-10"><SelectValue placeholder="فلترة حسب اسم البيدج" /></SelectTrigger>
+                <SelectTrigger className="w-40 h-10"><SelectValue placeholder="فلترة حسب اسم البيدج" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل البيدجات</SelectItem>
                   {(adNames ?? []).map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}
@@ -1061,6 +1100,7 @@ export default function Orders() {
         rowKey={(o: any) => o.id}
         loading={activeLoading}
         density={density}
+        onRowClick={(order: any) => setDetailOrderId(order.id)}
         hiddenColumns={hiddenColumns}
         onHiddenColumnsChange={setHiddenColumns}
         empty={{ title: "لا توجد أوردرات", description: "جرّب تعديل الفلاتر أو أضف أوردرًا جديدًا" }}
@@ -1090,7 +1130,7 @@ export default function Orders() {
             governorate={order.governorate}
             statusBadge={<StatusBadge status={order.status} kind="order" size="sm" />}
             sourceBadge={order.websiteName ? <Badge variant="secondary" className="text-[10px]">{order.websiteName}</Badge> : undefined}
-            productSummary={`${order.productName}${order.quantity > 1 ? ` ×${order.quantity}` : ''}`}
+            productSummary={`${order.productName}${order.quantity > 1 ? ` – ${order.quantity} قطعة` : ''}`}
             total={`${Number(order.totalAmount).toLocaleString('ar-EG')} ج.م`}
             dateLabel={new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
             expanded={expandedMobileId === order.id}
@@ -1101,6 +1141,9 @@ export default function Orders() {
             details={
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">{order.customerAddress || '—'}</p>
+                <p className="text-xs text-muted-foreground">
+                  الموظف المسؤول: <span className="font-medium text-foreground">{order.assignedEmployeeId ? (employeeNameById.get(order.assignedEmployeeId) ?? `#${order.assignedEmployeeId}`) : 'غير موزع'}</span>
+                </p>
                 <div className="flex flex-wrap gap-1.5">
                   {(order.status === 'new' || order.status === 'postponed') && (
                     <>
@@ -1690,7 +1733,7 @@ export default function Orders() {
                     <div><span className="text-muted-foreground">أكّده:</span> <span className="font-semibold">{order.confirmedByEmployeeName || 'موظف التأكيد غير مسجل'}</span></div>
                   )}
                   {order.adName && <div><span className="text-muted-foreground">البيدج:</span> <span className="font-semibold">{order.adName}</span></div>}
-                  {order.assignedEmployeeId && <div><span className="text-muted-foreground">موزع لموظف:</span> <span className="font-semibold">#{order.assignedEmployeeId}</span></div>}
+                  {order.assignedEmployeeId && <div><span className="text-muted-foreground">موزع لموظف:</span> <span className="font-semibold">{employeeNameById.get(order.assignedEmployeeId) ?? `#${order.assignedEmployeeId}`}</span></div>}
                   {order.assignedAt && <div><span className="text-muted-foreground">تاريخ التوزيع:</span> <span className="font-semibold">{new Date(order.assignedAt).toLocaleString('ar-EG')}</span></div>}
                 </CardContent>
               </Card>
