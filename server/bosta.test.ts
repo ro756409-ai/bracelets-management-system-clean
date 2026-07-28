@@ -107,3 +107,29 @@ describe("Bosta integration - duplicate & non-existent handling", () => {
     expect(Array.isArray(res.errors)).toBe(true);
   });
 });
+
+// Sending a real shipment needs live Bosta credentials this sandbox doesn't have, so the COD
+// money invariant is locked in at the source level instead — the same approach security.test.ts
+// uses for rules that can't be exercised end to end here.
+describe("Bosta COD amount — shipping must never be double-charged", () => {
+  it("bosta.service.ts does not add shippingFees on top of totalAmount", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync("server/bosta.service.ts", "utf-8");
+    const idx = content.indexOf("const totalCOD");
+    expect(idx).toBeGreaterThan(-1);
+    const line = content.substring(idx, content.indexOf("\n", idx));
+    // totalAmount is already the full customer-facing amount (see easyorder.service.ts, which
+    // builds it as itemsTotal + shippingFee). shippingFees is a breakdown of that total, so
+    // adding it here inflates the COD by exactly the shipping fee.
+    expect(line).toContain("order.totalAmount");
+    expect(line).not.toContain("shippingFees");
+  });
+
+  it("easyorder.service.ts still builds totalAmount inclusive of shipping (the assumption above)", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync("server/easyorder.service.ts", "utf-8");
+    // If this ever changes to store a shipping-exclusive total, the Bosta COD line has to be
+    // revisited in the same commit — hence pinning the assumption itself, not just the result.
+    expect(content).toContain("totalAmount: itemsTotal + shippingFee");
+  });
+});

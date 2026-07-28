@@ -250,7 +250,14 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
     return { success: false, error: errMsg };
   }
 
-  const totalCOD = parseFloat(String(order.totalAmount)) + parseFloat(String(order.shippingFees ?? 0));
+  // `totalAmount` is already the full amount the customer pays — every source stores it that
+  // way: EasyOrder sets it to `itemsTotal + shippingFee` (easyorder.service.ts), the Facebook
+  // entry form submits a total its own calculator computed as `pieces + shippingCost`, and a
+  // manual order is a single typed total with no separate shipping input at all. `shippingFees`
+  // is only the breakdown — how much of that total is shipping — never an extra charge on top.
+  // Adding it here double-charged the customer at Bosta by exactly the shipping fee on every
+  // EasyOrder/Facebook order (the only sources that populate shippingFees).
+  const totalCOD = parseFloat(String(order.totalAmount));
 
   // جلب بنود الأوردر لبناء وصف وعدد قطع دقيق من الأصناف المتعددة
   const bostaItems = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
