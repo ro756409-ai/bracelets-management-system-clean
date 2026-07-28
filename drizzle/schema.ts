@@ -316,6 +316,11 @@ export const orders = mysqlTable("orders", {
   color: varchar("color", { length: 100 }),
   size: varchar("size", { length: 100 }),
   cancelReason: mysqlEnum("cancelReason", ["price", "not_serious", "wrong_number", "duplicate"]),
+  // Confirmation-employee feedback captured at the moment an order is marked "no_answer" —
+  // how many times they actually tried calling this round. Nullable: only ever set by the
+  // markNoAnswer mutation, never a default; overwritten (not accumulated) on each no_answer
+  // mark, matching "how many times this round", not a lifetime counter.
+  noAnswerCallAttempts: int("noAnswerCallAttempts"),
   notes: text("notes"),
   employeeNotes: text("employeeNotes"),
   lastUpdatedBy: int("lastUpdatedBy"),

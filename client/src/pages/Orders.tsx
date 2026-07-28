@@ -182,6 +182,8 @@ export default function Orders() {
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showPostponeDialog, setShowPostponeDialog] = useState(false);
+  const [showNoAnswerDialog, setShowNoAnswerDialog] = useState(false);
+  const [noAnswerCallAttempts, setNoAnswerCallAttempts] = useState("");
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([]);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
@@ -208,6 +210,12 @@ export default function Orders() {
 
   // Order details state
   const [detailOrderId, setDetailOrderId] = useState<number | null>(null);
+  // بيانات كاملة للأوردر المفتوح في الـdrawer — بما فيها بنود الأوردر مع اسم نوع الحفر لكل
+  // بند (variantName)، وده مش موجود في صفوف orders.list العادية (تُجلب فقط لحظة فتح التفاصيل).
+  const { data: detailOrder } = trpc.orders.get.useQuery(
+    { id: detailOrderId as number },
+    { enabled: detailOrderId != null }
+  );
 
   // Edit order state
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -358,9 +366,22 @@ export default function Orders() {
   });
 
   const noAnswerMutation = trpc.orders.markNoAnswer.useMutation({
-    onSuccess: () => { toast.success("تم تسجيل لم يرد"); utils.orders.list.invalidate(); utils.orders.statusCounts.invalidate(); },
+    onSuccess: () => {
+      toast.success("تم تسجيل لم يرد");
+      utils.orders.list.invalidate();
+      utils.orders.statusCounts.invalidate();
+      setShowNoAnswerDialog(false);
+      setNoAnswerCallAttempts("");
+    },
     onError: (e) => toast.error(e.message),
   });
+
+  // استبيان مصغّر لموظف التأكيد: كام مرة اتصل بالعميل قبل ما يعلّم الأوردر "لم يرد".
+  const openNoAnswerDialog = (orderId: number) => {
+    setSelectedOrderId(orderId);
+    setNoAnswerCallAttempts("");
+    setShowNoAnswerDialog(true);
+  };
 
   const deleteMutation = trpc.orders.delete.useMutation({
     onSuccess: () => { toast.success("تم حذف الأوردر"); utils.orders.list.invalidate(); utils.orders.statusCounts.invalidate(); },
@@ -748,7 +769,7 @@ export default function Orders() {
                     <DropdownMenuItem onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}>
                       <Clock className="h-4 w-4 ml-2 text-[var(--warning)]" /> جدولة اتصال لاحق
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => noAnswerMutation.mutate({ orderId: order.id })}>
+                    <DropdownMenuItem onClick={() => openNoAnswerDialog(order.id)}>
                       <PhoneOff className="h-4 w-4 ml-2 text-[var(--warning)]" /> لم يرد
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
@@ -1173,7 +1194,7 @@ export default function Orders() {
                           <DropdownMenuItem onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}>
                             <Clock className="h-4 w-4 ml-2 text-[var(--warning)]" /> جدولة اتصال لاحق
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => noAnswerMutation.mutate({ orderId: order.id })}>
+                          <DropdownMenuItem onClick={() => openNoAnswerDialog(order.id)}>
                             <PhoneOff className="h-4 w-4 ml-2 text-[var(--warning)]" /> لم يرد
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
@@ -1527,6 +1548,46 @@ export default function Orders() {
         </DialogContent>
       </Dialog>
 
+      {/* استبيان "لم يرد" — كام مرة اتصل الموظف بالعميل قبل ما يعلّم الأوردر بالحالة دي */}
+      <Dialog open={showNoAnswerDialog} onOpenChange={setShowNoAnswerDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>تسجيل "لم يرد"</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <Label>كام مرة اتصلت بالعميل؟</Label>
+            <div className="grid grid-cols-4 gap-2">
+              {[1, 2, 3, 4].map(n => (
+                <Button
+                  key={n}
+                  type="button"
+                  variant={noAnswerCallAttempts === String(n) ? "default" : "outline"}
+                  className="h-10"
+                  onClick={() => setNoAnswerCallAttempts(String(n))}
+                >
+                  {n}
+                </Button>
+              ))}
+            </div>
+            <Input
+              type="number" min={1} max={20} placeholder="أو رقم مختلف..."
+              value={noAnswerCallAttempts} onChange={e => setNoAnswerCallAttempts(e.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNoAnswerDialog(false)}>إلغاء</Button>
+            <Button
+              disabled={noAnswerMutation.isPending}
+              onClick={() => {
+                if (!selectedOrderId) return;
+                const attempts = noAnswerCallAttempts ? Number(noAnswerCallAttempts) : undefined;
+                noAnswerMutation.mutate({ orderId: selectedOrderId, callAttempts: attempts });
+              }}
+            >
+              تأكيد "لم يرد"
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Export Dialog */}
       <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" dir="rtl">
@@ -1652,7 +1713,7 @@ export default function Orders() {
         title="تفاصيل الأوردر"
         width="lg"
         footer={(() => {
-          const order = orders.find((o: any) => o.id === detailOrderId);
+          const order = (detailOrder as any) ?? orders.find((o: any) => o.id === detailOrderId);
           if (!order) return null;
           return (
             <div className="flex w-full gap-2">
@@ -1670,7 +1731,7 @@ export default function Orders() {
         })()}
       >
         {(() => {
-          const order = orders.find((o: any) => o.id === detailOrderId);
+          const order = (detailOrder as any) ?? orders.find((o: any) => o.id === detailOrderId);
           if (!order) return <p className="text-muted-foreground text-center py-6">جاري التحميل...</p>;
           return (
             <div className="space-y-4">
@@ -1721,6 +1782,17 @@ export default function Orders() {
                   {order.size && <div><span className="text-muted-foreground">المقاس:</span> <span className="font-semibold">{order.size}</span></div>}
                   <div><span className="text-muted-foreground">المبلغ:</span> <span className="font-bold text-primary">{Number(order.totalAmount).toLocaleString('ar-EG')} ج.م</span></div>
                   <div><span className="text-muted-foreground">المصدر:</span> <span className="font-semibold">{SOURCE_LABELS[order.source] || order.source}</span></div>
+                  {Array.isArray(order.items) && order.items.length > 0 && (
+                    <div className="col-span-2 space-y-1.5 pt-1 border-t border-border">
+                      <p className="text-xs text-muted-foreground">تفاصيل الحفر لكل قطعة:</p>
+                      {order.items.map((item: any, idx: number) => (
+                        <div key={item.id ?? idx} className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-1.5">
+                          <span className="font-medium">{item.productName}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</span>
+                          <span className="text-[var(--info)] font-semibold">{item.variantName || item.color || item.size || '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -1735,6 +1807,9 @@ export default function Orders() {
                   {order.adName && <div><span className="text-muted-foreground">البيدج:</span> <span className="font-semibold">{order.adName}</span></div>}
                   {order.assignedEmployeeId && <div><span className="text-muted-foreground">موزع لموظف:</span> <span className="font-semibold">{employeeNameById.get(order.assignedEmployeeId) ?? `#${order.assignedEmployeeId}`}</span></div>}
                   {order.assignedAt && <div><span className="text-muted-foreground">تاريخ التوزيع:</span> <span className="font-semibold">{new Date(order.assignedAt).toLocaleString('ar-EG')}</span></div>}
+                  {order.status === 'no_answer' && order.noAnswerCallAttempts != null && (
+                    <div><span className="text-muted-foreground">عدد محاولات الاتصال:</span> <span className="font-semibold">{order.noAnswerCallAttempts}</span></div>
+                  )}
                 </CardContent>
               </Card>
 

@@ -776,17 +776,22 @@ export async function createOrder(data: InsertOrder): Promise<number | undefined
  * postponeOrder, cancelOrder, markOrdersAsPrinted, markOrderAsReturned) already encode
  * their own correct transitions and are unaffected by this map.
  */
+// Widened 2026-07-28 per an explicit ops review: the original map was too strict for real
+// day-to-day corrections (a confirmed order whose customer calls back to postpone, a shipment
+// that has to be cancelled, a delivered order the customer returns, ...). Still refuses
+// genuinely nonsensical jumps (e.g. new -> delivered) — this is a considered widening, not a
+// removal of the guard, and applies equally to every role (no manager-only bypass).
 const STATUS_TRANSITIONS: Record<string, string[]> = {
   new: ["confirmed", "postponed", "cancelled", "no_answer"],
   postponed: ["confirmed", "cancelled", "no_answer", "new"],
   no_answer: ["new", "confirmed", "postponed", "cancelled"],
-  confirmed: ["preparing", "cancelled"],
+  confirmed: ["preparing", "cancelled", "postponed", "no_answer"],
   printed: ["preparing", "shipped", "cancelled"],
-  preparing: ["shipped", "cancelled"],
-  shipped: ["delivered"],
-  delivered: [],
-  cancelled: ["new"],
-  returned: [],
+  preparing: ["shipped", "cancelled", "confirmed"],
+  shipped: ["delivered", "cancelled", "returned"],
+  delivered: ["returned"],
+  cancelled: ["new", "confirmed"],
+  returned: ["new"],
 };
 
 export function isValidOrderStatusTransition(from: string, to: string): boolean {
@@ -2156,21 +2161,39 @@ export async function replaceOrderItems(
   );
 }
 
-/** جلب بنود أوردر واحد */
-export async function getOrderItems(orderId: number): Promise<OrderItem[]> {
+/**
+ * بند أوردر مع اسم نوع الحفر/المتغير الفعلي (product_variants.name) — لا يوجد نص محفوظ وقت
+ * إنشاء الأوردر، فبيتجاب بـ join وقت القراءة عبر variantId الموجود بالفعل على كل بند. لو
+ * الأوردر قديم قبل إضافة variants أو مفيهوش variant (منتج مفرد) بيرجع null.
+ */
+export type OrderItemWithVariant = OrderItem & { variantName: string | null };
+
+/** جلب بنود أوردر واحد، مع اسم نوع الحفر لكل بند */
+export async function getOrderItems(orderId: number): Promise<OrderItemWithVariant[]> {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(orderItems).where(eq(orderItems.orderId, orderId)).orderBy(orderItems.id);
+  const rows = await db
+    .select({ ...getTableColumns(orderItems), variantName: productVariants.name })
+    .from(orderItems)
+    .leftJoin(productVariants, eq(orderItems.variantId, productVariants.id))
+    .where(eq(orderItems.orderId, orderId))
+    .orderBy(orderItems.id);
+  return rows;
 }
 
-/** جلب بنود عدة أوردرات دفعة واحدة (مفهرسة حسب orderId) */
-export async function getOrderItemsForOrders(orderIds: number[]): Promise<Map<number, OrderItem[]>> {
-  const map = new Map<number, OrderItem[]>();
+/** جلب بنود عدة أوردرات دفعة واحدة (مفهرسة حسب orderId)، مع اسم نوع الحفر لكل بند */
+export async function getOrderItemsForOrders(orderIds: number[]): Promise<Map<number, OrderItemWithVariant[]>> {
+  const map = new Map<number, OrderItemWithVariant[]>();
   if (orderIds.length === 0) return map;
   const db = await getDb();
   if (!db) return map;
   const { inArray } = await import('drizzle-orm');
-  const rows = await db.select().from(orderItems).where(inArray(orderItems.orderId, orderIds)).orderBy(orderItems.id);
+  const rows = await db
+    .select({ ...getTableColumns(orderItems), variantName: productVariants.name })
+    .from(orderItems)
+    .leftJoin(productVariants, eq(orderItems.variantId, productVariants.id))
+    .where(inArray(orderItems.orderId, orderIds))
+    .orderBy(orderItems.id);
   for (const r of rows) {
     const list = map.get(r.orderId) ?? [];
     list.push(r);

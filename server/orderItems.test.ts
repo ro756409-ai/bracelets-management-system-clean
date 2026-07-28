@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { getDb, replaceOrderItems, getOrderItems, getOrderItemsForOrders, createOrder } from "./db";
-import { orders, orderItems } from "../drizzle/schema";
+import { orders, orderItems, productVariants } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 
 /**
@@ -89,6 +89,35 @@ describe("Order Items - بنود الأوردر المتعددة", () => {
     const items = await getOrderItems(testOrderId);
     expect(items.length).toBe(1);
     expect(Number(items[0].unitPrice)).toBe(250);
+  });
+
+  it("يجلب اسم نوع الحفر (variantName) لكل بند عن طريق variantId", async () => {
+    const db = await getDb();
+    if (!db) return;
+
+    const variantInsert = await db.insert(productVariants).values({
+      productId: 1,
+      name: "آية الكرسي",
+      currentStock: 0,
+    });
+    const variantId = (variantInsert as any).insertId as number;
+
+    try {
+      await replaceOrderItems(testOrderId, [
+        { productName: "أسورة نحاس", quantity: 2, variantId },
+        { productName: "منتج بدون نوع حفر", quantity: 1 },
+      ]);
+
+      const items = await getOrderItems(testOrderId);
+      expect(items.length).toBe(2);
+      expect(items[0].variantName).toBe("آية الكرسي");
+      expect(items[1].variantName).toBeNull();
+
+      const map = await getOrderItemsForOrders([testOrderId]);
+      expect(map.get(testOrderId)?.[0].variantName).toBe("آية الكرسي");
+    } finally {
+      await db.delete(productVariants).where(eq(productVariants.id, variantId));
+    }
   });
 
   it("يجلب بنود عدة أوردرات دفعة واحدة مفهرسة حسب orderId", async () => {

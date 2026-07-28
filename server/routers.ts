@@ -702,9 +702,16 @@ export const appRouter = router({
 
     markNoAnswer: protectedProcedure.input(z.object({
       orderId: z.number(),
+      // كام مرة اتصل موظف التأكيد بالعميل قبل ما يعلّم الأوردر "لم يرد" — استبيان مصغّر بيتسجل
+      // وقت كل مرة الحالة دي بتتحدد، مش عدّاد تراكمي.
+      callAttempts: z.number().int().min(1).max(20).optional(),
     })).mutation(async ({ ctx, input }) => {
       const actingEmpId = await resolveActingEmployeeId(ctx);
-      await updateOrder(input.orderId, { status: 'no_answer', lastUpdatedBy: actingEmpId });
+      await updateOrder(input.orderId, {
+        status: 'no_answer',
+        lastUpdatedBy: actingEmpId,
+        noAnswerCallAttempts: input.callAttempts,
+      });
       return { success: true };
     }),
 
@@ -1075,6 +1082,7 @@ export const appRouter = router({
 
     markNoAnswer: requireEmployeePermission('orders.update').input(z.object({
       orderId: z.number(),
+      callAttempts: z.number().int().min(1).max(20).optional(),
     })).mutation(async ({ ctx, input }) => {
       const emp = (ctx as any).employee;
       if (emp.role !== 'manager') {
@@ -1083,7 +1091,11 @@ export const appRouter = router({
           throw new TRPCError({ code: 'FORBIDDEN', message: 'هذا الأوردر غير مخصص لك' });
         }
       }
-      await updateOrder(input.orderId, { status: 'no_answer', lastUpdatedBy: emp.id });
+      await updateOrder(input.orderId, {
+        status: 'no_answer',
+        lastUpdatedBy: emp.id,
+        noAnswerCallAttempts: input.callAttempts,
+      });
       return { success: true };
     }),
 
