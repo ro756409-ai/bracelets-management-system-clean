@@ -7,6 +7,7 @@ import {
   varchar,
   decimal,
   boolean,
+  uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
 // ==================== TENANTS ====================
@@ -30,8 +31,18 @@ export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = typeof tenants.$inferInsert;
 
 // ==================== BUSINESS GROUPS ====================
+// Optional tenant-owned sub-entity: platform -> tenant -> (optional) business group -> business.
+// A group belongs to exactly one tenant; a business may optionally belong to a group, but only
+// one that belongs to the SAME tenant as the business (enforced in code — see
+// db.ts createBusiness/updateBusiness — since this schema has no DB-level FKs anywhere).
 export const businessGroups = mysqlTable("business_groups", {
   id: int("id").autoincrement().primaryKey(),
+  // NULLABLE, NO DATABASE DEFAULT — deliberately. A schema-level DEFAULT is itself a silent
+  // tenant fallback, same category of risk as a runtime `tenantId ?? 1`. This column is
+  // populated ONLY by the explicit, reviewed backfill script (scripts/backfillLegacyTenant.ts)
+  // and only becomes NOT NULL in a later migration once that backfill is verified with zero
+  // remaining NULLs (see docs/multi-tenant-deployment.md).
+  tenantId: int("tenantId"),
   name: varchar("name", { length: 100 }).notNull(),
   slug: varchar("slug", { length: 50 }).notNull().unique(),
   isActive: boolean("isActive").default(true).notNull(),
@@ -45,10 +56,13 @@ export type InsertBusinessGroup = typeof businessGroups.$inferInsert;
 // ==================== BUSINESSES ====================
 export const businesses = mysqlTable("businesses", {
   id: int("id").autoincrement().primaryKey(),
-  // Existing single real business/brand rows backfill to tenant #1 in the data-migration step
-  // (see comment on `tenants` above) — same "default(1)" convention already used across this
-  // schema (products.businessId, orders.businessId, etc.) for additive NOT NULL columns.
-  tenantId: int("tenantId").notNull().default(1),
+  // CORRECTED (forward-only, see migration 0030): migration 0028 originally added this column
+  // as `NOT NULL DEFAULT 1` in a single step — a database-level tenant fallback of exactly the
+  // kind now disallowed, and it made existing businesses NOT NULL before any real tenant #1 row
+  // ever existed. 0028 is left untouched (unknown whether it already ran against a real
+  // database) — this nullable-no-default shape is applied by a NEW forward migration instead.
+  // Populated only by scripts/backfillLegacyTenant.ts, NOT NULL only after validation passes.
+  tenantId: int("tenantId"),
   name: varchar("name", { length: 100 }).notNull(),
   slug: varchar("slug", { length: 50 }).notNull().unique(),
   groupId: int("groupId"),
@@ -97,6 +111,14 @@ export type InsertSubscription = typeof subscriptions.$inferInsert;
 // ==================== PAYMENT GATEWAY CONFIGS ====================
 // إعدادات بوابة الدفع الخاصة بكل tenant — كل تاجر يختار ويربط بوابته بنفسه من الإعدادات.
 // نفس نمط الإخفاء/التأمين المستخدم فعلاً في sales_channels.apiToken/webhookSecret.
+//
+// SECURITY (schema preparation only — do not store real credentials yet): this codebase has
+// no encryption/secret-manager utility anywhere today (audited — no crypto helper, no KMS/vault
+// dependency). `credentials` is plain `text` for now purely to reserve the shape. Before any
+// real tenant payment credential is ever written here, application-level encryption at rest
+// must be implemented (e.g. AES-GCM with a key from env, never the raw value). Until then this
+// column must stay unused by any live integration code path. Never return its value to the
+// frontend and never log it, regardless of encryption status.
 export const paymentGatewayConfigs = mysqlTable("payment_gateway_configs", {
   id: int("id").autoincrement().primaryKey(),
   tenantId: int("tenantId").notNull(),
@@ -113,6 +135,40 @@ export const paymentGatewayConfigs = mysqlTable("payment_gateway_configs", {
 
 export type PaymentGatewayConfig = typeof paymentGatewayConfigs.$inferSelect;
 export type InsertPaymentGatewayConfig = typeof paymentGatewayConfigs.$inferInsert;
+
+// ==================== PLAN FEATURES / LIMITS (normalized, not a JSON blob) ====================
+export const planFeatures = mysqlTable("plan_features", {
+  id: int("id").autoincrement().primaryKey(),
+  planId: int("planId").notNull(),
+  // Validated server-side against a fixed known-code list — see permissions.ts-style constant,
+  // not scattered plan-name string checks throughout the app.
+  featureCode: varchar("featureCode", { length: 60 }).notNull(),
+  enabled: boolean("enabled").default(true).notNull(),
+  // Feature-specific configuration only (e.g. a rate limit for that one feature) — never a
+  // dumping ground for the whole plan's permissions.
+  configurationJson: text("configurationJson"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  planFeatureUnique: uniqueIndex("plan_features_plan_id_feature_code_unique").on(table.planId, table.featureCode),
+}));
+
+export type PlanFeature = typeof planFeatures.$inferSelect;
+export type InsertPlanFeature = typeof planFeatures.$inferInsert;
+
+export const planLimits = mysqlTable("plan_limits", {
+  id: int("id").autoincrement().primaryKey(),
+  planId: int("planId").notNull(),
+  limitCode: varchar("limitCode", { length: 60 }).notNull(),
+  limitValue: int("limitValue").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  planLimitUnique: uniqueIndex("plan_limits_plan_id_limit_code_unique").on(table.planId, table.limitCode),
+}));
+
+export type PlanLimit = typeof planLimits.$inferSelect;
+export type InsertPlanLimit = typeof planLimits.$inferInsert;
 
 // ==================== CATEGORIES ====================
 export const categories = mysqlTable("categories", {
@@ -167,6 +223,14 @@ export const employees = mysqlTable("employees", {
     "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
   ]).default("agent").notNull(),
   isActive: boolean("isActive").default(true).notNull(),
+  // The tenant this employee belongs to — the authoritative source for auth-time tenant
+  // resolution (see server/_core/context.ts). Deliberately NULLABLE WITH NO DEFAULT: unlike
+  // businesses.tenantId/businessGroups.tenantId (which safely default existing rows to tenant
+  // #1 as pure migration backfill machinery), this column drives live authentication decisions
+  // — it must only ever be populated by an explicit backfill migration, never implied by a
+  // schema default, so a session with no resolvable tenant is rejected instead of silently
+  // treated as tenant #1.
+  tenantId: int("tenantId"),
   businessId: int("businessId"),
   userId: int("userId"),
   username: varchar("username", { length: 50 }).unique(),
@@ -595,6 +659,10 @@ export type InsertScanLog = typeof scanLogs.$inferInsert;
 // كل أوردر جاء من أي دفعة، ومن نفّذها، ولإمكانية التراجع عن دفعة بعينها لاحقًا.
 export const importBatches = mysqlTable("import_batches", {
   id: int("id").autoincrement().primaryKey(),
+  // NULLABLE, NO DEFAULT — added under the "if approved" clause of the multi-tenant migration
+  // plan; flagged for explicit confirmation (see the migration report). Same backfill-then-
+  // NOT-NULL treatment as businessGroups.tenantId/employees.tenantId above.
+  tenantId: int("tenantId"),
   label: varchar("label", { length: 150 }).notNull(),
   source: varchar("source", { length: 100 }).notNull(),
   status: mysqlEnum("status", ["running", "completed", "failed", "rolled_back"]).default("running").notNull(),
