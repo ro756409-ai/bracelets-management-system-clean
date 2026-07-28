@@ -482,34 +482,10 @@ export default function Orders() {
     return map;
   }, [orders, page]);
 
-  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
-
-  const toggleOrderSelect = (id: number, index: number, shiftKey: boolean) => {
-    if (shiftKey && lastSelectedIndex !== null) {
-      const start = Math.min(lastSelectedIndex, index);
-      const end = Math.max(lastSelectedIndex, index);
-      const rangeIds = orders.slice(start, end + 1).map((o: any) => o.id);
-      setSelectedOrderIds(prev => Array.from(new Set([...prev, ...rangeIds])));
-    } else {
-      setSelectedOrderIds(prev =>
-        prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-      );
-    }
-    setLastSelectedIndex(index);
-  };
-
-  const currentPageIds = orders.map((o: any) => o.id);
-  const selectedInCurrentPage = selectedOrderIds.filter(id => currentPageIds.includes(id));
-  const allCurrentPageSelected = currentPageIds.length > 0 && selectedInCurrentPage.length === currentPageIds.length;
-
-  const selectAllCurrentPage = () => {
-    if (allCurrentPageSelected) {
-      setSelectedOrderIds(prev => prev.filter(id => !currentPageIds.includes(id)));
-    } else {
-      setSelectedOrderIds(prev => Array.from(new Set([...prev, ...currentPageIds])));
-    }
-  };
-
+  // Selection state itself still lives here (the assign/delete/print mutations read it), but
+  // the *interaction* — per-row toggle, shift-click ranges, select-all, clear — is owned by
+  // ResponsiveDataTable now. The hand-rolled versions of all four were deleted with the custom
+  // checkbox column they served.
   const clearAllSelections = () => setSelectedOrderIds([]);
 
   const openEditFor = (order: any) => {
@@ -564,33 +540,10 @@ export default function Orders() {
   };
 
   // ==================== Table columns ====================
+  // No hand-rolled "select" column: row selection (including shift-click ranges and the
+  // select-all header box) now comes from ResponsiveDataTable's built-in `selectedKeys`
+  // support, so it looks and behaves identically to every other table in the product.
   const columns: Column<any>[] = [
-    {
-      id: "select",
-      alwaysVisible: true,
-      header: isAdmin ? (
-        <input
-          type="checkbox"
-          checked={allCurrentPageSelected}
-          onChange={selectAllCurrentPage}
-          className="w-4 h-4 rounded cursor-pointer accent-primary"
-          title="تحديد/إلغاء كل الصفحة الحالية"
-        />
-      ) : null,
-      cell: (order) => isAdmin ? (
-        <input
-          type="checkbox"
-          checked={selectedOrderIds.includes(order.id)}
-          onChange={(e) => {
-            const idx = orders.findIndex((o: any) => o.id === order.id);
-            toggleOrderSelect(order.id, idx, e.nativeEvent instanceof MouseEvent ? (e.nativeEvent as MouseEvent).shiftKey : false);
-          }}
-          onClick={(e) => e.stopPropagation()}
-          className="w-4 h-4 rounded cursor-pointer accent-primary"
-        />
-      ) : null,
-      className: "w-10",
-    },
     {
       id: "seq", header: "#", defaultHidden: true,
       cell: (order) => <span className="text-xs text-muted-foreground font-semibold">{seqByOrderId.get(order.id)}</span>,
@@ -1131,22 +1084,8 @@ export default function Orders() {
                 <DateRangePicker value={dateRange} onChange={(range) => { setDateRange(range); setPage(1); }} />
               </div>
             </FilterBar>
-
-            {isAdmin && selectedOrderIds.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-border">
-                <Badge variant="secondary" className="text-xs px-2 py-1 tabular-nums">
-                  محدد: {selectedOrderIds.length} أوردر
-                </Badge>
-                <Button variant="ghost" size="sm" onClick={clearAllSelections} className="text-muted-foreground text-xs">إلغاء الكل</Button>
-                <Button variant="outline" size="sm" onClick={() => setShowAssignDialog(true)}>
-                  <UserPlus className="h-4 w-4 ml-1" /> توزيع ({selectedOrderIds.length})
-                </Button>
-                <Button variant="outline" size="sm" className="border-destructive/30 text-destructive hover:bg-destructive/10"
-                  onClick={() => setPendingConfirm({ type: "bulkDelete" })}>
-                  <Trash2 className="h-4 w-4 ml-1" /> حذف ({selectedOrderIds.length})
-                </Button>
-              </div>
-            )}
+            {/* إجراءات التحديد الجماعي انتقلت لشريط الجدول نفسه (bulkActions) — كانت هنا فوق
+                الجدول وبتدفعه لتحت أول ما تحدد صف. */}
           </CardContent>
         </Card>
       )}
@@ -1180,6 +1119,22 @@ export default function Orders() {
             </Button>
           </div>
         }
+        selectedKeys={isAdmin ? selectedKeysSet : undefined}
+        onSelectionChange={isAdmin ? (keys) => setSelectedOrderIds(Array.from(keys) as number[]) : undefined}
+        bulkActions={() => (
+          <>
+            <Button variant="outline" size="sm" className="h-8" onClick={() => setShowAssignDialog(true)}>
+              <UserPlus className="h-4 w-4 ml-1" /> توزيع
+            </Button>
+            <Button
+              variant="outline" size="sm"
+              className="h-8 border-destructive/30 text-destructive hover:bg-destructive/10"
+              onClick={() => setPendingConfirm({ type: "bulkDelete" })}
+            >
+              <Trash2 className="h-4 w-4 ml-1" /> حذف
+            </Button>
+          </>
+        )}
         mobileRow={(order: any) => (
           <MobileOrderCard
             orderNumber={order.easyOrderShortId || order.orderNumber}

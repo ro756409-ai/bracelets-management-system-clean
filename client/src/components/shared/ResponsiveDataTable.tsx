@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ChevronsUpDown, Columns3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -68,8 +68,15 @@ export type ResponsiveDataTableProps<T> = {
    */
   mobileRow?: (row: T) => ReactNode;
 
-  /** Toolbar content shown above the table (bulk actions, density switch). */
+  /** Toolbar content shown above the table (density switch, exports…). */
   toolbar?: ReactNode;
+
+  /**
+   * Rendered in a bar that only appears while rows are selected. Lives here rather than in
+   * each page so every table in the product surfaces bulk actions the same way — and so the
+   * "N selected / clear" affordance is written once.
+   */
+  bulkActions?: (selected: Set<string | number>) => ReactNode;
 
   className?: string;
 };
@@ -108,9 +115,22 @@ export function ResponsiveDataTable<T>({
   onHiddenColumnsChange,
   mobileRow,
   toolbar,
+  bulkActions,
   className,
 }: ResponsiveDataTableProps<T>) {
   const selectable = Boolean(selectedKeys && onSelectionChange);
+
+  // Roving-tabindex keyboard navigation. A data table is a grid, not a list of links: only one
+  // row is in the tab order at a time, and ↑/↓ moves within it. Without this, tabbing through a
+  // 50-row table means 50 stops before reaching the pagination.
+  const [focusedRow, setFocusedRow] = useState(0);
+  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+
+  const moveFocus = (to: number) => {
+    const clamped = Math.max(0, Math.min(rows.length - 1, to));
+    setFocusedRow(clamped);
+    rowRefs.current[clamped]?.focus();
+  };
 
   const visibleColumns = useMemo(
     () => columns.filter((c) => c.alwaysVisible || !hiddenColumns?.has(c.id)),
@@ -133,11 +153,26 @@ export function ResponsiveDataTable<T>({
     onSelectionChange!(next);
   };
 
-  const toggleRow = (key: string | number) => {
+  // Shift-click range selection. Was hand-rolled inside the Orders page against a raw
+  // <input type="checkbox">; promoted here so every table gets it and no page re-implements
+  // selection. `shiftHeld` is captured on mousedown because Radix's onCheckedChange only
+  // reports the next checked state, not the originating mouse event.
+  const lastSelectedIndex = useRef<number | null>(null);
+  const shiftHeld = useRef(false);
+
+  const toggleRow = (key: string | number, index?: number) => {
     if (!selectable) return;
     const next = new Set(selectedKeys);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
+
+    if (shiftHeld.current && lastSelectedIndex.current !== null && index !== undefined) {
+      const [from, to] = [lastSelectedIndex.current, index].sort((a, b) => a - b);
+      for (let i = from; i <= to; i++) next.add(rowKey(rows[i]));
+    } else {
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      if (index !== undefined) lastSelectedIndex.current = index;
+    }
+
     onSelectionChange!(next);
   };
 
@@ -216,6 +251,26 @@ export function ResponsiveDataTable<T>({
         </div>
       )}
 
+      {/* Bulk-action bar — only present while something is selected, so it never occupies
+          vertical space during normal scanning. */}
+      {selectable && bulkActions && selectedKeys!.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-brand-md)] border border-primary/30 bg-accent px-3 py-2">
+          <span className="text-sm font-semibold text-accent-foreground tabular-nums">
+            {selectedKeys!.size.toLocaleString("ar-EG")} محدد
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 text-accent-foreground hover:bg-primary/10"
+            onClick={() => onSelectionChange!(new Set())}
+          >
+            إلغاء التحديد
+          </Button>
+          <span className="mx-1 hidden h-4 w-px bg-primary/20 sm:block" />
+          {bulkActions(selectedKeys!)}
+        </div>
+      )}
+
       {/* Mobile: card list */}
       {mobileRow && (
         <div className="space-y-2 lg:hidden">
@@ -281,15 +336,28 @@ export function ResponsiveDataTable<T>({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {rows.map((row, rowIndex) => {
               const key = rowKey(row);
               const isSelected = selectable && selectedKeys!.has(key);
               return (
                 <tr
                   key={key}
+                  ref={(el) => { rowRefs.current[rowIndex] = el; }}
+                  tabIndex={rowIndex === Math.min(focusedRow, rows.length - 1) ? 0 : -1}
+                  onFocus={() => setFocusedRow(rowIndex)}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowDown") { e.preventDefault(); moveFocus(rowIndex + 1); }
+                    else if (e.key === "ArrowUp") { e.preventDefault(); moveFocus(rowIndex - 1); }
+                    else if (e.key === "Home") { e.preventDefault(); moveFocus(0); }
+                    else if (e.key === "End") { e.preventDefault(); moveFocus(rows.length - 1); }
+                    else if (e.key === "Enter" && onRowClick) { e.preventDefault(); onRowClick(row); }
+                    // Space toggles selection rather than scrolling — the row is a grid cell here.
+                    else if (e.key === " " && selectable) { e.preventDefault(); toggleRow(key); }
+                  }}
                   className={cn(
-                    "border-t border-border transition-colors",
+                    "border-t border-border transition-colors duration-[var(--duration-fast)]",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                     ROW_H[density],
                     onRowClick && "cursor-pointer",
                     isSelected ? "bg-accent/50" : "hover:bg-muted/40"
@@ -299,7 +367,8 @@ export function ResponsiveDataTable<T>({
                     <td className="px-3" onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={isSelected}
-                        onCheckedChange={() => toggleRow(key)}
+                        onMouseDown={(e) => { shiftHeld.current = e.shiftKey; }}
+                        onCheckedChange={() => toggleRow(key, rowIndex)}
                         aria-label="تحديد الصف"
                       />
                     </td>

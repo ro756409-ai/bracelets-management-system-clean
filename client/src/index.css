@@ -13,6 +13,8 @@
   --shadow-dropdown: var(--shadow-dropdown);
   --shadow-modal: var(--shadow-modal);
   --shadow-sidebar: var(--shadow-sidebar);
+  --ease-out: var(--ease-out);
+  --ease-in-out: var(--ease-in-out);
   --font-sans: var(--font-brand);
   --font-en: var(--font-brand-en);
   --color-background: var(--background);
@@ -86,6 +88,15 @@
   --row-h-compact: 2.75rem;
   --font-brand: 'IBM Plex Sans Arabic', 'Inter', 'Cairo', 'Tajawal', sans-serif;
   --font-brand-en: 'Inter', 'IBM Plex Sans Arabic', sans-serif;
+
+  /* Motion — one scale so every transition in the product feels like the same product.
+     `--ease-out` is the standard "settle" curve (fast start, soft landing) used by Linear /
+     Stripe-class UIs; anything interactive should use a duration from here, never an ad-hoc ms. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast: 120ms;   /* hover, focus ring, colour swaps */
+  --duration-base: 180ms;   /* dropdowns, popovers, inline expand */
+  --duration-slow: 260ms;   /* drawers, dialogs, page-level surfaces */
 
   /* Shadows — always neutral navy at low opacity, never tinted purple (brand book §16) */
   --shadow-card: 0 1px 2px 0 rgb(30 41 59 / 0.06), 0 1px 3px 0 rgb(30 41 59 / 0.08);
