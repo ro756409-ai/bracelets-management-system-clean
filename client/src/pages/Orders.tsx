@@ -29,7 +29,6 @@ import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import {
   PageHeader,
-  StatCard,
   StatusBadge,
   FilterBar,
   SearchInput,
@@ -681,11 +680,8 @@ export default function Orders() {
               ⚠️ يحتاج مراجعة
             </span>
           )}
-          {order.status === 'confirmed' && (
-            <span className="text-[10px] font-bold text-[var(--warning)] bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded px-1.5 py-0.5 text-center w-fit">
-              لسه مطبعش
-            </span>
-          )}
+          {/* شارة "لسه مطبعش" اتشالت عمدًا: حالة "مؤكد" معناها بالتعريف إنه لم يُطبع بعد
+              (الطباعة حالة منفصلة "مطبوع") — كانت معلومة مكررة بتزحم العمود في كل صف مؤكد. */}
         </div>
       ),
     },
@@ -891,46 +887,68 @@ export default function Orders() {
           </DropdownMenu>
         }
       >
-        {/* Header stat cards — clicking one applies it as a quick filter. Five, not six: كل
-            حالة إحصائية فيها أهمية عملية يومية؛ الحالات الأقل استخدامًا (زي "ملغي") متاحة زي أي
-            حالة تانية من فلتر "الحالة" العادي بدل ما تاخد مكان كارت دايم. */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-          <StatCard label="الكل" value={(statusCounts?.total ?? 0).toLocaleString('ar-EG')}
-            active={statusFilter === 'all'} onClick={() => { setStatusFilter('all'); setPage(1); }} />
-          <StatCard label="اليوم" value={(statusCounts?.today ?? 0).toLocaleString('ar-EG')} tone="info" />
-          <StatCard label="مؤكد" value={(statusCounts?.byStatus?.confirmed ?? 0).toLocaleString('ar-EG')} tone="success"
-            active={statusFilter === 'confirmed'} onClick={() => { setStatusFilter('confirmed'); setPage(1); }} />
-          <StatCard label="جديد" value={(statusCounts?.byStatus?.new ?? 0).toLocaleString('ar-EG')} tone="info"
-            active={statusFilter === 'new'} onClick={() => { setStatusFilter('new'); setPage(1); }} />
-          <StatCard label="يحتاج مراجعة" value={(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')} tone="warning" />
+        {/* بدل صف الكروت الكبير: chips مدمجة للمعلومتين الوحيدتين اللي مش موجودتين في شريط
+            الحالات تحت (أوردرات اليوم بغض النظر عن الحالة، والمحتاج مراجعة — يختفي لو صفر). */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground">
+            <CalendarDays className="h-4 w-4 text-[var(--info)]" />
+            أوردرات اليوم:
+            <strong className="tabular-nums text-foreground">{(statusCounts?.today ?? 0).toLocaleString('ar-EG')}</strong>
+          </span>
+          {(statusCounts?.needsReview ?? 0) > 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-3 py-1.5 text-sm text-[var(--warning)]">
+              ⚠️ يحتاج مراجعة:
+              <strong className="tabular-nums">{(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')}</strong>
+            </span>
+          )}
         </div>
       </PageHeader>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-muted/50 rounded-xl p-1 w-fit">
-        <button
-          onClick={() => setActiveTab('all')}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-            activeTab === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          كل الأوردرات
-        </button>
-        <button
-          onClick={() => setActiveTab('today_confirmed')}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
-            activeTab === 'today_confirmed' ? 'bg-[var(--success)] text-[var(--success-foreground)] shadow-sm' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          ✔ مؤكدات اليوم
-          {todayConfirmedData && (
-            <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold tabular-nums ${
-              activeTab === 'today_confirmed' ? 'bg-white/20' : 'bg-[var(--success)]/10 text-[var(--success)]'
-            }`}>
-              {todayConfirmedData.total}
-            </span>
-          )}
-        </button>
+      {/* شريط التبويبات الموحّد — الحالات كلها + تبويب "مؤكدات اليوم" المميز في صف واحد،
+          بدل صفين تبويبات فوق بعض (الزرار القديم اتشال). */}
+      <div className="overflow-x-auto border-b border-border">
+        <div className="flex w-max items-center gap-1">
+          {(["all", "new", "confirmed", "no_answer", "postponed", "printed", "preparing", "shipped", "delivered", "cancelled", "returned"] as const).map(v => {
+            const active = activeTab === 'all' && statusFilter === v;
+            const count = v === 'all' ? statusCounts?.total : statusCounts?.byStatus?.[v];
+            return (
+              <button
+                key={v}
+                onClick={() => { setActiveTab('all'); setStatusFilter(v); setPage(1); }}
+                className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm transition-colors ${
+                  active ? 'font-bold text-primary' : 'font-medium text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {v === 'all' ? 'كل الأوردرات' : STATUS_LABEL(v)}
+                {count != null && count > 0 && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
+                    active ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'
+                  }`}>
+                    {Number(count).toLocaleString('ar-EG')}
+                  </span>
+                )}
+                {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />}
+              </button>
+            );
+          })}
+          <span className="mx-1 h-5 w-px shrink-0 bg-border" />
+          <button
+            onClick={() => setActiveTab('today_confirmed')}
+            className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm transition-colors ${
+              activeTab === 'today_confirmed' ? 'font-bold text-[var(--success)]' : 'font-medium text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            ✔ مؤكدات اليوم
+            {todayConfirmedData != null && (
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
+                activeTab === 'today_confirmed' ? 'bg-[var(--success)]/15 text-[var(--success)]' : 'bg-muted text-muted-foreground'
+              }`}>
+                {Number(todayConfirmedData.total).toLocaleString('ar-EG')}
+              </span>
+            )}
+            {activeTab === 'today_confirmed' && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--success)]" />}
+          </button>
+        </div>
       </div>
 
       {/* Today-confirmed panel */}
@@ -1011,36 +1029,6 @@ export default function Orders() {
       {activeTab === 'all' && (
         <Card>
           <CardContent className="p-4 space-y-3">
-            {/* شريط تبويبات الحالة — بديل هادي لقائمة "الحالة" المنسدلة: كل الحالات ظاهرة
-                بعدادها، ضغطة واحدة بتفلتر، والتبويب النشط بخط سفلي بس بدون صناديق ملونة. */}
-            <div className="-mx-4 -mt-4 mb-1 overflow-x-auto border-b border-border px-4">
-              <div className="flex w-max items-center gap-1">
-                {(["all", "new", "confirmed", "no_answer", "postponed", "printed", "preparing", "shipped", "delivered", "cancelled", "returned"] as const).map(v => {
-                  const active = statusFilter === v;
-                  const count = v === 'all' ? statusCounts?.total : statusCounts?.byStatus?.[v];
-                  return (
-                    <button
-                      key={v}
-                      onClick={() => { setStatusFilter(v); setPage(1); }}
-                      className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm transition-colors ${
-                        active ? 'font-bold text-primary' : 'font-medium text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      {v === 'all' ? 'كل الأوردرات' : STATUS_LABEL(v)}
-                      {count != null && count > 0 && (
-                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
-                          active ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'
-                        }`}>
-                          {Number(count).toLocaleString('ar-EG')}
-                        </span>
-                      )}
-                      {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             <FilterBar
               search={
                 <SearchInput
