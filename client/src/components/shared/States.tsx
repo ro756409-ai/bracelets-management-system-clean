@@ -18,21 +18,35 @@ export type EmptyStateProps = {
   className?: string;
 };
 
+/**
+ * Empty state carries the most brand of any system surface — it is the one moment the product
+ * has nothing to show and therefore only its own character to show. Built from the brand book:
+ * the §22 dot-grid texture, a purple-tinted icon tile (§19 illustration is purple+navy only,
+ * flat and outlined), the §16 `lg` radius reserved for hero surfaces, and the generous
+ * whitespace the identity asks for.
+ */
 export function EmptyState({ title, description, icon, action, className }: EmptyStateProps) {
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-3 rounded-[var(--radius-brand-md)] border border-dashed border-border px-6 py-12 text-center",
+        "bg-dot-grid flex flex-col items-center justify-center gap-4 rounded-[var(--radius-brand-lg)]",
+        "border border-border bg-card/60 px-6 py-16 text-center",
         className
       )}
     >
-      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-        {icon ?? <Inbox className="h-6 w-6" />}
+      <span
+        className={cn(
+          "flex h-14 w-14 items-center justify-center rounded-[var(--radius-brand-lg)]",
+          "bg-accent text-accent-foreground ring-1 ring-primary/15"
+        )}
+        aria-hidden="true"
+      >
+        {icon ?? <Inbox className="h-7 w-7" />}
       </span>
-      <div className="space-y-1">
-        <p className="font-medium">{title}</p>
+      <div className="space-y-1.5">
+        <p className="type-subheading">{title}</p>
         {description && (
-          <p className="mx-auto max-w-sm text-sm text-muted-foreground">{description}</p>
+          <p className="mx-auto max-w-sm type-body text-muted-foreground">{description}</p>
         )}
       </div>
       {action}
@@ -108,11 +122,22 @@ export type LoadingSkeletonProps = {
 };
 
 export function LoadingSkeleton({ variant = "table", rows = 5, className }: LoadingSkeletonProps) {
+  // Every variant announces itself, not just the table one: a screen-reader user waiting on a
+  // card grid or a form got silence before. `aria-busy` + a single visually-hidden label is
+  // enough — the individual bones are decorative and stay hidden.
+  const a11y = {
+    "aria-busy": true as const,
+    "aria-live": "polite" as const,
+    role: "status" as const,
+  };
+  const srLabel = <span className="sr-only">جاري التحميل…</span>;
+
   if (variant === "cards") {
     return (
-      <div className={cn("grid gap-3 sm:grid-cols-2 lg:grid-cols-3", className)}>
+      <div className={cn("grid gap-3 sm:grid-cols-2 lg:grid-cols-3", className)} {...a11y}>
+        {srLabel}
         {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className="space-y-2 rounded-[var(--radius-brand-md)] border border-border p-4">
+          <div key={i} aria-hidden="true" className="space-y-2 rounded-[var(--radius-brand-md)] border border-border p-4">
             <Skeleton className="h-4 w-2/3" />
             <Skeleton className="h-3 w-1/2" />
             <Skeleton className="h-3 w-1/3" />
@@ -124,9 +149,10 @@ export function LoadingSkeleton({ variant = "table", rows = 5, className }: Load
 
   if (variant === "form") {
     return (
-      <div className={cn("space-y-4", className)}>
+      <div className={cn("space-y-4", className)} {...a11y}>
+        {srLabel}
         {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className="space-y-1.5">
+          <div key={i} aria-hidden="true" className="space-y-1.5">
             <Skeleton className="h-3 w-24" />
             <Skeleton className="h-10 w-full" />
           </div>
@@ -136,10 +162,12 @@ export function LoadingSkeleton({ variant = "table", rows = 5, className }: Load
   }
 
   return (
-    <div className={cn("space-y-2", className)} aria-busy="true" aria-live="polite">
+    <div className={cn("space-y-2", className)} {...a11y}>
+      {srLabel}
       {Array.from({ length: rows }).map((_, i) => (
         <div
           key={i}
+          aria-hidden="true"
           className="flex items-center gap-3 rounded-[var(--radius-brand-md)] border border-border p-3"
         >
           <Skeleton className="h-9 w-9 shrink-0 rounded-full" />

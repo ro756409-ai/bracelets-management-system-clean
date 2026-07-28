@@ -80,12 +80,36 @@
   --radius-brand-pill: 32px;
   --radius: var(--radius-brand-md);
 
+  /* Spacing — 8px base unit (brand book §15). Every gap, pad and margin in the product should
+     land on this scale; nothing in between. The named aliases below are the two composites the
+     layout actually repeats, expressed in the same scale. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+
   /* Layout scale — one source of truth for card padding, section gaps and table row
      heights, so pages stop inventing their own spacing. */
-  --space-card: 1.25rem;
-  --space-section: 1.5rem;
+  --space-card: var(--space-6);      /* 24px */
+  --space-section: var(--space-6);   /* 24px */
   --row-h-comfortable: 3.75rem;
   --row-h-compact: 2.75rem;
+
+  /* Iconography (brand book §18) — 24px grid, 1.75px stroke, rounded joins, outlined never
+     filled, so icons stay quiet next to data. Applied globally to Lucide in @layer base. */
+  --icon-stroke: 1.75;
+
+  /* The one approved gradient (brand book §21): Primary → Dark Purple at 135°. Hero surfaces
+     and premium CTAs only — never a default background. */
+  --gradient-brand: linear-gradient(135deg, #5B3DF5 0%, #4527D6 100%);
+
+  /* A quiet 16px dot grid derived from the logo's construction grid (brand book §22) — for
+     section backgrounds, empty states and print collateral texture. */
+  --pattern-dot-grid: radial-gradient(circle, rgb(30 41 59 / 0.07) 1px, transparent 1px);
+  --pattern-dot-size: 16px;
   --font-brand: 'IBM Plex Sans Arabic', 'Inter', 'Cairo', 'Tajawal', sans-serif;
   --font-brand-en: 'Inter', 'IBM Plex Sans Arabic', sans-serif;
 
@@ -111,15 +135,15 @@
   --card-foreground: #1E293B;
   --popover: #FFFFFF;
   --popover-foreground: #1E293B;
-  --primary: #6366F1;
+  --primary: #5B3DF5;
   --primary-foreground: #FFFFFF;
-  --primary-dark: #4F46E5;
+  --primary-dark: #4527D6;
   --secondary: #1E293B;
   --secondary-foreground: #FFFFFF;
   --muted: #F1F5F9;
-  --muted-foreground: #6B7280;
-  --accent: #EEF2FF;
-  --accent-foreground: #4338CA;
+  --muted-foreground: #64748B;
+  --accent: #EDE9FE;
+  --accent-foreground: #4527D6;
   --destructive: #EF4444;
   --destructive-foreground: #FFFFFF;
   --success: #10B981;
@@ -146,8 +170,8 @@
   --delivered-foreground: #FFFFFF;
   --border: #E2E8F0;
   --input: #E2E8F0;
-  --ring: #6366F1;
-  --chart-1: #6366F1;
+  --ring: #5B3DF5;
+  --chart-1: #5B3DF5;
   --chart-2: #3B82F6;
   --chart-3: #10B981;
   --chart-4: #F59E0B;
@@ -155,12 +179,12 @@
   /* Sidebar: Matjarak dark navy base (brand book §27 mobile/desktop hierarchy) */
   --sidebar: #1E293B;
   --sidebar-foreground: #F1F5F9;
-  --sidebar-primary: #6366F1;
+  --sidebar-primary: #5B3DF5;
   --sidebar-primary-foreground: #FFFFFF;
   --sidebar-accent: #334155;
   --sidebar-accent-foreground: #F1F5F9;
   --sidebar-border: #334155;
-  --sidebar-ring: #6366F1;
+  --sidebar-ring: #5B3DF5;
 }
 
 .dark {
@@ -171,15 +195,15 @@
   --card-foreground: #F1F5F9;
   --popover: #1E293B;
   --popover-foreground: #F1F5F9;
-  --primary: #818CF8;
+  --primary: #7C63F7;
   --primary-foreground: #FFFFFF;
-  --primary-dark: #4F46E5;
+  --primary-dark: #4527D6;
   --secondary: #334155;
   --secondary-foreground: #F1F5F9;
   --muted: #1E293B;
   --muted-foreground: #94A3B8;
-  --accent: #312E81;
-  --accent-foreground: #E0E7FF;
+  --accent: #322659;
+  --accent-foreground: #EDE9FE;
   --destructive: #EF4444;
   --destructive-foreground: #FFFFFF;
   --success: #34D399;
@@ -202,20 +226,20 @@
   --delivered-foreground: #052E1E;
   --border: #334155;
   --input: #334155;
-  --ring: #818CF8;
-  --chart-1: #818CF8;
+  --ring: #7C63F7;
+  --chart-1: #7C63F7;
   --chart-2: #60A5FA;
   --chart-3: #34D399;
   --chart-4: #FBBF24;
   --chart-5: #EF4444;
   --sidebar: #0B1220;
   --sidebar-foreground: #F1F5F9;
-  --sidebar-primary: #818CF8;
+  --sidebar-primary: #7C63F7;
   --sidebar-primary-foreground: #FFFFFF;
   --sidebar-accent: #1E293B;
   --sidebar-accent-foreground: #F1F5F9;
   --sidebar-border: #1E293B;
-  --sidebar-ring: #818CF8;
+  --sidebar-ring: #7C63F7;
 }
 
 @layer base {
@@ -236,6 +260,15 @@
   h1, h2, h3, h4, h5, h6 {
     line-height: 1.4;
     text-wrap: balance;
+  }
+
+  /* Iconography (brand book §18): every Lucide icon is outlined on a 24px grid at 1.75px with
+     rounded joins. Setting it here means no component has to remember — and no icon can drift
+     to a filled or hairline style and quietly break the set. */
+  svg.lucide {
+    stroke-width: var(--icon-stroke);
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   /* Money and counts must line up column-to-column in RTL tables. Applied via the
@@ -333,4 +366,54 @@
 
 #qr-reader__dashboard {
   display: none !important;
+}
+
+/* ==================== Matjarak type scale & brand texture ====================
+   Typography hierarchy (brand book §14): four levels, one weight each —
+   Heading 700 / Subheading 600 / Body 500 / Caption 400. Reach for these rather than pairing
+   a font-size utility with a font-weight utility per element; that is what keeps every screen
+   on the same voice. Sizes stay restrained on purpose — dense ERP tables are read, not
+   admired.
+
+   NOTE: never write a Tailwind wildcard like "text-" followed by star-slash inside a CSS
+   comment here. That sequence closes the comment early and silently eats the rule that
+   follows it — it is exactly how `.type-heading` went missing from the production stylesheet
+   while its siblings survived. */
+.type-heading {
+  font-size: 1.25rem;      /* 20px */
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+.type-subheading {
+  font-size: 1rem;         /* 16px */
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.type-body {
+  font-size: 0.875rem;     /* 14px */
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.type-caption {
+  font-size: 0.75rem;      /* 12px */
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+/* The brand's quiet dot-grid texture (§22) — empty states and hero surfaces only, never a
+   default page background. */
+.bg-dot-grid {
+  background-image: var(--pattern-dot-grid);
+  background-size: var(--pattern-dot-size) var(--pattern-dot-size);
+}
+
+/* The single approved gradient (§21): Primary → Dark Purple at 135°. Hero surfaces and
+   premium-tier CTAs only. */
+.bg-brand-gradient {
+  background-image: var(--gradient-brand);
 }
