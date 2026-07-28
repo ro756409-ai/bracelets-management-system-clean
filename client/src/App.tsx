@@ -1,3 +1,4 @@
+import { CommandPalette } from "@/components/shared/CommandPalette";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
@@ -129,6 +130,10 @@ function App() {
         <BusinessProvider>
           <TooltipProvider>
             <Toaster />
+            {/* Mounted at the root so ⌘K works from every screen, including ones that
+                render their own layout — navigation shortcuts that only work in some
+                places are worse than none, because you stop trusting them. */}
+            <CommandPalette />
             <Router />
           </TooltipProvider>
         </BusinessProvider>
