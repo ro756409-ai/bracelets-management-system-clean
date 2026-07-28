@@ -21,7 +21,7 @@ import {
   Plus, Search, CheckCircle, XCircle, Clock, UserPlus, Eye, FileSpreadsheet, Download, Truck,
   Trash2, Printer, PhoneCall, PhoneOff, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
   MoreHorizontal, MoreVertical, ListChecks, LayoutGrid, Rows3,
-  Package, FileText, AlertTriangle,
+  Package, FileText, AlertTriangle, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import ImportExcelDialog from "@/components/ImportExcelDialog";
@@ -775,6 +775,42 @@ export default function Orders() {
   ];
 
   const selectedKeysSet = useMemo(() => new Set<string | number>(selectedOrderIds), [selectedOrderIds]);
+
+  // ==================== Drawer workspace ====================
+  // The drawer is a queue, not a popup: open one order, act on it, move to the next without
+  // bouncing back to the table. In RTL, ← advances (forward is leftward) and → goes back.
+  const drawerOrder = (detailOrder as any) ?? orders.find((o: any) => o.id === detailOrderId);
+  const detailIndex = detailOrderId != null ? orders.findIndex((o: any) => o.id === detailOrderId) : -1;
+  const goToOrderAt = (index: number) => {
+    if (index < 0 || index >= orders.length) return;
+    setDetailOrderId(orders[index].id);
+  };
+
+  useEffect(() => {
+    if (detailOrderId == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      // Never hijack the arrow keys while someone is typing a note inside the drawer.
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.key === "ArrowLeft") { e.preventDefault(); goToOrderAt(detailIndex + 1); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); goToOrderAt(detailIndex - 1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailOrderId, detailIndex, orders]);
+
+  // Status change from inside the drawer — the same generic update the table's status column
+  // uses, so the widened transition rules in db.ts apply identically here.
+  const updateStatusMutation = trpc.orders.update.useMutation({
+    onSuccess: () => {
+      toast.success("تم تحديث الحالة");
+      utils.orders.list.invalidate();
+      utils.orders.statusCounts.invalidate();
+      utils.orders.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   return (
     <div className="space-y-6">
@@ -1702,30 +1738,93 @@ export default function Orders() {
       <Drawer
         open={!!detailOrderId}
         onOpenChange={(open) => { if (!open) setDetailOrderId(null); }}
-        title="تفاصيل الأوردر"
-        width="lg"
-        footer={(() => {
-          const order = (detailOrder as any) ?? orders.find((o: any) => o.id === detailOrderId);
-          if (!order) return null;
-          return (
+        width="xl"
+        title={
+          drawerOrder ? (
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="font-mono">#{drawerOrder.easyOrderShortId || drawerOrder.orderNumber}</span>
+              <StatusBadge status={drawerOrder.status} kind="order" size="sm" />
+              {drawerOrder.needsReview && (
+                <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-[var(--purple)] bg-[var(--purple)]/10 border border-[var(--purple)]/30">
+                  يحتاج مراجعة
+                </span>
+              )}
+            </span>
+          ) : "تفاصيل الأوردر"
+        }
+        description={drawerOrder?.customerName}
+        headerExtra={
+          detailIndex >= 0 ? (
+            <>
+              <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
+                {(detailIndex + 1).toLocaleString('ar-EG')} / {orders.length.toLocaleString('ar-EG')}
+              </span>
+              <Button variant="ghost" size="icon" className="h-8 w-8" title="الأوردر السابق (→)"
+                disabled={detailIndex <= 0} onClick={() => goToOrderAt(detailIndex - 1)}>
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8" title="الأوردر التالي (←)"
+                disabled={detailIndex >= orders.length - 1} onClick={() => goToOrderAt(detailIndex + 1)}>
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+            </>
+          ) : undefined
+        }
+        subHeader={
+          drawerOrder ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {/* تغيير الحالة من جوّه الدرج — من غير ما تقفله وترجع للجدول */}
+              <Select
+                value={drawerOrder.status}
+                onValueChange={(v) => updateStatusMutation.mutate({ id: drawerOrder.id, status: v as any })}
+              >
+                <SelectTrigger className="h-9 w-44"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["new", "confirmed", "postponed", "no_answer", "preparing", "shipped", "delivered", "cancelled"].map(v => (
+                    <SelectItem key={v} value={v}>{STATUS_LABEL(v)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <WhatsAppButton phone={drawerOrder.customerPhone} size="sm" className="h-9" />
+              <Button size="sm" variant="outline" className="h-9 gap-1 border-[var(--info)]/30 text-[var(--info)]"
+                onClick={() => { window.location.href = `tel:${drawerOrder.customerPhone}`; }}>
+                <PhoneCall className="h-4 w-4" /> اتصال
+              </Button>
+              {(drawerOrder.status === 'new' || drawerOrder.status === 'postponed') && (
+                <>
+                  <Button size="sm" className="h-9 gap-1 bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90"
+                    disabled={confirmMutation.isPending}
+                    onClick={() => confirmMutation.mutate({ orderId: drawerOrder.id })}>
+                    <CheckCircle className="h-4 w-4" /> تأكيد
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-9 gap-1 border-destructive/30 text-destructive"
+                    onClick={() => { setSelectedOrderId(drawerOrder.id); setShowCancelDialog(true); }}>
+                    <XCircle className="h-4 w-4" /> إلغاء
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : undefined
+        }
+        footer={
+          drawerOrder ? (
             <div className="flex w-full gap-2">
-              {/* المعاينة السريعة هنا، والتفاصيل الكاملة (مراحل الأوردر والتاريخ الزمني) في صفحة مستقلة */}
               <Button variant="outline" className="flex-1 gap-1"
-                onClick={() => { setDetailOrderId(null); navigate(`/order/${order.id}`); }}>
+                onClick={() => { setDetailOrderId(null); navigate(`/order/${drawerOrder.id}`); }}>
                 <Eye className="h-4 w-4" /> الصفحة الكاملة
               </Button>
               {isAdmin && (
                 <Button variant="outline" className="flex-1 gap-1" disabled={duplicateOrderMutation.isPending}
-                  onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: order.id, orderNumber: order.orderNumber, customerName: order.customerName })}>
+                  onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: drawerOrder.id, orderNumber: drawerOrder.orderNumber, customerName: drawerOrder.customerName })}>
                   <Copy className="h-4 w-4" /> تكرار
                 </Button>
               )}
-              <Button className="flex-1 gap-1" onClick={() => { openEditFor(order); setDetailOrderId(null); }}>
+              <Button className="flex-1 gap-1" onClick={() => { openEditFor(drawerOrder); setDetailOrderId(null); }}>
                 <Edit2 className="h-4 w-4" /> تعديل
               </Button>
             </div>
-          );
-        })()}
+          ) : null
+        }
       >
         {(() => {
           const order = (detailOrder as any) ?? orders.find((o: any) => o.id === detailOrderId);
