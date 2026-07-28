@@ -64,6 +64,11 @@ export default function OrderDetails() {
   );
 
   const { data: products } = trpc.products.list.useQuery();
+  // اسم الموظف المسؤول — نفس الـlookup المحلي المستخدم في صفحة الأوردرات (الـAPI بيرجع رقم فقط).
+  const { data: employees } = trpc.employees.activeList.useQuery();
+  const assignedEmployeeName = order?.assignedEmployeeId
+    ? employees?.find((e: any) => e.id === order.assignedEmployeeId)?.name ?? `#${order.assignedEmployeeId}`
+    : null;
 
   const sendToBostaMutation = trpc.orders.sendToBosta.useMutation({
     onSuccess: (result) => {
@@ -231,6 +236,70 @@ export default function OrderDetails() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* مراحل الأوردر — خط زمني هادي مبني من تواريخ المراحل المسجلة فعليًا على الأوردر */}
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Truck className="h-5 w-5 text-primary" /> مراحل الأوردر
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(() => {
+              const stages: { label: string; date: any; extra?: string }[] = [
+                { label: "إنشاء الأوردر", date: order.createdAt },
+                { label: "التوزيع على موظف", date: order.assignedAt, extra: assignedEmployeeName ?? undefined },
+                { label: "التأكيد", date: order.confirmedAt, extra: order.confirmedByEmployeeName ?? undefined },
+                { label: "الطباعة", date: order.printedAt },
+                { label: "الشحن", date: (order as any).shippedAt },
+                { label: "التوصيل", date: (order as any).deliveredAt },
+              ];
+              // آخر مرحلة متحققة — كل اللي قبلها مكتمل، واللي بعدها قادم (رمادي).
+              const lastDone = stages.reduce((acc, s, i) => (s.date ? i : acc), 0);
+              return (
+                <ol className="space-y-0">
+                  {stages.map((s, i) => {
+                    const done = Boolean(s.date);
+                    const isCurrent = i === lastDone && done;
+                    return (
+                      <li key={s.label} className="relative flex gap-3 pb-5 last:pb-0">
+                        {i < stages.length - 1 && (
+                          <span className={`absolute right-[9px] top-6 bottom-0 w-0.5 ${stages[i + 1].date ? "bg-[var(--success)]" : "bg-border"}`} />
+                        )}
+                        <span className={`relative z-[1] mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
+                          done ? "border-[var(--success)] bg-[var(--success)]" : "border-border bg-card"
+                        }`}>
+                          {done && <CheckCircle className="h-3.5 w-3.5 text-white" />}
+                        </span>
+                        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                          <p className={`text-sm ${done ? "font-semibold" : "text-muted-foreground"} ${isCurrent ? "text-[var(--success)]" : ""}`}>{s.label}</p>
+                          {s.date && <p className="text-xs text-muted-foreground tabular-nums">{formatDate(s.date)}</p>}
+                          {s.extra && <p className="text-xs font-medium text-muted-foreground">بواسطة: {s.extra}</p>}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              );
+            })()}
+            {/* أحداث استثنائية خارج المسار الطبيعي — تظهر فقط لو حصلت */}
+            {(order.status === "cancelled" || order.status === "postponed" || order.status === "no_answer" || order.status === "returned") && (
+              <div className={`mt-4 rounded-lg border p-3 text-sm ${
+                order.status === "cancelled" || order.status === "returned"
+                  ? "border-destructive/30 bg-destructive/5 text-destructive"
+                  : "border-[var(--warning)]/30 bg-[var(--warning)]/5 text-[var(--warning)]"
+              }`}>
+                <p className="font-semibold">{STATUS_LABELS[order.status]}</p>
+                {order.status === "cancelled" && order.cancelReason && <p className="mt-0.5 text-xs">السبب: {order.cancelReason}</p>}
+                {order.status === "cancelled" && order.cancelledAt && <p className="mt-0.5 text-xs">{formatDate(order.cancelledAt)}</p>}
+                {order.status === "postponed" && order.postponedTo && <p className="mt-0.5 text-xs">مؤجل إلى: {formatDate(order.postponedTo)}</p>}
+                {order.status === "no_answer" && (order as any).noAnswerCallAttempts != null && (
+                  <p className="mt-0.5 text-xs">عدد محاولات الاتصال: {(order as any).noAnswerCallAttempts}</p>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* بيانات العميل */}
         <Card>
           <CardHeader>
@@ -308,9 +377,16 @@ export default function OrderDetails() {
                 <Label className="text-[var(--warning)] text-xs font-semibold">تفصيل الأصناف / الحفر</Label>
                 <div className="mt-2 space-y-1">
                   {(order as any).items.map((it: any) => (
-                    <div key={it.id} className="flex items-center justify-between text-sm">
-                      <span className="text-foreground">{it.productName}</span>
-                      <span className="font-semibold text-[var(--warning)]">× {it.quantity}</span>
+                    <div key={it.id} className="flex items-center justify-between gap-2 text-sm">
+                      <span className="min-w-0 text-foreground">
+                        {it.productName}
+                        {(it.variantName || it.color || it.size) && (
+                          <span className="mr-1.5 text-xs font-semibold text-[var(--info)]">
+                            ({it.variantName || [it.color, it.size].filter(Boolean).join(' / ')})
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 font-semibold text-[var(--warning)]">× {it.quantity}</span>
                     </div>
                   ))}
                   <div className="flex items-center justify-between border-t border-[var(--warning)]/30 pt-1 mt-1">
@@ -433,8 +509,20 @@ export default function OrderDetails() {
               </div>
               <div>
                 <Label className="text-muted-foreground text-xs">الموظف المسؤول</Label>
-                <p className="font-medium text-sm">{order.assignedEmployeeId ? `#${order.assignedEmployeeId}` : "غير موزع"}</p>
+                <p className="font-medium text-sm">{assignedEmployeeName ?? "غير موزع"}</p>
               </div>
+              {order.confirmedByEmployeeName && (
+                <div>
+                  <Label className="text-muted-foreground text-xs">أكّده</Label>
+                  <p className="font-medium text-sm">{order.confirmedByEmployeeName}</p>
+                </div>
+              )}
+              {(order as any).noAnswerCallAttempts != null && (
+                <div>
+                  <Label className="text-muted-foreground text-xs">محاولات الاتصال (لم يرد)</Label>
+                  <p className="font-medium text-sm tabular-nums">{(order as any).noAnswerCallAttempts}</p>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

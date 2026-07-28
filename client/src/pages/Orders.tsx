@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -134,6 +135,7 @@ function STATUS_LABEL(status: string): string {
 export default function Orders() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
+  const [, navigate] = useLocation();
   const isAdmin = user?.role === 'admin';
   const { currentBusinessIds } = useBusinessContext();
 
@@ -1740,6 +1742,11 @@ export default function Orders() {
           if (!order) return null;
           return (
             <div className="flex w-full gap-2">
+              {/* المعاينة السريعة هنا، والتفاصيل الكاملة (مراحل الأوردر والتاريخ الزمني) في صفحة مستقلة */}
+              <Button variant="outline" className="flex-1 gap-1"
+                onClick={() => { setDetailOrderId(null); navigate(`/order/${order.id}`); }}>
+                <Eye className="h-4 w-4" /> الصفحة الكاملة
+              </Button>
               {isAdmin && (
                 <Button variant="outline" className="flex-1 gap-1" disabled={duplicateOrderMutation.isPending}
                   onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: order.id, orderNumber: order.orderNumber, customerName: order.customerName })}>
