@@ -21,6 +21,7 @@ import {
   Plus, Search, CheckCircle, XCircle, Clock, UserPlus, Eye, FileSpreadsheet, Download, Truck,
   Trash2, Printer, PhoneCall, PhoneOff, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
   MoreHorizontal, MoreVertical, ListChecks, LayoutGrid, Rows3,
+  Package, FileText, AlertTriangle,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import ImportExcelDialog from "@/components/ImportExcelDialog";
@@ -29,6 +30,7 @@ import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import {
   PageHeader,
+  StatCard,
   StatusBadge,
   FilterBar,
   SearchInput,
@@ -160,7 +162,7 @@ export default function Orders() {
   // لازم يتزامن مع أعمدة columns تحت اللي معلّمة defaultHidden: true (seq/address/website) —
   // ResponsiveDataTable بيحترم فقط الـids الموجودة فعليًا في هذا الـSet، الخاصية defaultHidden
   // على تعريف العمود نفسه مجرد نية، مش بتُطبَّق لوحدها.
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set(['seq', 'address', 'website']));
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set(['seq', 'website']));
   const [expandedMobileId, setExpandedMobileId] = useState<number | null>(null);
 
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -622,21 +624,26 @@ export default function Orders() {
     {
       id: "customer", header: "العميل", alwaysVisible: true,
       cell: (order) => (
-        <div>
-          <p className="font-semibold text-sm">{order.customerName}</p>
-          <p className="text-xs text-muted-foreground font-mono" dir="ltr">{order.customerPhone}</p>
+        <div className="min-w-0 max-w-[190px]">
+          <p className="truncate text-sm font-semibold" title={order.customerName}>{order.customerName}</p>
+          <p className="flex items-center gap-1 text-xs text-muted-foreground">
+            <PhoneCall className="h-3 w-3 shrink-0" />
+            <span className="font-mono" dir="ltr">{order.customerPhone}</span>
+          </p>
         </div>
       ),
     },
     {
-      id: "address", header: "العنوان", defaultHidden: true,
+      // "الموقع" في التصميم: المحافظة بارزة والمنطقة تحتها. العنوان الكامل يظل في الـdrawer
+      // بدل ما ياخد عرض عمود كامل في الجدول.
+      id: "location", header: "الموقع", alwaysVisible: true,
       cell: (order) => (
-        <div className="max-w-[220px]">
-          <p className="text-sm leading-snug break-words line-clamp-2" title={order.customerAddress || order.governorate || undefined}>
-            {order.customerAddress || order.governorate || '—'}
-          </p>
-          {order.customerAddress && order.governorate && (
-            <p className="text-xs text-muted-foreground">{order.governorate}</p>
+        <div className="max-w-[150px]">
+          <p className="text-sm font-medium">{order.governorate || '—'}</p>
+          {(order.city || order.customerAddress) && (
+            <p className="truncate text-xs text-muted-foreground" title={order.customerAddress || undefined}>
+              {order.city || order.customerAddress}
+            </p>
           )}
         </div>
       ),
@@ -887,20 +894,37 @@ export default function Orders() {
           </DropdownMenu>
         }
       >
-        {/* بدل صف الكروت الكبير: chips مدمجة للمعلومتين الوحيدتين اللي مش موجودتين في شريط
-            الحالات تحت (أوردرات اليوم بغض النظر عن الحالة، والمحتاج مراجعة — يختفي لو صفر). */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-sm text-muted-foreground">
-            <CalendarDays className="h-4 w-4 text-[var(--info)]" />
-            أوردرات اليوم:
-            <strong className="tabular-nums text-foreground">{(statusCounts?.today ?? 0).toLocaleString('ar-EG')}</strong>
-          </span>
-          {(statusCounts?.needsReview ?? 0) > 0 && (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-3 py-1.5 text-sm text-[var(--warning)]">
-              ⚠️ يحتاج مراجعة:
-              <strong className="tabular-nums">{(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')}</strong>
-            </span>
-          )}
+        {/* Design System V2 — بطاقات إحصائيات: أيقونة في مربع ملوّن + رقم كبير، وكل بطاقة
+            تعمل كفلتر سريع للحالة. الحالات المختارة هي الأكثر استخدامًا فعليًا في هذا النشاط
+            (جديد/مؤكد/لم يرد/ملغي هي الأرقام الكبيرة)، وباقي الحالات متاحة من شريط التبويبات.
+            ملاحظة: التصميم يعرض مؤشر اتجاه ("من أمس") — لا توجد بيانات مقارنة في الـAPI الحالي
+            ولم أختلق أرقامًا؛ الـStatCard يدعم `trend` ويظهر تلقائيًا فور توفّر البيانات. */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+          {([
+            { key: 'all', label: 'كل الأوردرات', value: statusCounts?.total, tone: 'default', icon: <Package className="h-5 w-5" /> },
+            { key: 'new', label: 'جديد', value: statusCounts?.byStatus?.new, tone: 'info', icon: <FileText className="h-5 w-5" /> },
+            { key: 'confirmed', label: 'مؤكد', value: statusCounts?.byStatus?.confirmed, tone: 'success', icon: <CheckCircle className="h-5 w-5" /> },
+            { key: 'no_answer', label: 'لم يرد', value: statusCounts?.byStatus?.no_answer, tone: 'warning', icon: <PhoneOff className="h-5 w-5" /> },
+            { key: 'shipped', label: 'تم الشحن', value: statusCounts?.byStatus?.shipped, tone: 'info', icon: <Truck className="h-5 w-5" /> },
+            { key: 'cancelled', label: 'ملغي', value: statusCounts?.byStatus?.cancelled, tone: 'danger', icon: <XCircle className="h-5 w-5" /> },
+          ] as const).map(c => (
+            <StatCard
+              key={c.key}
+              label={c.label}
+              value={(c.value ?? 0).toLocaleString('ar-EG')}
+              tone={c.tone}
+              icon={c.icon}
+              active={activeTab === 'all' && statusFilter === c.key}
+              onClick={() => { setActiveTab('all'); setStatusFilter(c.key); setPage(1); }}
+            />
+          ))}
+          {/* غير قابلة للنقر: "يحتاج مراجعة" علامة على الأوردر وليست حالة، فمفيش فلتر مقابل لها */}
+          <StatCard
+            label="يحتاج مراجعة"
+            value={(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')}
+            tone="warning"
+            icon={<AlertTriangle className="h-5 w-5" />}
+          />
         </div>
       </PageHeader>
 

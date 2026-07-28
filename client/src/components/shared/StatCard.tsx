@@ -63,8 +63,36 @@ export function StatCard({
 }: StatCardProps) {
   const interactive = typeof onClick === "function";
 
+  // Design System V2: label on top, large number below, trend last; the tinted icon tile sits
+  // opposite the text (visually left in RTL) rather than leading it.
   const body = (
-    <CardContent className="flex items-center gap-3 p-4">
+    <CardContent className="flex items-start justify-between gap-3 p-4">
+      <div className="min-w-0 space-y-1 text-right">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        {loading ? (
+          <Skeleton className="h-8 w-16" />
+        ) : (
+          <p className={cn("text-[26px] font-bold leading-none tabular-nums", TONE_TEXT[tone])}>
+            {value}
+          </p>
+        )}
+        {trend && !loading && (
+          <p className="flex items-center gap-1 text-[11px] font-medium">
+            <span
+              className={cn(
+                "tabular-nums",
+                trend.value > 0 ? "text-[var(--success)]" : trend.value < 0 ? "text-destructive" : "text-muted-foreground"
+              )}
+            >
+              {trend.value > 0 ? "↑" : trend.value < 0 ? "↓" : "–"} {Math.abs(trend.value)}%
+            </span>
+            {trend.label && <span className="text-muted-foreground">{trend.label}</span>}
+          </p>
+        )}
+        {hint && !loading && (
+          <p className="text-[11px] text-muted-foreground/80">{hint}</p>
+        )}
+      </div>
       {icon && (
         <span
           className={cn(
@@ -75,34 +103,6 @@ export function StatCard({
           {icon}
         </span>
       )}
-      <div className="min-w-0 space-y-0.5 text-right">
-        {loading ? (
-          <Skeleton className="h-7 w-16" />
-        ) : (
-          <div className="flex items-baseline gap-1.5">
-            <p className={cn("text-2xl font-bold tabular-nums leading-tight", TONE_TEXT[tone])}>
-              {value}
-            </p>
-            {trend && (
-              <span
-                className={cn(
-                  "text-[11px] font-semibold tabular-nums",
-                  trend.value > 0 ? "text-[var(--success)]" : trend.value < 0 ? "text-destructive" : "text-muted-foreground"
-                )}
-              >
-                {trend.value > 0 ? "↑" : trend.value < 0 ? "↓" : "–"} {Math.abs(trend.value)}%
-              </span>
-            )}
-          </div>
-        )}
-        <p className="text-xs text-muted-foreground">{label}</p>
-        {hint && !loading && (
-          <p className="text-[11px] text-muted-foreground/80">{hint}</p>
-        )}
-        {trend?.label && !loading && (
-          <p className="text-[11px] text-muted-foreground/80">{trend.label}</p>
-        )}
-      </div>
     </CardContent>
   );
 

@@ -100,15 +100,15 @@
   --card-foreground: #1E293B;
   --popover: #FFFFFF;
   --popover-foreground: #1E293B;
-  --primary: #5B3DF5;
+  --primary: #6366F1;
   --primary-foreground: #FFFFFF;
-  --primary-dark: #4527D6;
+  --primary-dark: #4F46E5;
   --secondary: #1E293B;
   --secondary-foreground: #FFFFFF;
   --muted: #F1F5F9;
-  --muted-foreground: #64748B;
-  --accent: #EDE9FE;
-  --accent-foreground: #4527D6;
+  --muted-foreground: #6B7280;
+  --accent: #EEF2FF;
+  --accent-foreground: #4338CA;
   --destructive: #EF4444;
   --destructive-foreground: #FFFFFF;
   --success: #10B981;
@@ -135,8 +135,8 @@
   --delivered-foreground: #FFFFFF;
   --border: #E2E8F0;
   --input: #E2E8F0;
-  --ring: #5B3DF5;
-  --chart-1: #5B3DF5;
+  --ring: #6366F1;
+  --chart-1: #6366F1;
   --chart-2: #3B82F6;
   --chart-3: #10B981;
   --chart-4: #F59E0B;
@@ -144,12 +144,12 @@
   /* Sidebar: Matjarak dark navy base (brand book §27 mobile/desktop hierarchy) */
   --sidebar: #1E293B;
   --sidebar-foreground: #F1F5F9;
-  --sidebar-primary: #5B3DF5;
+  --sidebar-primary: #6366F1;
   --sidebar-primary-foreground: #FFFFFF;
   --sidebar-accent: #334155;
   --sidebar-accent-foreground: #F1F5F9;
   --sidebar-border: #334155;
-  --sidebar-ring: #5B3DF5;
+  --sidebar-ring: #6366F1;
 }
 
 .dark {
@@ -160,15 +160,15 @@
   --card-foreground: #F1F5F9;
   --popover: #1E293B;
   --popover-foreground: #F1F5F9;
-  --primary: #7C63F7;
+  --primary: #818CF8;
   --primary-foreground: #FFFFFF;
-  --primary-dark: #4527D6;
+  --primary-dark: #4F46E5;
   --secondary: #334155;
   --secondary-foreground: #F1F5F9;
   --muted: #1E293B;
   --muted-foreground: #94A3B8;
-  --accent: #322659;
-  --accent-foreground: #EDE9FE;
+  --accent: #312E81;
+  --accent-foreground: #E0E7FF;
   --destructive: #EF4444;
   --destructive-foreground: #FFFFFF;
   --success: #34D399;
@@ -191,20 +191,20 @@
   --delivered-foreground: #052E1E;
   --border: #334155;
   --input: #334155;
-  --ring: #7C63F7;
-  --chart-1: #7C63F7;
+  --ring: #818CF8;
+  --chart-1: #818CF8;
   --chart-2: #60A5FA;
   --chart-3: #34D399;
   --chart-4: #FBBF24;
   --chart-5: #EF4444;
   --sidebar: #0B1220;
   --sidebar-foreground: #F1F5F9;
-  --sidebar-primary: #7C63F7;
+  --sidebar-primary: #818CF8;
   --sidebar-primary-foreground: #FFFFFF;
   --sidebar-accent: #1E293B;
   --sidebar-accent-foreground: #F1F5F9;
   --sidebar-border: #1E293B;
-  --sidebar-ring: #7C63F7;
+  --sidebar-ring: #818CF8;
 }
 
 @layer base {
