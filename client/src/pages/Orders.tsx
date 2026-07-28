@@ -156,7 +156,10 @@ export default function Orders() {
     localStorage.setItem('orders-page-size', String(size));
   };
   const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  // لازم يتزامن مع أعمدة columns تحت اللي معلّمة defaultHidden: true (seq/address/website) —
+  // ResponsiveDataTable بيحترم فقط الـids الموجودة فعليًا في هذا الـSet، الخاصية defaultHidden
+  // على تعريف العمود نفسه مجرد نية، مش بتُطبَّق لوحدها.
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set(['seq', 'address', 'website']));
   const [expandedMobileId, setExpandedMobileId] = useState<number | null>(null);
 
   const [showCreateDialog, setShowCreateDialog] = useState(false);
