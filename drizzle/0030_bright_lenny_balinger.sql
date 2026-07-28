@@ -1,0 +1,1 @@
+ALTER TABLE `businesses` MODIFY COLUMN `tenantId` int;

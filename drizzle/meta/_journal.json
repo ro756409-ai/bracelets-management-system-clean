@@ -204,6 +204,20 @@
       "when": 1785181015646,
       "tag": "0028_next_grandmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "5",
+      "when": 1785194957077,
+      "tag": "0029_puzzling_genesis",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "5",
+      "when": 1785195903647,
+      "tag": "0030_bright_lenny_balinger",
+      "breakpoints": true
     }
   ]
 }
