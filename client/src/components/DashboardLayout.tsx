@@ -282,10 +282,14 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
             )}
             {visibleGroups.map(group => (
               <SidebarGroup key={group.label} className="px-2 py-0.5">
-                <SidebarGroupLabel className="gap-1.5">
-                  <group.icon className="h-3.5 w-3.5" />
-                  {group.label}
-                </SidebarGroupLabel>
+                {/* عنوان المجموعة بيتخفي لما تكون بند واحد: "المخزون" فوق "المخزون"،
+                    و"الموظفون" فوق "الموظفين" — كانت بتقرا كإنها صفحتين مختلفتين. */}
+                {group.items.length > 1 && (
+                  <SidebarGroupLabel className="gap-1.5">
+                    <group.icon className="h-3.5 w-3.5" />
+                    {group.label}
+                  </SidebarGroupLabel>
+                )}
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {group.items.map(item => {
