@@ -77,7 +77,8 @@ export function StatCard({
           </p>
         )}
         {trend && !loading && (
-          <p className="flex items-center gap-1 text-[11px] font-medium">
+          // whitespace-nowrap: على شاشة ضيقة كانت "عن أمس" بتتلف على سطرين وتطوّل الكارت
+          <p className="flex items-center gap-1 whitespace-nowrap text-[11px] font-medium">
             <span
               className={cn(
                 "tabular-nums",

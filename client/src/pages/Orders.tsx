@@ -855,7 +855,7 @@ export default function Orders() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">استيراد</DropdownMenuLabel>
+              <DropdownMenuLabel className="type-caption">استيراد</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => setShowImportDialog(true)}>
                 <FileSpreadsheet className="h-4 w-4 ml-2 text-[var(--success)]" /> استيراد Easy Order
               </DropdownMenuItem>
@@ -864,7 +864,7 @@ export default function Orders() {
                 استيراد واتساب
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs text-muted-foreground">تصدير</DropdownMenuLabel>
+              <DropdownMenuLabel className="type-caption">تصدير</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => { setExportType('confirmed'); setShowExportDialog(true); }}>
                 <Download className="h-4 w-4 ml-2" /> تصدير المؤكدة
               </DropdownMenuItem>
@@ -872,7 +872,7 @@ export default function Orders() {
                 <Truck className="h-4 w-4 ml-2" /> شيت الشحن
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs text-muted-foreground">إجراءات جماعية</DropdownMenuLabel>
+              <DropdownMenuLabel className="type-caption">إجراءات جماعية</DropdownMenuLabel>
               <DropdownMenuItem
                 disabled={selectedOrderIds.length === 0}
                 onClick={() => {
@@ -911,7 +911,10 @@ export default function Orders() {
             (جديد/مؤكد/لم يرد/ملغي هي الأرقام الكبيرة)، وباقي الحالات متاحة من شريط التبويبات.
             ملاحظة: التصميم يعرض مؤشر اتجاه ("من أمس") — لا توجد بيانات مقارنة في الـAPI الحالي
             ولم أختلق أرقامًا؛ الـStatCard يدعم `trend` ويظهر تلقائيًا فور توفّر البيانات. */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+        {/* موبايل: شريط أفقي قابل للتمرير — الشبكة الرأسية كانت بتحط ٧ كروت فوق بعض، يعني
+            تمرير طويل قبل ما توصل لأول أوردر. من lg وطالع بيرجع شبكة عادية (الديسكتوب ما اتغيرش).
+            -mx-* + px-* عشان أول وآخر كارت يلمسوا حافة الشاشة بدل ما يتقصّوا. */}
+        <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-7 lg:overflow-visible [&>*]:min-w-[152px] [&>*]:snap-start lg:[&>*]:min-w-0">
           {([
             { key: 'all', label: 'كل الأوردرات', value: statusCounts?.total, tone: 'default', icon: <Package className="h-5 w-5" /> },
             { key: 'new', label: 'جديد', value: statusCounts?.byStatus?.new, tone: 'info', icon: <FileText className="h-5 w-5" /> },
@@ -957,7 +960,7 @@ export default function Orders() {
               >
                 {v === 'all' ? 'كل الأوردرات' : STATUS_LABEL(v)}
                 {count != null && count > 0 && (
-                  <span className={`rounded-[var(--radius-brand-sm)] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
+                  <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
                     active ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'
                   }`}>
                     {Number(count).toLocaleString('ar-EG')}
@@ -1001,7 +1004,7 @@ export default function Orders() {
                   ? new Date(Date.now() - 86400000).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
                   : confirmedCustomDate ? new Date(confirmedCustomDate + 'T00:00:00').toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : ''}
               </p>
-              <p className="text-xs text-muted-foreground mt-0.5 tabular-nums">
+              <p className="mt-0.5 type-caption tabular-nums">
                 إجمالي: {todayConfirmedData?.total ?? 0} أوردر مؤكد (لم يُطبع بعد) · إجمالي المبالغ: {(todayConfirmedData?.orders ?? []).reduce((s: number, o: any) => s + Number(o.totalAmount), 0).toLocaleString('ar-EG')} ج.م
               </p>
             </div>
@@ -1228,7 +1231,7 @@ export default function Orders() {
             details={
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">{order.customerAddress || '—'}</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="type-caption">
                   الموظف المسؤول: <span className="font-medium text-foreground">{order.assignedEmployeeId ? (employeeNameById.get(order.assignedEmployeeId) ?? `#${order.assignedEmployeeId}`) : 'غير موزع'}</span>
                 </p>
                 <div className="flex flex-wrap gap-1.5">
@@ -1669,15 +1672,15 @@ export default function Orders() {
             <div className="bg-muted/50 rounded-lg p-3 space-y-2">
               <Label className="text-sm font-semibold">نطاق أرقام الأوردرات (اختياري)</Label>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label className="text-xs text-muted-foreground">من رقم</Label><Input value={exportFromOrder} onChange={e => setExportFromOrder(e.target.value.replace(/[^0-9]/g, ''))} placeholder="1" className="mt-1" type="number" min="1" dir="ltr" /></div>
-                <div><Label className="text-xs text-muted-foreground">إلى رقم</Label><Input value={exportToOrder} onChange={e => setExportToOrder(e.target.value.replace(/[^0-9]/g, ''))} placeholder="999" className="mt-1" type="number" min="1" dir="ltr" /></div>
+                <div><Label className="type-caption">من رقم</Label><Input value={exportFromOrder} onChange={e => setExportFromOrder(e.target.value.replace(/[^0-9]/g, ''))} placeholder="1" className="mt-1" type="number" min="1" dir="ltr" /></div>
+                <div><Label className="type-caption">إلى رقم</Label><Input value={exportToOrder} onChange={e => setExportToOrder(e.target.value.replace(/[^0-9]/g, ''))} placeholder="999" className="mt-1" type="number" min="1" dir="ltr" /></div>
               </div>
             </div>
             <div className="bg-muted/50 rounded-lg p-3 space-y-2">
               <Label className="text-sm font-semibold">فلتر بالتاريخ (اختياري)</Label>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label className="text-xs text-muted-foreground">من تاريخ</Label><Input type="date" value={exportDateFrom} onChange={e => setExportDateFrom(e.target.value)} className="mt-1" /></div>
-                <div><Label className="text-xs text-muted-foreground">إلى تاريخ</Label><Input type="date" value={exportDateTo} onChange={e => setExportDateTo(e.target.value)} className="mt-1" /></div>
+                <div><Label className="type-caption">من تاريخ</Label><Input type="date" value={exportDateFrom} onChange={e => setExportDateFrom(e.target.value)} className="mt-1" /></div>
+                <div><Label className="type-caption">إلى تاريخ</Label><Input type="date" value={exportDateTo} onChange={e => setExportDateTo(e.target.value)} className="mt-1" /></div>
               </div>
             </div>
             <div className="bg-muted/50 rounded-lg p-3 space-y-2">
@@ -1872,7 +1875,7 @@ export default function Orders() {
               {/* رقم الأوردر وحالته اتشالوا من هنا: الهيدر المثبّت فوق بيعرضهم دايمًا، فكانت
                   نفس المعلومة مرتين وبتاخد أول شاشة كاملة قبل أي تفصيل مفيد. */}
               {order.needsReview && (
-                <div className="rounded-[var(--radius-brand-md)] border border-[var(--purple)]/30 bg-[var(--purple)]/10 p-3">
+                <div className="rounded-lg border border-[var(--purple)]/30 bg-[var(--purple)]/10 p-3">
                   <p className="flex items-center gap-1.5 type-subheading text-[var(--purple)]">
                     <AlertTriangle className="h-4 w-4" /> يحتاج مراجعة
                   </p>
@@ -1910,7 +1913,7 @@ export default function Orders() {
                   <div><span className="text-muted-foreground">المصدر:</span> <span className="font-semibold">{SOURCE_LABELS[order.source] || order.source}</span></div>
                   {Array.isArray(order.items) && order.items.length > 0 && (
                     <div className="col-span-2 space-y-1.5 pt-1 border-t border-border">
-                      <p className="text-xs text-muted-foreground">تفاصيل الحفر لكل قطعة:</p>
+                      <p className="type-caption">تفاصيل الحفر لكل قطعة:</p>
                       {order.items.map((item: any, idx: number) => (
                         <div key={item.id ?? idx} className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-1.5">
                           <span className="font-medium">{item.productName}{item.quantity > 1 ? ` ×${item.quantity}` : ''}</span>
@@ -1981,15 +1984,15 @@ export default function Orders() {
                       <canvas id={`qr-canvas-${order.id}`} className="border border-primary/30 rounded-lg" />
                       <div className="flex flex-col gap-2">
                         <div>
-                          <span className="text-xs text-muted-foreground">Serial Number</span>
+                          <span className="type-caption">Serial Number</span>
                           <p className="font-mono font-bold text-primary text-lg">{order.serialNumber}</p>
                         </div>
                         <div>
-                          <span className="text-xs text-muted-foreground">حالة التجهيز</span>
+                          <span className="type-caption">حالة التجهيز</span>
                           <p className={`font-bold text-sm mt-0.5 ${order.isPrepared ? 'text-[var(--success)]' : 'text-[var(--warning)]'}`}>
                             {order.isPrepared ? `✅ تم التجهيز بواسطة ${order.preparedByName || 'موظف'}` : '⏳ لم يتم التجهيز بعد'}
                           </p>
-                          {order.preparedAt && <p className="text-xs text-muted-foreground">{new Date(order.preparedAt).toLocaleString('ar-EG')}</p>}
+                          {order.preparedAt && <p className="type-caption">{new Date(order.preparedAt).toLocaleString('ar-EG')}</p>}
                         </div>
                       </div>
                     </div>
