@@ -107,13 +107,16 @@ type PendingConfirm =
 
 const FILTER_DESCRIPTORS: FilterDescriptor<{
   status: string; source: string; website: string; governorates: string[];
-  adName: string; hideAssigned: boolean; dateRange: DateRange;
+  adName: string; hideAssigned: boolean; employee: string; dateRange: DateRange;
 }>[] = [
   { key: "status", label: "الحالة", format: (v) => STATUS_LABEL(v) },
   { key: "source", label: "المصدر", format: (v) => SOURCE_LABELS[v] ?? v },
   { key: "governorates", label: "المحافظة" },
   { key: "adName", label: "البيدج" },
   { key: "hideAssigned", label: "التوزيع", format: () => "غير الموزعة فقط" },
+  // اللقطة بتمرّر اسم الموظف مش رقمه، عشان الشريحة تقرأ "الموظف: أحمد" من غير ما ملف
+  // الثوابت ده يحتاج يعرف حاجة عن قائمة الموظفين.
+  { key: "employee", label: "الموظف" },
   {
     key: "dateRange", label: "التاريخ",
     format: (v: DateRange) => {
@@ -123,6 +126,41 @@ const FILTER_DESCRIPTORS: FilterDescriptor<{
     },
   },
 ];
+
+/**
+ * سجل حالات الأوردر.
+ *
+ * مفيش جدول تاريخ حالات في قاعدة البيانات، لكن جدول `orders` بيحتفظ بـtimestamp منفصل لكل
+ * محطة في رحلة الأوردر (assignedAt, confirmedAt, printedAt, …). المحطات دي مجتمعة هي السجل
+ * فعليًا — الناقص كان عرضها. فبنقراها زي ما هي ونرتبها زمنيًا: صفر تعديل في الباك إند، وصفر
+ * تخمين لتواريخ مش متسجلة.
+ *
+ * القيد الوحيد: أي انتقال متسجلش ليه عمود (مثلاً رجوع من "مؤجل" لـ"جديد") مش هيبان — عشان
+ * كده السجل بيتقال عنه "المحطات المسجّلة" مش "كل التغييرات".
+ */
+type TimelineEvent = { at: Date; label: string; detail?: string; tone: string };
+
+function buildOrderTimeline(order: any, employeeName?: string): TimelineEvent[] {
+  const events: TimelineEvent[] = [];
+  const push = (raw: any, label: string, tone: string, detail?: string) => {
+    if (!raw) return;
+    const at = new Date(raw);
+    if (Number.isNaN(at.getTime())) return;
+    events.push({ at, label, detail, tone });
+  };
+
+  push(order.createdAt, "تم إنشاء الأوردر", "var(--muted-foreground)", SOURCE_LABELS[order.source] ?? order.source);
+  push(order.assignedAt, "تم التوزيع", "var(--info)", employeeName);
+  push(order.confirmedAt, "تم التأكيد", "var(--success)", order.confirmedByEmployeeName || undefined);
+  push(order.cancelledAt, "تم الإلغاء", "var(--destructive)", order.cancelReason || undefined);
+  push(order.printedAt, "تمت الطباعة", "var(--info)");
+  push(order.preparedAt, "تم التجهيز", "var(--success)", order.preparedByName || undefined);
+  push(order.bostaSentAt, "تم الإرسال لبوسطة", "var(--info)", order.bostaTrackingNumber || undefined);
+  push(order.shippedAt, "تم الشحن", "var(--info)");
+  push(order.deliveredAt, "تم التوصيل", "var(--success)");
+
+  return events.sort((a, b) => a.at.getTime() - b.at.getTime());
+}
 
 function STATUS_LABEL(status: string): string {
   const labels: Record<string, string> = {
@@ -240,6 +278,8 @@ export default function Orders() {
   const [editShippingFees, setEditShippingFees] = useState<number>(0);
 
   const [hideAssigned, setHideAssigned] = useState(true);
+  // فلتر "الموظف المسؤول" — الـAPI كان بيدعم assignedEmployeeId من الأول، الناقص كان الواجهة.
+  const [employeeFilter, setEmployeeFilter] = useState<string>("all");
   const [showBostaDialog, setShowBostaDialog] = useState(false);
   const [bostaAllowOpen, setBostaAllowOpen] = useState(true);
 
@@ -281,11 +321,15 @@ export default function Orders() {
     printedDateFrom: printedDateRange.from ?? undefined,
     printedDateTo: printedDateRange.to ?? undefined,
     adName: adNameFilter !== "all" ? adNameFilter : undefined,
-    unassignedOnly: hideAssigned ? true : undefined,
+    // الفلترين متناقضين بطبيعتهم: "غير الموزعة فقط" معناها assignedEmployeeId = NULL، فلو
+    // المستخدم اختار موظف بعينه بنسقط unassignedOnly بدل ما نبعت شرطين مستحيل يتحققوا مع بعض
+    // ونرجّع جدول فاضي من غير سبب واضح.
+    assignedEmployeeId: employeeFilter !== "all" ? Number(employeeFilter) : undefined,
+    unassignedOnly: hideAssigned && employeeFilter === "all" ? true : undefined,
     page,
     limit: pageSize,
     businessIds: currentBusinessIds,
-  }), [search, statusFilter, sourceFilter, websiteFilter, governorateFilter, dateRange, printedDateRange, adNameFilter, hideAssigned, page, pageSize, currentBusinessIds]);
+  }), [search, statusFilter, sourceFilter, websiteFilter, governorateFilter, dateRange, printedDateRange, adNameFilter, hideAssigned, employeeFilter, page, pageSize, currentBusinessIds]);
 
   const { data, isLoading, refetch } = trpc.orders.list.useQuery(queryParams);
   const { data: statusCounts } = trpc.orders.statusCounts.useQuery({ businessIds: currentBusinessIds });
@@ -510,6 +554,9 @@ export default function Orders() {
   const filtersSnapshot = {
     status: statusFilter, source: sourceFilter, website: websiteFilter,
     governorates: governorateFilter, adName: adNameFilter, hideAssigned, dateRange,
+    employee: employeeFilter === "all"
+      ? "all"
+      : employeeNameById.get(Number(employeeFilter)) ?? `#${employeeFilter}`,
   };
   const filterChips = buildFilterChips(filtersSnapshot, FILTER_DESCRIPTORS);
   const activeFilterCount = countActiveFilters(filtersSnapshot, FILTER_DESCRIPTORS);
@@ -520,12 +567,14 @@ export default function Orders() {
     else if (key === "governorates") setGovernorateFilter([]);
     else if (key === "adName") setAdNameFilter("all");
     else if (key === "hideAssigned") setHideAssigned(false);
+    else if (key === "employee") setEmployeeFilter("all");
     else if (key === "dateRange") setDateRange({ from: null, to: null });
   };
   const resetAllFilters = () => {
     setPage(1);
     setSearch(""); setStatusFilter("all"); setSourceFilter("all"); setWebsiteFilter("all");
     setGovernorateFilter([]); setAdNameFilter("all"); setHideAssigned(false);
+    setEmployeeFilter("all");
     setDateRange({ from: null, to: null });
   };
 
@@ -978,7 +1027,9 @@ export default function Orders() {
             }`}
           >
             ✔ مؤكدات اليوم
-            {todayConfirmedData != null && (
+            {/* الحارس على `total` نفسه مش على الكائن: لو الاستجابة رجعت من غير العدّاد كان
+                Number(undefined) بيطبع "ليس رقمًا" جوه الشارة قدام المستخدم. */}
+            {todayConfirmedData?.total != null && (
               <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
                 activeTab === 'today_confirmed' ? 'bg-[var(--success)]/15 text-[var(--success)]' : 'bg-muted text-muted-foreground'
               }`}>
@@ -1132,10 +1183,24 @@ export default function Orders() {
                 </SelectContent>
               </Select>
 
+              <Select value={employeeFilter} onValueChange={v => { setEmployeeFilter(v); setPage(1); }}>
+                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="الموظف المسؤول" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">كل الموظفين</SelectItem>
+                  {(employees ?? []).map((emp: any) => (
+                    <SelectItem key={emp.id} value={String(emp.id)}>{emp.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
               <Button
                 variant={hideAssigned ? "default" : "outline"}
                 size="sm"
                 className="h-9"
+                // متعطّل وقت اختيار موظف: الزرار وقتها مالوش أثر (بنسقط unassignedOnly)،
+                // وزرار شكله فعّال ومش بيعمل حاجة أسوأ من زرار متعطّل بسبب واضح.
+                disabled={employeeFilter !== "all"}
+                title={employeeFilter !== "all" ? "غير متاح أثناء الفلترة بموظف محدد" : undefined}
                 onClick={() => { setHideAssigned(v => !v); setPage(1); }}
               >
                 {hideAssigned ? "غير الموزعة فقط" : "كل الأوردرات"}
@@ -1899,8 +1964,56 @@ export default function Orders() {
                 <CardContent className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-muted-foreground">الاسم:</span> <span className="font-semibold">{order.customerName}</span></div>
                   <div><span className="text-muted-foreground">الهاتف:</span> <span className="font-mono font-semibold" dir="ltr">{order.customerPhone}</span></div>
-                  <div className="col-span-2"><span className="text-muted-foreground">العنوان:</span> <span className="font-semibold">{order.customerAddress || '—'}</span></div>
+                  {order.customerPhone2 && (
+                    <div><span className="text-muted-foreground">هاتف احتياطي:</span> <span className="font-mono font-semibold" dir="ltr">{order.customerPhone2}</span></div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* الشحن — كان مفكك: العنوان والمحافظة مع بيانات العميل، ومصاريف الشحن مش
+                  معروضة أصلاً، وبوسطة في كارت لوحدها تحت. الثلاثة بيجاوبوا سؤال واحد
+                  ("رايح فين وبكام وفين وصل؟") فبقوا كارت واحد. */}
+              <Card>
+                <CardHeader className="pb-2 pt-3">
+                  <CardTitle className="type-subheading">الشحن</CardTitle>
+                  {order.bostaShipmentId && (
+                    <CardAction>
+                      <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
+                        onClick={() => window.open(`/api/orders/${order.id}/bosta-awb`, "_blank", "noopener,noreferrer")}>
+                        <Printer className="h-3.5 w-3.5" /> طباعة AWB
+                      </Button>
+                    </CardAction>
+                  )}
+                </CardHeader>
+                <CardContent className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-muted-foreground">المحافظة:</span> <span className="font-semibold">{order.governorate || '—'}</span></div>
+                  <div><span className="text-muted-foreground">المدينة:</span> <span className="font-semibold">{order.city || '—'}</span></div>
+                  <div className="col-span-2"><span className="text-muted-foreground">العنوان:</span> <span className="font-semibold">{order.customerAddress || '—'}</span></div>
+                  <div>
+                    <span className="text-muted-foreground">مصاريف الشحن:</span>{' '}
+                    <span className="font-semibold tabular-nums">{Number(order.shippingFees ?? 0).toLocaleString('ar-EG')} ج.م</span>
+                  </div>
+                  <div><span className="text-muted-foreground">طريقة الدفع:</span> <span className="font-semibold">{order.paymentMethod === 'cod' ? 'دفع عند الاستلام' : (order.paymentMethod || '—')}</span></div>
+                  {order.bostaShipmentId && (
+                    <>
+                      <div className="col-span-2 border-t border-border pt-2">
+                        <span className="text-muted-foreground">رقم شحنة بوسطة:</span>{' '}
+                        <span className="font-mono font-bold text-[var(--info)]">{order.bostaShipmentId}</span>
+                      </div>
+                      {order.bostaTrackingNumber && (
+                        <div className="col-span-2"><span className="text-muted-foreground">رقم التتبع:</span> <span className="font-mono font-bold text-[var(--info)]">{order.bostaTrackingNumber}</span></div>
+                      )}
+                      {order.bostaStatus && (
+                        <div className="col-span-2"><span className="text-muted-foreground">حالة بوسطة:</span> <span className="font-semibold">{order.bostaStatus}</span></div>
+                      )}
+                    </>
+                  )}
+                  {order.bostaLastError && !order.bostaShipmentId && (
+                    <div className="col-span-2 rounded-md border border-destructive/20 bg-destructive/10 px-2.5 py-1.5">
+                      <span className="text-muted-foreground">فشل الإرسال لبوسطة:</span>{' '}
+                      <span className="font-medium text-destructive">{order.bostaLastError}</span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -1927,53 +2040,98 @@ export default function Orders() {
                 </CardContent>
               </Card>
 
+              {/* الموظف المسؤول — كان سطر مدفون وسط "معلومات إضافية". هو أول سؤال بيتسأل
+                  لما أوردر يقف، فبقى كارت واقف لوحده باسم واضح. */}
               <Card>
-                <CardHeader className="pb-2 pt-3"><CardTitle className="type-subheading">معلومات إضافية</CardTitle></CardHeader>
+                <CardHeader className="pb-2 pt-3"><CardTitle className="type-subheading">الموظف المسؤول</CardTitle></CardHeader>
                 <CardContent className="grid grid-cols-2 gap-3 text-sm">
-                  <div><span className="text-muted-foreground">تاريخ الإنشاء:</span> <span className="font-semibold">{new Date(order.createdAt).toLocaleString('ar-EG')}</span></div>
-                  {order.confirmedAt && <div><span className="text-muted-foreground">تاريخ التأكيد:</span> <span className="font-semibold">{new Date(order.confirmedAt).toLocaleString('ar-EG')}</span></div>}
+                  <div>
+                    <span className="text-muted-foreground">موزّع لـ:</span>{' '}
+                    <span className="font-semibold">
+                      {order.assignedEmployeeId
+                        ? (employeeNameById.get(order.assignedEmployeeId) ?? `#${order.assignedEmployeeId}`)
+                        : 'غير موزع'}
+                    </span>
+                  </div>
                   {order.confirmedAt && (
-                    <div><span className="text-muted-foreground">أكّده:</span> <span className="font-semibold">{order.confirmedByEmployeeName || 'موظف التأكيد غير مسجل'}</span></div>
+                    <div><span className="text-muted-foreground">أكّده:</span> <span className="font-semibold">{order.confirmedByEmployeeName || 'غير مسجل'}</span></div>
+                  )}
+                  {order.status === 'no_answer' && order.noAnswerCallAttempts != null && (
+                    <div><span className="text-muted-foreground">محاولات الاتصال:</span> <span className="font-semibold tabular-nums">{order.noAnswerCallAttempts}</span></div>
                   )}
                   {order.adName && <div><span className="text-muted-foreground">البيدج:</span> <span className="font-semibold">{order.adName}</span></div>}
-                  {order.assignedEmployeeId && <div><span className="text-muted-foreground">موزع لموظف:</span> <span className="font-semibold">{employeeNameById.get(order.assignedEmployeeId) ?? `#${order.assignedEmployeeId}`}</span></div>}
-                  {order.assignedAt && <div><span className="text-muted-foreground">تاريخ التوزيع:</span> <span className="font-semibold">{new Date(order.assignedAt).toLocaleString('ar-EG')}</span></div>}
-                  {order.status === 'no_answer' && order.noAnswerCallAttempts != null && (
-                    <div><span className="text-muted-foreground">عدد محاولات الاتصال:</span> <span className="font-semibold">{order.noAnswerCallAttempts}</span></div>
-                  )}
                 </CardContent>
               </Card>
 
-              {order.notes && (
-                <Card>
-                  <CardHeader className="pb-2 pt-3"><CardTitle className="type-subheading">ملاحظات</CardTitle></CardHeader>
-                  <CardContent><p className="text-sm bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-lg p-3">{order.notes}</p></CardContent>
-                </Card>
-              )}
+              {/* سجل الحالات */}
+              {(() => {
+                const timeline = buildOrderTimeline(
+                  order,
+                  order.assignedEmployeeId ? employeeNameById.get(order.assignedEmployeeId) : undefined
+                );
+                if (timeline.length === 0) return null;
+                return (
+                  <Card>
+                    <CardHeader className="pb-2 pt-3">
+                      <CardTitle className="type-subheading">سجل الحالات</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ol className="space-y-0">
+                        {timeline.map((ev, i) => (
+                          <li key={`${ev.label}-${ev.at.getTime()}`} className="flex gap-3">
+                            {/* العمود ده هو الخط الزمني: نقطة لكل محطة، وخط واصل بينها ما عدا
+                                آخر واحدة عشان الخط ميكملش في الفراغ تحت آخر حدث. */}
+                            <div className="flex flex-col items-center">
+                              <span
+                                className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                                style={{ backgroundColor: ev.tone }}
+                              />
+                              {i < timeline.length - 1 && <span className="w-px flex-1 bg-border" />}
+                            </div>
+                            {/* الوقت على الطرف المقابل مش تحت العنوان: بيملا عرض الكارت
+                                وبيخلي الأوقات تتقرا كعمود واحد تحت بعضه. */}
+                            <div className={`flex min-w-0 flex-1 items-baseline justify-between gap-3 ${i < timeline.length - 1 ? 'pb-3' : ''}`}>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold" style={{ color: ev.tone }}>{ev.label}</p>
+                                {ev.detail && <p className="type-caption truncate" title={ev.detail}>{ev.detail}</p>}
+                              </div>
+                              <p className="type-caption shrink-0 tabular-nums">
+                                {ev.at.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
+                                {' · '}
+                                {ev.at.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                      {order.postponedTo && (
+                        <p className="mt-3 rounded-md border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-2.5 py-1.5 text-sm">
+                          <span className="text-muted-foreground">مؤجَّل حتى:</span>{' '}
+                          <span className="font-semibold text-[var(--warning)]">{new Date(order.postponedTo).toLocaleDateString('ar-EG')}</span>
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })()}
 
-              {(order.bostaShipmentId || order.bostaLastError) && (
-                <Card className={order.bostaShipmentId ? "border-[var(--info)]/30 bg-[var(--info)]/5" : "border-destructive/30 bg-destructive/5"}>
-                  <CardHeader className="pb-2 pt-3">
-                    <CardTitle className="text-sm flex items-center gap-1.5">
-                      <PackageCheck className={`h-4 w-4 ${order.bostaShipmentId ? 'text-[var(--info)]' : 'text-destructive'}`} />
-                      <span className={order.bostaShipmentId ? 'text-[var(--info)]' : 'text-destructive'}>
-                        {order.bostaShipmentId ? 'تم الإرسال لـ بوسطة' : 'خطأ بوسطة'}
-                      </span>
-                    </CardTitle>
-                    {order.bostaShipmentId && (
-                      <CardAction>
-                        <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
-                          onClick={() => window.open(`/api/orders/${order.id}/bosta-awb`, "_blank", "noopener,noreferrer")}>
-                          <Printer className="h-3.5 w-3.5" /> طباعة AWB
-                        </Button>
-                      </CardAction>
+              {(order.notes || order.employeeNotes) && (
+                <Card>
+                  <CardHeader className="pb-2 pt-3"><CardTitle className="type-subheading">الملاحظات</CardTitle></CardHeader>
+                  <CardContent className="space-y-2">
+                    {order.notes && (
+                      <div>
+                        <p className="type-caption mb-1">ملاحظات الأوردر</p>
+                        <p className="rounded-lg border border-[var(--success)]/30 bg-[var(--success)]/10 p-3 text-sm">{order.notes}</p>
+                      </div>
                     )}
-                  </CardHeader>
-                  <CardContent className="grid grid-cols-2 gap-3 text-sm">
-                    {order.bostaShipmentId && <div className="col-span-2"><span className="text-muted-foreground">رقم الشحنة:</span> <span className="font-mono font-bold text-[var(--info)]">{order.bostaShipmentId}</span></div>}
-                    {order.bostaTrackingNumber && <div className="col-span-2"><span className="text-muted-foreground">رقم التتبع:</span> <span className="font-mono font-bold text-[var(--info)]">{order.bostaTrackingNumber}</span></div>}
-                    {order.bostaSentAt && <div className="col-span-2"><span className="text-muted-foreground">تاريخ الإرسال:</span> <span className="font-semibold">{new Date(order.bostaSentAt).toLocaleString('ar-EG')}</span></div>}
-                    {order.bostaLastError && !order.bostaShipmentId && <div className="col-span-2"><span className="text-muted-foreground">سبب الخطأ:</span> <span className="text-destructive font-medium">{order.bostaLastError}</span></div>}
+                    {/* employeeNotes كان بيتكتب من بورتال الموظف ومحدش بيشوفه من هنا. */}
+                    {order.employeeNotes && (
+                      <div>
+                        <p className="type-caption mb-1">ملاحظات الموظف</p>
+                        <p className="rounded-lg border border-border bg-muted/50 p-3 text-sm">{order.employeeNotes}</p>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               )}
