@@ -61,7 +61,7 @@ export function SearchInput({
         value={local}
         onChange={(e) => setLocal(e.target.value)}
         placeholder={placeholder}
-        className="h-10 pr-9 pl-9"
+        className="h-9 pr-9 pl-9"
         aria-label={rest["aria-label"] ?? placeholder}
       />
       {local && (
@@ -118,7 +118,7 @@ export function FilterBar({
             {/* Mobile: filters live in a drawer */}
             <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
               <SheetTrigger asChild>
-                <Button variant="outline" className="h-10 shrink-0 gap-1.5 lg:hidden">
+                <Button variant="outline" className="h-9 shrink-0 gap-1.5 lg:hidden">
                   <SlidersHorizontal className="h-4 w-4" />
                   فلاتر
                   {activeCount > 0 && (
@@ -144,7 +144,7 @@ export function FilterBar({
         {onReset && activeCount > 0 && (
           <Button
             variant="ghost"
-            className="h-10 shrink-0 gap-1 text-muted-foreground"
+            className="h-9 shrink-0 gap-1 text-muted-foreground"
             onClick={onReset}
           >
             <X className="h-4 w-4" />

@@ -21,7 +21,7 @@ import {
   Plus, Search, CheckCircle, XCircle, Clock, UserPlus, Eye, FileSpreadsheet, Download, Truck,
   Trash2, Printer, PhoneCall, PhoneOff, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
   MoreHorizontal, MoreVertical, ListChecks, LayoutGrid, Rows3,
-  Package, FileText, AlertTriangle, ChevronLeft, ChevronRight,
+  Package, FileText, AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import ImportExcelDialog from "@/components/ImportExcelDialog";
@@ -552,14 +552,16 @@ export default function Orders() {
     {
       id: "identifier", header: "رقم الأوردر", alwaysVisible: true,
       cell: (order) => (
-        <div>
+        <div className="leading-tight">
+          {/* المعرّف الخارجي هو اللي الموظف بينده بيه، فهو الأبرز؛ الرقم الداخلي سياق تحته.
+              اتشال الخلفية الملوّنة: اللون في هذا النظام دلالة حالة، مش زخرفة. */}
           {order.easyOrderShortId ? (
-            <div className="flex flex-col gap-0.5">
-              <span className="font-mono text-sm font-bold px-2 py-0.5 rounded bg-[var(--warning)]/15 text-[var(--warning)]">{order.easyOrderShortId}</span>
-              <span className="text-xs text-muted-foreground font-mono">#{order.orderNumber}</span>
-            </div>
+            <>
+              <p className="font-mono text-sm font-bold">#{order.easyOrderShortId}</p>
+              <p className="type-caption font-mono">{order.orderNumber}</p>
+            </>
           ) : (
-            <span className="font-mono text-sm font-bold px-2 py-0.5 rounded bg-muted">{order.orderNumber}</span>
+            <p className="font-mono text-sm font-bold">#{order.orderNumber}</p>
           )}
           {order.bostaShipmentId && (
             <span className="flex items-center gap-0.5 mt-0.5 text-[10px] bg-[var(--info)] text-white px-1.5 py-0.5 rounded-full w-fit font-bold" title={`شحنة Bosta: ${order.bostaTrackingNumber || order.bostaShipmentId}`}>
@@ -577,9 +579,9 @@ export default function Orders() {
     {
       id: "customer", header: "العميل", alwaysVisible: true,
       cell: (order) => (
-        <div className="min-w-0 max-w-[190px]">
+        <div className="min-w-0 max-w-[200px] leading-tight">
           <p className="truncate text-sm font-semibold" title={order.customerName}>{order.customerName}</p>
-          <p className="flex items-center gap-1 text-xs text-muted-foreground">
+          <p className="flex items-center gap-1 type-caption">
             <PhoneCall className="h-3 w-3 shrink-0" />
             <span className="font-mono" dir="ltr">{order.customerPhone}</span>
           </p>
@@ -591,10 +593,10 @@ export default function Orders() {
       // بدل ما ياخد عرض عمود كامل في الجدول.
       id: "location", header: "الموقع", alwaysVisible: true,
       cell: (order) => (
-        <div className="max-w-[150px]">
+        <div className="max-w-[130px] leading-tight">
           <p className="text-sm font-medium">{order.governorate || '—'}</p>
           {(order.city || order.customerAddress) && (
-            <p className="truncate text-xs text-muted-foreground" title={order.customerAddress || undefined}>
+            <p className="truncate type-caption" title={order.customerAddress || undefined}>
               {order.city || order.customerAddress}
             </p>
           )}
@@ -610,14 +612,16 @@ export default function Orders() {
         const hasCustomization = Boolean(order.color || order.size);
         const multipleCustomized = order.quantity > 1 && hasCustomization;
         return (
-          <div className="max-w-[220px]">
-            <p className="text-sm font-medium break-words line-clamp-1" title={order.productName}>
-              {order.productName}{order.quantity > 1 ? ` – ${order.quantity} قطعة` : ''}
+          <div className="max-w-[210px] leading-tight">
+            <p className="truncate text-sm font-medium" title={order.productName}>
+              {order.productName}{order.quantity > 1 ? ` – ${order.quantity} قطع` : ''}
             </p>
             {hasCustomization && (
-              <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+              <p className="flex items-center gap-1 truncate type-caption">
+                {/* أيقونة من طقم Lucide بدل إيموجي: الإيموجي بيتغيّر شكله من نظام لنظام
+                    وبيكسر اتساق الأيقونات اللي الكتيّب بيفرضه (§18). */}
                 {multipleCustomized && (
-                  <span title="أكتر من قطعة مخصصة — راجع التفاصيل قبل التجهيز">⚠️</span>
+                  <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--warning)]" />
                 )}
                 <span className="truncate">
                   {order.color && `اللون: ${order.color}`}
@@ -633,11 +637,11 @@ export default function Orders() {
     {
       id: "status", header: "الحالة", alwaysVisible: true,
       cell: (order) => (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col items-start gap-1">
           <StatusBadge status={order.status} kind="order" size="sm" />
           {order.needsReview && (
-            <span className="text-[10px] font-bold text-[var(--purple)] bg-[var(--purple)]/10 border border-[var(--purple)]/30 rounded px-1.5 py-0.5 text-center w-fit">
-              ⚠️ يحتاج مراجعة
+            <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-[var(--purple)] bg-[var(--purple)]/10 border border-[var(--purple)]/30">
+              يحتاج مراجعة
             </span>
           )}
           {/* شارة "لسه مطبعش" اتشالت عمدًا: حالة "مؤكد" معناها بالتعريف إنه لم يُطبع بعد
@@ -652,13 +656,19 @@ export default function Orders() {
         return name ? (
           <span className="text-sm font-medium">{name}</span>
         ) : (
-          <span className="text-sm text-muted-foreground">غير موزع</span>
+          <span className="type-caption">غير موزع</span>
         );
       },
     },
     {
       id: "total", header: "الإجمالي", numeric: true, alwaysVisible: true,
-      cell: (order) => <span className="font-bold text-sm">{Number(order.totalAmount).toLocaleString('ar-EG')}</span>,
+      cell: (order) => (
+        // المبلغ هو الرقم اللي العين بتدوّر عليه، فبيفضل بارز والعملة تخفت وراه.
+        <span className="text-sm font-bold tabular-nums">
+          {Number(order.totalAmount).toLocaleString('ar-EG')}{' '}
+          <span className="type-caption font-normal">ج.م</span>
+        </span>
+      ),
     },
     {
       id: "website", header: "الموقع", defaultHidden: true,
@@ -671,9 +681,13 @@ export default function Orders() {
     {
       id: "date", header: "تاريخ الطلب", alwaysVisible: true,
       cell: (order) => (
-        <div className="text-xs text-muted-foreground whitespace-nowrap">
-          <p>{new Date(order.createdAt).toLocaleDateString('ar-EG', { year: 'numeric', month: 'numeric', day: 'numeric' })}</p>
-          <p className="text-muted-foreground/70">{new Date(order.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</p>
+        <div className="whitespace-nowrap leading-tight">
+          <p className="text-sm tabular-nums">
+            {new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
+          </p>
+          <p className="type-caption tabular-nums">
+            {new Date(order.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+          </p>
         </div>
       ),
     },
@@ -682,35 +696,44 @@ export default function Orders() {
       // البيانات، والاتفاق كان استخدام تاريخ آخر تعديل للأوردر بدل إضافة أي حقل جديد بالباك إند.
       id: "lastFollowUp", header: "آخر متابعة", alwaysVisible: true,
       cell: (order) => (
-        <span className="text-xs text-muted-foreground whitespace-nowrap">
-          {order.updatedAt ? new Date(order.updatedAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }) : '—'}
-        </span>
+        <div className="whitespace-nowrap leading-tight">
+          {order.updatedAt ? (
+            <>
+              <p className="text-sm tabular-nums">
+                {new Date(order.updatedAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
+              </p>
+              <p className="type-caption tabular-nums">
+                {new Date(order.updatedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </>
+          ) : <span className="type-caption">—</span>}
+        </div>
       ),
     },
     {
-      id: "actions", header: "إجراءات", alwaysVisible: true, sticky: true,
+      id: "actions", header: "", alwaysVisible: true, sticky: true,
       cell: (order) => {
         const isActionable = order.status === 'new' || order.status === 'postponed';
         const canReturn = isAdmin && ['confirmed', 'shipped', 'delivered', 'preparing'].includes(order.status);
         return (
-          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
             {/* أزرار أساسية — ظاهرة دايمًا، لون ثابت لكل معنى، بحد أقصى 3-4 عشان الصف ميبقاش مزدحم */}
             {isActionable && (
               <>
-                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-md text-[var(--success)] hover:bg-[var(--success)]/15 hover:text-[var(--success)]"
+                <Button size="icon" variant="ghost" className="h-8 w-8 text-[var(--success)] hover:bg-[var(--success)]/12 hover:text-[var(--success)]"
                   onClick={() => confirmMutation.mutate({ orderId: order.id })}
                   title="تأكيد الأوردر" aria-label="تأكيد الأوردر">
                   <CheckCircle className="h-4 w-4" />
                 </Button>
-                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-md text-destructive hover:bg-destructive/15 hover:text-destructive"
+                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive hover:bg-destructive/12 hover:text-destructive"
                   onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}
                   title="إلغاء الأوردر" aria-label="إلغاء الأوردر">
                   <XCircle className="h-4 w-4" />
                 </Button>
               </>
             )}
-            <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-8 w-8 rounded-md hover:bg-[var(--success)]/15" />
-            <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-md text-[var(--info)] hover:bg-[var(--info)]/15 hover:text-[var(--info)]"
+            <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-8 w-8" />
+            <Button size="icon" variant="ghost" className="h-8 w-8 text-[var(--info)] hover:bg-[var(--info)]/12 hover:text-[var(--info)]"
               onClick={() => setDetailOrderId(order.id)}
               title="عرض تفاصيل الأوردر" aria-label="عرض تفاصيل الأوردر">
               <Eye className="h-4 w-4" />
@@ -816,19 +839,19 @@ export default function Orders() {
     <div className="space-y-6">
       <PageHeader
         title="الأوردرات"
-        description={`إدارة ومتابعة كل الأوردرات — الإجمالي: ${total.toLocaleString('ar-EG')} أوردر`}
+        description="إدارة ومتابعة الطلبات والشحن والتوصيل"
         primaryAction={
-          <Button onClick={() => setShowCreateDialog(true)}>
-            <Plus className="h-4 w-4 ml-1" />
+          <Button className="gap-1.5" onClick={() => setShowCreateDialog(true)}>
+            <Plus className="h-4 w-4" />
             أوردر جديد
           </Button>
         }
         actions={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-1">
+              {/* أيقونة فقط: الفائض مش إجراء أساسي، فمياخدش وزن بصري زي الزر الأساسي */}
+              <Button variant="outline" size="icon" aria-label="إجراءات أخرى" title="إجراءات أخرى">
                 <MoreHorizontal className="h-4 w-4" />
-                المزيد
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">
@@ -919,8 +942,8 @@ export default function Orders() {
 
       {/* شريط التبويبات الموحّد — الحالات كلها + تبويب "مؤكدات اليوم" المميز في صف واحد،
           بدل صفين تبويبات فوق بعض (الزرار القديم اتشال). */}
-      <div className="overflow-x-auto border-b border-border">
-        <div className="flex w-max items-center gap-1">
+      <div className="overflow-x-auto border-b border-border px-3">
+        <div className="flex w-max items-center gap-0.5">
           {(["all", "new", "confirmed", "no_answer", "postponed", "printed", "preparing", "shipped", "delivered", "cancelled", "returned"] as const).map(v => {
             const active = activeTab === 'all' && statusFilter === v;
             const count = v === 'all' ? statusCounts?.total : statusCounts?.byStatus?.[v];
@@ -928,26 +951,26 @@ export default function Orders() {
               <button
                 key={v}
                 onClick={() => { setActiveTab('all'); setStatusFilter(v); setPage(1); }}
-                className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm transition-colors ${
+                className={`relative flex items-center gap-2 whitespace-nowrap px-3.5 py-3 text-sm transition-colors duration-[var(--duration-fast)] ${
                   active ? 'font-bold text-primary' : 'font-medium text-muted-foreground hover:text-foreground'
                 }`}
               >
                 {v === 'all' ? 'كل الأوردرات' : STATUS_LABEL(v)}
                 {count != null && count > 0 && (
-                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
+                  <span className={`rounded-[var(--radius-brand-sm)] px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
                     active ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'
                   }`}>
                     {Number(count).toLocaleString('ar-EG')}
                   </span>
                 )}
-                {active && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />}
+                {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />}
               </button>
             );
           })}
           <span className="mx-1 h-5 w-px shrink-0 bg-border" />
           <button
             onClick={() => setActiveTab('today_confirmed')}
-            className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-sm transition-colors ${
+            className={`relative flex items-center gap-2 whitespace-nowrap px-3.5 py-3 text-sm transition-colors duration-[var(--duration-fast)] ${
               activeTab === 'today_confirmed' ? 'font-bold text-[var(--success)]' : 'font-medium text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -959,7 +982,7 @@ export default function Orders() {
                 {Number(todayConfirmedData.total).toLocaleString('ar-EG')}
               </span>
             )}
-            {activeTab === 'today_confirmed' && <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--success)]" />}
+            {activeTab === 'today_confirmed' && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-[var(--success)]" />}
           </button>
         </div>
       </div>
@@ -1040,8 +1063,8 @@ export default function Orders() {
 
       {/* Filters */}
       {activeTab === 'all' && (
-        <Card>
-          <CardContent className="p-4 space-y-3">
+        <Card className="shadow-[var(--shadow-card)]">
+          <CardContent className="p-3">
             <FilterBar
               search={
                 <SearchInput
@@ -1074,7 +1097,7 @@ export default function Orders() {
               )}
 
               <Select value={sourceFilter} onValueChange={v => { setSourceFilter(v); setPage(1); }}>
-                <SelectTrigger className="w-40 h-10"><SelectValue placeholder="المصدر" /></SelectTrigger>
+                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="المصدر" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل المصادر</SelectItem>
                   {Object.entries(SOURCE_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
@@ -1082,7 +1105,7 @@ export default function Orders() {
               </Select>
 
               <Select value={websiteFilter} onValueChange={v => { setWebsiteFilter(v); setPage(1); }}>
-                <SelectTrigger className="w-40 h-10"><SelectValue placeholder="الموقع" /></SelectTrigger>
+                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="الموقع" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل المواقع</SelectItem>
                   {salesChannels?.map((ch: any) => <SelectItem key={ch.id} value={String(ch.id)}>{ch.name}</SelectItem>)}
@@ -1099,7 +1122,7 @@ export default function Orders() {
               />
 
               <Select value={adNameFilter} onValueChange={v => { setAdNameFilter(v); setPage(1); }}>
-                <SelectTrigger className="w-40 h-10"><SelectValue placeholder="فلترة حسب اسم البيدج" /></SelectTrigger>
+                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="فلترة حسب اسم البيدج" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل البيدجات</SelectItem>
                   {(adNames ?? []).map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}
@@ -1109,7 +1132,7 @@ export default function Orders() {
               <Button
                 variant={hideAssigned ? "default" : "outline"}
                 size="sm"
-                className="h-10"
+                className="h-9"
                 onClick={() => { setHideAssigned(v => !v); setPage(1); }}
               >
                 {hideAssigned ? "غير الموزعة فقط" : "كل الأوردرات"}
@@ -1119,6 +1142,17 @@ export default function Orders() {
                 <CalendarDays className="h-4 w-4 text-muted-foreground" />
                 <DateRangePicker value={dateRange} onChange={(range) => { setDateRange(range); setPage(1); }} />
               </div>
+
+              {/* "فلاتر متقدمة" — يفتح/يقفل الأعمدة الإضافية المخفية (seq/website) بدل ما تبقى
+                  مدفونة في قائمة الأعمدة. لا فلاتر جديدة، ولا تغيير في منطق أي فلتر قائم. */}
+              <Button
+                variant="outline" size="sm" className="h-9 gap-1.5"
+                aria-expanded={hiddenColumns.size === 0}
+                onClick={() => setHiddenColumns(prev => prev.size > 0 ? new Set() : new Set(['seq', 'website']))}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                {hiddenColumns.size > 0 ? 'فلاتر متقدمة' : 'إخفاء المتقدمة'}
+              </Button>
             </FilterBar>
             {/* إجراءات التحديد الجماعي انتقلت لشريط الجدول نفسه (bulkActions) — كانت هنا فوق
                 الجدول وبتدفعه لتحت أول ما تحدد صف. */}
@@ -1179,7 +1213,11 @@ export default function Orders() {
             governorate={order.governorate}
             statusBadge={<StatusBadge status={order.status} kind="order" size="sm" />}
             sourceBadge={order.websiteName ? <Badge variant="secondary" className="text-[10px]">{order.websiteName}</Badge> : undefined}
-            productSummary={`${order.productName}${order.quantity > 1 ? ` – ${order.quantity} قطعة` : ''}`}
+            productSummary={[
+              `${order.productName}${order.quantity > 1 ? ` – ${order.quantity} قطع` : ''}`,
+              // نوع الحفر مهم للتجهيز، فبيظهر على كارت الموبايل زي ما بيظهر في الجدول.
+              [order.color, order.size].filter(Boolean).join(' / '),
+            ].filter(Boolean).join(' · ')}
             total={`${Number(order.totalAmount).toLocaleString('ar-EG')} ج.م`}
             dateLabel={new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
             expanded={expandedMobileId === order.id}
@@ -1831,28 +1869,20 @@ export default function Orders() {
           if (!order) return <p className="text-muted-foreground text-center py-6">جاري التحميل...</p>;
           return (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <p className="text-xs text-muted-foreground">رقم الأوردر</p>
-                  <p className="font-bold text-lg">{order.orderNumber}</p>
-                  {order.easyOrderShortId && <p className="text-xs text-[var(--warning)] font-mono">EO: {order.easyOrderShortId}</p>}
-                </div>
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <p className="text-xs text-muted-foreground">الحالة</p>
-                  <StatusBadge status={order.status} kind="order" className="mt-1" />
-                </div>
-              </div>
-
+              {/* رقم الأوردر وحالته اتشالوا من هنا: الهيدر المثبّت فوق بيعرضهم دايمًا، فكانت
+                  نفس المعلومة مرتين وبتاخد أول شاشة كاملة قبل أي تفصيل مفيد. */}
               {order.needsReview && (
-                <div className="rounded-lg border border-[var(--warning)]/30 bg-[var(--warning)]/10 p-3 text-sm">
-                  <p className="font-semibold text-[var(--warning)]">⚠️ يحتاج مراجعة</p>
-                  {order.reviewReason && <p className="text-muted-foreground mt-1">{order.reviewReason}</p>}
+                <div className="rounded-[var(--radius-brand-md)] border border-[var(--purple)]/30 bg-[var(--purple)]/10 p-3">
+                  <p className="flex items-center gap-1.5 type-subheading text-[var(--purple)]">
+                    <AlertTriangle className="h-4 w-4" /> يحتاج مراجعة
+                  </p>
+                  {order.reviewReason && <p className="mt-1 type-body text-muted-foreground">{order.reviewReason}</p>}
                 </div>
               )}
 
               <Card>
                 <CardHeader className="pb-2 pt-3">
-                  <CardTitle className="text-sm text-muted-foreground">بيانات العميل</CardTitle>
+                  <CardTitle className="type-subheading">بيانات العميل</CardTitle>
                   <CardAction className="flex items-center gap-1.5">
                     <WhatsAppButton phone={order.customerPhone} size="sm" />
                     <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
@@ -1870,7 +1900,7 @@ export default function Orders() {
               </Card>
 
               <Card>
-                <CardHeader className="pb-2 pt-3"><CardTitle className="text-sm text-muted-foreground">بيانات المنتج</CardTitle></CardHeader>
+                <CardHeader className="pb-2 pt-3"><CardTitle className="type-subheading">بيانات المنتج</CardTitle></CardHeader>
                 <CardContent className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-muted-foreground">المنتج:</span> <span className="font-semibold">{order.productName}</span></div>
                   <div><span className="text-muted-foreground">الكمية:</span> <span className="font-semibold">{order.quantity}</span></div>
@@ -1893,7 +1923,7 @@ export default function Orders() {
               </Card>
 
               <Card>
-                <CardHeader className="pb-2 pt-3"><CardTitle className="text-sm text-muted-foreground">معلومات إضافية</CardTitle></CardHeader>
+                <CardHeader className="pb-2 pt-3"><CardTitle className="type-subheading">معلومات إضافية</CardTitle></CardHeader>
                 <CardContent className="grid grid-cols-2 gap-3 text-sm">
                   <div><span className="text-muted-foreground">تاريخ الإنشاء:</span> <span className="font-semibold">{new Date(order.createdAt).toLocaleString('ar-EG')}</span></div>
                   {order.confirmedAt && <div><span className="text-muted-foreground">تاريخ التأكيد:</span> <span className="font-semibold">{new Date(order.confirmedAt).toLocaleString('ar-EG')}</span></div>}
@@ -1911,7 +1941,7 @@ export default function Orders() {
 
               {order.notes && (
                 <Card>
-                  <CardHeader className="pb-2 pt-3"><CardTitle className="text-sm text-muted-foreground">ملاحظات</CardTitle></CardHeader>
+                  <CardHeader className="pb-2 pt-3"><CardTitle className="type-subheading">ملاحظات</CardTitle></CardHeader>
                   <CardContent><p className="text-sm bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-lg p-3">{order.notes}</p></CardContent>
                 </Card>
               )}
