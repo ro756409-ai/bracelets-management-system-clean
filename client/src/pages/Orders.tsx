@@ -1335,7 +1335,9 @@ export default function Orders() {
               }}>
               <Printer className="h-3.5 w-3.5 ml-1" /> AWB بوسطة
             </Button>
-            <Button size="sm" variant="ghost" className="h-8 px-3 text-red-400 hover:bg-background/20 text-xs font-medium"
+            {/* الأحمر هنا دلالة "إجراء مدمّر"، فبياخده من --destructive زي أي إجراء حذف
+                في المنتج — مش من درجات Tailwind الخام زي باقي الأزرار المجاورة. */}
+            <Button size="sm" variant="ghost" className="h-8 px-3 text-destructive hover:bg-background/20 text-xs font-medium"
               onClick={() => setPendingConfirm({ type: "bulkDelete" })}>
               <Trash2 className="h-3.5 w-3.5 ml-1" /> حذف
             </Button>
