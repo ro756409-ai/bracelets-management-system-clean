@@ -14,7 +14,7 @@ import {
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  CheckCircle2, XCircle, Clock, Phone, MapPin, Package,
+  CheckCircle2, XCircle, Clock, Phone, PhoneOff, MapPin, Package,
   LogOut, RefreshCw, Search, ChevronDown, ChevronUp, User,
   ShoppingBag, TrendingUp, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle
 } from "lucide-react";
@@ -483,6 +483,28 @@ export default function EmployeeDashboard() {
     setEditingNotes(prev => { const n = { ...prev }; delete n[orderId]; return n; });
   };
 
+  // نفس الـ17 setState كانوا متكتوبين مرتين: مرة في زرار "تعديل بيانات" ومرة في
+  // اختصار الكيبورد E. أي حقل جديد كان لازم يتضاف في المكانين وإلا يفتح بقيمة قديمة.
+  function openEditDialogFor(order: any) {
+    setEditDialog({ open: true, orderId: order.id });
+    setEditProductName(order.productName ?? "");
+    setEditQuantity(order.quantity ?? 1);
+    setEditTotalAmount(Number(order.totalAmount));
+    setEditNotes(order.notes ?? "");
+    setEditGovernorate(order.governorate ?? "");
+    setEditAddress(order.customerAddress ?? "");
+    setEditCustomerName(order.customerName ?? "");
+    setEditCustomerPhone(order.customerPhone ?? "");
+    setEditCustomerPhone2(order.customerPhone2 ?? "");
+    setEditCity(order.city ?? "");
+    setEditShippingFees(Number(order.shippingFees || 0));
+    setEditPaymentMethod(order.paymentMethod ?? "cod");
+    setEditEmployeeNotes(order.employeeNotes ?? "");
+    setEditColor(order.color ?? "");
+    setEditSize(order.size ?? "");
+    setShowEditHistory(false);
+  }
+
   const handleLogout = async () => {
     await fetch("/api/employee/logout", { method: "POST", credentials: "include" });
     localStorage.removeItem("employee_session");
@@ -535,6 +557,11 @@ export default function EmployeeDashboard() {
 
   const employeeName = meData?.name ?? empSession?.name ?? "الموظف";
 
+  // "المتبقي" = الأوردرات اللي لسه محتاجة إجراء من الموظف. مؤكد/ملغي خلصوا، فمش بيتحسبوا.
+  // ده الرقم الوحيد اللي بيقول للموظف "فاضلك كام" — كان مش معروض في أي مكان.
+  const remainingCount =
+    (displayStats?.new ?? 0) + (displayStats?.postponed ?? 0) + (displayStats?.no_answer ?? 0);
+
   // ==================== Confirmation validation ====================
   // Blocks تأكيد with a clear reason instead of letting an order through with data the
   // confirmation call cannot act on (no phone to call, no address to ship to, ...).
@@ -586,23 +613,7 @@ export default function EmployeeDashboard() {
           setCancelReason(""); setCancelNotes("");
           break;
         case "e":
-          setEditDialog({ open: true, orderId: order.id });
-          setEditProductName(order.productName ?? "");
-          setEditQuantity(order.quantity ?? 1);
-          setEditTotalAmount(Number(order.totalAmount));
-          setEditNotes(order.notes ?? "");
-          setEditGovernorate(order.governorate ?? "");
-          setEditAddress(order.customerAddress ?? "");
-          setEditCustomerName(order.customerName ?? "");
-          setEditCustomerPhone(order.customerPhone ?? "");
-          setEditCustomerPhone2((order as any).customerPhone2 ?? "");
-          setEditCity((order as any).city ?? "");
-          setEditShippingFees(Number((order as any).shippingFees || 0));
-          setEditPaymentMethod((order as any).paymentMethod ?? "cod");
-          setEditEmployeeNotes((order as any).employeeNotes ?? "");
-          setEditColor((order as any).color ?? "");
-          setEditSize((order as any).size ?? "");
-          setShowEditHistory(false);
+          openEditDialogFor(order);
           break;
       }
     }
@@ -628,15 +639,23 @@ export default function EmployeeDashboard() {
         className="sticky top-0 z-40 shadow-md"
         style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}
       >
-        <div className="flex items-center justify-between px-4 py-3 max-w-2xl mx-auto">
-          <div className="flex items-center gap-3">
-            <BrandMark className="w-9 h-9" />
-            <div>
-              <p className="text-white font-bold text-sm leading-tight">متجرك</p>
-              <p className="text-white/70 text-xs">أهلاً، {employeeName}</p>
+        {/* صفّين على الموبايل، صف واحد من sm فوق: ٦ أيقونات أدوات + تحديث + خروج
+            كانوا بيخنقوا الاسم لـ٤٢px على شاشة ٣٧٥ — بقى "سارة ..." وخلاص. */}
+        <div className="mx-auto flex max-w-2xl flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3 lg:max-w-6xl">
+          <div className="flex min-w-0 items-center gap-3">
+            <BrandMark className="w-9 h-9 shrink-0" />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold leading-tight text-white">{employeeName}</p>
+              {/* "فاضلك كام" — أهم رقم في شاشة التأكيدات، وكان مش معروض في أي مكان.
+                  مكانه جنب الاسم عشان يتشاف من غير ما الموظف ينزل بصره. */}
+              <p className="text-xs text-white/75">
+                {remainingCount > 0
+                  ? <>متبقّي <span className="font-bold tabular-nums text-white">{remainingCount.toLocaleString('ar-EG')}</span> طلب</>
+                  : 'خلصت كل الطلبات ✅'}
+              </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-end gap-1.5">
             <button
               onClick={() => setLocation("/today-shipments")}
               className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
@@ -651,10 +670,13 @@ export default function EmployeeDashboard() {
             >
               <CalendarRange className="h-4 w-4" />
             </button>
+            {/* الحالة النشطة كانت بألوان Tailwind خام (amber-500/green-500) جوه هيدر
+                متدرّج بلون الهوية — بقت شفافية بيضا موحّدة، فبتقرا كـ"مفعّل" في أي ثيم. */}
             <button
               onClick={() => setShowDateFilter(!showDateFilter)}
-              className={`w-8 h-8 rounded-lg flex items-center justify-center text-white transition-colors ${
-                (dateFrom || dateTo) ? 'bg-amber-500/60 hover:bg-amber-500/80' : 'bg-white/10 hover:bg-white/20'
+              aria-pressed={Boolean(dateFrom || dateTo)}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg text-white transition-colors ${
+                (dateFrom || dateTo) ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
               }`}
               title="فلتر التاريخ"
             >
@@ -662,8 +684,9 @@ export default function EmployeeDashboard() {
             </button>
             <button
               onClick={() => { setShowScanPanel(!showScanPanel); if (showScanPanel) stopScanCamera(); setScanResult(null); }}
-              className={`w-8 h-8 rounded-lg flex items-center justify-center text-white transition-colors ${
-                showScanPanel ? 'bg-green-500/70 hover:bg-green-500/90' : 'bg-white/10 hover:bg-white/20'
+              aria-pressed={showScanPanel}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg text-white transition-colors ${
+                showScanPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
               }`}
               title="مسح QR"
             >
@@ -671,8 +694,9 @@ export default function EmployeeDashboard() {
             </button>
             <button
               onClick={() => setShowTasksPanel(!showTasksPanel)}
-              className={`w-8 h-8 rounded-lg flex items-center justify-center text-white transition-colors ${
-                showTasksPanel ? 'bg-amber-500/60 hover:bg-amber-500/80' : 'bg-white/10 hover:bg-white/20'
+              aria-pressed={showTasksPanel}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg text-white transition-colors ${
+                showTasksPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
               }`}
               title="المهام"
             >
@@ -680,28 +704,41 @@ export default function EmployeeDashboard() {
             </button>
             <button
               onClick={() => setShowStockPanel(!showStockPanel)}
-              className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
+              aria-pressed={showStockPanel}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg text-white transition-colors ${
+                showStockPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
+              }`}
               title="المخزون"
             >
               <Box className="h-4 w-4" />
             </button>
+
+            {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
+                فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
+            <span className="mx-1 h-5 w-px bg-white/25" />
             <button
               onClick={() => refetch()}
-              className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
+              className="flex h-8 items-center gap-1.5 rounded-lg bg-white/10 px-2 text-white transition-colors hover:bg-white/20"
+              title="تحديث القائمة"
             >
               <RefreshCw className="h-4 w-4" />
+              <span className="hidden text-xs font-medium sm:inline">تحديث</span>
             </button>
             <button
               onClick={handleLogout}
-              className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-red-500/30 transition-colors"
+              className="flex h-8 items-center gap-1.5 rounded-lg bg-white/10 px-2 text-white transition-colors hover:bg-white/25"
+              title="تسجيل الخروج"
             >
               <LogOut className="h-4 w-4" />
+              <span className="hidden text-xs font-medium sm:inline">خروج</span>
             </button>
           </div>
         </div>
       </header>
 
-      <div className="max-w-2xl mx-auto px-4 py-4 space-y-4">
+      {/* الصفحة كانت محبوسة في max-w-2xl على كل المقاسات — على الديسكتوب كانت عمود
+          ضيّق وسط شاشة فاضية. mobile-first زي ما هي، بس بتتوسّع بدل ما تتجمّد. */}
+      <div className="mx-auto max-w-2xl space-y-4 px-4 py-4 lg:max-w-6xl">
         {/* Business Group Filter - نحاس / مفروشات */}
         {groupsData.length > 0 && (
           <div className="flex gap-2">
@@ -709,8 +746,8 @@ export default function EmployeeDashboard() {
               onClick={() => setSelectedGroupId(undefined)}
               className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
                 !selectedGroupId
-                  ? 'bg-amber-700 text-white shadow-md'
-                  : 'bg-card text-muted-foreground border border-border hover:border-amber-300'
+                  ? 'bg-[var(--warning)] text-white shadow-md'
+                  : 'bg-card text-muted-foreground border border-border hover:border-[var(--warning)]/30'
               }`}
             >
               كل الأقسام
@@ -721,8 +758,8 @@ export default function EmployeeDashboard() {
                 onClick={() => setSelectedGroupId(group.id)}
                 className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
                   selectedGroupId === group.id
-                    ? 'bg-amber-700 text-white shadow-md'
-                    : 'bg-card text-muted-foreground border border-border hover:border-amber-300'
+                    ? 'bg-[var(--warning)] text-white shadow-md'
+                    : 'bg-card text-muted-foreground border border-border hover:border-[var(--warning)]/30'
                 }`}
               >
                 {group.name}
@@ -735,12 +772,12 @@ export default function EmployeeDashboard() {
         {showStockPanel && (
           <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 bg-amber-50 border-b border-amber-100">
+            <div className="flex items-center justify-between px-4 py-3 bg-[var(--warning)]/10 border-b border-[var(--warning)]/30">
               <h3 className="font-bold text-foreground flex items-center gap-2">
-                <Box className="h-4 w-4 text-amber-600" />
+                <Box className="h-4 w-4 text-[var(--warning)]" />
                 جرد المخزون
                 {selectedGroupId && (
-                  <span className="text-xs font-normal text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                  <span className="text-xs font-normal text-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 rounded-full">
                     {groupsData.find((g: any) => g.id === selectedGroupId)?.name || ''}
                   </span>
                 )}
@@ -762,18 +799,18 @@ export default function EmployeeDashboard() {
                         <div
                           key={p.id}
                           className={`rounded-lg p-3 border ${
-                            isLow ? 'bg-red-50 border-red-200' : 'bg-muted/50 border-border'
+                            isLow ? 'bg-destructive/10 border-destructive/30' : 'bg-muted/50 border-border'
                           }`}
                         >
                           <p className="text-xs text-muted-foreground truncate" title={p.name}>{p.name}</p>
                           <p className={`text-lg font-bold mt-0.5 ${
-                            isLow ? 'text-red-600' : 'text-foreground'
+                            isLow ? 'text-destructive' : 'text-foreground'
                           }`}>
                             {p.currentStock} <span className="text-xs font-normal text-muted-foreground">قطعة</span>
                           </p>
                           <p className="text-xs text-muted-foreground mt-0.5">سعر: {Number(p.price).toLocaleString('ar-EG')} ج.م</p>
                           {isLow && (
-                            <p className="text-xs text-red-500 flex items-center gap-1 mt-0.5">
+                            <p className="text-xs text-destructive flex items-center gap-1 mt-0.5">
                               <AlertCircle className="h-3 w-3" /> مخزون منخفض
                             </p>
                           )}
@@ -799,7 +836,7 @@ export default function EmployeeDashboard() {
                     {Object.entries(grouped).map(([productId, group]) => (
                       <div key={productId} className="mb-3">
                         <p className="text-sm font-bold text-foreground mb-2 flex items-center gap-2">
-                          <Package className="h-3.5 w-3.5 text-amber-600" />
+                          <Package className="h-3.5 w-3.5 text-[var(--warning)]" />
                           {group.productName}
                           <span className="text-xs font-normal text-muted-foreground">
                             (إجمالي: {group.variants.reduce((s: number, v: any) => s + v.currentStock, 0)} قطعة)
@@ -820,22 +857,22 @@ export default function EmployeeDashboard() {
                               {group.variants.map((v: any) => {
                                 const isLow = v.currentStock <= v.minStockLevel;
                                 return (
-                                  <tr key={v.id} className={isLow ? 'bg-red-50' : 'bg-card'}>
+                                  <tr key={v.id} className={isLow ? 'bg-destructive/10' : 'bg-card'}>
                                     <td className="py-1.5 px-2 border border-border font-medium text-foreground">{v.color || '-'}</td>
                                     <td className="py-1.5 px-2 border border-border text-muted-foreground">{v.size || '-'}</td>
-                                    <td className="py-1.5 px-2 border border-border text-center font-bold text-amber-700">
+                                    <td className="py-1.5 px-2 border border-border text-center font-bold text-[var(--warning)]">
                                       {v.price ? `${Number(v.price).toLocaleString('ar-EG')} ج.م` : '-'}
                                     </td>
                                     <td className={`py-1.5 px-2 border border-border text-center font-bold ${
-                                      isLow ? 'text-red-600' : 'text-foreground'
+                                      isLow ? 'text-destructive' : 'text-foreground'
                                     }`}>
                                       {v.currentStock}
                                     </td>
                                     <td className="py-1.5 px-2 border border-border text-center">
                                       {isLow ? (
-                                        <span className="text-red-500 font-semibold">ينفد</span>
+                                        <span className="text-destructive font-semibold">ينفد</span>
                                       ) : (
-                                        <span className="text-green-600 font-semibold">متوفر</span>
+                                        <span className="text-[var(--success)] font-semibold">متوفر</span>
                                       )}
                                     </td>
                                   </tr>
@@ -860,10 +897,10 @@ export default function EmployeeDashboard() {
         {/* QR Scan Panel */}
         {showScanPanel && (
           <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden" dir="rtl">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-l from-green-50 to-emerald-50">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-l from-[var(--success)]/10 to-[var(--success)]/5">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center">
-                  <QrCode className="h-4 w-4 text-green-700" />
+                <div className="w-8 h-8 rounded-lg bg-[var(--success)]/10 flex items-center justify-center">
+                  <QrCode className="h-4 w-4 text-[var(--success)]" />
                 </div>
                 <div>
                   <p className="text-sm font-bold text-foreground">مسح QR - تجهيز الأوردرات</p>
@@ -872,7 +909,7 @@ export default function EmployeeDashboard() {
               </div>
               <button
                 onClick={() => { setShowScanPanel(false); stopScanCamera(); setScanResult(null); }}
-                className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground hover:bg-gray-200"
+                className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground hover:bg-muted"
               >
                 <XCircle className="h-4 w-4" />
               </button>
@@ -897,10 +934,10 @@ export default function EmployeeDashboard() {
                   {/* Scan overlay */}
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <div className="w-48 h-48 border-2 border-white/70 rounded-xl relative">
-                      <div className="absolute top-0 left-0 w-5 h-5 border-t-4 border-l-4 border-green-400 rounded-tl-lg" />
-                      <div className="absolute top-0 right-0 w-5 h-5 border-t-4 border-r-4 border-green-400 rounded-tr-lg" />
-                      <div className="absolute bottom-0 left-0 w-5 h-5 border-b-4 border-l-4 border-green-400 rounded-bl-lg" />
-                      <div className="absolute bottom-0 right-0 w-5 h-5 border-b-4 border-r-4 border-green-400 rounded-br-lg" />
+                      <div className="absolute top-0 left-0 w-5 h-5 border-t-4 border-l-4 border-[var(--success)]/30 rounded-tl-lg" />
+                      <div className="absolute top-0 right-0 w-5 h-5 border-t-4 border-r-4 border-[var(--success)]/30 rounded-tr-lg" />
+                      <div className="absolute bottom-0 left-0 w-5 h-5 border-b-4 border-l-4 border-[var(--success)]/30 rounded-bl-lg" />
+                      <div className="absolute bottom-0 right-0 w-5 h-5 border-b-4 border-r-4 border-[var(--success)]/30 rounded-br-lg" />
                     </div>
                   </div>
                   {/* Hidden canvas for QR processing */}
@@ -908,7 +945,7 @@ export default function EmployeeDashboard() {
                 </div>
 
                 {!scanIsScanning && !scanCameraError && (
-                  <div className="w-full bg-muted rounded-xl h-40 flex items-center justify-center border-2 border-dashed border-green-300">
+                  <div className="w-full bg-muted rounded-xl h-40 flex items-center justify-center border-2 border-dashed border-[var(--success)]/30">
                     <div className="text-center text-muted-foreground">
                       <CameraOff className="h-10 w-10 mx-auto mb-2 opacity-50" />
                       <p className="text-xs">اضغط لتشغيل الكاميرا</p>
@@ -917,15 +954,15 @@ export default function EmployeeDashboard() {
                 )}
 
                 {scanCameraError && (
-                  <div className="w-full bg-red-50 border border-red-200 rounded-xl p-4 text-center">
-                    <XCircle className="h-8 w-8 text-red-400 mx-auto mb-2" />
-                    <p className="text-sm text-red-700">{scanCameraError}</p>
+                  <div className="w-full bg-destructive/10 border border-destructive/30 rounded-xl p-4 text-center">
+                    <XCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
+                    <p className="text-sm text-destructive">{scanCameraError}</p>
                   </div>
                 )}
                 {!scanIsScanning ? (
                   <button
                     onClick={startScanCamera}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
+                    className="flex items-center gap-2 px-5 py-2.5 bg-[var(--success)] hover:bg-[var(--success)] text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
                   >
                     <Camera className="h-4 w-4" />
                     تشغيل الكاميرا
@@ -933,7 +970,7 @@ export default function EmployeeDashboard() {
                 ) : (
                   <button
                     onClick={stopScanCamera}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
+                    className="flex items-center gap-2 px-5 py-2.5 bg-destructive hover:bg-destructive text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
                   >
                     <CameraOff className="h-4 w-4" />
                     إيقاف الكاميرا
@@ -952,7 +989,7 @@ export default function EmployeeDashboard() {
                     className="flex-1 text-sm text-right"
                     dir="ltr"
                   />
-                  <Button type="submit" size="sm" className="bg-green-600 hover:bg-green-700 text-white" disabled={scanMutation.isPending}>
+                  <Button type="submit" size="sm" className="bg-[var(--success)] hover:bg-[var(--success)] text-white" disabled={scanMutation.isPending}>
                     <Hash className="h-4 w-4" />
                   </Button>
                 </form>
@@ -967,21 +1004,21 @@ export default function EmployeeDashboard() {
               )}
               {scanResult && !scanMutation.isPending && (
                 <div className={`rounded-xl p-4 border ${
-                  scanResult.success ? 'bg-green-50 border-green-200' :
-                  scanResult.result === 'duplicate' ? 'bg-amber-50 border-amber-200' :
-                  'bg-red-50 border-red-200'
+                  scanResult.success ? 'bg-[var(--success)]/10 border-[var(--success)]/30' :
+                  scanResult.result === 'duplicate' ? 'bg-[var(--warning)]/10 border-[var(--warning)]/30' :
+                  'bg-destructive/10 border-destructive/30'
                 }`}>
                   <div className="flex items-center gap-2 mb-2">
                     {scanResult.success ? (
-                      <CheckCircle className="h-5 w-5 text-green-600" />
+                      <CheckCircle className="h-5 w-5 text-[var(--success)]" />
                     ) : scanResult.result === 'duplicate' ? (
-                      <AlertCircle className="h-5 w-5 text-amber-600" />
+                      <AlertCircle className="h-5 w-5 text-[var(--warning)]" />
                     ) : (
-                      <XCircle className="h-5 w-5 text-red-600" />
+                      <XCircle className="h-5 w-5 text-destructive" />
                     )}
                     <span className={`font-bold text-sm ${
-                      scanResult.success ? 'text-green-800' :
-                      scanResult.result === 'duplicate' ? 'text-amber-800' : 'text-red-800'
+                      scanResult.success ? 'text-[var(--success)]' :
+                      scanResult.result === 'duplicate' ? 'text-[var(--warning)]' : 'text-destructive'
                     }`}>
                       {scanResult.success ? '✅ تم التجهيز بنجاح' :
                        scanResult.result === 'duplicate' ? '⚠️ تم تجهيزه من قبل' :
@@ -999,7 +1036,7 @@ export default function EmployeeDashboard() {
                       <p><span className="font-semibold">الكمية:</span> {scanResult.order.quantity}</p>
                       <p><span className="font-semibold">المحافظة:</span> {scanResult.order.governorate}</p>
                       {scanResult.preparedByName && (
-                        <p className="text-amber-700"><span className="font-semibold">جهزه:</span> {scanResult.preparedByName} • {scanResult.preparedAt ? new Date(scanResult.preparedAt).toLocaleString('ar-EG') : ''}</p>
+                        <p className="text-[var(--warning)]"><span className="font-semibold">جهزه:</span> {scanResult.preparedByName} • {scanResult.preparedAt ? new Date(scanResult.preparedAt).toLocaleString('ar-EG') : ''}</p>
                       )}
                     </div>
                   )}
@@ -1020,20 +1057,20 @@ export default function EmployeeDashboard() {
 
         {/* Broadcast Message - Notification احترافي */}
         {broadcastData && (
-          <div className="relative overflow-hidden bg-gradient-to-l from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 shadow-sm">
-            <div className="absolute top-0 left-0 w-1 h-full bg-amber-500"></div>
+          <div className="relative overflow-hidden bg-gradient-to-l from-[var(--warning)]/10 to-[var(--warning)]/5 border border-[var(--warning)]/30 rounded-xl p-4 shadow-sm">
+            <div className="absolute top-0 left-0 w-1 h-full bg-[var(--warning)]"></div>
             <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-full bg-amber-100 border border-amber-300 flex items-center justify-center shrink-0">
+              <div className="w-10 h-10 rounded-full bg-[var(--warning)]/10 border border-[var(--warning)]/30 flex items-center justify-center shrink-0">
                 <span className="text-lg">📢</span>
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-1">
-                  <h4 className="text-sm font-bold text-amber-900">رسالة من الإدارة</h4>
-                  <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">إشعار</span>
+                  <h4 className="text-sm font-bold text-[var(--warning)]">رسالة من الإدارة</h4>
+                  <span className="text-xs text-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 rounded-full">إشعار</span>
                 </div>
                 <p className="text-sm text-foreground leading-relaxed">{broadcastData.message}</p>
                 <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                  <span className="font-medium text-amber-700">{broadcastData.sentByName}</span>
+                  <span className="font-medium text-[var(--warning)]">{broadcastData.sentByName}</span>
                   <span>•</span>
                   <span>{new Date(broadcastData.createdAt).toLocaleString('ar-EG')}</span>
                 </div>
@@ -1044,10 +1081,10 @@ export default function EmployeeDashboard() {
 
         {/* Date Filter Panel */}
         {showDateFilter && (
-          <div className="bg-card rounded-xl border border-amber-200 shadow-sm p-4">
+          <div className="bg-card rounded-xl border border-[var(--warning)]/30 shadow-sm p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold text-foreground flex items-center gap-2">
-                <CalendarDays className="h-4 w-4 text-amber-600" />
+                <CalendarDays className="h-4 w-4 text-[var(--warning)]" />
                 فلتر التاريخ
               </h3>
               <button onClick={() => setShowDateFilter(false)} className="text-muted-foreground hover:text-muted-foreground">
@@ -1059,7 +1096,7 @@ export default function EmployeeDashboard() {
               <button
                 onClick={() => { setDateFrom(""); setDateTo(""); }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                  !dateFrom && !dateTo ? 'bg-amber-600 text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-gray-200'
+                  !dateFrom && !dateTo ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
                 }`}
               >اليوم</button>
               <button
@@ -1071,13 +1108,13 @@ export default function EmployeeDashboard() {
                 }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                   dateFrom && dateTo && dateFrom === dateTo && dateFrom === (() => { const y = new Date(Date.now() + 2*60*60*1000); y.setUTCDate(y.getUTCDate() - 1); return y.toISOString().slice(0, 10); })()
-                    ? 'bg-amber-600 text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-gray-200'
+                    ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
                 }`}
               >أمس</button>
               <button
                 onClick={() => { setDateFrom("2024-01-01"); setDateTo(""); }}
                 className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                  dateFrom === '2024-01-01' && !dateTo ? 'bg-amber-600 text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-gray-200'
+                  dateFrom === '2024-01-01' && !dateTo ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
                 }`}
               >كل الأوردرات</button>
             </div>
@@ -1089,7 +1126,7 @@ export default function EmployeeDashboard() {
                   type="date"
                   value={dateFrom}
                   onChange={e => setDateFrom(e.target.value)}
-                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400"
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--warning)]/30"
                 />
               </div>
               <div>
@@ -1098,12 +1135,12 @@ export default function EmployeeDashboard() {
                   type="date"
                   value={dateTo}
                   onChange={e => setDateTo(e.target.value)}
-                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-400"
+                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--warning)]/30"
                 />
               </div>
             </div>
             {(dateFrom || dateTo) && (
-              <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-2 flex items-center gap-1">
+              <p className="text-xs text-[var(--warning)] bg-[var(--warning)]/10 rounded-lg px-3 py-2 mt-2 flex items-center gap-1">
                 <Filter className="h-3 w-3" />
                 يتم عرض الأوردرات المسندة في الفترة المحددة
               </p>
@@ -1111,12 +1148,18 @@ export default function EmployeeDashboard() {
           </div>
         )}
 
-        {/* Stats Row — each tile doubles as a quick filter into the tab it names */}
-        <div className="grid grid-cols-4 gap-2">
+        {/* Stats Row — each tile doubles as a quick filter into the tab it names.
+            سبع بطاقات مش أربعة: "ملغي" و"لم يرد" و"يحتاج مراجعة" كانوا في شرايط الفلترة
+            بس، فالموظف مكانش شايف أرقامهم. على الموبايل شريط بيتمرّر جوه نفسه (نفس نمط
+            صفحة الأوردرات)، وعلى الشاشات الأوسع جريد كامل. */}
+        <div className="-mx-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-7 lg:overflow-visible [&>*]:min-w-[128px] [&>*]:snap-start lg:[&>*]:min-w-0">
           <StatCard label="الكل" value={displayStats?.total ?? 0} active={activeTab === "all"} onClick={() => setActiveTab("all")} />
           <StatCard label="جديد" value={displayStats?.new ?? 0} tone="primary" active={activeTab === "new"} onClick={() => setActiveTab("new")} />
           <StatCard label="مؤكد" value={displayStats?.confirmed ?? 0} tone="success" active={activeTab === "confirmed"} onClick={() => setActiveTab("confirmed")} />
           <StatCard label="مؤجل" value={displayStats?.postponed ?? 0} tone="warning" active={activeTab === "postponed"} onClick={() => setActiveTab("postponed")} />
+          <StatCard label="ملغي" value={displayStats?.cancelled ?? 0} tone="danger" active={activeTab === "cancelled"} onClick={() => setActiveTab("cancelled")} />
+          <StatCard label="لم يرد" value={displayStats?.no_answer ?? 0} tone="warning" active={activeTab === "no_answer"} onClick={() => setActiveTab("no_answer")} />
+          <StatCard label="يحتاج مراجعة" value={reviewCount} tone="info" active={activeTab === "needs_review"} onClick={() => setActiveTab("needs_review")} />
         </div>
 
         {/* Search */}
@@ -1173,7 +1216,9 @@ export default function EmployeeDashboard() {
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
+          // عمودين على الشاشات الواسعة: كارت التأكيد ارتفاعه ثابت تقريبًا، فعمود واحد
+          // على شاشة ١٤٤٠ معناه تمرير ضعف اللازم مقابل نص الشاشة فاضي.
+          <div className="space-y-3 xl:grid xl:grid-cols-2 xl:items-start xl:gap-3 xl:space-y-0">
             {filteredOrders.map(order => {
               const statusConf = STATUS_CONFIG[order.status] ?? STATUS_CONFIG.new;
               const isExpanded = expandedOrder === order.id;
@@ -1210,15 +1255,19 @@ export default function EmployeeDashboard() {
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-3 mt-1.5 text-sm text-muted-foreground">
+                        {/* flex-wrap: على ٣٧٥px كان الصف بيتقطع في نص "القاهرة · مدينة نصر"
+                            وتفضل النقطة الفاصلة معلّقة لوحدها في سطر. زرار الواتساب اتشال من
+                            هنا — بقى في شريط الإجراءات الثابت تحت بنص واضح بدل أيقونة. */}
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
                           <span className="flex items-center gap-1">
                             <Phone className="h-3.5 w-3.5" />
                             <span dir="ltr">{order.customerPhone}</span>
                           </span>
-                          <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-7 w-7" />
-                          <span className="flex items-center gap-1">
+                          {/* المنطقة كانت ناقصة — "القاهرة" لوحدها مش كفاية لمكالمة تأكيد. */}
+                          <span className="flex items-center gap-1 whitespace-nowrap">
                             <MapPin className="h-3.5 w-3.5" />
                             {order.governorate}
+                            {(order as any).city && <span className="text-muted-foreground/80"> · {(order as any).city}</span>}
                           </span>
                         </div>
                         {/* العنوان الكامل - ظاهر دائماً */}
@@ -1226,25 +1275,45 @@ export default function EmployeeDashboard() {
                           <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5 text-primary" />
                           <span className="leading-snug">{order.customerAddress}</span>
                         </div>
-                        <div className="flex items-center gap-3 mt-1 text-sm">
-                          <span className="flex items-center gap-1 text-muted-foreground">
-                            <Package className="h-3.5 w-3.5" />
-                            {order.productName}
-                            {((order as any).color || (order as any).size) && (
-                              <span className="text-xs text-muted-foreground mr-1">
-                                ({(order as any).color && `${(order as any).color}`}{(order as any).color && (order as any).size && " - "}{(order as any).size && `${(order as any).size}`})
-                              </span>
-                            )}
+                        {/* المنتج والسعر على طرفي سطر واحد، والتخصيص تحته: مع الالتفاف الحر
+                            كان "(ذهبي - وسط)" بيتعلّق في الطرف المقابل بعيد عن اسم المنتج. */}
+                        <div className="mt-1 flex items-start justify-between gap-3 text-sm">
+                          <span className="flex min-w-0 items-start gap-1 text-muted-foreground">
+                            <Package className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                            <span className="min-w-0">
+                              <span className="leading-snug">{order.productName}</span>
+                              {/* الكمية كانت مش ظاهرة خالص — أهم رقم بعد السعر في مكالمة التأكيد. */}
+                              {order.quantity > 1 && (
+                                <span className="font-semibold text-foreground"> × {order.quantity}</span>
+                              )}
+                              {((order as any).color || (order as any).size) && (
+                                <span className="block text-xs text-muted-foreground/80">
+                                  {(order as any).color}{(order as any).color && (order as any).size && " · "}{(order as any).size}
+                                </span>
+                              )}
+                            </span>
                           </span>
-                          <span className="font-semibold">
-                            {Number(order.totalAmount).toLocaleString()} ج.م
+                          <span className="shrink-0 font-semibold tabular-nums">
+                            {Number(order.totalAmount).toLocaleString('ar-EG')} ج.م
                           </span>
                         </div>
+                        {/* الملاحظة كانت مدفونة جوه التوسيع: الموظف كان لازم يفتح كل كارت
+                            عشان يعرف إذا كان فيه تعليمات خاصة قبل ما يتصل. */}
+                        {order.notes && (
+                          <p className="mt-1.5 flex items-start gap-1.5 rounded-[var(--radius-brand-sm)] bg-muted/60 px-2 py-1 text-xs text-muted-foreground">
+                            <MessageSquare className="mt-0.5 h-3 w-3 shrink-0" />
+                            <span className="line-clamp-2 leading-snug">{order.notes}</span>
+                          </p>
+                        )}
                       </div>
-                      <div className="flex flex-col items-end gap-1 shrink-0">
-                        <span className="text-xs text-muted-foreground font-mono">{order.orderNumber}</span>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <span className="font-mono text-xs text-muted-foreground">{order.orderNumber}</span>
                         {order.createdAt && (
-                          <span className="text-xs text-muted-foreground">{new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                          // بدون السنة: كل أوردرات الموظف من نفس السنة، والسنة كانت بتوسّع
+                          // العمود ده وتاكل من عرض بيانات العميل على الموبايل.
+                          <span className="whitespace-nowrap text-xs text-muted-foreground">
+                            {new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
+                          </span>
                         )}
                         {isExpanded ? (
                           <ChevronUp className="h-4 w-4 text-muted-foreground" />
@@ -1252,6 +1321,65 @@ export default function EmployeeDashboard() {
                           <ChevronDown className="h-4 w-4 text-muted-foreground" />
                         )}
                       </div>
+                    </div>
+                  </div>
+
+                  {/* شريط الإجراءات — ثابت وظاهر من غير ما الكارت يتفتح.
+                      كان كله جوه القسم الموسّع، يعني كل تأكيد كان بيتكلّف ضغطة زيادة
+                      وشاشة بتتحرك تحت الصباع. شاشة تأكيدات بتتعامل مع مئات المكالمات
+                      في اليوم متتحملش الضغطة دي. */}
+                  <div
+                    className="space-y-1.5 border-t border-border bg-muted/30 px-3 py-2"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* جريد مش flex-wrap: مع الالتفاف الحر كانت الأزرار بتتوزّع ٣ + ١،
+                        فيفضل زرار يتيم في سطر لوحده وشكل الشريط يتغيّر من كارت للتاني.
+                        الجريد بيثبّت الصفّين: أربعة قرارات فوق، وثلاث وسائل تواصل تحت. */}
+                    {canAct && (
+                      <div className="grid grid-cols-4 gap-1.5">
+                        <Button
+                          size="sm"
+                          className="h-9 bg-[var(--success)] px-1 text-[var(--success-foreground)] hover:opacity-90"
+                          onClick={() => handleConfirmOrder(order)}
+                          disabled={confirmMutation.isPending}
+                        >
+                          <CheckCircle2 className="h-4 w-4 ml-1" /> تأكيد
+                        </Button>
+                        <Button
+                          size="sm" variant="outline"
+                          className="h-9 border-[var(--warning)]/50 px-1 text-[var(--warning)] hover:bg-[var(--warning)]/10"
+                          onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}
+                        >
+                          <Clock className="h-4 w-4 ml-1" /> تأجيل
+                        </Button>
+                        <Button
+                          size="sm" variant="outline"
+                          className="h-9 border-destructive/50 px-1 text-destructive hover:bg-destructive/10"
+                          onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); }}
+                        >
+                          <XCircle className="h-4 w-4 ml-1" /> إلغاء
+                        </Button>
+                        <Button
+                          size="sm" variant="outline" className="h-9 px-1"
+                          onClick={() => openNoAnswerDialog(order.id)}
+                          disabled={noAnswerMutation.isPending}
+                        >
+                          <PhoneOff className="h-4 w-4 ml-1" /> لم يرد
+                        </Button>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <WhatsAppButton phone={order.customerPhone} size="sm" className="h-9 w-full px-1" />
+                      <Button
+                        size="sm" variant="outline"
+                        className="h-9 gap-1 border-[var(--info)]/40 px-1 text-[var(--info)] hover:bg-[var(--info)]/10"
+                        onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}
+                      >
+                        <Phone className="h-4 w-4" /> اتصال
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-9 gap-1 px-1" onClick={() => openEditDialogFor(order)}>
+                        <Edit2 className="h-4 w-4" /> تعديل
+                      </Button>
                     </div>
                   </div>
 
@@ -1333,35 +1461,8 @@ export default function EmployeeDashboard() {
                         </div>
                       )}
 
-                      {/* Edit + Duplicate Buttons */}
-                      <div className="flex items-center justify-between gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 gap-1 text-xs"
-                          onClick={() => {
-                            setEditDialog({ open: true, orderId: order.id });
-                            setEditProductName(order.productName ?? "");
-                            setEditQuantity(order.quantity ?? 1);
-                            setEditTotalAmount(Number(order.totalAmount));
-                            setEditNotes(order.notes ?? "");
-                            setEditGovernorate(order.governorate ?? "");
-                            setEditAddress(order.customerAddress ?? "");
-                            setEditCustomerName(order.customerName ?? "");
-                            setEditCustomerPhone(order.customerPhone ?? "");
-                            setEditCustomerPhone2((order as any).customerPhone2 ?? "");
-                            setEditCity((order as any).city ?? "");
-                            setEditShippingFees(Number((order as any).shippingFees || 0));
-                            setEditPaymentMethod((order as any).paymentMethod ?? "cod");
-                            setEditEmployeeNotes((order as any).employeeNotes ?? "");
-                            setEditColor((order as any).color ?? "");
-                            setEditSize((order as any).size ?? "");
-                            setShowEditHistory(false);
-                          }}
-                        >
-                          <Edit2 className="h-3.5 w-3.5" />
-                          تعديل بيانات
-                        </Button>
+                      {/* Duplicate marker — زرار "تعديل بيانات" اتنقل لشريط الإجراءات الثابت */}
+                      <div className="flex items-center justify-end gap-2">
                         {order.isDuplicate ? (
                           <button
                             className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-1 text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20"
@@ -1383,56 +1484,6 @@ export default function EmployeeDashboard() {
                         )}
                       </div>
 
-                      {/* Action Buttons */}
-                      {canAct && (
-                        <div className="flex gap-2 pt-1">
-                          <Button
-                            size="sm"
-                            className="h-9 flex-1 bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90"
-                            onClick={() => handleConfirmOrder(order)}
-                            disabled={confirmMutation.isPending}
-                          >
-                            <CheckCircle2 className="h-4 w-4 ml-1" />
-                            تأكيد
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-9 flex-1 border-[var(--warning)]/50 text-[var(--warning)] hover:bg-[var(--warning)]/10"
-                            onClick={() => {
-                              setPostponeDialog({ open: true, orderId: order.id });
-                              setPostponeDate("");
-                              setPostponeNotes("");
-                            }}
-                          >
-                            <Clock className="h-4 w-4 ml-1" />
-                            تأجيل
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-9 px-3"
-                            onClick={() => openNoAnswerDialog(order.id)}
-                            disabled={noAnswerMutation.isPending}
-                            title="لم يرد"
-                          >
-                            <Phone className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-9 flex-1 border-destructive/50 text-destructive hover:bg-destructive/10"
-                            onClick={() => {
-                              setCancelDialog({ open: true, orderId: order.id });
-                              setCancelReason("");
-                              setCancelNotes("");
-                            }}
-                          >
-                            <XCircle className="h-4 w-4 ml-1" />
-                            إلغاء
-                          </Button>
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
@@ -1447,14 +1498,14 @@ export default function EmployeeDashboard() {
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Edit2 className="h-5 w-5 text-blue-600" />
+              <Edit2 className="h-5 w-5 text-[var(--info)]" />
               تعديل بيانات الأوردر
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             {/* قسم بيانات العميل */}
-            <div className="bg-blue-50/50 border border-blue-100 rounded-lg p-3">
-              <p className="text-sm font-semibold text-blue-800 mb-3 flex items-center gap-1">
+            <div className="bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-lg p-3">
+              <p className="text-sm font-semibold text-[var(--info)] mb-3 flex items-center gap-1">
                 <User className="h-4 w-4" />
                 بيانات العميل
               </p>
@@ -1465,7 +1516,7 @@ export default function EmployeeDashboard() {
                     value={editCustomerName}
                     onChange={e => setEditCustomerName(e.target.value)}
                     placeholder="اسم العميل..."
-                    className={`mt-1 ${!editCustomerName ? 'border-red-300 bg-red-50' : ''}`}
+                    className={`mt-1 ${!editCustomerName ? 'border-destructive/30 bg-destructive/10' : ''}`}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -1475,7 +1526,7 @@ export default function EmployeeDashboard() {
                       value={editCustomerPhone}
                       onChange={e => setEditCustomerPhone(e.target.value)}
                       placeholder="01xxxxxxxxx"
-                      className={`mt-1 ${!editCustomerPhone || editCustomerPhone.length < 10 ? 'border-red-300 bg-red-50' : ''}`}
+                      className={`mt-1 ${!editCustomerPhone || editCustomerPhone.length < 10 ? 'border-destructive/30 bg-destructive/10' : ''}`}
                       dir="ltr"
                     />
                   </div>
@@ -1494,8 +1545,8 @@ export default function EmployeeDashboard() {
             </div>
 
             {/* قسم بيانات الشحن */}
-            <div className="bg-green-50/50 border border-green-100 rounded-lg p-3">
-              <p className="text-sm font-semibold text-green-800 mb-3 flex items-center gap-1">
+            <div className="bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-lg p-3">
+              <p className="text-sm font-semibold text-[var(--success)] mb-3 flex items-center gap-1">
                 <Truck className="h-4 w-4" />
                 بيانات الشحن
               </p>
@@ -1504,7 +1555,7 @@ export default function EmployeeDashboard() {
                   <div>
                     <Label>المحافظة <span className="text-destructive">*</span></Label>
                     <Select value={editGovernorate} onValueChange={setEditGovernorate}>
-                      <SelectTrigger className={`mt-1 ${!editGovernorate ? 'border-red-300 bg-red-50' : ''}`}>
+                      <SelectTrigger className={`mt-1 ${!editGovernorate ? 'border-destructive/30 bg-destructive/10' : ''}`}>
                         <SelectValue placeholder="اختر المحافظة..." />
                       </SelectTrigger>
                       <SelectContent>
@@ -1513,7 +1564,7 @@ export default function EmployeeDashboard() {
                         ))}
                       </SelectContent>
                     </Select>
-                    {!editGovernorate && <p className="text-xs text-red-500 mt-1">مطلوبة</p>}
+                    {!editGovernorate && <p className="text-xs text-destructive mt-1">مطلوبة</p>}
                   </div>
                   <div>
                     <Label>المدينة / المركز</Label>
@@ -1531,17 +1582,17 @@ export default function EmployeeDashboard() {
                     value={editAddress}
                     onChange={e => setEditAddress(e.target.value)}
                     placeholder="الشارع، المنطقة، علامة مميزة..."
-                    className={`mt-1 ${!editAddress || editAddress.length < 5 ? 'border-red-300 bg-red-50' : ''}`}
+                    className={`mt-1 ${!editAddress || editAddress.length < 5 ? 'border-destructive/30 bg-destructive/10' : ''}`}
                     rows={2}
                   />
-                  {(!editAddress || editAddress.length < 5) && <p className="text-xs text-red-500 mt-1">العنوان مطلوب (أكثر من 5 حروف)</p>}
+                  {(!editAddress || editAddress.length < 5) && <p className="text-xs text-destructive mt-1">العنوان مطلوب (أكثر من 5 حروف)</p>}
                 </div>
               </div>
             </div>
 
             {/* قسم المنتجات */}
-            <div className="bg-purple-50/50 border border-purple-100 rounded-lg p-3">
-              <p className="text-sm font-semibold text-purple-800 mb-3 flex items-center gap-1">
+            <div className="bg-[var(--purple)]/10 border border-[var(--purple)]/30 rounded-lg p-3">
+              <p className="text-sm font-semibold text-[var(--purple)] mb-3 flex items-center gap-1">
                 <Package className="h-4 w-4" />
                 المنتجات
               </p>
@@ -1635,8 +1686,8 @@ export default function EmployeeDashboard() {
             </div>
 
             {/* قسم ملخص الطلب */}
-            <div className="bg-amber-50/50 border border-amber-100 rounded-lg p-3">
-              <p className="text-sm font-semibold text-amber-800 mb-3 flex items-center gap-1">
+            <div className="bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-lg p-3">
+              <p className="text-sm font-semibold text-[var(--warning)] mb-3 flex items-center gap-1">
                 <ShoppingBag className="h-4 w-4" />
                 ملخص الطلب
               </p>
@@ -1679,12 +1730,12 @@ export default function EmployeeDashboard() {
 
             {/* تنبيه بيانات ناقصة */}
             {(!editCustomerName || !editCustomerPhone || editCustomerPhone.length < 10 || !editGovernorate || !editAddress || editAddress.length < 5) && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-2">
-                <p className="text-xs text-red-700 font-semibold flex items-center gap-1">
+              <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-2">
+                <p className="text-xs text-destructive font-semibold flex items-center gap-1">
                   <AlertCircle className="h-3.5 w-3.5" />
                   بيانات ناقصة - لن يتم تصدير هذا الأوردر في شيت الشحن
                 </p>
-                <ul className="text-xs text-red-600 mt-1 list-disc list-inside">
+                <ul className="text-xs text-destructive mt-1 list-disc list-inside">
                   {!editCustomerName && <li>اسم العميل مطلوب</li>}
                   {(!editCustomerPhone || editCustomerPhone.length < 10) && <li>رقم الهاتف غير صحيح</li>}
                   {!editGovernorate && <li>المحافظة مطلوبة</li>}
@@ -1696,7 +1747,7 @@ export default function EmployeeDashboard() {
             {/* سجل التعديلات */}
             <button
               type="button"
-              className="text-xs text-blue-600 underline"
+              className="text-xs text-[var(--info)] underline"
               onClick={() => setShowEditHistory(!showEditHistory)}
             >
               {showEditHistory ? "إخفاء سجل التعديلات" : "عرض سجل التعديلات"}
@@ -1738,7 +1789,7 @@ export default function EmployeeDashboard() {
                   size: editSize || null,
                 });
               }}
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-[var(--info)] hover:bg-[var(--info)]"
             >
               {editOrderMutation.isPending ? "جاري الحفظ..." : "حفظ التعديلات"}
             </Button>
@@ -1751,7 +1802,7 @@ export default function EmployeeDashboard() {
         <DialogContent className="max-w-sm" dir="rtl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Clock className="h-5 w-5 text-amber-600" />
+              <Clock className="h-5 w-5 text-[var(--warning)]" />
               تأجيل الأوردر
             </DialogTitle>
           </DialogHeader>
@@ -1785,7 +1836,7 @@ export default function EmployeeDashboard() {
             <Button
               onClick={handlePostpone}
               disabled={postponeMutation.isPending}
-              className="bg-amber-600 hover:bg-amber-700 text-white"
+              className="bg-[var(--warning)] hover:bg-[var(--warning)] text-white"
             >
               {postponeMutation.isPending ? "جاري..." : "تأجيل"}
             </Button>
@@ -1798,7 +1849,7 @@ export default function EmployeeDashboard() {
         <DialogContent className="max-w-sm" dir="rtl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <XCircle className="h-5 w-5 text-red-600" />
+              <XCircle className="h-5 w-5 text-destructive" />
               إلغاء الأوردر
             </DialogTitle>
           </DialogHeader>
@@ -1926,8 +1977,8 @@ function EditHistoryPanel({ orderId }: { orderId: number }) {
             </div>
             <div className="mt-0.5 text-muted-foreground">
               <span className="font-medium">{log.fieldName}:</span>{' '}
-              <span className="text-red-600 line-through">{log.oldValue || '(فارغ)'}</span>{' → '}
-              <span className="text-green-700">{log.newValue || '(فارغ)'}</span>
+              <span className="text-destructive line-through">{log.oldValue || '(فارغ)'}</span>{' → '}
+              <span className="text-[var(--success)]">{log.newValue || '(فارغ)'}</span>
             </div>
           </div>
         ))}
@@ -1953,16 +2004,16 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
   });
 
   const TASK_STATUS: Record<string, { label: string; color: string; bg: string }> = {
-    new: { label: "جديدة", color: "text-blue-700", bg: "bg-blue-50 border-blue-200" },
-    in_progress: { label: "قيد التنفيذ", color: "text-amber-700", bg: "bg-amber-50 border-amber-200" },
-    done: { label: "تمت", color: "text-green-700", bg: "bg-green-50 border-green-200" },
+    new: { label: "جديدة", color: "text-[var(--info)]", bg: "bg-[var(--info)]/10 border-[var(--info)]/30" },
+    in_progress: { label: "قيد التنفيذ", color: "text-[var(--warning)]", bg: "bg-[var(--warning)]/10 border-[var(--warning)]/30" },
+    done: { label: "تمت", color: "text-[var(--success)]", bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
   };
 
   if (isLoading) {
     return (
       <div className="bg-card rounded-xl border border-border shadow-sm p-4">
         <div className="animate-pulse space-y-3">
-          <div className="h-4 bg-gray-200 rounded w-1/3" />
+          <div className="h-4 bg-muted rounded w-1/3" />
           <div className="h-16 bg-muted rounded" />
           <div className="h-16 bg-muted rounded" />
         </div>
@@ -1977,7 +2028,7 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
     <div className="bg-card rounded-xl border border-border shadow-sm p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-bold text-foreground flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-amber-600" />
+          <MessageSquare className="h-4 w-4 text-[var(--warning)]" />
           المهام ({pendingTasks.length} مهمة نشطة)
         </h3>
       </div>
@@ -2032,9 +2083,9 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
               </summary>
               <div className="space-y-1 mt-2">
                 {doneTasks.slice(0, 5).map((task: any) => (
-                  <div key={task.id} className="border border-green-100 rounded-lg p-2 bg-green-50/50">
+                  <div key={task.id} className="border border-[var(--success)]/30 rounded-lg p-2 bg-[var(--success)]/10">
                     <div className="flex items-center gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0" />
+                      <CheckCircle2 className="h-3.5 w-3.5 text-[var(--success)] shrink-0" />
                       <span className="text-sm text-foreground line-through">{task.title}</span>
                     </div>
                   </div>
