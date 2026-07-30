@@ -16,6 +16,7 @@ import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
 import { orders as ordersTable } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
 import { isAdminTierRole, hasPermission, EMPLOYEE_ROLE_VALUES, type Permission } from "./permissions";
+import { EMPLOYEE_SETTABLE_ORDER_STATUSES } from "@shared/const";
 
 const EMP_JWT_SECRET = process.env.JWT_SECRET;
 const EMP_COOKIE = "employee_token";
@@ -146,7 +147,7 @@ import {
   getCategoriesByBusiness, createCategory, updateCategory,
   getWarehousesByBusiness, createWarehouse, updateWarehouse,
   getBusinessGroupsWithBusinesses, getBusinessIdsByGroupId, getActiveBusinessGroups,
-  editOrderFull, getOrderEditLogs,
+  editOrderFull, getOrderEditLogs, logOrderEdit,
   scanOrderBySerial, getScanLogs,
   getBusinessIdsForTenant,
 } from "./db";
@@ -1096,6 +1097,80 @@ export const appRouter = router({
         lastUpdatedBy: emp.id,
         noAnswerCallAttempts: input.callAttempts,
       });
+      return { success: true };
+    }),
+
+    /**
+     * تغيير حالة الأوردر من شاشة التأكيدات — أربع حالات فقط.
+     *
+     * الـenum هنا هو الحد الأمني نفسه، مش مجرد تلميح للواجهة: zod بيرفض أي قيمة تانية
+     * على السيرفر قبل ما توصل لأي كود، فحتى طلب متعمّد بـ"shipped" أو "delivered"
+     * بيترفض. الموظف مش بيعدي أي حقل تاني — مفيش في الـinput أصلاً سعر ولا منتج ولا
+     * بيانات عميل، فمفيش سطح للتعديل غير الحالة.
+     *
+     * التنفيذ بيمرّ على نفس دوال confirmOrder/cancelOrder/postponeOrder الموجودة، عشان
+     * منطق التأكيد (تحديث المخزون، confirmedByEmployeeId، الطوابع الزمنية) يفضل واحد
+     * ومايتفرّعش نسخة تانية منه هنا.
+     */
+    updateStatus: requireEmployeePermission('orders.update').input(z.object({
+      orderId: z.number(),
+      status: z.enum(EMPLOYEE_SETTABLE_ORDER_STATUSES),
+      cancelReason: z.enum(['price', 'not_serious', 'wrong_number', 'duplicate']).optional(),
+      postponedTo: z.date().optional(),
+      notes: z.string().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const emp = (ctx as any).employee;
+      const order = await getOrderById(input.orderId);
+      if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'الأوردر غير موجود' });
+      // نفس شرط الملكية الموجود في confirm/cancel/postpone
+      if (emp.role !== 'manager' && order.assignedEmployeeId !== emp.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'هذا الأوردر غير مخصص لك' });
+      }
+
+      const previousStatus = order.status;
+      if (previousStatus === input.status) return { success: true, unchanged: true };
+
+      switch (input.status) {
+        case 'confirmed':
+          await confirmOrder(input.orderId, emp.id, emp.name);
+          break;
+        case 'cancelled':
+          if (!input.cancelReason) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'سبب الإلغاء مطلوب' });
+          }
+          await cancelOrder(input.orderId, input.cancelReason, input.notes, emp.id);
+          break;
+        case 'postponed':
+          if (!input.postponedTo) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'تاريخ التأجيل مطلوب' });
+          }
+          await postponeOrder(input.orderId, input.postponedTo, input.notes, emp.id);
+          break;
+        case 'new':
+          // الرجوع لـ"جديد" بيمسح طابع الإلغاء وسببه، وإلا الأوردر يفضل شكله جديد
+          // وسجلّه بيقول إنه ملغي — والـtimeline في صفحة الأوردرات بيقرا الطوابع دي.
+          await updateOrder(input.orderId, {
+            status: 'new',
+            lastUpdatedBy: emp.id,
+            cancelledAt: null,
+            cancelReason: null,
+            postponedTo: null,
+          });
+          break;
+      }
+
+      // سجل الحالات: مين غيّر، من إيه لإيه، وامتى. جدول order_edit_logs موجود بالحقول
+      // دي بالظبط، فمفيش داعي لجدول تاريخ حالات منفصل.
+      await logOrderEdit({
+        orderId: input.orderId,
+        field: 'status',
+        oldValue: previousStatus,
+        newValue: input.status,
+        editedBy: emp.id,
+        editedByName: emp.name,
+        editedByRole: emp.role ?? 'employee',
+      });
+
       return { success: true };
     }),
 

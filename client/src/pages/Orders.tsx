@@ -140,6 +140,40 @@ const FILTER_DESCRIPTORS: FilterDescriptor<{
  */
 type TimelineEvent = { at: Date; label: string; detail?: string; tone: string };
 
+const TIMELINE_STATUS_TONE: Record<string, string> = {
+  new: "var(--muted-foreground)",
+  confirmed: "var(--success)",
+  postponed: "var(--warning)",
+  cancelled: "var(--destructive)",
+  no_answer: "var(--warning)",
+  delivered: "var(--success)",
+};
+
+/**
+ * تغييرات الحالة المسجّلة في order_edit_logs (field='status').
+ *
+ * الطوابع الزمنية في جدول orders بتقول "الأوردر عدّى بالمحطة دي"، لكنها مش بتقول مين.
+ * السجل ده بيقول مين وامتى ومن أي حالة — وهو المصدر الوحيد اللي بيمسك رجوع الأوردر
+ * لحالة سابقة (مثلاً من "ملغي" لـ"جديد")، لأن الرجوع ده مالوش عمود طابع زمني أصلاً.
+ */
+function statusLogEvents(editLogs: any[] | undefined): TimelineEvent[] {
+  if (!Array.isArray(editLogs)) return [];
+  return editLogs
+    .filter((log) => log.field === "status")
+    .map((log): TimelineEvent | null => {
+      const at = new Date(log.createdAt);
+      if (Number.isNaN(at.getTime())) return null;
+      return {
+        at,
+        label: `الحالة → ${STATUS_LABEL(log.newValue)}`,
+        detail: [log.editedByName, log.oldValue ? `من ${STATUS_LABEL(log.oldValue)}` : null]
+          .filter(Boolean).join(" · "),
+        tone: TIMELINE_STATUS_TONE[log.newValue] ?? "var(--info)",
+      };
+    })
+    .filter((e): e is TimelineEvent => e !== null);
+}
+
 function buildOrderTimeline(order: any, employeeName?: string): TimelineEvent[] {
   const events: TimelineEvent[] = [];
   const push = (raw: any, label: string, tone: string, detail?: string) => {
@@ -258,6 +292,12 @@ export default function Orders() {
   // بند (variantName)، وده مش موجود في صفوف orders.list العادية (تُجلب فقط لحظة فتح التفاصيل).
   const { data: detailOrder } = trpc.orders.get.useQuery(
     { id: detailOrderId as number },
+    { enabled: detailOrderId != null }
+  );
+  // سجل تغييرات الحالة (مين غيّرها وامتى) — بيتجمع مع الطوابع الزمنية في سجل الحالات.
+  // بيتجلب لحظة فتح الـdrawer بس، مش مع كل صف في الجدول.
+  const { data: drawerEditHistory } = trpc.orders.getEditHistory.useQuery(
+    { orderId: detailOrderId as number },
     { enabled: detailOrderId != null }
   );
 
@@ -2065,10 +2105,13 @@ export default function Orders() {
 
               {/* سجل الحالات */}
               {(() => {
-                const timeline = buildOrderTimeline(
-                  order,
-                  order.assignedEmployeeId ? employeeNameById.get(order.assignedEmployeeId) : undefined
-                );
+                const timeline = [
+                  ...buildOrderTimeline(
+                    order,
+                    order.assignedEmployeeId ? employeeNameById.get(order.assignedEmployeeId) : undefined
+                  ),
+                  ...statusLogEvents(drawerEditHistory),
+                ].sort((a, b) => a.at.getTime() - b.at.getTime());
                 if (timeline.length === 0) return null;
                 return (
                   <Card>

@@ -24,6 +24,7 @@ import { BrandMark } from "@/components/BrandMark";
 import { StatCard, ConfirmDialog, WhatsAppButton } from "@/components/shared";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getMissingConfirmationFields } from "@/lib/orderConfirmationValidation";
+import { EMPLOYEE_SETTABLE_ORDER_STATUSES } from "@shared/const";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new:       { label: "جديد",         color: "text-primary",            bg: "bg-accent border-primary/30" },
@@ -34,6 +35,17 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
   shipped:   { label: "تم الشحن",     color: "text-primary",            bg: "bg-accent border-primary/30" },
   delivered: { label: "تم التسليم",   color: "text-[var(--success)]",   bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
   no_answer: { label: "لم يرد",       color: "text-[var(--warning)]",   bg: "bg-[var(--warning)]/10 border-[var(--warning)]/30" },
+};
+
+/**
+ * نفس القائمة اللي الـprocedure على السيرفر بيبني منها الـz.enum — مستوردة مش متكتوبة
+ * تاني، عشان مايبقاش ممكن نزوّد حالة في الواجهة والحد الأمني مايعرفش عنها حاجة.
+ * الاستيراد نوعي وقت التصريف بس (القيمة ثوابت نصية)، فمفيش كود سيرفر بيتحزم للمتصفح.
+ */
+const EMPLOYEE_EDITABLE_STATUSES: readonly string[] = EMPLOYEE_SETTABLE_ORDER_STATUSES;
+
+const STATUS_SELECT_LABELS: Record<string, string> = {
+  new: "جديد", confirmed: "مؤكد", postponed: "مؤجل", cancelled: "لاغي",
 };
 
 const CANCEL_REASONS = [
@@ -273,6 +285,45 @@ export default function EmployeeDashboard() {
     setNoAnswerAttempts("");
     setNoAnswerDialog({ open: true, orderId });
   };
+
+  const updateStatusMutation = trpc.employeePortal.updateStatus.useMutation({
+    onSuccess: () => {
+      toast.success("تم تغيير الحالة");
+      utils.employeePortal.myOrders.invalidate();
+      utils.employeePortal.stats.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  /**
+   * قائمة تغيير الحالة على الكارت.
+   *
+   * "إلغاء" و"تأجيل" محتاجين مدخلات إضافية (سبب / تاريخ) — فبيفتحوا نفس الديالوجات
+   * الموجودة بدل ما نبعت للسيرفر طلب ناقص يترفض. "جديد" و"مؤكد" مالهمش مدخلات فبيروحوا
+   * على طول.
+   */
+  function handleStatusSelect(order: any, next: string) {
+    if (next === order.status) return;
+    if (next === "cancelled") {
+      setCancelDialog({ open: true, orderId: order.id });
+      setCancelReason(""); setCancelNotes("");
+      return;
+    }
+    if (next === "postponed") {
+      setPostponeDialog({ open: true, orderId: order.id });
+      setPostponeDate(""); setPostponeNotes("");
+      return;
+    }
+    if (next === "confirmed") {
+      // نفس التحقق اللي بيمنع تأكيد أوردر ناقص بياناته من زرار "تأكيد".
+      const missing = getMissingConfirmationFields(order);
+      if (missing.length > 0) {
+        toast.error(`لا يمكن التأكيد — بيانات ناقصة: ${missing.join("، ")}`);
+        return;
+      }
+    }
+    updateStatusMutation.mutate({ orderId: order.id, status: next as any });
+  }
 
   const updateNotesMutation = trpc.employeePortal.updateNotes.useMutation({
     onSuccess: () => {
@@ -1368,6 +1419,31 @@ export default function EmployeeDashboard() {
                         </Button>
                       </div>
                     )}
+                    {/* تغيير الحالة مباشرة — أربع حالات فقط، وهي نفس الأربعة اللي الـ
+                        procedure على السيرفر بيقبلها. الحالات التانية (مطبوع/تم الشحن/
+                        تم التوصيل/مرتجع) بتتعرض للقراءة بس عشان الموظف يفهم إن الأوردر
+                        خرج من نطاقه، ومش قابلة للاختيار. */}
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 type-caption">الحالة:</span>
+                      <Select
+                        value={EMPLOYEE_EDITABLE_STATUSES.includes(order.status) ? order.status : "__locked"}
+                        onValueChange={(v) => handleStatusSelect(order, v)}
+                        disabled={updateStatusMutation.isPending || !EMPLOYEE_EDITABLE_STATUSES.includes(order.status)}
+                      >
+                        <SelectTrigger className="h-9 flex-1 bg-card"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {!EMPLOYEE_EDITABLE_STATUSES.includes(order.status) && (
+                            <SelectItem value="__locked" disabled>
+                              {STATUS_CONFIG[order.status]?.label ?? order.status} — خارج نطاق التأكيدات
+                            </SelectItem>
+                          )}
+                          {EMPLOYEE_EDITABLE_STATUSES.map(s => (
+                            <SelectItem key={s} value={s}>{STATUS_SELECT_LABELS[s] ?? s}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
                     <div className="grid grid-cols-3 gap-1.5">
                       <WhatsAppButton phone={order.customerPhone} size="sm" className="h-9 w-full px-1" />
                       <Button
