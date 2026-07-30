@@ -165,6 +165,7 @@ import {
   getBusinessGroupsWithBusinesses, getBusinessIdsByGroupId, getActiveBusinessGroups,
   editOrderFull, getOrderEditLogs, logOrderEdit,
   getAccountingDashboard, getTreasuryBalance, getTreasuryTransactions, addTreasuryTransaction,
+  getTreasurySummary,
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, archiveExpenseCategory,
   getExpenses, createExpense, updateExpense, deleteExpense,
   getCollections, recordOrderCollection, getOrderCollectionHistory,
@@ -2891,6 +2892,14 @@ export const appRouter = router({
     })).query(async ({ ctx, input }) => {
       const businessIds = await scopeBusinessIds(ctx.tenantId, input);
       return getTreasuryTransactions({ ...input, businessIds });
+    }),
+
+    /** لوحة الخزنة — أرقام النهاردة والشهر وآخر ١٠ حركات */
+    treasurySummary: adminProcedure.input(z.object({
+      businessIds: z.array(z.number()).optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+      return getTreasurySummary(businessIds);
     }),
 
     treasuryBalance: adminProcedure.input(z.object({

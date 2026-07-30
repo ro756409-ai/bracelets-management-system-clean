@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Plus, ShoppingCart, Wallet } from "lucide-react";
+import {
+  ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Banknote, Clock, Plus, Receipt,
+  ShoppingCart, TrendingUp, Wallet,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,10 +16,27 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import {
   SectionHeader, StatCard, ResponsiveDataTable, type Column, Pagination,
-  FilterBar, SearchInput, MobileOrderCard, toast,
+  FilterBar, SearchInput, MobileOrderCard, LoadingSkeleton, toast,
   buildFilterChips, countActiveFilters, type FilterDescriptor,
 } from "@/components/shared";
-import { formatMoney } from "@/lib/money";
+import { formatAmount, formatMoney } from "@/lib/money";
+
+
+/**
+ * الرقم كبير والعملة صغيرة وراه.
+ *
+ * "٤٨,٧٥٠٫٠٠ ج.م" كامل بحجم ٢٦px مابيدخلش في كارت عرضه ٢٠٠px، فكان بيلفّ على سطرين
+ * ويطوّل الكروت بشكل غير متساوي. فصل العملة بيقصّر السطر وبيخلي العين تمسك الرقم أول
+ * حاجة — نفس اللي معمول في عمود "الإجمالي" في جدول الأوردرات.
+ */
+function Money({ value }: { value: unknown }) {
+  return (
+    <span className="whitespace-nowrap">
+      {formatAmount(value)}
+      <span className="ms-1 text-sm font-normal text-muted-foreground">ج.م</span>
+    </span>
+  );
+}
 
 /** نفس ترتيب الـenum على السيرفر، مع تسمياتها العربية. */
 const TX_TYPES: Record<string, string> = {
@@ -88,21 +108,9 @@ export function TreasurySection() {
     businessIds: currentBusinessIds,
     includeOrderEvents,
   });
-  const { data: balanceData } = trpc.accounting.treasuryBalance.useQuery({ businessIds: currentBusinessIds });
+  const { data: summary, isLoading: summaryLoading } = trpc.accounting.treasurySummary.useQuery({ businessIds: currentBusinessIds });
 
   const rows = data?.transactions ?? [];
-
-  // إجماليات الصفحة المعروضة — مش إجمالي كل الحركات. الفرق مهم فالكارت بيقوله صراحة.
-  const pageTotals = useMemo(() => {
-    let inflow = 0, outflow = 0;
-    for (const t of rows) {
-      // الالتزامات مش فلوس، فمابتدخلش في مجموع الداخل/الخارج
-      if (t.kind === "commitment") continue;
-      const amount = Number(t.amount);
-      if (t.direction === "in") inflow += amount; else outflow += amount;
-    }
-    return { inflow, outflow };
-  }, [rows]);
 
   const filtersSnapshot = {
     type: typeFilter,
@@ -229,27 +237,50 @@ export function TreasurySection() {
           </>
         }
       >
-        <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:overflow-visible [&>*]:min-w-[196px] [&>*]:snap-start lg:[&>*]:min-w-0">
+        {/* لوحة الخزنة — حالة النهاردة، مستقلّة عن فلاتر الجدول تحت */}
+        <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:overflow-visible xl:grid-cols-6 [&>*]:min-w-[196px] [&>*]:snap-start lg:[&>*]:min-w-0">
           <StatCard
-            label="رصيد الخزنة"
-            tone={(balanceData?.balance ?? 0) < 0 ? "danger" : "primary"}
-            value={formatMoney(balanceData?.balance ?? 0)}
+            label="الرصيد الحالي"
+            tone={(summary?.balance ?? 0) < 0 ? "danger" : "primary"}
+            loading={summaryLoading}
+            value={<Money value={summary?.balance ?? 0} />}
             icon={<Wallet className="h-5 w-5" />}
           />
           <StatCard
-            label="داخل (هذه الصفحة)" tone="success"
-            value={formatMoney(pageTotals.inflow)}
-            hint={`${rows.length} حركة معروضة`}
-            icon={<ArrowDownLeft className="h-5 w-5" />}
+            label="تحصيلات اليوم" tone="success" loading={summaryLoading}
+            value={<Money value={summary?.todayCollections ?? 0} />}
+            icon={<Banknote className="h-5 w-5" />}
           />
           <StatCard
-            label="خارج (هذه الصفحة)" tone="danger"
-            value={formatMoney(pageTotals.outflow)}
-            hint={`إجمالي الحركات: ${(data?.total ?? 0).toLocaleString("ar-EG")}`}
-            icon={<ArrowUpRight className="h-5 w-5" />}
+            label="مصروفات اليوم" tone="warning" loading={summaryLoading}
+            value={<Money value={summary?.todayExpenses ?? 0} />}
+            icon={<Receipt className="h-5 w-5" />}
+          />
+          <StatCard
+            label="صافي اليوم"
+            tone={(summary?.todayNet ?? 0) < 0 ? "danger" : "success"}
+            loading={summaryLoading}
+            value={<Money value={summary?.todayNet ?? 0} />}
+            hint="كل الداخل ناقص كل الخارج"
+            icon={<ArrowLeftRight className="h-5 w-5" />}
+          />
+          <StatCard
+            label="أرباح الشهر"
+            tone={(summary?.monthProfit ?? 0) < 0 ? "danger" : "success"}
+            loading={summaryLoading}
+            value={<Money value={summary?.monthProfit ?? 0} />}
+            icon={<TrendingUp className="h-5 w-5" />}
+          />
+          <StatCard
+            label="تحصيلات معلّقة" tone="warning" loading={summaryLoading}
+            value={<Money value={summary?.pendingCollection ?? 0} />}
+            hint="لسه مع شركة الشحن"
+            icon={<Clock className="h-5 w-5" />}
           />
         </div>
       </SectionHeader>
+
+      <RecentMovements rows={summary?.recentTransactions ?? []} loading={summaryLoading} />
 
       <Card className="shadow-[var(--shadow-card)]">
         <CardContent className="p-3">
@@ -295,6 +326,31 @@ export function TreasurySection() {
           </FilterBar>
         </CardContent>
       </Card>
+
+      {/* إجماليات الحركات المطابقة للفلاتر — محسوبة على السيرفر على كل النتائج، مش على
+          الصفحة المعروضة. الوصف بيقول ده صراحة عشان الرقم مايتقراش غلط. */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-[var(--radius-brand-md)] border border-border bg-card px-4 py-3 shadow-[var(--shadow-card)]">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <ArrowDownLeft className="h-3.5 w-3.5 text-[var(--success)]" /> إجمالي الإيداعات
+          </p>
+          <p className="mt-1 text-[22px] font-bold leading-none tabular-nums text-[var(--success)]">
+            {formatMoney(data?.totalIn ?? 0)}
+          </p>
+          <p className="type-caption mt-1">كل الحركات الداخلة حسب الفلاتر الحالية</p>
+        </div>
+        <div className="rounded-[var(--radius-brand-md)] border border-border bg-card px-4 py-3 shadow-[var(--shadow-card)]">
+          <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <ArrowUpRight className="h-3.5 w-3.5 text-destructive" /> إجمالي السحوبات
+          </p>
+          <p className="mt-1 text-[22px] font-bold leading-none tabular-nums text-destructive">
+            {formatMoney(data?.totalOut ?? 0)}
+          </p>
+          <p className="type-caption mt-1">
+            {(data?.total ?? 0).toLocaleString("ar-EG")} حركة مطابقة
+          </p>
+        </div>
+      </div>
 
       <ResponsiveDataTable
         rows={rows}
@@ -458,5 +514,73 @@ function ManualTransactionDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * آخر ١٠ حركات.
+ *
+ * قائمة مختصرة فوق الجدول مش نسخة منه: أمين الخزنة بيفتح الصفحة عشان يشوف "إيه اللي
+ * حصل من ساعة ما سبت"، والجدول تحت بفلاتره وترقيمه بيجاوب سؤال تاني (البحث والمراجعة).
+ * مستقلّة عن الفلاتر عن قصد — "آخر ١٠" اللي بتتغير مع كل بحث مش آخر ١٠.
+ */
+function RecentMovements({
+  rows, loading,
+}: {
+  rows: any[];
+  loading?: boolean;
+}) {
+  if (loading) {
+    return (
+      <Card className="shadow-[var(--shadow-card)]">
+        <CardContent className="p-4"><LoadingSkeleton variant="form" rows={3} /></CardContent>
+      </Card>
+    );
+  }
+  if (rows.length === 0) return null;
+
+  return (
+    <Card className="shadow-[var(--shadow-card)]">
+      <CardHeader className="pb-2 pt-3">
+        <CardTitle className="type-subheading">آخر ١٠ حركات</CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        <ul className="divide-y divide-border">
+          {rows.map((t: any) => {
+            const isIn = t.direction === "in";
+            return (
+              <li key={t.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-brand-sm)]"
+                    style={{ backgroundColor: isIn ? "color-mix(in srgb, var(--success) 12%, transparent)" : "color-mix(in srgb, var(--destructive) 12%, transparent)" }}
+                  >
+                    {isIn
+                      ? <ArrowDownLeft className="h-4 w-4 text-[var(--success)]" />
+                      : <ArrowUpRight className="h-4 w-4 text-destructive" />}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium" title={t.description}>{t.description}</p>
+                    <p className="type-caption">
+                      {TX_TYPES[t.type] ?? t.type} · {t.performedByName}
+                    </p>
+                  </div>
+                </div>
+                <div className="shrink-0 text-left">
+                  <p className={`text-sm font-bold tabular-nums ${isIn ? "text-[var(--success)]" : "text-destructive"}`}>
+                    {isIn ? "+" : "−"}{formatMoney(t.amount)}
+                  </p>
+                  <p className="type-caption tabular-nums">
+                    {new Date(t.transactionDate).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}
+                    {" · "}
+                    {new Date(t.transactionDate).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }

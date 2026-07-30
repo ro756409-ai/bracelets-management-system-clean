@@ -2304,7 +2304,7 @@ export type LedgerRow = {
 
 export async function getTreasuryTransactions(filters: TreasuryFilters = {}) {
   const db = await getDb();
-  if (!db) return { transactions: [], total: 0, page: 1, totalPages: 0 };
+  if (!db) return { transactions: [], total: 0, page: 1, totalPages: 0, totalIn: 0, totalOut: 0 };
   const { page = 1, limit = 50 } = filters;
 
   const conditions: any[] = [];
@@ -2326,9 +2326,17 @@ export async function getTreasuryTransactions(filters: TreasuryFilters = {}) {
   }
   const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-  const [countRow] = await db.select({ count: sql<number>`count(*)` })
-    .from(treasuryTransactions).where(where);
+  // العدّاد والإجماليات في استعلام واحد على كل الحركات المطابقة للفلاتر — مش على الصفحة
+  // المعروضة. الكروت اللي فوق اسمها "إجمالي"، فلازم تكون إجمالي فعلاً: لو حسبت الصفحة بس
+  // كان الرقم بيتغيّر لما المستخدم يقلب صفحة، وده اسم بيكدب على نفسه.
+  const [countRow] = await db.select({
+    count: sql<number>`count(*)`,
+    totalIn: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'in' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+    totalOut: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'out' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+  }).from(treasuryTransactions).where(where);
   const total = Number(countRow?.count ?? 0);
+  const totalIn = Number(countRow?.totalIn ?? 0);
+  const totalOut = Number(countRow?.totalOut ?? 0);
 
   const transactions = await db.select().from(treasuryTransactions)
     .where(where)
@@ -2351,7 +2359,7 @@ export async function getTreasuryTransactions(filters: TreasuryFilters = {}) {
   }));
 
   if (!filters.includeOrderEvents) {
-    return { transactions: cashRows, total, page, totalPages: Math.ceil(total / limit) };
+    return { transactions: cashRows, total, page, totalPages: Math.ceil(total / limit), totalIn, totalOut };
   }
 
   // أحداث الأوردرات الجديدة — بتُدمج في صفحة النتائج المعروضة فقط.
@@ -2407,7 +2415,7 @@ export async function getTreasuryTransactions(filters: TreasuryFilters = {}) {
   const merged = [...cashRows, ...commitmentRows]
     .sort((a, b) => b.transactionDate.getTime() - a.transactionDate.getTime());
 
-  return { transactions: merged, total, page, totalPages: Math.ceil(total / limit) };
+  return { transactions: merged, total, page, totalPages: Math.ceil(total / limit), totalIn, totalOut };
 }
 
 // ==================== EXPENSE CATEGORIES ====================
@@ -2934,4 +2942,73 @@ export async function getOrderCollectionHistory(orderId: number) {
       eq(treasuryTransactions.referenceId, orderId),
     ))
     .orderBy(asc(treasuryTransactions.transactionDate), asc(treasuryTransactions.id));
+}
+
+/**
+ * لوحة الخزنة — الأرقام اللي أمين الخزنة بيفتح الصفحة عشانها.
+ *
+ * مستقلّة عن فلاتر الجدول تحتها عن قصد: دي حالة الخزنة النهاردة، مش ملخّص للي المستخدم
+ * فلتر عليه. لو خضعت للفلاتر كان "صافي اليوم" بيتغيّر لما حد يبحث عن كلمة، وهو رقم
+ * المفروض يبقى ثابت.
+ *
+ * "أرباح الشهر" بتتقرا من `getAccountingDashboard` مش بمعادلة تانية هنا: تعريف الربح
+ * لازم يفضل واحد في النظام كله، وأي نسخة تانية منه بتبقى رقم تالت يختلف عن التقارير.
+ */
+export async function getTreasurySummary(businessIds?: number[] | null) {
+  const db = await getDb();
+  const empty = {
+    balance: 0, todayCollections: 0, todayExpenses: 0, todayNet: 0,
+    monthProfit: 0, pendingCollection: 0,
+    recentTransactions: [] as TreasuryTransaction[],
+  };
+  if (!db) return empty;
+
+  const cairoNow = new Date(Date.now() + CAIRO_OFFSET_MS);
+  const todayStart = new Date(cairoNow.toISOString().slice(0, 10) + "T00:00:00Z");
+  const monthStart = new Date(cairoNow.toISOString().slice(0, 8) + "01T00:00:00Z");
+
+  const scopeTreasury = businessIds && businessIds.length > 0
+    ? [inArray(treasuryTransactions.businessId, businessIds)] : [];
+
+  // حركات النهاردة مقسّمة بالنوع والاتجاه في استعلام واحد
+  const [today] = await db.select({
+    collections: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'collection' AND ${treasuryTransactions.direction} = 'in' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+    expenses: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'expense' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+    inflow: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'in' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+    outflow: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'out' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+  }).from(treasuryTransactions).where(and(
+    gte(treasuryTransactions.transactionDate, todayStart),
+    ...scopeTreasury,
+  ));
+
+  // المعلّق: كل الأوردرات اللي خرجت للشحن ولسه ماتحصّلتش بالكامل — بدون حد زمني.
+  // فلوس بره من شهرين لسه بره، والحصر بالشهر الحالي كان هيخفيها.
+  const scopeOrders = businessIds && businessIds.length > 0
+    ? [inArray(orders.businessId, businessIds)] : [];
+  const [pending] = await db.select({
+    amount: sql<string>`COALESCE(SUM(${orders.totalAmount} - COALESCE(${orders.collectedAmount}, 0)), 0)`,
+  }).from(orders).where(and(
+    inArray(orders.status, ['printed', 'preparing', 'shipped', 'delivered', 'returned'] as any),
+    inArray(orders.collectionStatus, ['pending', 'partial'] as any),
+    ...scopeOrders,
+  ));
+
+  const recentTransactions = await db.select().from(treasuryTransactions)
+    .where(scopeTreasury.length > 0 ? and(...scopeTreasury) : undefined)
+    .orderBy(desc(treasuryTransactions.transactionDate), desc(treasuryTransactions.id))
+    .limit(10);
+
+  const monthDashboard = await getAccountingDashboard({ businessIds, dateFrom: monthStart });
+
+  return {
+    balance: await getTreasuryBalance(businessIds),
+    todayCollections: Number(today?.collections ?? 0),
+    todayExpenses: Number(today?.expenses ?? 0),
+    // صافي اليوم = كل الداخل − كل الخارج، مش التحصيلات ناقص المصروفات: الإيداع والسحب
+    // والمرتجع بيأثروا على الكاش برضه، وحصره في نوعين كان بيخلي الرقم مش مطابق للرصيد.
+    todayNet: Number(today?.inflow ?? 0) - Number(today?.outflow ?? 0),
+    monthProfit: monthDashboard.netProfit,
+    pendingCollection: Number(pending?.amount ?? 0),
+    recentTransactions,
+  };
 }
