@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import {
   BarChart3, Boxes, ClipboardList, Copy, FileSpreadsheet, LayoutDashboard, Package,
   Printer, QrCode, RotateCcw, ScanLine, Settings, ShoppingCart, Truck, Users,
+  Wallet, Receipt, Banknote,
 } from "lucide-react";
 import {
   CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
@@ -49,6 +50,12 @@ const ITEMS: PaletteItem[] = [
   { group: "المخزون", label: "المخزون", href: "/inventory", icon: <Boxes className="h-4 w-4" />, keywords: ["inventory", "مخزون", "منتجات", "products", "اصناف"] },
   { group: "المخزون", label: "المرتجعات", href: "/returns", icon: <RotateCcw className="h-4 w-4" />, keywords: ["returns", "مرتجع", "مرتجعات"] },
   { group: "المخزون", label: "المكررات", href: "/duplicates", icon: <Copy className="h-4 w-4" />, keywords: ["duplicates", "مكرر", "تكرار"] },
+
+  // ---- الحسابات ----
+  { group: "الحسابات", label: "لوحة الحسابات", href: "/accounting", icon: <Wallet className="h-4 w-4" />, keywords: ["accounting", "حسابات", "مالية", "ارباح", "ربح"] },
+  { group: "الحسابات", label: "الخزنة", href: "/treasury", icon: <Wallet className="h-4 w-4" />, keywords: ["treasury", "خزنة", "خزينة", "رصيد", "كاش"] },
+  { group: "الحسابات", label: "المصروفات", href: "/expenses", icon: <Receipt className="h-4 w-4" />, keywords: ["expenses", "مصروف", "مصروفات", "صرف"] },
+  { group: "الحسابات", label: "التحصيلات", href: "/collections", icon: <Banknote className="h-4 w-4" />, keywords: ["collections", "تحصيل", "تحصيلات", "محصل"] },
 
   // ---- الإدارة ----
   { group: "الإدارة", label: "الموظفون", href: "/employees", icon: <Users className="h-4 w-4" />, keywords: ["employees", "موظفين", "موظفون", "فريق"] },

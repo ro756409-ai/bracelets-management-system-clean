@@ -339,6 +339,19 @@ export const orders = mysqlTable("orders", {
   // attached to an arbitrary product.
   needsReview: boolean("needsReview").default(false).notNull(),
   reviewReason: text("reviewReason"),
+  // ==================== COLLECTION (التحصيل) ====================
+  // `totalAmount` هو المبلغ المتوقع من العميل. الحقول دي بتسجّل اللي اتحصّل فعلاً، وهو
+  // رقم مختلف: شركة الشحن بترجّع أقل (خصم، جزء مرفوض) أو متأخر أو مايرجّعش خالص.
+  // الفرق بين الاتنين هو أساس صفحة التحصيلات، وكان مستحيل يتحسب قبل كده.
+  // nullable مقصود: null معناها "لسه ماتحصّلش" وده مختلف عن 0 (اتحصّل صفر فعلاً).
+  collectedAmount: decimal("collectedAmount", { precision: 10, scale: 2 }),
+  collectedAt: timestamp("collectedAt"),
+  collectionStatus: mysqlEnum("collectionStatus", [
+    "pending",   // لسه في الطريق / مع شركة الشحن
+    "collected", // اتحصّل بالكامل
+    "partial",   // اتحصّل أقل من المتوقع
+    "failed",    // مرتجع / مارجعش فلوس
+  ]).default("pending").notNull(),
   adName: varchar("adName", { length: 255 }),
   pageName: varchar("pageName", { length: 255 }),
   isDuplicate: boolean("isDuplicate").default(false).notNull(),
@@ -685,3 +698,91 @@ export const importBatches = mysqlTable("import_batches", {
 });
 export type ImportBatch = typeof importBatches.$inferSelect;
 export type InsertImportBatch = typeof importBatches.$inferInsert;
+
+// ==================== ACCOUNTING ====================
+// المرحلة الأولى من وحدة الحسابات: خزنة + مصروفات، بدون قيود محاسبية مزدوجة.
+//
+// القرار المعماري هنا هو إن `treasury_transactions` هو الـledger الوحيد: كل حركة مالية
+// في النظام (تحصيل، مرتجع، مصروف، إيداع، سحب) بتنزل فيه صف واحد، والجداول التانية
+// (expenses) بتوصف تفاصيل الحركة بس مش بتحسب أرصدة بنفسها. كده رصيد الخزنة له مصدر
+// واحد، ومش ممكن جدولين يقولوا رقمين مختلفين لنفس اليوم.
+
+// تصنيفات المصروفات — جدول منفصل مش enum، لأن كل تاجر عنده تصنيفاته (إيجار، رواتب،
+// إعلانات، شحن، …) والـenum كان معناه migration مع كل تصنيف جديد.
+export const expenseCategories = mysqlTable("expense_categories", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  name: varchar("name", { length: 100 }).notNull(),
+  description: text("description"),
+  // تصنيفات النظام الأساسية — مش قابلة للحذف عشان المصروفات القديمة مايبقاش لها تصنيف
+  isSystem: boolean("isSystem").default(false).notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  // نفس الاسم مرتين لنفس النشاط بيخلي التقارير تتفرّق على تصنيفين متطابقين
+  businessNameUnique: uniqueIndex("expense_categories_business_name_unique").on(table.businessId, table.name),
+}));
+
+export type ExpenseCategory = typeof expenseCategories.$inferSelect;
+export type InsertExpenseCategory = typeof expenseCategories.$inferInsert;
+
+// المصروفات
+export const expenses = mysqlTable("expenses", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  categoryId: int("categoryId"),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  description: text("description").notNull(),
+  // تاريخ المصروف نفسه — مختلف عن createdAt (وقت الإدخال في النظام). مصروف امبارح
+  // ممكن يتسجّل النهاردة، والتقارير لازم تحسبه على يومه مش على يوم الإدخال.
+  expenseDate: timestamp("expenseDate").notNull(),
+  // مرجع خارجي: رقم فاتورة أو إيصال
+  reference: varchar("reference", { length: 100 }),
+  // المرفق: مسار/URL للفاتورة. الرفع نفسه مش متطبّق في المرحلة دي — العمود موجود عشان
+  // الواجهة تقدر تعرض رابط لو اتحط يدويًا، والرفع بياجي مع خدمة التخزين لاحقًا.
+  attachmentUrl: varchar("attachmentUrl", { length: 500 }),
+  createdBy: int("createdBy").notNull(),
+  createdByName: varchar("createdByName", { length: 100 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Expense = typeof expenses.$inferSelect;
+export type InsertExpense = typeof expenses.$inferInsert;
+
+// الخزنة — الـledger الوحيد لكل حركة مالية
+export const treasuryTransactions = mysqlTable("treasury_transactions", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  // نوع الحركة بيقول مصدرها، والاتجاه بيقول داخل/خارج. الاتنين منفصلين لأن نفس النوع
+  // ممكن يبقى في اتجاهين: تعديل تحصيل ناقص بيطلع، وتصحيحه بيدخل.
+  type: mysqlEnum("type", [
+    "collection", // تحصيل أوردر
+    "refund",     // مرتجع
+    "expense",    // مصروف
+    "deposit",    // إيداع
+    "withdrawal", // سحب
+    "adjustment", // تسوية يدوية
+  ]).notNull(),
+  direction: mysqlEnum("direction", ["in", "out"]).notNull(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  // الرصيد بعد الحركة — محسوب ومحفوظ وقت الإدخال، مش وقت العرض. لو حسبناه بجمع كل
+  // الصفوف السابقة عند كل قراءة، أي حركة بتاريخ قديم بتتضاف بعدين كانت هتغيّر كل
+  // الأرصدة اللي بعدها بأثر رجعي، والتاجر مايقدرش يطابق كشف قديم.
+  balanceAfter: decimal("balanceAfter", { precision: 10, scale: 2 }).notNull(),
+  description: text("description").notNull(),
+  notes: text("notes"),
+  // ربط الحركة بمصدرها: أوردر، مصروف، مرتجع. nullable لأن الإيداع/السحب اليدوي
+  // مالوش مصدر في جدول تاني.
+  referenceType: mysqlEnum("referenceType", ["order", "expense", "return", "manual"]).default("manual").notNull(),
+  referenceId: int("referenceId"),
+  performedBy: int("performedBy").notNull(),
+  performedByName: varchar("performedByName", { length: 100 }).notNull(),
+  // تاريخ الحركة المالية — زي expenseDate، مختلف عن وقت الإدخال
+  transactionDate: timestamp("transactionDate").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type TreasuryTransaction = typeof treasuryTransactions.$inferSelect;
+export type InsertTreasuryTransaction = typeof treasuryTransactions.$inferInsert;

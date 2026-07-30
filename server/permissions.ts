@@ -30,6 +30,10 @@ export const ALL_PERMISSIONS = [
   "settings.view",
   "settings.manage",
   "audit.view",
+  // وحدة الحسابات. مفصولة لـview/manage لأن قراءة الأرقام ودخول حركة على الخزنة
+  // مسؤوليتين مختلفتين: المدير بيبص، المحاسب بيسجّل.
+  "accounting.view",
+  "accounting.manage",
 ] as const;
 
 export type Permission = (typeof ALL_PERMISSIONS)[number];
@@ -53,7 +57,12 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
   super_admin: ALL_PERMISSIONS,
   admin: ALL_PERMISSIONS,
   manager: ALL_PERMISSIONS,
-  accountant: ["dashboard.view", "orders.view", "orders.export", "settings.view", "audit.view"],
+  // المحاسب هو الدور الوحيد غير الإداري اللي بيدخل حركات على الخزنة — الدور كان موجود
+  // في القائمة من غير أي صلاحية محاسبية، فكان بيشوف الأوردرات وبس.
+  accountant: [
+    "dashboard.view", "orders.view", "orders.export", "settings.view", "audit.view",
+    "accounting.view", "accounting.manage",
+  ],
   viewer: ["dashboard.view", "orders.view"],
   order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update"],
   agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update"],

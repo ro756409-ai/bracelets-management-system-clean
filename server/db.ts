@@ -19,6 +19,9 @@ import {
   orderEditLogs, InsertOrderEditLog, OrderEditLog,
   scanLogs, InsertScanLog,
   orderItems, InsertOrderItem, OrderItem,
+  expenseCategories, InsertExpenseCategory, ExpenseCategory,
+  expenses, InsertExpense, Expense,
+  treasuryTransactions, InsertTreasuryTransaction, TreasuryTransaction,
 } from "../drizzle/schema";
 import { normalizeEgyptianPhone, toAsciiDigits } from "../shared/phone";
 
@@ -2200,4 +2203,559 @@ export async function getOrderItemsForOrders(orderIds: number[]): Promise<Map<nu
     map.set(r.orderId, list);
   }
   return map;
+}
+
+// ==================== ACCOUNTING ====================
+//
+// قاعدة واحدة تحكم الملف ده كله: `treasury_transactions` هو الـledger الوحيد. أي حركة
+// مالية بتنزل فيه صف، ورصيد الخزنة هو `balanceAfter` لآخر صف — مش SUM محسوب عند كل
+// قراءة. السبب إن الأرصدة التاريخية لازم تفضل ثابتة: لو حسبناها بالجمع، إدخال حركة
+// بتاريخ قديم كان هيحرّك كل الأرصدة اللي بعدها ويخلي التاجر مايقدرش يطابق كشف قديم.
+
+/** رصيد الخزنة الحالي = balanceAfter لآخر حركة. صفر لو مفيش حركات. */
+export async function getTreasuryBalance(businessIds?: number[] | null): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const conditions = businessIds && businessIds.length > 0
+    ? [inArray(treasuryTransactions.businessId, businessIds)]
+    : [];
+  const [row] = await db.select({ balanceAfter: treasuryTransactions.balanceAfter })
+    .from(treasuryTransactions)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(treasuryTransactions.id))
+    .limit(1);
+  return row ? Number(row.balanceAfter) : 0;
+}
+
+/**
+ * إضافة حركة للخزنة مع حساب الرصيد بعدها.
+ *
+ * جوه transaction عن قصد: قراءة آخر رصيد ثم الكتابة عمليتان، ولو حركتين اتنفذوا في نفس
+ * اللحظة الاتنين هيقروا نفس الرصيد القديم ويكتبوا نفس `balanceAfter` — ووقتها الـledger
+ * بيكدب. الـtransaction بتخلي الاتنين يتسلسلوا.
+ *
+ * ملحوظة: كل الحركات في نفس الـbusiness بتشترك في سلسلة رصيد واحدة، فالرصيد بيتقرا
+ * لنفس الـbusinessId بس مش لكل الأنشطة.
+ */
+export async function addTreasuryTransaction(
+  data: Omit<InsertTreasuryTransaction, "balanceAfter">
+): Promise<TreasuryTransaction | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const signed = data.direction === "in" ? Number(data.amount) : -Number(data.amount);
+
+  return db.transaction(async (tx) => {
+    const [last] = await tx.select({ balanceAfter: treasuryTransactions.balanceAfter })
+      .from(treasuryTransactions)
+      .where(eq(treasuryTransactions.businessId, data.businessId))
+      .orderBy(desc(treasuryTransactions.id))
+      .limit(1);
+    const balanceAfter = (last ? Number(last.balanceAfter) : 0) + signed;
+    const result: any = await tx.insert(treasuryTransactions).values({
+      ...data,
+      balanceAfter: balanceAfter.toFixed(2),
+    });
+    const insertId = result?.insertId ?? result?.[0]?.insertId;
+    if (!insertId) return null;
+    const [row] = await tx.select().from(treasuryTransactions)
+      .where(eq(treasuryTransactions.id, Number(insertId))).limit(1);
+    return row ?? null;
+  });
+}
+
+export type TreasuryFilters = {
+  businessIds?: number[] | null;
+  type?: string;
+  direction?: "in" | "out";
+  performedBy?: number;
+  dateFrom?: Date;
+  dateTo?: Date;
+  search?: string;
+  page?: number;
+  limit?: number;
+};
+
+export async function getTreasuryTransactions(filters: TreasuryFilters = {}) {
+  const db = await getDb();
+  if (!db) return { transactions: [], total: 0, page: 1, totalPages: 0 };
+  const { page = 1, limit = 50 } = filters;
+
+  const conditions: any[] = [];
+  if (filters.businessIds && filters.businessIds.length > 0) {
+    conditions.push(inArray(treasuryTransactions.businessId, filters.businessIds));
+  }
+  if (filters.type) conditions.push(eq(treasuryTransactions.type, filters.type as any));
+  if (filters.direction) conditions.push(eq(treasuryTransactions.direction, filters.direction));
+  if (filters.performedBy) conditions.push(eq(treasuryTransactions.performedBy, filters.performedBy));
+  if (filters.dateFrom) conditions.push(gte(treasuryTransactions.transactionDate, filters.dateFrom));
+  if (filters.dateTo) conditions.push(lte(treasuryTransactions.transactionDate, filters.dateTo));
+  if (filters.search?.trim()) {
+    const q = `%${filters.search.trim()}%`;
+    conditions.push(or(
+      sql`${treasuryTransactions.description} LIKE ${q}`,
+      sql`${treasuryTransactions.notes} LIKE ${q}`,
+      sql`${treasuryTransactions.performedByName} LIKE ${q}`,
+    ));
+  }
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [countRow] = await db.select({ count: sql<number>`count(*)` })
+    .from(treasuryTransactions).where(where);
+  const total = Number(countRow?.count ?? 0);
+
+  const transactions = await db.select().from(treasuryTransactions)
+    .where(where)
+    .orderBy(desc(treasuryTransactions.transactionDate), desc(treasuryTransactions.id))
+    .limit(limit).offset((page - 1) * limit);
+
+  return { transactions, total, page, totalPages: Math.ceil(total / limit) };
+}
+
+// ==================== EXPENSE CATEGORIES ====================
+
+export async function getExpenseCategories(businessIds?: number[] | null, includeInactive = false) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions: any[] = [];
+  if (businessIds && businessIds.length > 0) {
+    conditions.push(inArray(expenseCategories.businessId, businessIds));
+  }
+  if (!includeInactive) conditions.push(eq(expenseCategories.isActive, true));
+  return db.select().from(expenseCategories)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(asc(expenseCategories.name));
+}
+
+export async function createExpenseCategory(data: InsertExpenseCategory) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result: any = await db.insert(expenseCategories).values(data);
+  const insertId = result?.insertId ?? result?.[0]?.insertId;
+  return { id: Number(insertId) };
+}
+
+export async function updateExpenseCategory(id: number, data: Partial<InsertExpenseCategory>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (Object.keys(data).length === 0) return;
+  await db.update(expenseCategories).set(data).where(eq(expenseCategories.id, id));
+}
+
+/**
+ * أرشفة التصنيف مش حذفه.
+ *
+ * المصروفات القديمة بتشاور على categoryId — والحذف كان هيخلي تقارير الشهور اللي فاتت
+ * تعرض تصنيف مفقود. الأرشفة بتشيله من قوائم الاختيار وبتسيب التاريخ سليم.
+ */
+export async function archiveExpenseCategory(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [cat] = await db.select().from(expenseCategories).where(eq(expenseCategories.id, id)).limit(1);
+  if (!cat) throw new Error("التصنيف غير موجود");
+  if (cat.isSystem) throw new Error("لا يمكن حذف تصنيف أساسي");
+  await db.update(expenseCategories).set({ isActive: false }).where(eq(expenseCategories.id, id));
+}
+
+// ==================== EXPENSES ====================
+
+export type ExpenseFilters = {
+  businessIds?: number[] | null;
+  categoryId?: number;
+  dateFrom?: Date;
+  dateTo?: Date;
+  search?: string;
+  page?: number;
+  limit?: number;
+};
+
+export async function getExpenses(filters: ExpenseFilters = {}) {
+  const db = await getDb();
+  if (!db) return { expenses: [], total: 0, page: 1, totalPages: 0, totalAmount: 0 };
+  const { page = 1, limit = 50 } = filters;
+
+  const conditions: any[] = [];
+  if (filters.businessIds && filters.businessIds.length > 0) {
+    conditions.push(inArray(expenses.businessId, filters.businessIds));
+  }
+  if (filters.categoryId) conditions.push(eq(expenses.categoryId, filters.categoryId));
+  if (filters.dateFrom) conditions.push(gte(expenses.expenseDate, filters.dateFrom));
+  if (filters.dateTo) conditions.push(lte(expenses.expenseDate, filters.dateTo));
+  if (filters.search?.trim()) {
+    const q = `%${filters.search.trim()}%`;
+    conditions.push(or(
+      sql`${expenses.description} LIKE ${q}`,
+      sql`${expenses.reference} LIKE ${q}`,
+      sql`${expenses.createdByName} LIKE ${q}`,
+    ));
+  }
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [agg] = await db.select({
+    count: sql<number>`count(*)`,
+    sum: sql<string>`COALESCE(SUM(${expenses.amount}), 0)`,
+  }).from(expenses).where(where);
+  const total = Number(agg?.count ?? 0);
+
+  // اسم التصنيف بـleftJoin: مصروف بتصنيف مؤرشف أو محذوف لازم يفضل ظاهر، فالـjoin
+  // مايقدرش يبقى inner.
+  const rows = await db.select({
+    ...getTableColumns(expenses),
+    categoryName: expenseCategories.name,
+  }).from(expenses)
+    .leftJoin(expenseCategories, eq(expenses.categoryId, expenseCategories.id))
+    .where(where)
+    .orderBy(desc(expenses.expenseDate), desc(expenses.id))
+    .limit(limit).offset((page - 1) * limit);
+
+  return {
+    expenses: rows,
+    total,
+    page,
+    totalPages: Math.ceil(total / limit),
+    totalAmount: Number(agg?.sum ?? 0),
+  };
+}
+
+/**
+ * إنشاء مصروف + حركة الخزنة المقابلة له.
+ *
+ * الاتنين مع بعض عن قصد: مصروف بدون حركة خزنة معناه إن الرصيد بيكدب، وده أسوأ من
+ * فشل الإدخال كله. لو حركة الخزنة فشلت بنرجّع المصروف.
+ */
+export async function createExpense(data: InsertExpense) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result: any = await db.insert(expenses).values(data);
+  const insertId = Number(result?.insertId ?? result?.[0]?.insertId);
+  if (!insertId) throw new Error("تعذر إنشاء المصروف");
+
+  try {
+    await addTreasuryTransaction({
+      businessId: data.businessId,
+      type: "expense",
+      direction: "out",
+      amount: String(data.amount),
+      description: data.description,
+      referenceType: "expense",
+      referenceId: insertId,
+      performedBy: data.createdBy,
+      performedByName: data.createdByName,
+      transactionDate: data.expenseDate,
+    } as any);
+  } catch (error) {
+    await db.delete(expenses).where(eq(expenses.id, insertId));
+    throw error;
+  }
+  return { id: insertId };
+}
+
+/**
+ * تعديل مصروف — بيسجّل حركة تسوية بالفرق، مش بيعدّل حركة الخزنة القديمة.
+ *
+ * الـledger مايتعدّلش بأثر رجعي: تعديل صف قديم كان معناه إن كل الأرصدة اللي بعده بقت
+ * غلط، وإن التاريخ نفسه مش موثوق. التسوية بتخلي المسار مقروء: صرفنا ١٠٠، بعدين
+ * اتصحّح لـ١٢٠، فطلعت ٢٠ زيادة.
+ */
+export async function updateExpense(
+  id: number,
+  data: Partial<InsertExpense>,
+  actor: { id: number; name: string }
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [before] = await db.select().from(expenses).where(eq(expenses.id, id)).limit(1);
+  if (!before) throw new Error("المصروف غير موجود");
+  if (Object.keys(data).length === 0) return;
+
+  await db.update(expenses).set(data).where(eq(expenses.id, id));
+
+  if (data.amount != null) {
+    const delta = Number(data.amount) - Number(before.amount);
+    if (delta !== 0) {
+      await addTreasuryTransaction({
+        businessId: before.businessId,
+        type: "adjustment",
+        direction: delta > 0 ? "out" : "in",
+        amount: Math.abs(delta).toFixed(2),
+        description: `تسوية تعديل مصروف: ${before.description}`,
+        notes: `من ${Number(before.amount).toFixed(2)} إلى ${Number(data.amount).toFixed(2)}`,
+        referenceType: "expense",
+        referenceId: id,
+        performedBy: actor.id,
+        performedByName: actor.name,
+        transactionDate: new Date(),
+      } as any);
+    }
+  }
+}
+
+/** حذف مصروف — بيرجّع قيمته للخزنة بحركة تسوية بدل ما يشيل الحركة الأصلية. */
+export async function deleteExpense(id: number, actor: { id: number; name: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [before] = await db.select().from(expenses).where(eq(expenses.id, id)).limit(1);
+  if (!before) throw new Error("المصروف غير موجود");
+
+  await db.delete(expenses).where(eq(expenses.id, id));
+  await addTreasuryTransaction({
+    businessId: before.businessId,
+    type: "adjustment",
+    direction: "in",
+    amount: String(before.amount),
+    description: `إلغاء مصروف: ${before.description}`,
+    referenceType: "expense",
+    referenceId: id,
+    performedBy: actor.id,
+    performedByName: actor.name,
+    transactionDate: new Date(),
+  } as any);
+}
+
+// ==================== COLLECTIONS (التحصيلات) ====================
+
+export type CollectionFilters = {
+  businessIds?: number[] | null;
+  collectionStatus?: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  search?: string;
+  page?: number;
+  limit?: number;
+};
+
+/**
+ * الأوردرات من منظور التحصيل.
+ *
+ * النطاق: الأوردرات اللي خرجت للشحن فعلاً (shipped/delivered/returned/printed/preparing).
+ * أوردر لسه "جديد" أو "ملغي" مالوش مبلغ متوقع للتحصيل، فوجوده هنا كان هيخلي "المعلّق"
+ * رقم بلا معنى.
+ */
+export async function getCollections(filters: CollectionFilters = {}) {
+  const db = await getDb();
+  if (!db) return { orders: [], total: 0, page: 1, totalPages: 0, expectedTotal: 0, collectedTotal: 0 };
+  const { page = 1, limit = 50 } = filters;
+
+  const conditions: any[] = [
+    inArray(orders.status, ['printed', 'preparing', 'shipped', 'delivered', 'returned'] as any),
+  ];
+  if (filters.businessIds && filters.businessIds.length > 0) {
+    conditions.push(inArray(orders.businessId, filters.businessIds));
+  }
+  if (filters.collectionStatus) {
+    conditions.push(eq(orders.collectionStatus, filters.collectionStatus as any));
+  }
+  if (filters.dateFrom) conditions.push(gte(orders.shippedAt, filters.dateFrom));
+  if (filters.dateTo) conditions.push(lte(orders.shippedAt, filters.dateTo));
+  if (filters.search?.trim()) {
+    const q = `%${filters.search.trim()}%`;
+    conditions.push(or(
+      sql`${orders.customerName} LIKE ${q}`,
+      sql`${orders.orderNumber} LIKE ${q}`,
+      sql`${orders.customerPhone} LIKE ${q}`,
+    ));
+  }
+  const where = and(...conditions);
+
+  const [agg] = await db.select({
+    count: sql<number>`count(*)`,
+    expected: sql<string>`COALESCE(SUM(${orders.totalAmount}), 0)`,
+    collected: sql<string>`COALESCE(SUM(${orders.collectedAmount}), 0)`,
+  }).from(orders).where(where);
+
+  const rows = await db.select({
+    id: orders.id,
+    orderNumber: orders.orderNumber,
+    customerName: orders.customerName,
+    customerPhone: orders.customerPhone,
+    governorate: orders.governorate,
+    status: orders.status,
+    totalAmount: orders.totalAmount,
+    shippingFees: orders.shippingFees,
+    collectedAmount: orders.collectedAmount,
+    collectedAt: orders.collectedAt,
+    collectionStatus: orders.collectionStatus,
+    bostaTrackingNumber: orders.bostaTrackingNumber,
+    bostaShipmentId: orders.bostaShipmentId,
+    shippedAt: orders.shippedAt,
+    deliveredAt: orders.deliveredAt,
+  }).from(orders)
+    .where(where)
+    .orderBy(desc(orders.shippedAt), desc(orders.id))
+    .limit(limit).offset((page - 1) * limit);
+
+  const total = Number(agg?.count ?? 0);
+  return {
+    orders: rows,
+    total,
+    page,
+    totalPages: Math.ceil(total / limit),
+    expectedTotal: Number(agg?.expected ?? 0),
+    collectedTotal: Number(agg?.collected ?? 0),
+  };
+}
+
+/**
+ * تسجيل تحصيل أوردر + حركة الخزنة المقابلة.
+ *
+ * الحالة بتتحدد من الأرقام مش من إدخال المستخدم: صفر = failed، أقل من المتوقع = partial،
+ * المتوقع أو أكتر = collected. كده مستحيل يبقى فيه أوردر محصّل بالكامل وحالته "معلّق".
+ */
+export async function recordOrderCollection(
+  orderId: number,
+  collectedAmount: number,
+  actor: { id: number; name: string },
+  collectedAt?: Date,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+  if (!order) throw new Error("الأوردر غير موجود");
+
+  const expected = Number(order.totalAmount);
+  const previous = order.collectedAmount != null ? Number(order.collectedAmount) : 0;
+  const status = collectedAmount <= 0 ? 'failed'
+    : collectedAmount < expected ? 'partial'
+    : 'collected';
+  const when = collectedAt ?? new Date();
+
+  await db.update(orders).set({
+    collectedAmount: collectedAmount.toFixed(2),
+    collectedAt: when,
+    collectionStatus: status as any,
+  }).where(eq(orders.id, orderId));
+
+  // بنسجّل الفرق مش المبلغ كامل: لو التحصيل اتصحّح من ٤٠٠ لـ٤٥٠، اللي دخل الخزنة
+  // فعلاً هو ٥٠ — تسجيل ٤٥٠ تاني كان هيحسب الأوردر مرتين.
+  const delta = collectedAmount - previous;
+  if (delta !== 0) {
+    await addTreasuryTransaction({
+      businessId: order.businessId,
+      type: previous === 0 ? "collection" : "adjustment",
+      direction: delta > 0 ? "in" : "out",
+      amount: Math.abs(delta).toFixed(2),
+      description: `تحصيل أوردر ${order.orderNumber} — ${order.customerName}`,
+      notes: previous === 0 ? undefined : `تصحيح من ${previous.toFixed(2)} إلى ${collectedAmount.toFixed(2)}`,
+      referenceType: "order",
+      referenceId: orderId,
+      performedBy: actor.id,
+      performedByName: actor.name,
+      transactionDate: when,
+    } as any);
+  }
+  return { status, delta };
+}
+
+// ==================== ACCOUNTING DASHBOARD ====================
+
+/**
+ * مؤشرات لوحة الحسابات.
+ *
+ * كل رقم هنا محسوب من الجداول الموجودة مباشرة — مفيش قيم مخزّنة مجمّعة تحتاج مزامنة.
+ * تكلفة المنتجات بتتحسب من costPrice في وقت القراءة، فمعناها "التكلفة بالسعر الحالي"
+ * مش "التكلفة وقت البيع": النظام مابيصوّرش سعر التكلفة على الأوردر، وده مرصود كنقص.
+ */
+export async function getAccountingDashboard(params: {
+  businessIds?: number[] | null;
+  dateFrom?: Date;
+  dateTo?: Date;
+}) {
+  const db = await getDb();
+  const empty = {
+    totalSales: 0, totalCollected: 0, shippingCost: 0, productCost: 0,
+    totalExpenses: 0, totalReturns: 0, treasuryBalance: 0, netProfit: 0,
+    pendingCollection: 0, movementByDay: [] as { day: string; inflow: number; outflow: number }[],
+  };
+  if (!db) return empty;
+
+  const { businessIds, dateFrom, dateTo } = params;
+  const scope = (col: any) => businessIds && businessIds.length > 0 ? [inArray(col, businessIds)] : [];
+  const range = (col: any) => {
+    const c: any[] = [];
+    if (dateFrom) c.push(gte(col, dateFrom));
+    if (dateTo) c.push(lte(col, dateTo));
+    return c;
+  };
+  const whereOf = (conds: any[]) => conds.length > 0 ? and(...conds) : undefined;
+
+  // المبيعات والشحن: الأوردرات اللي وصلت مرحلة الشحن. الملغي والجديد مش مبيعات.
+  const soldStatuses = ['printed', 'preparing', 'shipped', 'delivered', 'returned'] as any;
+  const [sales] = await db.select({
+    sales: sql<string>`COALESCE(SUM(${orders.totalAmount}), 0)`,
+    shipping: sql<string>`COALESCE(SUM(${orders.shippingFees}), 0)`,
+    collected: sql<string>`COALESCE(SUM(${orders.collectedAmount}), 0)`,
+  }).from(orders).where(whereOf([
+    inArray(orders.status, soldStatuses),
+    ...scope(orders.businessId),
+    ...range(orders.createdAt),
+  ]));
+
+  // المعلّق: المتوقع ناقص المحصّل للأوردرات اللي لسه مش محصّلة
+  const [pending] = await db.select({
+    amount: sql<string>`COALESCE(SUM(${orders.totalAmount} - COALESCE(${orders.collectedAmount}, 0)), 0)`,
+  }).from(orders).where(whereOf([
+    inArray(orders.status, soldStatuses),
+    inArray(orders.collectionStatus, ['pending', 'partial'] as any),
+    ...scope(orders.businessId),
+    ...range(orders.createdAt),
+  ]));
+
+  // تكلفة المنتجات: من بنود الأوردر مضروبة في costPrice للـvariant.
+  //
+  // نقص معروف: `costPrice` موجود على product_variants بس، مش على products. يعني منتج
+  // بدون variants (زي "مسند سيارة") تكلفته بتتحسب صفر، والرقم ده أقل من الحقيقي.
+  // الإصلاح محتاج عمود products.costPrice — مرصود للمرحلة الجاية ومش داخل في المطلوب هنا.
+  const [cost] = await db.select({
+    amount: sql<string>`COALESCE(SUM(${orderItems.quantity} * COALESCE(${productVariants.costPrice}, 0)), 0)`,
+  }).from(orderItems)
+    .innerJoin(orders, eq(orderItems.orderId, orders.id))
+    .leftJoin(productVariants, eq(orderItems.variantId, productVariants.id))
+    .where(whereOf([
+      inArray(orders.status, soldStatuses),
+      ...scope(orders.businessId),
+      ...range(orders.createdAt),
+    ]));
+
+  const [exp] = await db.select({
+    amount: sql<string>`COALESCE(SUM(${expenses.amount}), 0)`,
+  }).from(expenses).where(whereOf([...scope(expenses.businessId), ...range(expenses.expenseDate)]));
+
+  const [ret] = await db.select({
+    amount: sql<string>`COALESCE(SUM(${returnsTable.totalAmount}), 0)`,
+  }).from(returnsTable).where(whereOf([...scope(returnsTable.businessId), ...range(returnsTable.returnedAt)]));
+
+  // الحركة المالية بالأيام — للرسم البياني
+  const movement = await db.select({
+    day: sql<string>`DATE(${treasuryTransactions.transactionDate})`,
+    inflow: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'in' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+    outflow: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'out' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+  }).from(treasuryTransactions)
+    .where(whereOf([...scope(treasuryTransactions.businessId), ...range(treasuryTransactions.transactionDate)]))
+    .groupBy(sql`DATE(${treasuryTransactions.transactionDate})`)
+    .orderBy(sql`DATE(${treasuryTransactions.transactionDate})`);
+
+  const totalSales = Number(sales?.sales ?? 0);
+  const shippingCost = Number(sales?.shipping ?? 0);
+  const productCost = Number(cost?.amount ?? 0);
+  const totalExpenses = Number(exp?.amount ?? 0);
+  const totalReturns = Number(ret?.amount ?? 0);
+
+  return {
+    totalSales,
+    totalCollected: Number(sales?.collected ?? 0),
+    shippingCost,
+    productCost,
+    totalExpenses,
+    totalReturns,
+    pendingCollection: Number(pending?.amount ?? 0),
+    treasuryBalance: await getTreasuryBalance(businessIds),
+    // صافي الربح = المبيعات − (تكلفة المنتجات + الشحن + المصروفات + المرتجعات).
+    // مبني على المبيعات مش على المحصّل عن قصد: ده ربح محقّق دفتريًا، والفرق بينه وبين
+    // الكاش الفعلي هو "المعلّق" المعروض جنبه.
+    netProfit: totalSales - (productCost + shippingCost + totalExpenses + totalReturns),
+    movementByDay: movement.map(m => ({
+      day: String(m.day),
+      inflow: Number(m.inflow),
+      outflow: Number(m.outflow),
+    })),
+  };
 }

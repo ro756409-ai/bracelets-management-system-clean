@@ -121,6 +121,22 @@ async function scopeBusinessId(tenantId: number, businessId?: number | null): Pr
   }
   return businessId;
 }
+
+/**
+ * نفس `scopeBusinessId` لكن بيرجّع `number` مضمون.
+ *
+ * `scopeBusinessId` بيرجّع undefined في حالة واحدة بس: لما المدخل نفسه يكون null/undefined
+ * (يعني "من غير فلتر"). الإجراءات اللي بتكتب في جدول عموده businessId NOT NULL بيكون
+ * الـzod عندها فارض الرقم أصلاً، فالحالة دي مستحيلة عندها — والدالة دي بتوضّح ده للـtypes
+ * بدل non-null assertion مبهم في كل سطر.
+ */
+async function requireScopedBusinessId(tenantId: number, businessId: number): Promise<number> {
+  const scoped = await scopeBusinessId(tenantId, businessId);
+  if (scoped == null) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'النشاط (businessId) مطلوب' });
+  }
+  return scoped;
+}
 import {
   groupOrdersByAgent, getAgentsForGovernorateOnDay,
   getTodaySchedule, DAY_NAMES_AR, SHIPPING_SCHEDULES,
@@ -148,6 +164,10 @@ import {
   getWarehousesByBusiness, createWarehouse, updateWarehouse,
   getBusinessGroupsWithBusinesses, getBusinessIdsByGroupId, getActiveBusinessGroups,
   editOrderFull, getOrderEditLogs, logOrderEdit,
+  getAccountingDashboard, getTreasuryBalance, getTreasuryTransactions, addTreasuryTransaction,
+  getExpenseCategories, createExpenseCategory, updateExpenseCategory, archiveExpenseCategory,
+  getExpenses, createExpense, updateExpense, deleteExpense,
+  getCollections, recordOrderCollection,
   scanOrderBySerial, getScanLogs,
   getBusinessIdsForTenant,
 } from "./db";
@@ -2832,6 +2852,213 @@ export const appRouter = router({
     delete: adminProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       await deleteVariant(input.id);
       return { success: true };
+    }),
+  }),
+
+  // ==================== ACCOUNTING ====================
+  //
+  // الوصول: adminProcedure. الـcontext الحالي بيبني ctx.user للأدوار الإدارية بس
+  // (super_admin/admin/manager)، فمحاسب بـemployee_token مالوش ctx.user ومش هيوصل
+  // للـrouter ده. صلاحيات accounting.view/manage اتضافت في permissions.ts استعدادًا
+  // لبورتال المحاسب، لكن ربطها بمسار دخول منفصل مش جزء من المرحلة دي.
+  accounting: router({
+    /** مؤشرات لوحة الحسابات */
+    dashboard: adminProcedure.input(z.object({
+      dateFrom: z.date().optional(),
+      dateTo: z.date().optional(),
+      businessIds: z.array(z.number()).optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+      return getAccountingDashboard({
+        businessIds,
+        dateFrom: input?.dateFrom,
+        dateTo: input?.dateTo,
+      });
+    }),
+
+    // ---------- الخزنة ----------
+    treasuryList: adminProcedure.input(z.object({
+      type: z.enum(['collection', 'refund', 'expense', 'deposit', 'withdrawal', 'adjustment']).optional(),
+      direction: z.enum(['in', 'out']).optional(),
+      performedBy: z.number().optional(),
+      dateFrom: z.date().optional(),
+      dateTo: z.date().optional(),
+      search: z.string().optional(),
+      page: z.number().default(1),
+      limit: z.number().default(50),
+      businessIds: z.array(z.number()).optional(),
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getTreasuryTransactions({ ...input, businessIds });
+    }),
+
+    treasuryBalance: adminProcedure.input(z.object({
+      businessIds: z.array(z.number()).optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+      return { balance: await getTreasuryBalance(businessIds) };
+    }),
+
+    /**
+     * إيداع/سحب يدوي.
+     *
+     * النوع محدود بـdeposit/withdrawal: التحصيل والمصروف والمرتجع بيتسجّلوا تلقائيًا من
+     * مصادرهم، ولو اتسمح بإدخالهم يدوي هنا كان ممكن نفس المصروف يتحسب مرتين.
+     */
+    treasuryCreate: adminProcedure.input(z.object({
+      type: z.enum(['deposit', 'withdrawal']),
+      amount: z.number().positive('المبلغ لازم يكون أكبر من صفر'),
+      description: z.string().min(1, 'الوصف مطلوب'),
+      notes: z.string().optional(),
+      transactionDate: z.date().optional(),
+      businessId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      const row = await addTreasuryTransaction({
+        businessId,
+        type: input.type,
+        direction: input.type === 'deposit' ? 'in' : 'out',
+        amount: input.amount.toFixed(2),
+        description: input.description,
+        notes: input.notes,
+        referenceType: 'manual',
+        performedBy: actor.id ?? ctx.user.id,
+        performedByName: actor.name ?? 'غير معروف',
+        transactionDate: input.transactionDate ?? new Date(),
+      } as any);
+      return { success: true, transaction: row };
+    }),
+
+    // ---------- تصنيفات المصروفات ----------
+    expenseCategories: adminProcedure.input(z.object({
+      includeInactive: z.boolean().optional(),
+      businessIds: z.array(z.number()).optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+      return getExpenseCategories(businessIds, input?.includeInactive ?? false);
+    }),
+
+    expenseCategoryCreate: adminProcedure.input(z.object({
+      name: z.string().min(1, 'اسم التصنيف مطلوب').max(100),
+      description: z.string().optional(),
+      businessId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+      try {
+        return await createExpenseCategory({ ...input, businessId });
+      } catch (error: any) {
+        // الفهرس الفريد (businessId, name) بيمنع تصنيفين بنفس الاسم — نحوّل خطأ
+        // قاعدة البيانات لرسالة مفهومة بدل ما تظهر للمستخدم كخطأ داخلي.
+        if (String(error?.message ?? '').includes('Duplicate')) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'يوجد تصنيف بنفس الاسم' });
+        }
+        throw error;
+      }
+    }),
+
+    expenseCategoryUpdate: adminProcedure.input(z.object({
+      id: z.number(),
+      name: z.string().min(1).max(100).optional(),
+      description: z.string().optional(),
+    })).mutation(async ({ input }) => {
+      const { id, ...rest } = input;
+      await updateExpenseCategory(id, rest);
+      return { success: true };
+    }),
+
+    expenseCategoryArchive: adminProcedure.input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await archiveExpenseCategory(input.id);
+        return { success: true };
+      }),
+
+    // ---------- المصروفات ----------
+    expenseList: adminProcedure.input(z.object({
+      categoryId: z.number().optional(),
+      dateFrom: z.date().optional(),
+      dateTo: z.date().optional(),
+      search: z.string().optional(),
+      page: z.number().default(1),
+      limit: z.number().default(50),
+      businessIds: z.array(z.number()).optional(),
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getExpenses({ ...input, businessIds });
+    }),
+
+    expenseCreate: adminProcedure.input(z.object({
+      categoryId: z.number().optional(),
+      amount: z.number().positive('المبلغ لازم يكون أكبر من صفر'),
+      description: z.string().min(1, 'البيان مطلوب'),
+      expenseDate: z.date(),
+      reference: z.string().max(100).optional(),
+      attachmentUrl: z.string().max(500).optional(),
+      businessId: z.number(),
+    })).mutation(async ({ ctx, input }) => {
+      const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      return createExpense({
+        ...input,
+        businessId,
+        amount: input.amount.toFixed(2),
+        createdBy: actor.id ?? ctx.user.id,
+        createdByName: actor.name ?? 'غير معروف',
+      });
+    }),
+
+    expenseUpdate: adminProcedure.input(z.object({
+      id: z.number(),
+      categoryId: z.number().optional(),
+      amount: z.number().positive().optional(),
+      description: z.string().min(1).optional(),
+      expenseDate: z.date().optional(),
+      reference: z.string().max(100).optional(),
+      attachmentUrl: z.string().max(500).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const { id, amount, ...rest } = input;
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      await updateExpense(
+        id,
+        { ...rest, ...(amount != null ? { amount: amount.toFixed(2) } : {}) },
+        { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' },
+      );
+      return { success: true };
+    }),
+
+    expenseDelete: adminProcedure.input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await resolveActingEmployeeIdAndName(ctx);
+        await deleteExpense(input.id, { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' });
+        return { success: true };
+      }),
+
+    // ---------- التحصيلات ----------
+    collectionList: adminProcedure.input(z.object({
+      collectionStatus: z.enum(['pending', 'collected', 'partial', 'failed']).optional(),
+      dateFrom: z.date().optional(),
+      dateTo: z.date().optional(),
+      search: z.string().optional(),
+      page: z.number().default(1),
+      limit: z.number().default(50),
+      businessIds: z.array(z.number()).optional(),
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getCollections({ ...input, businessIds });
+    }),
+
+    collectionRecord: adminProcedure.input(z.object({
+      orderId: z.number(),
+      collectedAmount: z.number().min(0, 'المبلغ لا يمكن أن يكون سالبًا'),
+      collectedAt: z.date().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      return recordOrderCollection(
+        input.orderId,
+        input.collectedAmount,
+        { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' },
+        input.collectedAt,
+      );
     }),
   }),
 });

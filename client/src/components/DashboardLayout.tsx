@@ -26,7 +26,7 @@ import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
-  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck,
+  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -101,6 +101,18 @@ const MENU_GROUPS: MenuGroup[] = [
     label: "الموظفون",
     icon: UserCog,
     items: [{ icon: Users, label: "الموظفين", path: "/employees", adminOnly: true }],
+  },
+  {
+    // الحسابات مجموعة مستقلة مش تحت "التقارير": التقارير بتقرا، والحسابات بتسجّل
+    // حركات مالية — دخول مختلف ومسؤولية مختلفة.
+    label: "الحسابات",
+    icon: Wallet,
+    items: [
+      { icon: LineChart, label: "لوحة الحسابات", path: "/accounting", adminOnly: true },
+      { icon: Wallet, label: "الخزنة", path: "/treasury", adminOnly: true },
+      { icon: Receipt, label: "المصروفات", path: "/expenses", adminOnly: true },
+      { icon: Banknote, label: "التحصيلات", path: "/collections", adminOnly: true },
+    ],
   },
   {
     label: "التقارير",

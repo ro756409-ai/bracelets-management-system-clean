@@ -225,6 +225,13 @@
       "when": 1785239432295,
       "tag": "0031_curvy_apocalypse",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "5",
+      "when": 1785403940333,
+      "tag": "0032_cultured_radioactive_man",
+      "breakpoints": true
     }
   ]
 }
