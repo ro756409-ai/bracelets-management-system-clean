@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Plus, Wallet } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Plus, ShoppingCart, Wallet } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import {
-  PageHeader, StatCard, ResponsiveDataTable, type Column, Pagination,
+  SectionHeader, StatCard, ResponsiveDataTable, type Column, Pagination,
   FilterBar, SearchInput, MobileOrderCard, toast,
   buildFilterChips, countActiveFilters, type FilterDescriptor,
 } from "@/components/shared";
@@ -21,6 +21,7 @@ import { formatMoney } from "@/lib/money";
 /** نفس ترتيب الـenum على السيرفر، مع تسمياتها العربية. */
 const TX_TYPES: Record<string, string> = {
   collection: "تحصيل",
+  order_new: "أوردر جديد",
   refund: "مرتجع",
   expense: "مصروف",
   deposit: "إيداع",
@@ -51,7 +52,7 @@ const FILTER_DESCRIPTORS: FilterDescriptor<{
  * بينزلوا الخزنة تلقائيًا من مصادرهم (`recordOrderCollection`, `createExpense`)، فلو
  * الصفحة دي سمحت بإدخالهم يدوي كان ممكن نفس المبلغ يتحسب مرتين.
  */
-export default function Treasury() {
+export function TreasurySection() {
   const { currentBusinessIds } = useBusinessContext();
   const utils = trpc.useUtils();
 
@@ -62,8 +63,9 @@ export default function Treasury() {
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  const [expandedMobileId, setExpandedMobileId] = useState<number | null>(null);
+  const [expandedMobileId, setExpandedMobileId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [includeOrderEvents, setIncludeOrderEvents] = useState(false);
 
   const { data: employees } = trpc.employees.activeList.useQuery(
     currentBusinessIds && currentBusinessIds.length === 1 ? { businessId: currentBusinessIds[0] } : undefined
@@ -84,6 +86,7 @@ export default function Treasury() {
     page,
     limit: pageSize,
     businessIds: currentBusinessIds,
+    includeOrderEvents,
   });
   const { data: balanceData } = trpc.accounting.treasuryBalance.useQuery({ businessIds: currentBusinessIds });
 
@@ -93,6 +96,8 @@ export default function Treasury() {
   const pageTotals = useMemo(() => {
     let inflow = 0, outflow = 0;
     for (const t of rows) {
+      // الالتزامات مش فلوس، فمابتدخلش في مجموع الداخل/الخارج
+      if (t.kind === "commitment") continue;
       const amount = Number(t.amount);
       if (t.direction === "in") inflow += amount; else outflow += amount;
     }
@@ -135,7 +140,16 @@ export default function Treasury() {
     },
     {
       id: "type", header: "نوع الحركة", alwaysVisible: true,
-      cell: (t) => <Badge variant="secondary" className="text-xs">{TX_TYPES[t.type] ?? t.type}</Badge>,
+      cell: (t) => (
+        <Badge
+          variant="outline"
+          className={t.kind === "commitment"
+            ? "border-dashed border-border text-xs text-muted-foreground"
+            : "border-transparent bg-secondary text-xs text-secondary-foreground"}
+        >
+          {TX_TYPES[t.type] ?? t.type}
+        </Badge>
+      ),
     },
     {
       id: "description", header: "الوصف", alwaysVisible: true,
@@ -148,7 +162,10 @@ export default function Treasury() {
     },
     {
       id: "direction", header: "الاتجاه", alwaysVisible: true,
-      cell: (t) => t.direction === "in" ? (
+      // الالتزام (أوردر جديد) مالوش اتجاه: الفلوس لسه مادخلتش ولا خرجت
+      cell: (t) => t.kind === "commitment" ? (
+        <span className="type-caption">التزام</span>
+      ) : t.direction === "in" ? (
         <span className="flex items-center gap-1 text-sm font-medium text-[var(--success)]">
           <ArrowDownLeft className="h-3.5 w-3.5" /> داخل
         </span>
@@ -160,7 +177,9 @@ export default function Treasury() {
     },
     {
       id: "amount", header: "المبلغ", numeric: true, alwaysVisible: true,
-      cell: (t) => (
+      cell: (t) => t.kind === "commitment" ? (
+        <span className="text-sm tabular-nums text-muted-foreground">{formatMoney(t.amount)}</span>
+      ) : (
         <span className={`text-sm font-bold tabular-nums ${t.direction === "in" ? "text-[var(--success)]" : "text-destructive"}`}>
           {t.direction === "in" ? "+" : "−"}{formatMoney(t.amount)}
         </span>
@@ -181,24 +200,36 @@ export default function Treasury() {
     },
     {
       id: "balanceAfter", header: "الرصيد بعد الحركة", numeric: true, alwaysVisible: true,
-      cell: (t) => (
-        <span className="text-sm font-semibold tabular-nums">{formatMoney(t.balanceAfter)}</span>
-      ),
+      // الالتزام مابيغيّرش الرصيد، فالخانة بتقول كده صراحة بدل ما تعرض رقم مضلّل
+      cell: (t) => t.balanceAfter == null
+        ? <span className="type-caption" title="الأوردر التزام — الرصيد بيتغيّر عند التحصيل">لا يؤثر</span>
+        : <span className="text-sm font-semibold tabular-nums">{formatMoney(t.balanceAfter)}</span>,
     },
   ];
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="الخزنة"
+      <SectionHeader
         description="كل حركة مالية في النظام — تحصيل، مصروف، مرتجع، إيداع، سحب"
-        primaryAction={
-          <Button size="sm" className="h-9 gap-1.5" onClick={() => setShowCreate(true)}>
-            <Plus className="h-4 w-4" /> حركة يدوية
-          </Button>
+        actions={
+          <>
+            {/* التبديل ده عرض بحت: بيضيف الأوردرات الجديدة للتايم‌لاين كالتزامات
+                (بدون أثر على الرصيد) عشان التاجر يشوف الصورة كاملة في مكان واحد. */}
+            <Button
+              variant={includeOrderEvents ? "default" : "outline"}
+              size="sm" className="h-9 gap-1.5"
+              aria-pressed={includeOrderEvents}
+              onClick={() => setIncludeOrderEvents(v => !v)}
+            >
+              <ShoppingCart className="h-4 w-4" /> إظهار الأوردرات الجديدة
+            </Button>
+            <Button size="sm" className="h-9 gap-1.5" onClick={() => setShowCreate(true)}>
+              <Plus className="h-4 w-4" /> حركة يدوية
+            </Button>
+          </>
         }
       >
-        <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:overflow-visible [&>*]:min-w-[168px] [&>*]:snap-start lg:[&>*]:min-w-0">
+        <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:overflow-visible [&>*]:min-w-[196px] [&>*]:snap-start lg:[&>*]:min-w-0">
           <StatCard
             label="رصيد الخزنة"
             tone={(balanceData?.balance ?? 0) < 0 ? "danger" : "primary"}
@@ -218,7 +249,7 @@ export default function Treasury() {
             icon={<ArrowUpRight className="h-5 w-5" />}
           />
         </div>
-      </PageHeader>
+      </SectionHeader>
 
       <Card className="shadow-[var(--shadow-card)]">
         <CardContent className="p-3">
@@ -268,7 +299,7 @@ export default function Treasury() {
       <ResponsiveDataTable
         rows={rows}
         columns={columns}
-        rowKey={(t: any) => t.id}
+        rowKey={(t: any) => String(t.id)}
         loading={isLoading}
         empty={{ title: "لا توجد حركات", description: "أول تحصيل أو مصروف هيظهر هنا تلقائيًا" }}
         mobileRow={(t: any) => (

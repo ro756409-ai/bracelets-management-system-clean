@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Edit2, Paperclip, Plus, Receipt, Tag, Trash2 } from "lucide-react";
+import { Edit2, Paperclip, Plus, Printer, Receipt, Tag, Trash2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { Button } from "@/components/ui/button";
@@ -12,11 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import {
-  PageHeader, StatCard, ResponsiveDataTable, type Column, Pagination,
+  SectionHeader, StatCard, ResponsiveDataTable, type Column, Pagination,
   FilterBar, SearchInput, MobileOrderCard, ConfirmDialog, toast,
   buildFilterChips, countActiveFilters, type FilterDescriptor,
 } from "@/components/shared";
 import { formatMoney } from "@/lib/money";
+import { printExpenses } from "@/lib/printExpenses";
 
 const FILTER_DESCRIPTORS: FilterDescriptor<{ category: string; dateRange: DateRange }>[] = [
   { key: "category", label: "التصنيف" },
@@ -37,7 +38,7 @@ const FILTER_DESCRIPTORS: FilterDescriptor<{ category: string; dateRange: DateRa
  * مصروف مسجّل ورصيد الخزنة مش عارف عنه حاجة. التعديل والحذف بينزلوا حركة تسوية جديدة
  * مش بيمسحوا الحركة القديمة — الـledger مايتغيّرش بأثر رجعي.
  */
-export default function Expenses() {
+export function ExpensesSection() {
   const { currentBusinessIds } = useBusinessContext();
   const utils = trpc.useUtils();
 
@@ -165,18 +166,24 @@ export default function Expenses() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="المصروفات"
+      <SectionHeader
         description="كل مصروف بينزل حركة على الخزنة تلقائيًا"
-        primaryAction={
-          <Button size="sm" className="h-9 gap-1.5" onClick={() => { setEditing(null); setShowForm(true); }}>
-            <Plus className="h-4 w-4" /> إضافة مصروف
-          </Button>
-        }
         actions={
-          <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => setShowCategories(true)}>
-            <Tag className="h-4 w-4" /> التصنيفات
-          </Button>
+          <>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => {
+                if (!printExpenses(rows, data?.totalAmount ?? 0)) {
+                  toast.error("المتصفح منع نافذة الطباعة — اسمح بالنوافذ المنبثقة لهذا الموقع");
+                }
+              }}>
+              <Printer className="h-4 w-4" /> طباعة
+            </Button>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => setShowCategories(true)}>
+              <Tag className="h-4 w-4" /> التصنيفات
+            </Button>
+            <Button size="sm" className="h-9 gap-1.5" onClick={() => { setEditing(null); setShowForm(true); }}>
+              <Plus className="h-4 w-4" /> إضافة مصروف
+            </Button>
+          </>
         }
       >
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
@@ -197,7 +204,7 @@ export default function Expenses() {
             icon={<Tag className="h-5 w-5" />}
           />
         </div>
-      </PageHeader>
+      </SectionHeader>
 
       <Card className="shadow-[var(--shadow-card)]">
         <CardContent className="p-3">

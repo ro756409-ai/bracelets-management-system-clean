@@ -7,6 +7,7 @@
  */
 
 export { PageHeader, type PageHeaderProps } from "./PageHeader";
+export { SectionHeader, type SectionHeaderProps } from "./SectionHeader";
 export { SectionCard, type SectionCardProps } from "./SectionCard";
 export { StatCard, type StatCardProps, type StatTone } from "./StatCard";
 export {

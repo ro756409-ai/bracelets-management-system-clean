@@ -2273,6 +2273,33 @@ export type TreasuryFilters = {
   search?: string;
   page?: number;
   limit?: number;
+  /** يدمج أحداث "أوردر جديد" في السجل — عرض فقط، بدون أي أثر على الرصيد. */
+  includeOrderEvents?: boolean;
+};
+
+/**
+ * حدث "أوردر جديد" في سجل الحركة المالية.
+ *
+ * أوردر جديد **مش حركة نقدية** — هو التزام، الفلوس لسه مادخلتش. فلو نزل الخزنة كحركة
+ * `in` كان رصيد الخزنة بيبقى خيال: بيعرض فلوس لسه مع شركة الشحن كأنها في الدُرج.
+ *
+ * فالحدث بيتعرض في السجل عشان التاجر يشوف الصورة كاملة في تايم‌لاين واحد، لكن بـ
+ * `balanceAfter: null` و`direction: null` — يعني ظاهر ومحسوب عليه صفر. اللي بيحوّله
+ * لفلوس حقيقية هو التحصيل، وهو حركة منفصلة بترتبط بنفس الأوردر.
+ */
+export type LedgerRow = {
+  id: string;
+  kind: "cash" | "commitment";
+  type: string;
+  direction: "in" | "out" | null;
+  amount: string;
+  balanceAfter: string | null;
+  description: string;
+  notes: string | null;
+  referenceType: string;
+  referenceId: number | null;
+  performedByName: string;
+  transactionDate: Date;
 };
 
 export async function getTreasuryTransactions(filters: TreasuryFilters = {}) {
@@ -2308,7 +2335,79 @@ export async function getTreasuryTransactions(filters: TreasuryFilters = {}) {
     .orderBy(desc(treasuryTransactions.transactionDate), desc(treasuryTransactions.id))
     .limit(limit).offset((page - 1) * limit);
 
-  return { transactions, total, page, totalPages: Math.ceil(total / limit) };
+  const cashRows: LedgerRow[] = transactions.map(t => ({
+    id: `tx-${t.id}`,
+    kind: "cash",
+    type: t.type,
+    direction: t.direction,
+    amount: t.amount,
+    balanceAfter: t.balanceAfter,
+    description: t.description,
+    notes: t.notes,
+    referenceType: t.referenceType,
+    referenceId: t.referenceId,
+    performedByName: t.performedByName,
+    transactionDate: t.transactionDate,
+  }));
+
+  if (!filters.includeOrderEvents) {
+    return { transactions: cashRows, total, page, totalPages: Math.ceil(total / limit) };
+  }
+
+  // أحداث الأوردرات الجديدة — بتُدمج في صفحة النتائج المعروضة فقط.
+  //
+  // مقصودة إنها تدخل بعد الـpagination مش قبله: الترقيم بيفضل على الحركات النقدية (اللي
+  // ليها أرصدة متسلسلة)، والالتزامات بتنضاف كسياق على نفس النطاق الزمني. لو دخلت في
+  // الترقيم كان عدد الصفحات هيتغيّر بمجرد تشغيل الزر، والتاجر يفقد مكانه.
+  const shown = cashRows.map(r => r.transactionDate.getTime()).filter(t => !Number.isNaN(t));
+  const windowFrom = filters.dateFrom ?? (shown.length > 0 ? new Date(Math.min(...shown)) : undefined);
+  const windowTo = filters.dateTo ?? (shown.length > 0 ? new Date(Math.max(...shown)) : undefined);
+
+  const orderConditions: any[] = [];
+  if (filters.businessIds && filters.businessIds.length > 0) {
+    orderConditions.push(inArray(orders.businessId, filters.businessIds));
+  }
+  if (windowFrom) orderConditions.push(gte(orders.createdAt, windowFrom));
+  if (windowTo) orderConditions.push(lte(orders.createdAt, windowTo));
+  if (filters.search?.trim()) {
+    const q = `%${filters.search.trim()}%`;
+    orderConditions.push(or(
+      sql`${orders.customerName} LIKE ${q}`,
+      sql`${orders.orderNumber} LIKE ${q}`,
+    ));
+  }
+
+  const orderRows = await db.select({
+    id: orders.id,
+    orderNumber: orders.orderNumber,
+    customerName: orders.customerName,
+    totalAmount: orders.totalAmount,
+    createdAt: orders.createdAt,
+    source: orders.source,
+  }).from(orders)
+    .where(orderConditions.length > 0 ? and(...orderConditions) : undefined)
+    .orderBy(desc(orders.createdAt))
+    .limit(limit);
+
+  const commitmentRows: LedgerRow[] = orderRows.map(o => ({
+    id: `order-${o.id}`,
+    kind: "commitment",
+    type: "order_new",
+    direction: null,
+    amount: o.totalAmount,
+    balanceAfter: null,
+    description: `أوردر جديد ${o.orderNumber} — ${o.customerName}`,
+    notes: null,
+    referenceType: "order",
+    referenceId: o.id,
+    performedByName: "—",
+    transactionDate: o.createdAt,
+  }));
+
+  const merged = [...cashRows, ...commitmentRows]
+    .sort((a, b) => b.transactionDate.getTime() - a.transactionDate.getTime());
+
+  return { transactions: merged, total, page, totalPages: Math.ceil(total / limit) };
 }
 
 // ==================== EXPENSE CATEGORIES ====================
@@ -2583,9 +2682,31 @@ export async function getCollections(filters: CollectionFilters = {}) {
     .orderBy(desc(orders.shippedAt), desc(orders.id))
     .limit(limit).offset((page - 1) * limit);
 
+  // "الموظف الذي قام بالتحصيل" — مشتق من آخر حركة تحصيل للأوردر في الخزنة، مش من عمود
+  // جديد على orders. الخزنة بتسجّل performedByName مع كل حركة أصلاً، فالمعلومة موجودة
+  // ومضاف عمود denormalized كان هيبقى نسخة تانية ممكن تختلف عنها.
+  const collectorByOrderId = new Map<number, string>();
+  const orderIds = rows.map(r => r.id);
+  if (orderIds.length > 0) {
+    const collectors = await db.select({
+      referenceId: treasuryTransactions.referenceId,
+      performedByName: treasuryTransactions.performedByName,
+      id: treasuryTransactions.id,
+    }).from(treasuryTransactions)
+      .where(and(
+        eq(treasuryTransactions.referenceType, 'order'),
+        inArray(treasuryTransactions.referenceId, orderIds),
+      ))
+      .orderBy(asc(treasuryTransactions.id));
+    // الترتيب تصاعدي والكتابة بتستبدل، فآخر حركة هي اللي تفضل — وهي آخر مين لمس التحصيل
+    for (const c of collectors) {
+      if (c.referenceId != null) collectorByOrderId.set(c.referenceId, c.performedByName);
+    }
+  }
+
   const total = Number(agg?.count ?? 0);
   return {
-    orders: rows,
+    orders: rows.map(r => ({ ...r, collectedByName: collectorByOrderId.get(r.id) ?? null })),
     total,
     page,
     totalPages: Math.ceil(total / limit),
@@ -2663,7 +2784,9 @@ export async function getAccountingDashboard(params: {
   const empty = {
     totalSales: 0, totalCollected: 0, shippingCost: 0, productCost: 0,
     totalExpenses: 0, totalReturns: 0, treasuryBalance: 0, netProfit: 0,
-    pendingCollection: 0, movementByDay: [] as { day: string; inflow: number; outflow: number }[],
+    pendingCollection: 0, profitMargin: 0,
+    todaySales: 0, todayOrders: 0, monthSales: 0, monthOrders: 0,
+    movementByDay: [] as { day: string; inflow: number; outflow: number }[],
   };
   if (!db) return empty;
 
@@ -2687,6 +2810,33 @@ export async function getAccountingDashboard(params: {
     inArray(orders.status, soldStatuses),
     ...scope(orders.businessId),
     ...range(orders.createdAt),
+  ]));
+
+  // مبيعات اليوم والشهر — مستقلّة عن فلتر التاريخ عن قصد.
+  //
+  // البطاقتين دول بيجاوبوا "إيه اللي بيحصل دلوقتي؟"، فلازم يفضلوا ثابتين لما التاجر
+  // يفلتر على شهر قديم. لو خضعوا للفلتر كانوا هيقولوا "مبيعات اليوم: صفر" وهو بيبص على
+  // مارس، وده رقم صح بمعنى غلط. بتوقيت القاهرة زي باقي حسابات "اليوم" في النظام.
+  const cairoNow = new Date(Date.now() + CAIRO_OFFSET_MS);
+  const todayStart = new Date(cairoNow.toISOString().slice(0, 10) + "T00:00:00Z");
+  const monthStart = new Date(cairoNow.toISOString().slice(0, 8) + "01T00:00:00Z");
+
+  const [todayRow] = await db.select({
+    amount: sql<string>`COALESCE(SUM(${orders.totalAmount}), 0)`,
+    count: sql<number>`COUNT(*)`,
+  }).from(orders).where(whereOf([
+    inArray(orders.status, soldStatuses),
+    gte(orders.createdAt, todayStart),
+    ...scope(orders.businessId),
+  ]));
+
+  const [monthRow] = await db.select({
+    amount: sql<string>`COALESCE(SUM(${orders.totalAmount}), 0)`,
+    count: sql<number>`COUNT(*)`,
+  }).from(orders).where(whereOf([
+    inArray(orders.status, soldStatuses),
+    gte(orders.createdAt, monthStart),
+    ...scope(orders.businessId),
   ]));
 
   // المعلّق: المتوقع ناقص المحصّل للأوردرات اللي لسه مش محصّلة
@@ -2738,6 +2888,10 @@ export async function getAccountingDashboard(params: {
   const productCost = Number(cost?.amount ?? 0);
   const totalExpenses = Number(exp?.amount ?? 0);
   const totalReturns = Number(ret?.amount ?? 0);
+  // صافي الربح = المبيعات − (تكلفة المنتجات + الشحن + المصروفات + المرتجعات).
+  // مبني على المبيعات مش على المحصّل عن قصد: ده ربح محقّق دفتريًا، والفرق بينه وبين
+  // الكاش الفعلي هو "المعلّق" المعروض جنبه.
+  const netProfit = totalSales - (productCost + shippingCost + totalExpenses + totalReturns);
 
   return {
     totalSales,
@@ -2748,14 +2902,36 @@ export async function getAccountingDashboard(params: {
     totalReturns,
     pendingCollection: Number(pending?.amount ?? 0),
     treasuryBalance: await getTreasuryBalance(businessIds),
-    // صافي الربح = المبيعات − (تكلفة المنتجات + الشحن + المصروفات + المرتجعات).
-    // مبني على المبيعات مش على المحصّل عن قصد: ده ربح محقّق دفتريًا، والفرق بينه وبين
-    // الكاش الفعلي هو "المعلّق" المعروض جنبه.
-    netProfit: totalSales - (productCost + shippingCost + totalExpenses + totalReturns),
+    netProfit,
+    // هامش الربح كنسبة من المبيعات. القسمة محميّة: مفيش مبيعات معناها مفيش هامش (صفر)،
+    // مش Infinity ولا NaN — والواجهة بتعرضه كنسبة على طول.
+    profitMargin: totalSales > 0 ? (netProfit / totalSales) * 100 : 0,
+    todaySales: Number(todayRow?.amount ?? 0),
+    todayOrders: Number(todayRow?.count ?? 0),
+    monthSales: Number(monthRow?.amount ?? 0),
+    monthOrders: Number(monthRow?.count ?? 0),
     movementByDay: movement.map(m => ({
       day: String(m.day),
       inflow: Number(m.inflow),
       outflow: Number(m.outflow),
     })),
   };
+}
+
+/**
+ * سجل تحصيل أوردر واحد — مين حصّل، امتى، وكام.
+ *
+ * مقروء من `treasury_transactions` مش من عمود على الأوردر: الأوردر بيحمل آخر قيمة
+ * محصّلة بس، أما السجل ده فبيمسك كل خطوة (تحصيل أولي ٤٠٠، بعدين تصحيح +٥٠) واسم اللي
+ * عملها. ده هو "سجل التحصيل" — الجدول موجود بالحقول دي أصلاً، فمفيش داعي لجدول تالت.
+ */
+export async function getOrderCollectionHistory(orderId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(treasuryTransactions)
+    .where(and(
+      eq(treasuryTransactions.referenceType, 'order'),
+      eq(treasuryTransactions.referenceId, orderId),
+    ))
+    .orderBy(asc(treasuryTransactions.transactionDate), asc(treasuryTransactions.id));
 }

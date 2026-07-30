@@ -167,7 +167,7 @@ import {
   getAccountingDashboard, getTreasuryBalance, getTreasuryTransactions, addTreasuryTransaction,
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, archiveExpenseCategory,
   getExpenses, createExpense, updateExpense, deleteExpense,
-  getCollections, recordOrderCollection,
+  getCollections, recordOrderCollection, getOrderCollectionHistory,
   scanOrderBySerial, getScanLogs,
   getBusinessIdsForTenant,
 } from "./db";
@@ -2887,6 +2887,7 @@ export const appRouter = router({
       page: z.number().default(1),
       limit: z.number().default(50),
       businessIds: z.array(z.number()).optional(),
+      includeOrderEvents: z.boolean().optional(),
     })).query(async ({ ctx, input }) => {
       const businessIds = await scopeBusinessIds(ctx.tenantId, input);
       return getTreasuryTransactions({ ...input, businessIds });
@@ -3046,6 +3047,10 @@ export const appRouter = router({
       const businessIds = await scopeBusinessIds(ctx.tenantId, input);
       return getCollections({ ...input, businessIds });
     }),
+
+    /** سجل تحصيل أوردر واحد — كل خطوة ومين عملها */
+    collectionHistory: adminProcedure.input(z.object({ orderId: z.number() }))
+      .query(async ({ input }) => getOrderCollectionHistory(input.orderId)),
 
     collectionRecord: adminProcedure.input(z.object({
       orderId: z.number(),

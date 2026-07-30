@@ -35,9 +35,6 @@ import PrintedOrders from "./pages/PrintedOrders";
 import ScanLogs from "./pages/ScanLogs";
 import BostaOrders from "./pages/BostaOrders";
 import Accounting from "./pages/Accounting";
-import Treasury from "./pages/Treasury";
-import Expenses from "./pages/Expenses";
-import Collections from "./pages/Collections";
 import DashboardLayout from "./components/DashboardLayout";
 import { useAuth } from "./_core/hooks/useAuth";
 import { BusinessProvider } from "./contexts/BusinessContext";
@@ -117,17 +114,19 @@ function Router() {
       <Route path="/bosta-orders">
         <ProtectedLayout><BostaOrders /></ProtectedLayout>
       </Route>
+      {/* الأربعة بيرندروا نفس الصفحة — التاب بيتحدد من المسار. المسارات القديمة
+          محفوظة عشان أي رابط قديم أو bookmark يفضل شغّال. */}
       <Route path="/accounting">
         <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path="/treasury">
-        <ProtectedLayout><Treasury /></ProtectedLayout>
+        <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path="/expenses">
-        <ProtectedLayout><Expenses /></ProtectedLayout>
+        <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path="/collections">
-        <ProtectedLayout><Collections /></ProtectedLayout>
+        <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path={"/facebook-entry"} component={FacebookEntry} />
       <Route path={"/scan-orders"}>

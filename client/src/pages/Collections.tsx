@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Banknote, Clock, TriangleAlert, Truck } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Banknote, Clock, History, TriangleAlert, Truck } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import {
-  PageHeader, StatCard, ResponsiveDataTable, type Column, Pagination,
+  SectionHeader, StatCard, ResponsiveDataTable, type Column, Pagination,
   FilterBar, SearchInput, MobileOrderCard, StatusBadge, toast,
 } from "@/components/shared";
 import { formatMoney } from "@/lib/money";
@@ -33,7 +33,7 @@ const COLLECTION_STATUS: Record<string, { label: string; className: string }> = 
  * بيتعرض كـ"بوسطة" والباقي "غير محدد". لو اتضافت شركة تانية بعدين لازم يبقى عمود
  * حقيقي على الأوردر — مرصود كنقص.
  */
-export default function Collections() {
+export function CollectionsSection() {
   const { currentBusinessIds } = useBusinessContext();
   const utils = trpc.useUtils();
 
@@ -44,6 +44,7 @@ export default function Collections() {
   const [pageSize, setPageSize] = useState(50);
   const [expandedMobileId, setExpandedMobileId] = useState<number | null>(null);
   const [recording, setRecording] = useState<any | null>(null);
+  const [historyOrder, setHistoryOrder] = useState<any | null>(null);
 
   const { data, isLoading } = trpc.accounting.collectionList.useQuery({
     search: search || undefined,
@@ -121,6 +122,13 @@ export default function Collections() {
       },
     },
     {
+      // "الموظف الذي قام بالتحصيل" — مشتق على السيرفر من آخر حركة خزنة للأوردر
+      id: "collectedBy", header: "حصّله", alwaysVisible: true,
+      cell: (o) => o.collectedByName
+        ? <span className="text-sm">{o.collectedByName}</span>
+        : <span className="type-caption">—</span>,
+    },
+    {
       id: "collectedAt", header: "تاريخ التحصيل", alwaysVisible: true,
       cell: (o) => o.collectedAt ? (
         <span className="whitespace-nowrap text-sm tabular-nums">
@@ -131,11 +139,22 @@ export default function Collections() {
     {
       id: "actions", header: "", alwaysVisible: true, sticky: true,
       cell: (o) => (
-        <div onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => setRecording(o)}>
             <Banknote className="h-3.5 w-3.5" />
             {o.collectedAmount != null ? "تعديل" : "تسجيل"}
           </Button>
+          {/* السجل بيظهر بس لما يكون فيه حركة فعلاً — زرار بيفتح شاشة فاضية أسوأ من
+              زرار مش موجود. */}
+          {o.collectedAmount != null && (
+            <Button
+              size="icon" variant="ghost" className="h-8 w-8"
+              title="سجل التحصيل" aria-label="سجل التحصيل"
+              onClick={() => setHistoryOrder(o)}
+            >
+              <History className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       ),
     },
@@ -143,11 +162,8 @@ export default function Collections() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="التحصيلات"
-        description="متابعة المبالغ المتوقعة مقابل اللي رجع فعلاً من شركة الشحن"
-      >
-        <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:overflow-visible [&>*]:min-w-[168px] [&>*]:snap-start lg:[&>*]:min-w-0">
+      <SectionHeader description="متابعة المبالغ المتوقعة مقابل اللي رجع فعلاً من شركة الشحن">
+        <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:overflow-visible [&>*]:min-w-[196px] [&>*]:snap-start lg:[&>*]:min-w-0">
           <StatCard
             label="المتوقع" tone="primary" loading={isLoading}
             value={formatMoney(data?.expectedTotal ?? 0)}
@@ -168,7 +184,7 @@ export default function Collections() {
             icon={<TriangleAlert className="h-5 w-5" />}
           />
         </div>
-      </PageHeader>
+      </SectionHeader>
 
       <Card className="shadow-[var(--shadow-card)]">
         <CardContent className="p-3">
@@ -244,6 +260,8 @@ export default function Collections() {
         onPageChange={setPage}
         onPageSizeChange={(n) => { setPageSize(n); setPage(1); }}
       />
+
+      <CollectionHistoryDialog order={historyOrder} onClose={() => setHistoryOrder(null)} />
 
       <RecordCollectionDialog
         order={recording}
@@ -354,6 +372,97 @@ function RecordCollectionDialog({
           >
             {mutation.isPending ? "جاري الحفظ..." : "حفظ"}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * سجل تحصيل أوردر واحد.
+ *
+ * بيقرا حركات الخزنة المرتبطة بالأوردر بالترتيب الزمني: التحصيل الأول، وأي تصحيح بعده،
+ * ومين عمل كل خطوة. الأوردر نفسه بيحمل آخر قيمة بس — السجل ده هو اللي بيمسك المسار.
+ */
+function CollectionHistoryDialog({
+  order, onClose,
+}: {
+  order: any | null;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = trpc.accounting.collectionHistory.useQuery(
+    { orderId: order?.id as number },
+    { enabled: order?.id != null }
+  );
+
+  if (!order) return null;
+  const rows = data ?? [];
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent dir="rtl" className="max-h-[85vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>سجل التحصيل — {order.orderNumber}</DialogTitle>
+        </DialogHeader>
+
+        <div className="rounded-[var(--radius-brand-md)] border border-border bg-muted/40 p-3 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">العميل</span>
+            <span className="font-semibold">{order.customerName}</span>
+          </div>
+          <div className="mt-1 flex justify-between">
+            <span className="text-muted-foreground">المتوقع</span>
+            <span className="font-semibold tabular-nums">{formatMoney(order.totalAmount)}</span>
+          </div>
+          <div className="mt-1 flex justify-between">
+            <span className="text-muted-foreground">المحصّل حاليًا</span>
+            <span className="font-semibold tabular-nums">{formatMoney(order.collectedAmount)}</span>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <p className="type-caption py-6 text-center">جاري التحميل...</p>
+        ) : rows.length === 0 ? (
+          <p className="type-caption py-6 text-center">لا توجد حركات مسجّلة لهذا الأوردر</p>
+        ) : (
+          <ol className="space-y-0">
+            {rows.map((t: any, i: number) => {
+              const isIn = t.direction === "in";
+              return (
+                <li key={t.id} className="flex gap-3">
+                  {/* نفس نمط الخط الزمني في drawer الأوردرات: نقطة لكل خطوة، وخط واصل
+                      ما عدا الأخيرة. */}
+                  <div className="flex flex-col items-center">
+                    <span
+                      className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: isIn ? "var(--success)" : "var(--destructive)" }}
+                    />
+                    {i < rows.length - 1 && <span className="w-px flex-1 bg-border" />}
+                  </div>
+                  <div className={`flex min-w-0 flex-1 items-start justify-between gap-3 ${i < rows.length - 1 ? "pb-3" : ""}`}>
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-1 text-sm font-semibold"
+                        style={{ color: isIn ? "var(--success)" : "var(--destructive)" }}>
+                        {isIn ? <ArrowDownLeft className="h-3.5 w-3.5" /> : <ArrowUpRight className="h-3.5 w-3.5" />}
+                        {isIn ? "+" : "−"}{formatMoney(t.amount)}
+                      </p>
+                      <p className="type-caption">{t.performedByName}</p>
+                      {t.notes && <p className="type-caption truncate" title={t.notes}>{t.notes}</p>}
+                    </div>
+                    <p className="type-caption shrink-0 tabular-nums">
+                      {new Date(t.transactionDate).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}
+                      {" · "}
+                      {new Date(t.transactionDate).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>إغلاق</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

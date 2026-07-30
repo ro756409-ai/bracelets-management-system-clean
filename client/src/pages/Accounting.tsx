@@ -2,23 +2,87 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
   TrendingUp, Wallet, Receipt, RotateCcw, Truck, Package, Banknote, Clock, ArrowLeftRight,
+  CalendarDays, Percent, PiggyBank,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
-import { PageHeader, StatCard, LoadingSkeleton, EmptyState } from "@/components/shared";
+import { PageHeader, SectionHeader, StatCard, LoadingSkeleton, EmptyState } from "@/components/shared";
 import { formatMoney, formatMoneyCompact } from "@/lib/money";
+import { TreasurySection } from "./Treasury";
+import { ExpensesSection } from "./Expenses";
+import { CollectionsSection } from "./Collections";
 
 /**
- * لوحة الحسابات — المرحلة الثانية من وحدة الحسابات.
+ * الحسابات — صفحة واحدة بأربع تابات.
  *
- * كل رقم هنا محسوب على السيرفر من الجداول الموجودة (`accounting.dashboard`)، مفيش حساب
- * مالي في الواجهة: لو الصفحة حسبت صافي الربح بنفسها كانت هتبقى تعريف تاني للربح ينفع
- * يختلف عن أي تقرير تاني في النظام.
+ * كانت أربع صفحات وأربعة بنود في السايدبار تحت بعض، وهو الشكل اللي بيخلي التاجر يفتح
+ * صفحة، يبص، يرجع للسايدبار، يفتح التانية. الأربعة بيجاوبوا سؤال واحد ("فلوسي فين؟")
+ * فبقوا تابات في مكان واحد وبند واحد في القائمة.
+ *
+ * التاب في الـURL مش في الـstate: الرفريش بيفضل على نفس التاب، والرابط ينفع يتبعت،
+ * والمسارات القديمة (/treasury, /expenses, /collections) لسه شغّالة وبتفتح التاب بتاعها
+ * بدل ما تبوظ.
  */
+const TABS = [
+  { key: "overview", label: "نظرة عامة", path: "/accounting", icon: TrendingUp },
+  { key: "treasury", label: "الخزنة", path: "/treasury", icon: Wallet },
+  { key: "expenses", label: "المصروفات", path: "/expenses", icon: Receipt },
+  { key: "collections", label: "التحصيلات", path: "/collections", icon: Banknote },
+] as const;
+
 export default function Accounting() {
+  const [location, navigate] = useLocation();
+  const active = TABS.find(t => t.path === location)?.key ?? "overview";
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="الحسابات"
+        description="المبيعات والتحصيلات والمصروفات ورصيد الخزنة"
+      />
+
+      {/* نفس شريط التابات المستخدم في صفحة الأوردرات — يتمرّر جوه نفسه على الموبايل */}
+      <div className="overflow-x-auto border-b border-border px-1">
+        <div className="flex w-max items-center gap-0.5">
+          {TABS.map(tab => {
+            const isActive = active === tab.key;
+            return (
+              <button
+                key={tab.key}
+                onClick={() => navigate(tab.path)}
+                aria-current={isActive ? "page" : undefined}
+                className={`relative flex items-center gap-2 whitespace-nowrap px-3.5 py-3 text-sm transition-colors duration-[var(--duration-fast)] ${
+                  isActive ? "font-bold text-primary" : "font-medium text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <tab.icon className="h-4 w-4" />
+                {tab.label}
+                {isActive && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {active === "overview" && <OverviewSection />}
+      {active === "treasury" && <TreasurySection />}
+      {active === "expenses" && <ExpensesSection />}
+      {active === "collections" && <CollectionsSection />}
+    </div>
+  );
+}
+
+/**
+ * لوحة الأرباح.
+ *
+ * كل رقم محسوب على السيرفر من الجداول الموجودة (`accounting.dashboard`)، مفيش حساب مالي
+ * في الواجهة: لو الصفحة حسبت صافي الربح بنفسها كانت هتبقى تعريف تاني للربح ينفع يختلف
+ * عن أي تقرير تاني في النظام.
+ */
+function OverviewSection() {
   const [, navigate] = useLocation();
   const { currentBusinessIds } = useBusinessContext();
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
@@ -38,28 +102,46 @@ export default function Accounting() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="الحسابات"
-        description="المبيعات والتحصيلات والمصروفات ورصيد الخزنة"
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <DateRangePicker value={dateRange} onChange={setDateRange} />
-            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => navigate("/treasury")}>
-              <Wallet className="h-4 w-4" /> الخزنة
-            </Button>
-            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => navigate("/expenses")}>
-              <Receipt className="h-4 w-4" /> المصروفات
-            </Button>
-            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => navigate("/collections")}>
-              <Banknote className="h-4 w-4" /> التحصيلات
-            </Button>
-          </div>
-        }
+      <SectionHeader
+        description="الأرقام كلها للفترة المختارة — عدا مبيعات اليوم والشهر"
+        actions={<DateRangePicker value={dateRange} onChange={setDateRange} />}
       />
+
+      {/* مبيعات اليوم والشهر — صف مستقل فوق: دول أول حاجة التاجر بيدوّر عليها،
+          ومش تابعين لفلتر التاريخ عشان يفضلوا يجاوبوا "إيه اللي بيحصل دلوقتي". */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard
+          label="مبيعات اليوم" tone="primary" loading={isLoading}
+          value={formatMoney(data?.todaySales)}
+          hint={data ? `${(data.todayOrders ?? 0).toLocaleString("ar-EG")} أوردر` : undefined}
+          icon={<CalendarDays className="h-5 w-5" />}
+        />
+        <StatCard
+          label="مبيعات الشهر" tone="primary" loading={isLoading}
+          value={formatMoney(data?.monthSales)}
+          hint={data ? `${(data.monthOrders ?? 0).toLocaleString("ar-EG")} أوردر` : undefined}
+          icon={<CalendarDays className="h-5 w-5" />}
+        />
+        <StatCard
+          label="هامش الربح"
+          tone={(data?.profitMargin ?? 0) < 0 ? "danger" : "success"}
+          loading={isLoading}
+          value={`${(data?.profitMargin ?? 0).toLocaleString("ar-EG", { maximumFractionDigits: 1 })}%`}
+          hint="صافي الربح ÷ المبيعات"
+          icon={<Percent className="h-5 w-5" />}
+        />
+        <StatCard
+          label="رصيد الخزنة"
+          tone={(data?.treasuryBalance ?? 0) < 0 ? "danger" : "primary"}
+          loading={isLoading}
+          value={formatMoney(data?.treasuryBalance)}
+          icon={<PiggyBank className="h-5 w-5" />}
+        />
+      </div>
 
       {/* نفس نمط شريط الإحصائيات في صفحة الأوردرات: يتمرّر جوه نفسه على الموبايل،
           جريد على الشاشات الأوسع. */}
-      <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-4 lg:overflow-visible [&>*]:min-w-[168px] [&>*]:snap-start lg:[&>*]:min-w-0">
+      <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-3 lg:overflow-visible [&>*]:min-w-[168px] [&>*]:snap-start lg:[&>*]:min-w-0">
         <StatCard
           label="إجمالي المبيعات" tone="primary" loading={isLoading}
           value={formatMoneyCompact(data?.totalSales)}
@@ -71,14 +153,6 @@ export default function Accounting() {
           value={formatMoneyCompact(data?.totalCollected)}
           hint={data ? formatMoney(data.totalCollected) : undefined}
           icon={<Banknote className="h-5 w-5" />}
-        />
-        <StatCard
-          label="رصيد الخزنة"
-          tone={data && data.treasuryBalance < 0 ? "danger" : "primary"}
-          loading={isLoading}
-          value={formatMoneyCompact(data?.treasuryBalance)}
-          hint={data ? formatMoney(data.treasuryBalance) : undefined}
-          icon={<Wallet className="h-5 w-5" />}
         />
         <StatCard
           label="صافي الربح"

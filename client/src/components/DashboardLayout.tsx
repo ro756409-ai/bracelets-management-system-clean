@@ -103,16 +103,11 @@ const MENU_GROUPS: MenuGroup[] = [
     items: [{ icon: Users, label: "الموظفين", path: "/employees", adminOnly: true }],
   },
   {
-    // الحسابات مجموعة مستقلة مش تحت "التقارير": التقارير بتقرا، والحسابات بتسجّل
-    // حركات مالية — دخول مختلف ومسؤولية مختلفة.
+    // بند واحد مش أربعة: الخزنة والمصروفات والتحصيلات بقت تابات جوه /accounting.
+    // أربعة بنود تحت بعض كانت بتخلي القائمة تبان أطول من غير ما تضيف وجهة حقيقية.
     label: "الحسابات",
     icon: Wallet,
-    items: [
-      { icon: LineChart, label: "لوحة الحسابات", path: "/accounting", adminOnly: true },
-      { icon: Wallet, label: "الخزنة", path: "/treasury", adminOnly: true },
-      { icon: Receipt, label: "المصروفات", path: "/expenses", adminOnly: true },
-      { icon: Banknote, label: "التحصيلات", path: "/collections", adminOnly: true },
-    ],
+    items: [{ icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true }],
   },
   {
     label: "التقارير",
