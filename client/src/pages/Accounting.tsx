@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
   TrendingUp, Wallet, Receipt, RotateCcw, Truck, Package, Banknote, Clock, ArrowLeftRight,
-  CalendarDays, Percent, PiggyBank,
+  CalendarDays, Percent, PiggyBank, Users,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
@@ -14,6 +14,7 @@ import { formatMoney, formatMoneyCompact } from "@/lib/money";
 import { TreasurySection } from "./Treasury";
 import { ExpensesSection } from "./Expenses";
 import { CollectionsSection } from "./Collections";
+import { PayrollSection } from "./Payroll";
 
 /**
  * الحسابات — صفحة واحدة بأربع تابات.
@@ -31,6 +32,7 @@ const TABS = [
   { key: "treasury", label: "الخزنة", path: "/treasury", icon: Wallet },
   { key: "expenses", label: "المصروفات", path: "/expenses", icon: Receipt },
   { key: "collections", label: "التحصيلات", path: "/collections", icon: Banknote },
+  { key: "payroll", label: "المرتبات", path: "/payroll", icon: Users },
 ] as const;
 
 export default function Accounting() {
@@ -71,6 +73,7 @@ export default function Accounting() {
       {active === "treasury" && <TreasurySection />}
       {active === "expenses" && <ExpensesSection />}
       {active === "collections" && <CollectionsSection />}
+      {active === "payroll" && <PayrollSection />}
     </div>
   );
 }

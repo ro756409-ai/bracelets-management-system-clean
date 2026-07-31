@@ -128,6 +128,9 @@ function Router() {
       <Route path="/collections">
         <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
+      <Route path="/payroll">
+        <ProtectedLayout><Accounting /></ProtectedLayout>
+      </Route>
       <Route path={"/facebook-entry"} component={FacebookEntry} />
       <Route path={"/scan-orders"}>
         <ProtectedLayout><ScanOrders /></ProtectedLayout>

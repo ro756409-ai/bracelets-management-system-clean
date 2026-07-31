@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import {
   BarChart3, Boxes, ClipboardList, Copy, FileSpreadsheet, LayoutDashboard, Package,
   Printer, QrCode, RotateCcw, ScanLine, Settings, ShoppingCart, Truck, Users,
-  Wallet, Receipt, Banknote,
+  Wallet, Receipt, Banknote, HandCoins,
 } from "lucide-react";
 import {
   CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
@@ -56,6 +56,7 @@ const ITEMS: PaletteItem[] = [
   { group: "الحسابات", label: "الخزنة", href: "/treasury", icon: <Wallet className="h-4 w-4" />, keywords: ["treasury", "خزنة", "خزينة", "رصيد", "كاش"] },
   { group: "الحسابات", label: "المصروفات", href: "/expenses", icon: <Receipt className="h-4 w-4" />, keywords: ["expenses", "مصروف", "مصروفات", "صرف"] },
   { group: "الحسابات", label: "التحصيلات", href: "/collections", icon: <Banknote className="h-4 w-4" />, keywords: ["collections", "تحصيل", "تحصيلات", "محصل"] },
+  { group: "الحسابات", label: "المرتبات", href: "/payroll", icon: <HandCoins className="h-4 w-4" />, keywords: ["payroll", "salary", "مرتب", "مرتبات", "رواتب", "راتب", "سلفة", "سلف", "عمولة"] },
 
   // ---- الإدارة ----
   { group: "الإدارة", label: "الموظفون", href: "/employees", icon: <Users className="h-4 w-4" />, keywords: ["employees", "موظفين", "موظفون", "فريق"] },

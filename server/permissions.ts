@@ -34,6 +34,12 @@ export const ALL_PERMISSIONS = [
   // مسؤوليتين مختلفتين: المدير بيبص، المحاسب بيسجّل.
   "accounting.view",
   "accounting.manage",
+  // الرواتب. أربع صلاحيات مش واحدة عشان فصل المهام يبقى ممكن: المحاسب يجهّز ويدفع،
+  // والاعتماد يفضل للإدارة — وده أهم حاجز إداري في وحدة بتحرّك فلوس شهريًا.
+  "payroll.view",
+  "payroll.manage",
+  "payroll.approve",
+  "payroll.pay",
 ] as const;
 
 export type Permission = (typeof ALL_PERMISSIONS)[number];
@@ -62,6 +68,8 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
   accountant: [
     "dashboard.view", "orders.view", "orders.export", "settings.view", "audit.view",
     "accounting.view", "accounting.manage",
+    // بيجهّز الدورة ويدفعها، لكن مش بيعتمدها — الاعتماد قرار إداري
+    "payroll.view", "payroll.manage", "payroll.pay",
   ],
   viewer: ["dashboard.view", "orders.view"],
   order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update"],

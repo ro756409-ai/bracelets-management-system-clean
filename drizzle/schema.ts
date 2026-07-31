@@ -786,3 +786,213 @@ export const treasuryTransactions = mysqlTable("treasury_transactions", {
 
 export type TreasuryTransaction = typeof treasuryTransactions.$inferSelect;
 export type InsertTreasuryTransaction = typeof treasuryTransactions.$inferInsert;
+
+// ==================== PAYROLL ====================
+//
+// الرواتب بتدخل المحاسبة عن طريق جدول `expenses` مش الخزنة مباشرة، وده قرار محسوب:
+// لوحة الحسابات بتقرا المصروفات من `expenses`، فلو المرتبات نزلت الخزنة بس كان صافي
+// الربح هيتجاهلها بالكامل ويطلع أعلى من الحقيقي. و`createExpense` أصلاً بينزّل حركة
+// الخزنة المقابلة، فالمسار ده بيدّي الاتنين بقيد واحد.
+//
+// السُلفة كمان بتتسجّل كمصروف وقت صرفها مش وقت خصمها: الفلوس خرجت من الدُرج ساعتها.
+// لو اتسجّلت وقت الخصم بس، كان الرصيد بيكدب طول الشهر؛ ولو اتسجّلت مرتين (وقت الصرف
+// ووقت الخصم من إجمالي المرتب) كانت التكلفة هتتحسب مرتين. فسطر "السُلف" في كشف الراتب
+// عرضي بحت — بيفسّر ليه الصافي أقل من الإجمالي، وتكلفته اتسجّلت خلاص.
+
+/**
+ * إعدادات محرّك الرواتب — صف واحد لكل نشاط.
+ *
+ * القيم دي كانت هتبقى أرقامًا ثابتة في الكود (٣٠ يوم، إجازة الجمعة والسبت، …) وهي
+ * بتختلف من تاجر للتاني ومن بلد للتانية. وجودها في جدول معناه إن تغييرها إعداد مش نشر.
+ */
+export const payrollSettings = mysqlTable("payroll_settings", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  /** أيام العمل في الشهر — أساس حساب أجر اليوم للمرتب الشهري */
+  workingDaysPerMonth: int("workingDaysPerMonth").default(26).notNull(),
+  /**
+   * أساس خصم الغياب: أيام التقويم (÷30) ولا أيام العمل (÷workingDaysPerMonth).
+   * الفرق حقيقي في الجيب: مرتب ٣٠٠٠ وغياب يوم = ١٠٠ بالتقويم و١١٥.٣٨ بأيام العمل.
+   */
+  absenceDeductionBasis: mysqlEnum("absenceDeductionBasis", ["calendar_days", "working_days"])
+    .default("working_days").notNull(),
+  /** أيام الإجازة الأسبوعية كأرقام مفصولة بفواصل — 0=الأحد … 6=السبت. الافتراضي الجمعة والسبت. */
+  weekendDays: varchar("weekendDays", { length: 20 }).default("5,6").notNull(),
+  /**
+   * الأوفرتايم: يدوي (المستخدم بيكتب المبلغ)، أو محسوب من أجر الساعة × مضاعف.
+   * الافتراضي يدوي — مفيش نظام حضور بيسجّل ساعات لسه.
+   */
+  overtimeMode: mysqlEnum("overtimeMode", ["manual", "hourly_multiplier"]).default("manual").notNull(),
+  overtimeMultiplier: decimal("overtimeMultiplier", { precision: 5, scale: 2 }).default("1.50").notNull(),
+  /** ساعات اليوم — لحساب أجر الساعة لما يكون الأوفرتايم محسوبًا */
+  workHoursPerDay: decimal("workHoursPerDay", { precision: 4, scale: 2 }).default("8.00").notNull(),
+  currency: varchar("currency", { length: 10 }).default("EGP").notNull(),
+  /** تقريب الصافي — بعض التجار بيقرّبوا لأقرب ٥ أو ١٠ عشان الكاش */
+  roundingMode: mysqlEnum("roundingMode", ["none", "nearest_1", "nearest_5", "nearest_10"])
+    .default("none").notNull(),
+  defaultSalaryType: mysqlEnum("defaultSalaryType", ["monthly", "daily", "commission", "mixed"])
+    .default("monthly").notNull(),
+  defaultCommissionBasis: mysqlEnum("defaultCommissionBasis", ["confirmed", "prepared", "shipped", "delivered"])
+    .default("delivered").notNull(),
+  updatedBy: int("updatedBy"),
+  updatedByName: varchar("updatedByName", { length: 100 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  businessUnique: uniqueIndex("payroll_settings_business_unique").on(table.businessId),
+}));
+
+export type PayrollSettings = typeof payrollSettings.$inferSelect;
+export type InsertPayrollSettings = typeof payrollSettings.$inferInsert;
+
+/**
+ * ملف راتب الموظف — مُصدَّر بالإصدارات مش صفًا واحدًا بيتعدّل.
+ *
+ * لو كان صفًا واحدًا، رفع مرتب في مارس كان بيعيد حساب فبراير بأثر رجعي. الصفوف هنا
+ * بتتراكم، والدورة بتختار الإصدار الساري: أحدث `effectiveFrom` أقل من أو يساوي نهاية
+ * الشهر المحسوب.
+ */
+export const employeeSalaryProfiles = mysqlTable("employee_salary_profiles", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  employeeId: int("employeeId").notNull(),
+  salaryType: mysqlEnum("salaryType", ["monthly", "daily", "commission", "mixed"]).notNull(),
+  /** null للموظف اللي على عمولة صافية */
+  baseSalary: decimal("baseSalary", { precision: 10, scale: 2 }),
+  /** null لغير اليومي */
+  dailyRate: decimal("dailyRate", { precision: 10, scale: 2 }),
+  commissionType: mysqlEnum("commissionType", ["per_order", "percentage"]),
+  commissionValue: decimal("commissionValue", { precision: 10, scale: 2 }),
+  /**
+   * الحالة اللي بتستحق العمولة. إعداد لكل موظف مش افتراض في الكود: موظف التأكيدات
+   * بياخد على "مؤكد"، وموظف التجهيز على "تم التجهيز"، والمندوب على "تم التوصيل".
+   */
+  commissionBasis: mysqlEnum("commissionBasis", ["confirmed", "prepared", "shipped", "delivered"])
+    .default("delivered").notNull(),
+  effectiveFrom: timestamp("effectiveFrom").notNull(),
+  notes: text("notes"),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdBy: int("createdBy").notNull(),
+  createdByName: varchar("createdByName", { length: 100 }).notNull(),
+  updatedBy: int("updatedBy"),
+  updatedByName: varchar("updatedByName", { length: 100 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  // إصداران بنفس تاريخ السريان لنفس الموظف = اختيار عشوائي بين الاتنين وقت الحساب
+  employeeEffectiveUnique: uniqueIndex("employee_salary_profiles_employee_effective_unique")
+    .on(table.employeeId, table.effectiveFrom),
+}));
+
+export type EmployeeSalaryProfile = typeof employeeSalaryProfiles.$inferSelect;
+export type InsertEmployeeSalaryProfile = typeof employeeSalaryProfiles.$inferInsert;
+
+/** دورة رواتب شهرية — رأس الدورة */
+export const payrollPeriods = mysqlTable("payroll_periods", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  year: int("year").notNull(),
+  month: int("month").notNull(),
+  status: mysqlEnum("status", ["draft", "approved", "paid", "cancelled"]).default("draft").notNull(),
+  totalGross: decimal("totalGross", { precision: 12, scale: 2 }).default("0").notNull(),
+  totalNet: decimal("totalNet", { precision: 12, scale: 2 }).default("0").notNull(),
+  employeeCount: int("employeeCount").default(0).notNull(),
+  /**
+   * القيد المحاسبي المقابل للدفع. وجوده معناه إن الدورة اتدفعت فعلاً، وهو الحارس
+   * التاني ضد الدفع المزدوج بعد الفهرس الفريد على (businessId, year, month).
+   */
+  expenseId: int("expenseId"),
+  notes: text("notes"),
+  createdBy: int("createdBy").notNull(),
+  createdByName: varchar("createdByName", { length: 100 }).notNull(),
+  approvedBy: int("approvedBy"),
+  approvedByName: varchar("approvedByName", { length: 100 }),
+  approvedAt: timestamp("approvedAt"),
+  paidBy: int("paidBy"),
+  paidByName: varchar("paidByName", { length: 100 }),
+  paidAt: timestamp("paidAt"),
+  cancelledBy: int("cancelledBy"),
+  cancelledByName: varchar("cancelledByName", { length: 100 }),
+  cancelledAt: timestamp("cancelledAt"),
+  cancelReason: text("cancelReason"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  // الحارس الأول ضد الدفع المزدوج — على مستوى قاعدة البيانات مش شرط في الكود ينفع يتخطّى
+  businessPeriodUnique: uniqueIndex("payroll_periods_business_period_unique")
+    .on(table.businessId, table.year, table.month),
+}));
+
+export type PayrollPeriod = typeof payrollPeriods.$inferSelect;
+export type InsertPayrollPeriod = typeof payrollPeriods.$inferInsert;
+
+/** سطر راتب لموظف واحد في دورة واحدة */
+export const payrollItems = mysqlTable("payroll_items", {
+  id: int("id").autoincrement().primaryKey(),
+  periodId: int("periodId").notNull(),
+  businessId: int("businessId").notNull(),
+  employeeId: int("employeeId").notNull(),
+  /** لقطة مجمّدة — كشف يناير لازم يفضل مقروءًا لو الموظف اتشال بعدين */
+  employeeName: varchar("employeeName", { length: 100 }).notNull(),
+  salaryType: mysqlEnum("salaryType", ["monthly", "daily", "commission", "mixed"]).notNull(),
+  /**
+   * إصدار ملف الراتب اللي اتحسب منه السطر ده، ولقطة JSON من قيمه وقت الإنشاء.
+   * الاتنين مع بعض: الـid للتتبّع، واللقطة عشان الكشف يفضل مفهومًا حتى لو الإصدار
+   * نفسه اتمسح. أي تعديل مستقبلي على الراتب مالوش أي أثر على الدورات القديمة.
+   */
+  salaryProfileId: int("salaryProfileId"),
+  profileSnapshot: text("profileSnapshot"),
+  baseSalary: decimal("baseSalary", { precision: 10, scale: 2 }).default("0").notNull(),
+  // إدخال يدوي في المرحلة دي — مفيش نظام حضور بعد. وحدة الحضور المستقبلية هتملاهم
+  // تلقائيًا، والأعمدة موجودة من دلوقتي عشان مايحتاجش migration وقتها.
+  attendanceDays: int("attendanceDays").default(0).notNull(),
+  absenceDays: int("absenceDays").default(0).notNull(),
+  overtimeHours: decimal("overtimeHours", { precision: 6, scale: 2 }).default("0").notNull(),
+  overtimeAmount: decimal("overtimeAmount", { precision: 10, scale: 2 }).default("0").notNull(),
+  bonuses: decimal("bonuses", { precision: 10, scale: 2 }).default("0").notNull(),
+  commissions: decimal("commissions", { precision: 10, scale: 2 }).default("0").notNull(),
+  /** شفافية: العمولة دي جات من كام أوردر */
+  commissionOrders: int("commissionOrders").default(0).notNull(),
+  absenceDeduction: decimal("absenceDeduction", { precision: 10, scale: 2 }).default("0").notNull(),
+  deductions: decimal("deductions", { precision: 10, scale: 2 }).default("0").notNull(),
+  advances: decimal("advances", { precision: 10, scale: 2 }).default("0").notNull(),
+  netSalary: decimal("netSalary", { precision: 10, scale: 2 }).default("0").notNull(),
+  /**
+   * أسماء الحقول اللي المستخدم عدّلها بإيده (JSON array).
+   * إعادة الحساب بتحدّث اللي مش موجود في القائمة دي بس — ده تنفيذ شرط "لا تكتب فوق
+   * التعديلات اليدوية". من غيره كان أول ضغط على "إعادة حساب" بيمسح شغل يدوي كامل.
+   */
+  manualFields: text("manualFields"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  periodEmployeeUnique: uniqueIndex("payroll_items_period_employee_unique")
+    .on(table.periodId, table.employeeId),
+}));
+
+export type PayrollItem = typeof payrollItems.$inferSelect;
+export type InsertPayrollItem = typeof payrollItems.$inferInsert;
+
+/** سُلف الموظفين */
+export const employeeAdvances = mysqlTable("employee_advances", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  employeeId: int("employeeId").notNull(),
+  employeeName: varchar("employeeName", { length: 100 }).notNull(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  advanceDate: timestamp("advanceDate").notNull(),
+  reason: text("reason"),
+  status: mysqlEnum("status", ["pending", "settled", "cancelled"]).default("pending").notNull(),
+  /** الدورة اللي اتخصمت فيها — بيتملى وقت اعتماد الدورة */
+  settledPeriodId: int("settledPeriodId"),
+  /** المصروف المقابل وقت الصرف — الفلوس خرجت من الدُرج ساعتها */
+  expenseId: int("expenseId"),
+  createdBy: int("createdBy").notNull(),
+  createdByName: varchar("createdByName", { length: 100 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type EmployeeAdvance = typeof employeeAdvances.$inferSelect;
+export type InsertEmployeeAdvance = typeof employeeAdvances.$inferInsert;

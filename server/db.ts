@@ -22,7 +22,17 @@ import {
   expenseCategories, InsertExpenseCategory, ExpenseCategory,
   expenses, InsertExpense, Expense,
   treasuryTransactions, InsertTreasuryTransaction, TreasuryTransaction,
+  payrollSettings, InsertPayrollSettings, PayrollSettings,
+  employeeSalaryProfiles, InsertEmployeeSalaryProfile, EmployeeSalaryProfile,
+  payrollPeriods, InsertPayrollPeriod, PayrollPeriod,
+  payrollItems, InsertPayrollItem, PayrollItem,
+  employeeAdvances, InsertEmployeeAdvance, EmployeeAdvance,
 } from "../drizzle/schema";
+import {
+  calcPayrollLine, mergeWithManualEdits, parseManualFields, toNumber,
+  COMMISSION_BASIS_STATUS,
+  type PayrollSettingsInput, type SalaryProfileInput, type PayrollLineInput,
+} from "../shared/payrollCalc";
 import { normalizeEgyptianPhone, toAsciiDigits } from "../shared/phone";
 
 // ==================== CAIRO TIMEZONE HELPERS ====================
@@ -3010,5 +3020,771 @@ export async function getTreasurySummary(businessIds?: number[] | null) {
     monthProfit: monthDashboard.netProfit,
     pendingCollection: Number(pending?.amount ?? 0),
     recentTransactions,
+  };
+}
+
+// ==================== PAYROLL ====================
+//
+// المسار المحاسبي: الرواتب والسُلف بتدخل عن طريق `createExpense` مش الخزنة مباشرة.
+// السبب إن لوحة الحسابات بتقرا المصروفات من جدول `expenses`، فلو نزلت الخزنة بس كان
+// صافي الربح هيتجاهل المرتبات ويطلع أعلى من الحقيقي. و`createExpense` بينزّل حركة
+// الخزنة المقابلة تلقائيًا، فالمسار ده بيدّي القيدين مع بعض.
+
+const PAYROLL_EXPENSE_CATEGORY = "رواتب وأجور";
+
+/** إعدادات افتراضية لنشاط لسه ماعندوش صف — مش بتتكتب في القاعدة إلا لما المستخدم يحفظ. */
+const DEFAULT_PAYROLL_SETTINGS = {
+  workingDaysPerMonth: 26,
+  absenceDeductionBasis: "working_days" as const,
+  weekendDays: "5,6",
+  overtimeMode: "manual" as const,
+  overtimeMultiplier: "1.50",
+  workHoursPerDay: "8.00",
+  currency: "EGP",
+  roundingMode: "none" as const,
+  defaultSalaryType: "monthly" as const,
+  defaultCommissionBasis: "delivered" as const,
+};
+
+export async function getPayrollSettings(businessId: number) {
+  const db = await getDb();
+  if (!db) return { businessId, ...DEFAULT_PAYROLL_SETTINGS, id: 0 };
+  const [row] = await db.select().from(payrollSettings)
+    .where(eq(payrollSettings.businessId, businessId)).limit(1);
+  // الافتراضيات بترجع كأنها صف حقيقي — الواجهة مالهاش لازمة تعرف إن الإعدادات
+  // ماتحفظتش لسه، والحساب بيشتغل من أول يوم.
+  return row ?? { businessId, ...DEFAULT_PAYROLL_SETTINGS, id: 0 };
+}
+
+export async function upsertPayrollSettings(
+  businessId: number,
+  data: Partial<InsertPayrollSettings>,
+  actor: { id: number; name: string },
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [existing] = await db.select({ id: payrollSettings.id }).from(payrollSettings)
+    .where(eq(payrollSettings.businessId, businessId)).limit(1);
+  const values = { ...data, updatedBy: actor.id, updatedByName: actor.name };
+  if (existing) {
+    await db.update(payrollSettings).set(values).where(eq(payrollSettings.id, existing.id));
+    return { id: existing.id };
+  }
+  const result: any = await db.insert(payrollSettings).values({
+    ...DEFAULT_PAYROLL_SETTINGS, ...values, businessId,
+  } as InsertPayrollSettings);
+  return { id: Number(result?.insertId ?? result?.[0]?.insertId) };
+}
+
+// ---------- ملفات الرواتب ----------
+
+export async function getSalaryProfiles(employeeId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(employeeSalaryProfiles)
+    .where(eq(employeeSalaryProfiles.employeeId, employeeId))
+    .orderBy(desc(employeeSalaryProfiles.effectiveFrom));
+}
+
+/**
+ * الإصدار الساري من ملف الراتب في تاريخ معيّن.
+ *
+ * أحدث `effectiveFrom` أقل من أو يساوي التاريخ. ده اللي بيخلي رفع مرتب في مارس
+ * مايغيّرش حساب فبراير: دورة فبراير بتسأل عن الساري في ٢٨ فبراير، فبتلاقي الإصدار
+ * القديم مهما اتضاف بعده من إصدارات.
+ */
+export async function getEffectiveSalaryProfile(employeeId: number, onDate: Date) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(employeeSalaryProfiles)
+    .where(and(
+      eq(employeeSalaryProfiles.employeeId, employeeId),
+      eq(employeeSalaryProfiles.isActive, true),
+      lte(employeeSalaryProfiles.effectiveFrom, onDate),
+    ))
+    .orderBy(desc(employeeSalaryProfiles.effectiveFrom))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function createSalaryProfile(data: InsertEmployeeSalaryProfile) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  try {
+    const result: any = await db.insert(employeeSalaryProfiles).values(data);
+    return { id: Number(result?.insertId ?? result?.[0]?.insertId) };
+  } catch (error: any) {
+    if (String(error?.message ?? "").includes("Duplicate")) {
+      throw new Error("يوجد إصدار راتب بنفس تاريخ السريان لهذا الموظف");
+    }
+    throw error;
+  }
+}
+
+export async function updateSalaryProfile(
+  id: number,
+  data: Partial<InsertEmployeeSalaryProfile>,
+  actor: { id: number; name: string },
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (Object.keys(data).length === 0) return;
+  await db.update(employeeSalaryProfiles)
+    .set({ ...data, updatedBy: actor.id, updatedByName: actor.name })
+    .where(eq(employeeSalaryProfiles.id, id));
+}
+
+// ---------- السُلف ----------
+
+export async function getAdvances(filters: {
+  businessIds?: number[] | null;
+  employeeId?: number;
+  status?: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  page?: number;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return { advances: [], total: 0, page: 1, totalPages: 0, totalAmount: 0, pendingAmount: 0 };
+  const { page = 1, limit = 50 } = filters;
+  const conditions: any[] = [];
+  if (filters.businessIds && filters.businessIds.length > 0) {
+    conditions.push(inArray(employeeAdvances.businessId, filters.businessIds));
+  }
+  if (filters.employeeId) conditions.push(eq(employeeAdvances.employeeId, filters.employeeId));
+  if (filters.status) conditions.push(eq(employeeAdvances.status, filters.status as any));
+  if (filters.dateFrom) conditions.push(gte(employeeAdvances.advanceDate, filters.dateFrom));
+  if (filters.dateTo) conditions.push(lte(employeeAdvances.advanceDate, filters.dateTo));
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [agg] = await db.select({
+    count: sql<number>`count(*)`,
+    total: sql<string>`COALESCE(SUM(${employeeAdvances.amount}), 0)`,
+    pending: sql<string>`COALESCE(SUM(CASE WHEN ${employeeAdvances.status} = 'pending' THEN ${employeeAdvances.amount} ELSE 0 END), 0)`,
+  }).from(employeeAdvances).where(where);
+
+  const advances = await db.select().from(employeeAdvances)
+    .where(where)
+    .orderBy(desc(employeeAdvances.advanceDate), desc(employeeAdvances.id))
+    .limit(limit).offset((page - 1) * limit);
+
+  const total = Number(agg?.count ?? 0);
+  return {
+    advances, total, page, totalPages: Math.ceil(total / limit),
+    totalAmount: Number(agg?.total ?? 0),
+    pendingAmount: Number(agg?.pending ?? 0),
+  };
+}
+
+/** تصنيف مصروفات الرواتب — بيتعمل مرة واحدة لكل نشاط عند أول استخدام. */
+async function ensurePayrollExpenseCategory(businessId: number): Promise<number | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [existing] = await db.select({ id: expenseCategories.id }).from(expenseCategories)
+    .where(and(
+      eq(expenseCategories.businessId, businessId),
+      eq(expenseCategories.name, PAYROLL_EXPENSE_CATEGORY),
+    )).limit(1);
+  if (existing) return existing.id;
+  try {
+    const result: any = await db.insert(expenseCategories).values({
+      businessId,
+      name: PAYROLL_EXPENSE_CATEGORY,
+      description: "مرتبات وسُلف الموظفين — يُنشأ تلقائيًا",
+      isSystem: true,
+    });
+    return Number(result?.insertId ?? result?.[0]?.insertId);
+  } catch {
+    // سباق بين طلبين متزامنين: الفهرس الفريد رفض التاني، فنقرا اللي اتكتب
+    const [row] = await db.select({ id: expenseCategories.id }).from(expenseCategories)
+      .where(and(
+        eq(expenseCategories.businessId, businessId),
+        eq(expenseCategories.name, PAYROLL_EXPENSE_CATEGORY),
+      )).limit(1);
+    return row?.id;
+  }
+}
+
+/**
+ * صرف سُلفة — بتتسجّل كمصروف فورًا.
+ *
+ * الفلوس بتخرج من الدُرج ساعة الصرف، فالتكلفة بتتسجّل ساعتها. وقت الرواتب بيتخصم
+ * المبلغ من إجمالي المرتب لكن **مايتسجّلش كمصروف تاني** — سطر "السُلف" في كشف الراتب
+ * عرضي بحت بيفسّر ليه الصافي أقل من الإجمالي. لو اتسجّل مرتين كانت التكلفة هتتضاعف.
+ */
+export async function createAdvance(
+  data: Omit<InsertEmployeeAdvance, "expenseId">,
+): Promise<{ id: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const categoryId = await ensurePayrollExpenseCategory(data.businessId);
+  const expense = await createExpense({
+    businessId: data.businessId,
+    categoryId,
+    amount: String(data.amount),
+    description: `سُلفة — ${data.employeeName}`,
+    expenseDate: data.advanceDate,
+    createdBy: data.createdBy,
+    createdByName: data.createdByName,
+  } as InsertExpense);
+
+  try {
+    const result: any = await db.insert(employeeAdvances).values({ ...data, expenseId: expense.id });
+    return { id: Number(result?.insertId ?? result?.[0]?.insertId) };
+  } catch (error) {
+    // السُلفة مااتسجلتش، فالمصروف اللي اتعمل ليها لازم يترد — وإلا فضل مصروف يتيم
+    await deleteExpense(expense.id, { id: data.createdBy, name: data.createdByName });
+    throw error;
+  }
+}
+
+/** إلغاء سُلفة — بيرد قيمتها للخزنة بقيد تسوية. ممنوع لو اتخصمت في دورة. */
+export async function cancelAdvance(id: number, actor: { id: number; name: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [advance] = await db.select().from(employeeAdvances)
+    .where(eq(employeeAdvances.id, id)).limit(1);
+  if (!advance) throw new Error("السُلفة غير موجودة");
+  if (advance.status === "settled") {
+    throw new Error("لا يمكن إلغاء سُلفة تم خصمها في دورة رواتب");
+  }
+  if (advance.status === "cancelled") return;
+
+  if (advance.expenseId) await deleteExpense(advance.expenseId, actor);
+  await db.update(employeeAdvances)
+    .set({ status: "cancelled" })
+    .where(eq(employeeAdvances.id, id));
+}
+
+// ---------- دورات الرواتب ----------
+
+/** حدود الشهر بتوقيت القاهرة — نفس اصطلاح باقي حسابات "الشهر" في النظام. */
+function monthBounds(year: number, month: number) {
+  const from = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0) - CAIRO_OFFSET_MS);
+  const to = new Date(Date.UTC(year, month, 1, 0, 0, 0) - CAIRO_OFFSET_MS - 1);
+  return { from, to };
+}
+
+function settingsToInput(s: any): PayrollSettingsInput {
+  return {
+    workingDaysPerMonth: s.workingDaysPerMonth,
+    absenceDeductionBasis: s.absenceDeductionBasis,
+    overtimeMode: s.overtimeMode,
+    overtimeMultiplier: s.overtimeMultiplier,
+    workHoursPerDay: s.workHoursPerDay,
+    roundingMode: s.roundingMode,
+  };
+}
+
+function profileToInput(p: any): SalaryProfileInput {
+  return {
+    salaryType: p.salaryType,
+    baseSalary: p.baseSalary,
+    dailyRate: p.dailyRate,
+    commissionType: p.commissionType,
+    commissionValue: p.commissionValue,
+    commissionBasis: p.commissionBasis,
+  };
+}
+
+/**
+ * الأوردرات المستحقة للعمولة لموظف في شهر.
+ *
+ * الحالة بتيجي من `commissionBasis` في ملف راتبه — مش ثابتة في الكود. والطابع الزمني
+ * المستخدم للفلترة هو طابع الحالة نفسها (confirmedAt للتأكيد، deliveredAt للتوصيل …)
+ * مش `createdAt`: أوردر اتعمل في يناير واتوصّل في فبراير عمولته على فبراير، لأن ده
+ * الشهر اللي الموظف استحقها فيه.
+ */
+async function getCommissionableOrders(
+  employeeId: number, basis: string, from: Date, to: Date, businessId: number,
+): Promise<{ count: number; total: number }> {
+  const db = await getDb();
+  if (!db) return { count: 0, total: 0 };
+
+  const status = COMMISSION_BASIS_STATUS[basis as keyof typeof COMMISSION_BASIS_STATUS] ?? "delivered";
+  const dateColumn = {
+    confirmed: orders.confirmedAt,
+    preparing: orders.preparedAt,
+    shipped: orders.shippedAt,
+    delivered: orders.deliveredAt,
+  }[status] ?? orders.deliveredAt;
+
+  const [row] = await db.select({
+    count: sql<number>`count(*)`,
+    total: sql<string>`COALESCE(SUM(${orders.totalAmount}), 0)`,
+  }).from(orders).where(and(
+    eq(orders.assignedEmployeeId, employeeId),
+    eq(orders.businessId, businessId),
+    isNotNull(dateColumn),
+    gte(dateColumn, from),
+    lte(dateColumn, to),
+  ));
+
+  return { count: Number(row?.count ?? 0), total: Number(row?.total ?? 0) };
+}
+
+export async function getPayrollPeriods(filters: {
+  businessIds?: number[] | null;
+  year?: number;
+  status?: string;
+  page?: number;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return { periods: [], total: 0, page: 1, totalPages: 0 };
+  const { page = 1, limit = 50 } = filters;
+  const conditions: any[] = [];
+  if (filters.businessIds && filters.businessIds.length > 0) {
+    conditions.push(inArray(payrollPeriods.businessId, filters.businessIds));
+  }
+  if (filters.year) conditions.push(eq(payrollPeriods.year, filters.year));
+  if (filters.status) conditions.push(eq(payrollPeriods.status, filters.status as any));
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [countRow] = await db.select({ count: sql<number>`count(*)` })
+    .from(payrollPeriods).where(where);
+  const periods = await db.select().from(payrollPeriods)
+    .where(where)
+    .orderBy(desc(payrollPeriods.year), desc(payrollPeriods.month))
+    .limit(limit).offset((page - 1) * limit);
+
+  const total = Number(countRow?.count ?? 0);
+  return { periods, total, page, totalPages: Math.ceil(total / limit) };
+}
+
+export async function getPayrollPeriod(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [period] = await db.select().from(payrollPeriods)
+    .where(eq(payrollPeriods.id, id)).limit(1);
+  if (!period) return null;
+  const items = await db.select().from(payrollItems)
+    .where(eq(payrollItems.periodId, id))
+    .orderBy(asc(payrollItems.employeeName));
+  return { ...period, items };
+}
+
+/**
+ * إنشاء دورة رواتب لشهر — بيتولّد سطر لكل موظف نشط له ملف راتب ساري.
+ *
+ * الفهرس الفريد (businessId, year, month) بيرفض دورة تانية لنفس الشهر على مستوى قاعدة
+ * البيانات. ده الحارس الأول ضد الدفع المزدوج، ومش شرط في الكود ينفع يتخطّى بطلبين
+ * متزامنين.
+ */
+export async function createPayrollPeriod(params: {
+  businessId: number;
+  year: number;
+  month: number;
+  notes?: string;
+  actor: { id: number; name: string };
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { businessId, year, month, actor } = params;
+
+  let periodId: number;
+  try {
+    const result: any = await db.insert(payrollPeriods).values({
+      businessId, year, month,
+      notes: params.notes,
+      createdBy: actor.id,
+      createdByName: actor.name,
+    });
+    periodId = Number(result?.insertId ?? result?.[0]?.insertId);
+  } catch (error: any) {
+    if (String(error?.message ?? "").includes("Duplicate")) {
+      throw new Error(`توجد دورة رواتب بالفعل لشهر ${month}/${year}`);
+    }
+    throw error;
+  }
+  if (!periodId) throw new Error("تعذر إنشاء دورة الرواتب");
+
+  await recalculatePayrollPeriod(periodId, actor);
+  return { id: periodId };
+}
+
+/**
+ * إعادة حساب سطور الدورة.
+ *
+ * الحقول المذكورة في `manualFields` لكل سطر بتفضل زي ما هي — ده تنفيذ شرط "لا تكتب
+ * فوق التعديلات اليدوية". الأرقام المدخلة يدويًا أصلاً (الحضور، الغياب، الحوافز،
+ * الخصومات) مابتتلمسش هنا خالص: مفيش مصدر تلقائي ليها لسه.
+ *
+ * ممنوعة بعد الاعتماد: دورة معتمدة أرقامها اتقفلت، وإعادة حسابها كانت هتغيّر مبلغًا
+ * وافق عليه مدير.
+ */
+export async function recalculatePayrollPeriod(periodId: number, actor: { id: number; name: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [period] = await db.select().from(payrollPeriods)
+    .where(eq(payrollPeriods.id, periodId)).limit(1);
+  if (!period) throw new Error("الدورة غير موجودة");
+  if (period.status !== "draft") {
+    throw new Error("لا يمكن إعادة حساب دورة بعد اعتمادها");
+  }
+
+  const { from, to } = monthBounds(period.year, period.month);
+  const settings = await getPayrollSettings(period.businessId);
+  const settingsInput = settingsToInput(settings);
+
+  const employeeRows = await db.select().from(employees).where(and(
+    eq(employees.businessId, period.businessId),
+    eq(employees.isActive, true),
+  ));
+  const existingItems = await db.select().from(payrollItems)
+    .where(eq(payrollItems.periodId, periodId));
+  const existingByEmployee = new Map(existingItems.map(i => [i.employeeId, i]));
+
+  let totalGross = 0, totalNet = 0, employeeCount = 0;
+
+  for (const emp of employeeRows) {
+    const profile = await getEffectiveSalaryProfile(emp.id, to);
+    // موظف بلا ملف راتب ساري مالوش سطر — مش سطر بصفر. صفر بيبان كأنه قرار،
+    // والغياب بيبان كأنه إعداد ناقص، وده الصح.
+    if (!profile) continue;
+
+    const existing = existingByEmployee.get(emp.id);
+    const manualFields = parseManualFields(existing?.manualFields);
+
+    const commission = await getCommissionableOrders(
+      emp.id, profile.commissionBasis, from, to, period.businessId,
+    );
+
+    const line: PayrollLineInput = {
+      attendanceDays: existing?.attendanceDays ?? 0,
+      absenceDays: existing?.absenceDays ?? 0,
+      overtimeHours: toNumber(existing?.overtimeHours),
+      overtimeAmount: toNumber(existing?.overtimeAmount),
+      bonuses: toNumber(existing?.bonuses),
+      deductions: toNumber(existing?.deductions),
+      advances: toNumber(existing?.advances),
+      commissionOrderCount: commission.count,
+      commissionOrderTotal: commission.total,
+    };
+
+    const computed = calcPayrollLine(profileToInput(profile), line, settingsInput);
+    const stored = {
+      baseSalary: toNumber(existing?.baseSalary),
+      absenceDeduction: toNumber(existing?.absenceDeduction),
+      overtimeAmount: toNumber(existing?.overtimeAmount),
+      commissions: toNumber(existing?.commissions),
+      netSalary: toNumber(existing?.netSalary),
+    };
+    const final = existing
+      ? mergeWithManualEdits(computed, stored, manualFields, line, settingsInput.roundingMode)
+      : computed;
+
+    // لقطة كاملة من الملف والإعدادات وقت الحساب — أي تعديل مستقبلي على الراتب مالوش
+    // أثر على الدورة دي، والكشف بيفضل مفهومًا حتى لو الإصدار نفسه اتمسح.
+    const snapshot = JSON.stringify({
+      profile: profileToInput(profile),
+      settings: settingsInput,
+      commissionBasis: profile.commissionBasis,
+      capturedAt: new Date().toISOString(),
+    });
+
+    const values = {
+      periodId, businessId: period.businessId,
+      employeeId: emp.id, employeeName: emp.name,
+      salaryType: profile.salaryType,
+      salaryProfileId: profile.id,
+      profileSnapshot: snapshot,
+      baseSalary: final.baseSalary.toFixed(2),
+      attendanceDays: line.attendanceDays,
+      absenceDays: line.absenceDays,
+      overtimeHours: line.overtimeHours.toFixed(2),
+      overtimeAmount: final.overtimeAmount.toFixed(2),
+      bonuses: line.bonuses.toFixed(2),
+      commissions: final.commissions.toFixed(2),
+      commissionOrders: commission.count,
+      absenceDeduction: final.absenceDeduction.toFixed(2),
+      deductions: line.deductions.toFixed(2),
+      advances: line.advances.toFixed(2),
+      netSalary: final.netSalary.toFixed(2),
+      manualFields: existing?.manualFields ?? null,
+      notes: existing?.notes ?? null,
+    };
+
+    if (existing) {
+      await db.update(payrollItems).set(values).where(eq(payrollItems.id, existing.id));
+    } else {
+      await db.insert(payrollItems).values(values as InsertPayrollItem);
+    }
+
+    totalGross += final.baseSalary + final.overtimeAmount + line.bonuses + final.commissions;
+    totalNet += final.netSalary;
+    employeeCount += 1;
+  }
+
+  await db.update(payrollPeriods).set({
+    totalGross: totalGross.toFixed(2),
+    totalNet: totalNet.toFixed(2),
+    employeeCount,
+  }).where(eq(payrollPeriods.id, periodId));
+
+  return { employeeCount, totalGross, totalNet };
+}
+
+/**
+ * تعديل سطر يدويًا.
+ *
+ * أي حقل محسوب بيتعدّل هنا بيتسجّل في `manualFields`، فإعادة الحساب بعدها بتحترمه.
+ * الحقول المُدخلة (الحضور، الحوافز …) مابتتسجّلش لأنها يدوية أصلاً ومفيش حساب بيلمسها.
+ */
+export async function updatePayrollItem(
+  itemId: number,
+  data: Record<string, any>,
+  actor: { id: number; name: string },
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [item] = await db.select().from(payrollItems).where(eq(payrollItems.id, itemId)).limit(1);
+  if (!item) throw new Error("السطر غير موجود");
+  const [period] = await db.select().from(payrollPeriods)
+    .where(eq(payrollPeriods.id, item.periodId)).limit(1);
+  if (!period) throw new Error("الدورة غير موجودة");
+  if (period.status !== "draft") {
+    throw new Error("لا يمكن تعديل سطور دورة بعد اعتمادها");
+  }
+
+  const CALCULATED = ["baseSalary", "absenceDeduction", "overtimeAmount", "commissions", "netSalary"];
+  const manual = new Set(parseManualFields(item.manualFields));
+  for (const field of Object.keys(data)) {
+    if (CALCULATED.includes(field)) manual.add(field);
+  }
+
+  const settings = await getPayrollSettings(period.businessId);
+  const merged = { ...item, ...data };
+  // الصافي بيتعاد جمعه من الأرقام النهائية إلا لو المستخدم قفله بنفسه — وإلا كان
+  // بيعرض رقمًا مش مطابقًا لسطوره.
+  const netSalary = manual.has("netSalary") && data.netSalary === undefined
+    ? toNumber(item.netSalary)
+    : data.netSalary !== undefined
+      ? toNumber(data.netSalary)
+      : toNumber(merged.baseSalary) + toNumber(merged.overtimeAmount) + toNumber(merged.bonuses)
+        + toNumber(merged.commissions) - toNumber(merged.absenceDeduction)
+        - toNumber(merged.deductions) - toNumber(merged.advances);
+
+  await db.update(payrollItems).set({
+    ...data,
+    netSalary: netSalary.toFixed(2),
+    manualFields: JSON.stringify(Array.from(manual)),
+  }).where(eq(payrollItems.id, itemId));
+
+  // إجماليات الرأس لازم تتماشى مع سطورها
+  const [agg] = await db.select({
+    net: sql<string>`COALESCE(SUM(${payrollItems.netSalary}), 0)`,
+    gross: sql<string>`COALESCE(SUM(${payrollItems.baseSalary} + ${payrollItems.overtimeAmount} + ${payrollItems.bonuses} + ${payrollItems.commissions}), 0)`,
+  }).from(payrollItems).where(eq(payrollItems.periodId, item.periodId));
+  await db.update(payrollPeriods).set({
+    totalNet: String(agg?.net ?? "0"),
+    totalGross: String(agg?.gross ?? "0"),
+  }).where(eq(payrollPeriods.id, item.periodId));
+}
+
+/**
+ * اعتماد الدورة — بيثبّت الأرقام ويخصم السُلف المعلّقة.
+ *
+ * الخصم بيحصل هنا مش وقت الدفع: الاعتماد هو اللحظة اللي الأرقام بتتقفل فيها، ولو
+ * السُلف اتخصمت وقت الدفع كان المدير بيعتمد رقمًا غير اللي هيتدفع.
+ */
+export async function approvePayrollPeriod(periodId: number, actor: { id: number; name: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [period] = await db.select().from(payrollPeriods)
+    .where(eq(payrollPeriods.id, periodId)).limit(1);
+  if (!period) throw new Error("الدورة غير موجودة");
+  if (period.status !== "draft") throw new Error("لا يمكن اعتماد دورة إلا وهي مسودة");
+
+  const items = await db.select().from(payrollItems).where(eq(payrollItems.periodId, periodId));
+  if (items.length === 0) throw new Error("لا يمكن اعتماد دورة بلا سطور");
+
+  // السُلف المعلّقة لكل موظف في الدورة → تتخصم من سطره وتتعلّم كمُسوّاة
+  for (const item of items) {
+    const pending = await db.select().from(employeeAdvances).where(and(
+      eq(employeeAdvances.employeeId, item.employeeId),
+      eq(employeeAdvances.businessId, period.businessId),
+      eq(employeeAdvances.status, "pending"),
+    ));
+    if (pending.length === 0) continue;
+
+    const totalAdvances = pending.reduce((sum, a) => sum + toNumber(a.amount), 0);
+    const newNet = toNumber(item.baseSalary) + toNumber(item.overtimeAmount)
+      + toNumber(item.bonuses) + toNumber(item.commissions)
+      - toNumber(item.absenceDeduction) - toNumber(item.deductions) - totalAdvances;
+
+    await db.update(payrollItems).set({
+      advances: totalAdvances.toFixed(2),
+      netSalary: newNet.toFixed(2),
+    }).where(eq(payrollItems.id, item.id));
+
+    await db.update(employeeAdvances).set({
+      status: "settled", settledPeriodId: periodId,
+    }).where(inArray(employeeAdvances.id, pending.map(a => a.id)));
+  }
+
+  const [agg] = await db.select({
+    net: sql<string>`COALESCE(SUM(${payrollItems.netSalary}), 0)`,
+    gross: sql<string>`COALESCE(SUM(${payrollItems.baseSalary} + ${payrollItems.overtimeAmount} + ${payrollItems.bonuses} + ${payrollItems.commissions}), 0)`,
+  }).from(payrollItems).where(eq(payrollItems.periodId, periodId));
+
+  await db.update(payrollPeriods).set({
+    status: "approved",
+    totalNet: String(agg?.net ?? "0"),
+    totalGross: String(agg?.gross ?? "0"),
+    approvedBy: actor.id,
+    approvedByName: actor.name,
+    approvedAt: new Date(),
+  }).where(eq(payrollPeriods.id, periodId));
+
+  return { totalNet: Number(agg?.net ?? 0) };
+}
+
+/**
+ * دفع الدورة — قيد محاسبي واحد بمجموع الصافي.
+ *
+ * ثلاثة حواجز ضد الدفع المزدوج:
+ *   ١. الفهرس الفريد (businessId, year, month) — دورة واحدة للشهر
+ *   ٢. `status !== 'approved'` — الدفع من حالة واحدة بس
+ *   ٣. `expenseId != null` — لو فيه قيد خلاص، الطلب بيترفض
+ *
+ * القيمة المدفوعة هي **الصافي** مش الإجمالي: السُلف خرجت من الدُرج واتسجّلت كمصروف
+ * وقت صرفها، فتسجيلها تاني هنا كان بيحسب نفس التكلفة مرتين.
+ */
+export async function payPayrollPeriod(periodId: number, actor: { id: number; name: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [period] = await db.select().from(payrollPeriods)
+    .where(eq(payrollPeriods.id, periodId)).limit(1);
+  if (!period) throw new Error("الدورة غير موجودة");
+  if (period.status !== "approved") throw new Error("لا يمكن دفع دورة إلا بعد اعتمادها");
+  if (period.expenseId) throw new Error("هذه الدورة مدفوعة بالفعل");
+
+  const netTotal = toNumber(period.totalNet);
+  if (netTotal <= 0) throw new Error("لا يمكن دفع دورة صافيها صفر أو أقل");
+
+  const categoryId = await ensurePayrollExpenseCategory(period.businessId);
+  const { to } = monthBounds(period.year, period.month);
+  const expense = await createExpense({
+    businessId: period.businessId,
+    categoryId,
+    amount: netTotal.toFixed(2),
+    description: `مرتبات ${period.month}/${period.year} — ${period.employeeCount} موظف`,
+    expenseDate: to,
+    reference: `PAYROLL-${period.year}-${String(period.month).padStart(2, "0")}`,
+    createdBy: actor.id,
+    createdByName: actor.name,
+  } as InsertExpense);
+
+  await db.update(payrollPeriods).set({
+    status: "paid",
+    expenseId: expense.id,
+    paidBy: actor.id,
+    paidByName: actor.name,
+    paidAt: new Date(),
+  }).where(eq(payrollPeriods.id, periodId));
+
+  return { expenseId: expense.id, amount: netTotal };
+}
+
+/**
+ * إلغاء دورة.
+ *
+ * المسودة والمعتمدة بتتلغي مباشرة. المدفوعة بتتلغي كمان لكن بقيد عكسي: `deleteExpense`
+ * بينزّل حركة تسوية بترد القيمة للخزنة بدل ما يمسح الحركة الأصلية — الـledger
+ * append-only، والفلوس اللي خرجت لازم يفضل ليها أثر.
+ *
+ * في كل الحالات السُلف المخصومة بترجع "معلّقة" عشان تتخصم في الدورة الجاية، وإلا كان
+ * الموظف بياخد سُلفة اتخصمت من دورة اتلغت.
+ */
+export async function cancelPayrollPeriod(
+  periodId: number, reason: string, actor: { id: number; name: string },
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [period] = await db.select().from(payrollPeriods)
+    .where(eq(payrollPeriods.id, periodId)).limit(1);
+  if (!period) throw new Error("الدورة غير موجودة");
+  if (period.status === "cancelled") throw new Error("الدورة ملغاة بالفعل");
+
+  if (period.expenseId) {
+    await deleteExpense(period.expenseId, actor);
+  }
+
+  await db.update(employeeAdvances).set({
+    status: "pending", settledPeriodId: null,
+  }).where(eq(employeeAdvances.settledPeriodId, periodId));
+
+  await db.update(payrollPeriods).set({
+    status: "cancelled",
+    expenseId: null,
+    cancelledBy: actor.id,
+    cancelledByName: actor.name,
+    cancelledAt: new Date(),
+    cancelReason: reason,
+  }).where(eq(payrollPeriods.id, periodId));
+}
+
+/** حذف دورة مسودة نهائيًا — المعتمدة والمدفوعة بتتلغي مش بتتحذف. */
+export async function deletePayrollPeriod(periodId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [period] = await db.select().from(payrollPeriods)
+    .where(eq(payrollPeriods.id, periodId)).limit(1);
+  if (!period) throw new Error("الدورة غير موجودة");
+  if (period.status !== "draft") {
+    throw new Error("لا يمكن حذف دورة بعد اعتمادها — استخدم الإلغاء");
+  }
+  await db.delete(payrollItems).where(eq(payrollItems.periodId, periodId));
+  await db.delete(payrollPeriods).where(eq(payrollPeriods.id, periodId));
+}
+
+/** ملخّص لوحة الرواتب */
+export async function getPayrollSummary(businessIds?: number[] | null) {
+  const db = await getDb();
+  const empty = {
+    draftPeriods: 0, approvedPeriods: 0, paidThisYear: 0,
+    pendingAdvances: 0, employeesWithProfile: 0, lastPeriod: null as PayrollPeriod | null,
+  };
+  if (!db) return empty;
+  const scope = businessIds && businessIds.length > 0
+    ? [inArray(payrollPeriods.businessId, businessIds)] : [];
+  const year = new Date().getFullYear();
+
+  const [counts] = await db.select({
+    draft: sql<number>`SUM(CASE WHEN ${payrollPeriods.status} = 'draft' THEN 1 ELSE 0 END)`,
+    approved: sql<number>`SUM(CASE WHEN ${payrollPeriods.status} = 'approved' THEN 1 ELSE 0 END)`,
+    paidYear: sql<string>`COALESCE(SUM(CASE WHEN ${payrollPeriods.status} = 'paid' AND ${payrollPeriods.year} = ${year} THEN ${payrollPeriods.totalNet} ELSE 0 END), 0)`,
+  }).from(payrollPeriods).where(scope.length > 0 ? and(...scope) : undefined);
+
+  const advScope = businessIds && businessIds.length > 0
+    ? [inArray(employeeAdvances.businessId, businessIds)] : [];
+  const [adv] = await db.select({
+    pending: sql<string>`COALESCE(SUM(CASE WHEN ${employeeAdvances.status} = 'pending' THEN ${employeeAdvances.amount} ELSE 0 END), 0)`,
+  }).from(employeeAdvances).where(advScope.length > 0 ? and(...advScope) : undefined);
+
+  const profScope = businessIds && businessIds.length > 0
+    ? [inArray(employeeSalaryProfiles.businessId, businessIds)] : [];
+  const [prof] = await db.select({
+    count: sql<number>`COUNT(DISTINCT ${employeeSalaryProfiles.employeeId})`,
+  }).from(employeeSalaryProfiles).where(and(
+    eq(employeeSalaryProfiles.isActive, true),
+    ...profScope,
+  ));
+
+  const [lastPeriod] = await db.select().from(payrollPeriods)
+    .where(scope.length > 0 ? and(...scope) : undefined)
+    .orderBy(desc(payrollPeriods.year), desc(payrollPeriods.month))
+    .limit(1);
+
+  return {
+    draftPeriods: Number(counts?.draft ?? 0),
+    approvedPeriods: Number(counts?.approved ?? 0),
+    paidThisYear: Number(counts?.paidYear ?? 0),
+    pendingAdvances: Number(adv?.pending ?? 0),
+    employeesWithProfile: Number(prof?.count ?? 0),
+    lastPeriod: lastPeriod ?? null,
   };
 }

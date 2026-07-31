@@ -169,6 +169,11 @@ import {
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, archiveExpenseCategory,
   getExpenses, createExpense, updateExpense, deleteExpense,
   getCollections, recordOrderCollection, getOrderCollectionHistory,
+  getPayrollSettings, upsertPayrollSettings, getSalaryProfiles, createSalaryProfile, updateSalaryProfile,
+  getAdvances, createAdvance, cancelAdvance,
+  getPayrollPeriods, getPayrollPeriod, createPayrollPeriod, recalculatePayrollPeriod,
+  updatePayrollItem, approvePayrollPeriod, payPayrollPeriod, cancelPayrollPeriod,
+  deletePayrollPeriod, getPayrollSummary,
   scanOrderBySerial, getScanLogs,
   getBusinessIdsForTenant,
 } from "./db";
@@ -3074,6 +3079,287 @@ export const appRouter = router({
         input.collectedAt,
       );
     }),
+  }),
+
+  // ==================== PAYROLL ====================
+  //
+  // الوصول: adminProcedure زي router الحسابات — الـcontext بيبني ctx.user للأدوار
+  // الإدارية بس. صلاحيات payroll.* اتعرّفت في permissions.ts استعدادًا لبورتال المحاسب،
+  // والاعتماد مفصول عن الدفع عشان فصل المهام يفضل ممكن.
+  payroll: router({
+    summary: adminProcedure.input(z.object({
+      businessIds: z.array(z.number()).optional(),
+    }).optional()).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+      return getPayrollSummary(businessIds);
+    }),
+
+    // ---------- الإعدادات ----------
+    settingsGet: adminProcedure.input(z.object({ businessId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+        return getPayrollSettings(businessId);
+      }),
+
+    settingsSave: adminProcedure.input(z.object({
+      businessId: z.number(),
+      workingDaysPerMonth: z.number().int().min(1).max(31).optional(),
+      absenceDeductionBasis: z.enum(['calendar_days', 'working_days']).optional(),
+      weekendDays: z.string().max(20).optional(),
+      overtimeMode: z.enum(['manual', 'hourly_multiplier']).optional(),
+      overtimeMultiplier: z.number().min(1).max(5).optional(),
+      workHoursPerDay: z.number().min(1).max(24).optional(),
+      currency: z.string().max(10).optional(),
+      roundingMode: z.enum(['none', 'nearest_1', 'nearest_5', 'nearest_10']).optional(),
+      defaultSalaryType: z.enum(['monthly', 'daily', 'commission', 'mixed']).optional(),
+      defaultCommissionBasis: z.enum(['confirmed', 'prepared', 'shipped', 'delivered']).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      const { businessId: _b, overtimeMultiplier, workHoursPerDay, ...rest } = input;
+      await upsertPayrollSettings(businessId, {
+        ...rest,
+        ...(overtimeMultiplier != null ? { overtimeMultiplier: overtimeMultiplier.toFixed(2) } : {}),
+        ...(workHoursPerDay != null ? { workHoursPerDay: workHoursPerDay.toFixed(2) } : {}),
+      }, { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' });
+      await addActivityLog({
+        action: 'payroll_settings_update', entityType: 'payroll_settings',
+        description: 'تعديل إعدادات الرواتب',
+        performedBy: actor.id ?? ctx.user.id, performedByName: actor.name ?? 'غير معروف',
+        performedByRole: 'admin', businessId,
+      });
+      return { success: true };
+    }),
+
+    // ---------- ملفات الرواتب ----------
+    profileList: adminProcedure.input(z.object({ employeeId: z.number() }))
+      .query(async ({ input }) => getSalaryProfiles(input.employeeId)),
+
+    profileCreate: adminProcedure.input(z.object({
+      businessId: z.number(),
+      employeeId: z.number(),
+      salaryType: z.enum(['monthly', 'daily', 'commission', 'mixed']),
+      baseSalary: z.number().min(0).optional(),
+      dailyRate: z.number().min(0).optional(),
+      commissionType: z.enum(['per_order', 'percentage']).optional(),
+      commissionValue: z.number().min(0).optional(),
+      commissionBasis: z.enum(['confirmed', 'prepared', 'shipped', 'delivered']).default('delivered'),
+      effectiveFrom: z.date(),
+      notes: z.string().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      const { baseSalary, dailyRate, commissionValue, ...rest } = input;
+      const result = await createSalaryProfile({
+        ...rest, businessId,
+        ...(baseSalary != null ? { baseSalary: baseSalary.toFixed(2) } : {}),
+        ...(dailyRate != null ? { dailyRate: dailyRate.toFixed(2) } : {}),
+        ...(commissionValue != null ? { commissionValue: commissionValue.toFixed(2) } : {}),
+        createdBy: actor.id ?? ctx.user.id,
+        createdByName: actor.name ?? 'غير معروف',
+      } as any);
+      await addActivityLog({
+        action: 'salary_profile_create', entityType: 'employee_salary_profile',
+        entityId: result.id,
+        description: `إنشاء ملف راتب للموظف #${input.employeeId}`,
+        metadata: { salaryType: input.salaryType, effectiveFrom: input.effectiveFrom },
+        performedBy: actor.id ?? ctx.user.id, performedByName: actor.name ?? 'غير معروف',
+        performedByRole: 'admin', businessId,
+      });
+      return result;
+    }),
+
+    profileUpdate: adminProcedure.input(z.object({
+      id: z.number(),
+      isActive: z.boolean().optional(),
+      notes: z.string().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const { id, ...rest } = input;
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      await updateSalaryProfile(id, rest, { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' });
+      return { success: true };
+    }),
+
+    // ---------- السُلف ----------
+    advanceList: adminProcedure.input(z.object({
+      employeeId: z.number().optional(),
+      status: z.enum(['pending', 'settled', 'cancelled']).optional(),
+      dateFrom: z.date().optional(),
+      dateTo: z.date().optional(),
+      page: z.number().default(1),
+      limit: z.number().default(50),
+      businessIds: z.array(z.number()).optional(),
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getAdvances({ ...input, businessIds });
+    }),
+
+    advanceCreate: adminProcedure.input(z.object({
+      businessId: z.number(),
+      employeeId: z.number(),
+      amount: z.number().positive('المبلغ لازم يكون أكبر من صفر'),
+      advanceDate: z.date(),
+      reason: z.string().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      const employee = await getEmployeeById(input.employeeId);
+      if (!employee) throw new TRPCError({ code: 'NOT_FOUND', message: 'الموظف غير موجود' });
+      const result = await createAdvance({
+        businessId, employeeId: input.employeeId, employeeName: employee.name,
+        amount: input.amount.toFixed(2),
+        advanceDate: input.advanceDate,
+        reason: input.reason,
+        createdBy: actor.id ?? ctx.user.id,
+        createdByName: actor.name ?? 'غير معروف',
+      } as any);
+      await addActivityLog({
+        action: 'advance_create', entityType: 'employee_advance', entityId: result.id,
+        description: `صرف سُلفة ${input.amount} لـ${employee.name}`,
+        performedBy: actor.id ?? ctx.user.id, performedByName: actor.name ?? 'غير معروف',
+        performedByRole: 'admin', businessId,
+      });
+      return result;
+    }),
+
+    advanceCancel: adminProcedure.input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await resolveActingEmployeeIdAndName(ctx);
+        await cancelAdvance(input.id, { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' });
+        await addActivityLog({
+          action: 'advance_cancel', entityType: 'employee_advance', entityId: input.id,
+          description: `إلغاء سُلفة #${input.id}`,
+          performedBy: actor.id ?? ctx.user.id, performedByName: actor.name ?? 'غير معروف',
+          performedByRole: 'admin',
+        });
+        return { success: true };
+      }),
+
+    // ---------- الدورات ----------
+    periodList: adminProcedure.input(z.object({
+      year: z.number().optional(),
+      status: z.enum(['draft', 'approved', 'paid', 'cancelled']).optional(),
+      page: z.number().default(1),
+      limit: z.number().default(50),
+      businessIds: z.array(z.number()).optional(),
+    })).query(async ({ ctx, input }) => {
+      const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+      return getPayrollPeriods({ ...input, businessIds });
+    }),
+
+    periodGet: adminProcedure.input(z.object({ id: z.number() }))
+      .query(async ({ input }) => getPayrollPeriod(input.id)),
+
+    periodCreate: adminProcedure.input(z.object({
+      businessId: z.number(),
+      year: z.number().int().min(2020).max(2100),
+      month: z.number().int().min(1).max(12),
+      notes: z.string().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      const who = { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' };
+      const result = await createPayrollPeriod({ ...input, businessId, actor: who });
+      await addActivityLog({
+        action: 'payroll_period_create', entityType: 'payroll_period', entityId: result.id,
+        description: `إنشاء دورة رواتب ${input.month}/${input.year}`,
+        performedBy: who.id, performedByName: who.name, performedByRole: 'admin', businessId,
+      });
+      return result;
+    }),
+
+    periodRecalculate: adminProcedure.input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await resolveActingEmployeeIdAndName(ctx);
+        return recalculatePayrollPeriod(input.id, {
+          id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف',
+        });
+      }),
+
+    itemUpdate: adminProcedure.input(z.object({
+      id: z.number(),
+      attendanceDays: z.number().int().min(0).max(31).optional(),
+      absenceDays: z.number().int().min(0).max(31).optional(),
+      overtimeHours: z.number().min(0).optional(),
+      overtimeAmount: z.number().min(0).optional(),
+      bonuses: z.number().min(0).optional(),
+      deductions: z.number().min(0).optional(),
+      commissions: z.number().min(0).optional(),
+      baseSalary: z.number().min(0).optional(),
+      netSalary: z.number().optional(),
+      notes: z.string().optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const { id, ...rest } = input;
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      // decimal في drizzle نص — الأرقام بتتحول قبل الحفظ عشان الدقة تفضل ثابتة
+      const DECIMALS = ['overtimeHours', 'overtimeAmount', 'bonuses', 'deductions',
+        'commissions', 'baseSalary', 'netSalary'];
+      const data: Record<string, any> = {};
+      for (const [k, v] of Object.entries(rest)) {
+        if (v === undefined) continue;
+        data[k] = DECIMALS.includes(k) && typeof v === 'number' ? v.toFixed(2) : v;
+      }
+      await updatePayrollItem(id, data, {
+        id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف',
+      });
+      return { success: true };
+    }),
+
+    periodApprove: adminProcedure.input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await resolveActingEmployeeIdAndName(ctx);
+        const who = { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' };
+        const result = await approvePayrollPeriod(input.id, who);
+        await addActivityLog({
+          action: 'payroll_period_approve', entityType: 'payroll_period', entityId: input.id,
+          description: `اعتماد دورة رواتب #${input.id} بصافي ${result.totalNet}`,
+          metadata: { totalNet: result.totalNet },
+          performedBy: who.id, performedByName: who.name, performedByRole: 'admin',
+        });
+        return result;
+      }),
+
+    periodPay: adminProcedure.input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await resolveActingEmployeeIdAndName(ctx);
+        const who = { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' };
+        const result = await payPayrollPeriod(input.id, who);
+        await addActivityLog({
+          action: 'payroll_period_pay', entityType: 'payroll_period', entityId: input.id,
+          description: `دفع دورة رواتب #${input.id} بمبلغ ${result.amount}`,
+          metadata: { expenseId: result.expenseId, amount: result.amount },
+          performedBy: who.id, performedByName: who.name, performedByRole: 'admin',
+        });
+        return result;
+      }),
+
+    periodCancel: adminProcedure.input(z.object({
+      id: z.number(),
+      reason: z.string().min(1, 'سبب الإلغاء مطلوب'),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveActingEmployeeIdAndName(ctx);
+      const who = { id: actor.id ?? ctx.user.id, name: actor.name ?? 'غير معروف' };
+      await cancelPayrollPeriod(input.id, input.reason, who);
+      await addActivityLog({
+        action: 'payroll_period_cancel', entityType: 'payroll_period', entityId: input.id,
+        description: `إلغاء دورة رواتب #${input.id} — ${input.reason}`,
+        performedBy: who.id, performedByName: who.name, performedByRole: 'admin',
+      });
+      return { success: true };
+    }),
+
+    periodDelete: adminProcedure.input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const actor = await resolveActingEmployeeIdAndName(ctx);
+        await deletePayrollPeriod(input.id);
+        await addActivityLog({
+          action: 'payroll_period_delete', entityType: 'payroll_period', entityId: input.id,
+          description: `حذف دورة رواتب مسودة #${input.id}`,
+          performedBy: actor.id ?? ctx.user.id, performedByName: actor.name ?? 'غير معروف',
+          performedByRole: 'admin',
+        });
+        return { success: true };
+      }),
   }),
 });
 
