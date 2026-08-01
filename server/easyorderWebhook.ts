@@ -36,10 +36,11 @@
  * Manual "Sync Now" is deliberately NOT wired up — it has no documented endpoint.
  */
 import { Request, Response, Express } from "express";
-import { getDb, getSalesChannelByWebhookSecret, getSalesChannelByPlatformAndBusiness, getOrderByExternalId, updateOrder } from "./db";
+import { getDb, getSalesChannelByWebhookSecret, getOrderByExternalId, updateOrder } from "./db";
 import { webhookLogs } from "../drizzle/schema";
 import { desc } from "drizzle-orm";
 import { upsertEasyOrder, fetchEasyOrderById, type EasyOrderPayload } from "./easyorder.service";
+import { recordIntegrationOrderEvent } from "./shippingV2.service";
 
 type EnforcementMode = "log_only" | "enforce";
 
@@ -55,9 +56,9 @@ interface EasyOrderStatusUpdate {
   payment_ref_id?: string;
 }
 
-/** Per-business source label, shared by the create and backfill paths. */
-function sourceLabelFor(businessId: number): string {
-  return businessId === 3 ? "easyorder_ataba" : businessId === 1 ? "easyorder_farhat" : "easyorder";
+/** Stable provider-neutral source label. Business names and numeric IDs are never encoded. */
+function sourceLabelFor(channel: { id: number; platform: string }): string {
+  return `${channel.platform}:${channel.id}`;
 }
 
 /** EasyOrder status → local order status. Unknown values are logged, never guessed. */
@@ -164,7 +165,8 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     // Resolve the channel before branching: the status-update path needs its API token to
     // recover an unknown order, not just the create path.
     if (!channel) {
-      channel = await getSalesChannelByPlatformAndBusiness("easyorder");
+      await addLog({ eventType: "auth", status: "error", message: "تعذر تحديد قناة البيع والـ Business من Secret صالح" });
+      return res.status(401).json({ error: "A configured channel secret is required" });
     }
 
     const body = req.body;
@@ -173,10 +175,21 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     if (body?.event_type === "order-status-update") {
       const payload = body as EasyOrderStatusUpdate;
       const mapped = EXTERNAL_STATUS_MAP[String(payload.new_status ?? "").toLowerCase()];
-      const existing = payload.order_id ? await getOrderByExternalId(payload.order_id) : undefined;
+      const existing = payload.order_id ? await getOrderByExternalId(payload.order_id, channel.businessId) : undefined;
 
       if (existing && mapped) {
-        await updateOrder(existing.id, { status: mapped as any });
+        const accountingEvent = await recordIntegrationOrderEvent({
+          businessId: channel.businessId,
+          orderId: existing.id,
+          integrationCode: channel.platform,
+          providerStatusCode: String(payload.new_status ?? ""),
+          occurredAt: new Date(),
+          payload,
+          providerEventId: payload.payment_ref_id,
+        });
+        if ((accountingEvent as any).reason === "accounting_not_active") {
+          await updateOrder(existing.id, { status: mapped as any });
+        }
         await addLog({
           eventType: "order-status-update",
           status: "status_update",
@@ -215,11 +228,11 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
         return res.json({ received: true, action: "status_ignored" });
       }
 
-      const businessIdForBackfill = channel?.businessId ?? 1;
+      const businessIdForBackfill = channel.businessId;
       const backfilled = await upsertEasyOrder(backfill.order, {
         businessId: businessIdForBackfill,
-        channelId: channel?.id ?? null,
-        source: sourceLabelFor(businessIdForBackfill),
+        channelId: channel.id,
+        source: sourceLabelFor(channel),
       });
 
       if (backfilled.outcome === "failed") {
@@ -233,8 +246,19 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       }
 
       // Apply the new status on top of the freshly stored order, when we understand it.
-      const restored = await getOrderByExternalId(payload.order_id);
-      if (restored && mapped) await updateOrder(restored.id, { status: mapped as any });
+      const restored = await getOrderByExternalId(payload.order_id, channel.businessId);
+      if (restored && mapped) {
+        const accountingEvent = await recordIntegrationOrderEvent({
+          businessId: channel.businessId,
+          orderId: restored.id,
+          integrationCode: channel.platform,
+          providerStatusCode: String(payload.new_status ?? ""),
+          occurredAt: new Date(),
+          payload,
+          providerEventId: payload.payment_ref_id,
+        });
+        if ((accountingEvent as any).reason === "accounting_not_active") await updateOrder(restored.id, { status: mapped as any });
+      }
 
       await addLog({
         eventType: "order-status-update",
@@ -261,7 +285,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       return res.status(400).json({ error: "Invalid payload" });
     }
 
-    const businessId = channel?.businessId ?? 1;
+    const businessId = channel.businessId;
 
     // The create webhook already carries the whole order, so this call is not needed to
     // capture it. It is made anyway to store the provider's canonical copy: the pushed body
@@ -288,8 +312,8 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
 
     const result = await upsertEasyOrder(effectivePayload, {
       businessId,
-      channelId: channel?.id ?? null,
-      source: sourceLabelFor(businessId),
+      channelId: channel.id,
+      source: sourceLabelFor(channel),
     });
 
     if (result.outcome === "failed") {

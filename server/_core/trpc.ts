@@ -2,6 +2,7 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { hasTenantPermission, type Permission } from "../permissions";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -32,6 +33,25 @@ const requireUser = t.middleware(async opts => {
 });
 
 export const protectedProcedure = t.procedure.use(requireUser);
+
+const requireAuthenticatedIdentity = t.middleware(async ({ ctx, next }) => {
+  if ((!ctx.user && !ctx.employee) || ctx.tenantId == null) {
+    throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  }
+  return next({ ctx: { ...ctx, tenantId: ctx.tenantId } });
+});
+
+export const authenticatedProcedure = t.procedure.use(requireAuthenticatedIdentity);
+
+export function permissionProcedure(permission: Permission) {
+  return authenticatedProcedure.use(async ({ ctx, next }) => {
+    const ownerOrAdmin = ctx.user?.role === "admin";
+    if (!ownerOrAdmin && !await hasTenantPermission(ctx.tenantId, ctx.employee?.role, permission)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+    }
+    return next({ ctx });
+  });
+}
 
 // Built on protectedProcedure (not a fresh t.procedure) so it inherits the same tenantId
 // narrowing requireUser already does — one place asserts "authenticated ⇒ real tenant",

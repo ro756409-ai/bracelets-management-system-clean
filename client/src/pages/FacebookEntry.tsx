@@ -26,15 +26,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-
-const EGYPT_GOVERNORATES = [
-  "القاهرة", "الجيزة", "الإسكندرية", "الدقهلية", "البحر الأحمر",
-  "البحيرة", "الفيوم", "الغربية", "الإسماعيلية", "المنوفية",
-  "المنيا", "القليوبية", "الوادي الجديد", "السويس", "أسوان",
-  "أسيوط", "بني سويف", "بورسعيد", "دمياط", "الشرقية",
-  "جنوب سيناء", "كفر الشيخ", "مطروح", "الأقصر", "قنا",
-  "شمال سيناء", "سوهاج",
-];
+import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 
 // ID منتج كفر مرتبة ووتر بروف
 const WATERPROOF_PRODUCT_ID = 60001;
@@ -122,6 +114,7 @@ const EMPTY_FORM: FormState = {
 const DRAFT_STORAGE_KEY = "facebookEntryDraft";
 
 export default function FacebookEntry() {
+  const { values: EGYPT_GOVERNORATES } = useOperationalOptions("governorate");
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [pasteText, setPasteText] = useState("");
   const [showPaste, setShowPaste] = useState(false);

@@ -7,6 +7,7 @@ import {
   varchar,
   decimal,
   boolean,
+  index,
   uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
@@ -19,7 +20,9 @@ export const tenants = mysqlTable("tenants", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 150 }).notNull(),
   slug: varchar("slug", { length: 60 }).notNull().unique(),
-  status: mysqlEnum("status", ["trialing", "active", "past_due", "canceled"]).default("trialing").notNull(),
+  status: mysqlEnum("status", ["trialing", "active", "past_due", "canceled"])
+    .default("trialing")
+    .notNull(),
   trialEndsAt: timestamp("trialEndsAt"),
   ownerName: varchar("ownerName", { length: 150 }),
   ownerEmail: varchar("ownerEmail", { length: 320 }),
@@ -66,6 +69,12 @@ export const businesses = mysqlTable("businesses", {
   name: varchar("name", { length: 100 }).notNull(),
   slug: varchar("slug", { length: 50 }).notNull().unique(),
   groupId: int("groupId"),
+  baseCurrency: varchar("baseCurrency", { length: 3 }).default("EGP").notNull(),
+  timezone: varchar("timezone", { length: 64 })
+    .default("Africa/Cairo")
+    .notNull(),
+  accountingGoLiveAt: timestamp("accountingGoLiveAt"),
+  defaultWarehouseId: int("defaultWarehouseId"),
   isActive: boolean("isActive").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -96,7 +105,9 @@ export const subscriptions = mysqlTable("subscriptions", {
   id: int("id").autoincrement().primaryKey(),
   tenantId: int("tenantId").notNull(),
   planId: int("planId").notNull(),
-  status: mysqlEnum("status", ["trialing", "active", "past_due", "canceled"]).default("trialing").notNull(),
+  status: mysqlEnum("status", ["trialing", "active", "past_due", "canceled"])
+    .default("trialing")
+    .notNull(),
   currentPeriodStart: timestamp("currentPeriodStart"),
   currentPeriodEnd: timestamp("currentPeriodEnd"),
   cancelAtPeriodEnd: boolean("cancelAtPeriodEnd").default(false).notNull(),
@@ -122,50 +133,75 @@ export type InsertSubscription = typeof subscriptions.$inferInsert;
 export const paymentGatewayConfigs = mysqlTable("payment_gateway_configs", {
   id: int("id").autoincrement().primaryKey(),
   tenantId: int("tenantId").notNull(),
-  provider: mysqlEnum("provider", ["paymob", "stripe", "fawry", "other"]).notNull(),
+  provider: mysqlEnum("provider", [
+    "paymob",
+    "stripe",
+    "fawry",
+    "other",
+  ]).notNull(),
   displayName: varchar("displayName", { length: 100 }),
   credentials: text("credentials"),
   isActive: boolean("isActive").default(false).notNull(),
   lastVerifiedAt: timestamp("lastVerifiedAt"),
-  lastVerificationStatus: mysqlEnum("lastVerificationStatus", ["never", "connected", "failed"]).default("never").notNull(),
+  lastVerificationStatus: mysqlEnum("lastVerificationStatus", [
+    "never",
+    "connected",
+    "failed",
+  ])
+    .default("never")
+    .notNull(),
   lastVerificationError: text("lastVerificationError"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
 export type PaymentGatewayConfig = typeof paymentGatewayConfigs.$inferSelect;
-export type InsertPaymentGatewayConfig = typeof paymentGatewayConfigs.$inferInsert;
+export type InsertPaymentGatewayConfig =
+  typeof paymentGatewayConfigs.$inferInsert;
 
 // ==================== PLAN FEATURES / LIMITS (normalized, not a JSON blob) ====================
-export const planFeatures = mysqlTable("plan_features", {
-  id: int("id").autoincrement().primaryKey(),
-  planId: int("planId").notNull(),
-  // Validated server-side against a fixed known-code list — see permissions.ts-style constant,
-  // not scattered plan-name string checks throughout the app.
-  featureCode: varchar("featureCode", { length: 60 }).notNull(),
-  enabled: boolean("enabled").default(true).notNull(),
-  // Feature-specific configuration only (e.g. a rate limit for that one feature) — never a
-  // dumping ground for the whole plan's permissions.
-  configurationJson: text("configurationJson"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => ({
-  planFeatureUnique: uniqueIndex("plan_features_plan_id_feature_code_unique").on(table.planId, table.featureCode),
-}));
+export const planFeatures = mysqlTable(
+  "plan_features",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    planId: int("planId").notNull(),
+    // Validated server-side against a fixed known-code list — see permissions.ts-style constant,
+    // not scattered plan-name string checks throughout the app.
+    featureCode: varchar("featureCode", { length: 60 }).notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    // Feature-specific configuration only (e.g. a rate limit for that one feature) — never a
+    // dumping ground for the whole plan's permissions.
+    configurationJson: text("configurationJson"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    planFeatureUnique: uniqueIndex(
+      "plan_features_plan_id_feature_code_unique"
+    ).on(table.planId, table.featureCode),
+  })
+);
 
 export type PlanFeature = typeof planFeatures.$inferSelect;
 export type InsertPlanFeature = typeof planFeatures.$inferInsert;
 
-export const planLimits = mysqlTable("plan_limits", {
-  id: int("id").autoincrement().primaryKey(),
-  planId: int("planId").notNull(),
-  limitCode: varchar("limitCode", { length: 60 }).notNull(),
-  limitValue: int("limitValue").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => ({
-  planLimitUnique: uniqueIndex("plan_limits_plan_id_limit_code_unique").on(table.planId, table.limitCode),
-}));
+export const planLimits = mysqlTable(
+  "plan_limits",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    planId: int("planId").notNull(),
+    limitCode: varchar("limitCode", { length: 60 }).notNull(),
+    limitValue: int("limitValue").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    planLimitUnique: uniqueIndex("plan_limits_plan_id_limit_code_unique").on(
+      table.planId,
+      table.limitCode
+    ),
+  })
+);
 
 export type PlanLimit = typeof planLimits.$inferSelect;
 export type InsertPlanLimit = typeof planLimits.$inferInsert;
@@ -218,10 +254,22 @@ export const employees = mysqlTable("employees", {
   email: varchar("email", { length: 320 }),
   role: mysqlEnum("role", [
     // existing roles — unchanged, still drive current admin/manager/employee-portal auth
-    "agent", "warehouse", "manager", "facebook_entry", "scanner",
+    "agent",
+    "warehouse",
+    "manager",
+    "facebook_entry",
+    "scanner",
     // new roles (Sprint 3 employee management) — additive only
-    "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
-  ]).default("agent").notNull(),
+    "super_admin",
+    "admin",
+    "data_entry",
+    "order_confirmation",
+    "shipping",
+    "accountant",
+    "viewer",
+  ])
+    .default("agent")
+    .notNull(),
   isActive: boolean("isActive").default(true).notNull(),
   // The tenant this employee belongs to — the authoritative source for auth-time tenant
   // resolution (see server/_core/context.ts). Deliberately NULLABLE WITH NO DEFAULT: unlike
@@ -283,8 +331,18 @@ export const orders = mysqlTable("orders", {
   productName: varchar("productName", { length: 200 }).notNull(),
   quantity: int("quantity").default(1).notNull(),
   totalAmount: decimal("totalAmount", { precision: 10, scale: 2 }).notNull(),
-  shippingFees: decimal("shippingFees", { precision: 10, scale: 2 }).default("0"),
+  shippingFees: decimal("shippingFees", { precision: 10, scale: 2 }).default(
+    "0"
+  ),
   paymentMethod: varchar("paymentMethod", { length: 50 }).default("cod"),
+  projectedShippingProviderId: int("projectedShippingProviderId"),
+  projectedShippingType: varchar("projectedShippingType", { length: 50 }),
+  projectedPaymentType: varchar("projectedPaymentType", { length: 50 }),
+  projectedShippingCostSnapshot: decimal("projectedShippingCostSnapshot", {
+    precision: 18,
+    scale: 4,
+  }),
+  projectedShippingCapturedAt: timestamp("projectedShippingCapturedAt"),
   status: mysqlEnum("status", [
     "new",
     "confirmed",
@@ -296,8 +354,11 @@ export const orders = mysqlTable("orders", {
     "no_answer",
     "returned",
     "printed",
-  ]).default("new").notNull(),
-  source: mysqlEnum("source", ["easyorder", "easyorder_ataba", "easyorder_farhat", "easyorder_flashbox", "shopify", "whatsapp", "manual", "facebook"]).default("manual").notNull(),
+  ])
+    .default("new")
+    .notNull(),
+  // Operational values come from each Business configuration, not a deploy-time enum.
+  source: varchar("source", { length: 60 }).notNull(),
   assignedEmployeeId: int("assignedEmployeeId"),
   assignedAt: timestamp("assignedAt"),
   confirmedAt: timestamp("confirmedAt"),
@@ -315,7 +376,7 @@ export const orders = mysqlTable("orders", {
   variantId: int("variantId"),
   color: varchar("color", { length: 100 }),
   size: varchar("size", { length: 100 }),
-  cancelReason: mysqlEnum("cancelReason", ["price", "not_serious", "wrong_number", "duplicate"]),
+  cancelReason: varchar("cancelReason", { length: 80 }),
   // Confirmation-employee feedback captured at the moment an order is marked "no_answer" —
   // how many times they actually tried calling this round. Nullable: only ever set by the
   // markNoAnswer mutation, never a default; overwritten (not accumulated) on each no_answer
@@ -347,11 +408,13 @@ export const orders = mysqlTable("orders", {
   collectedAmount: decimal("collectedAmount", { precision: 10, scale: 2 }),
   collectedAt: timestamp("collectedAt"),
   collectionStatus: mysqlEnum("collectionStatus", [
-    "pending",   // لسه في الطريق / مع شركة الشحن
+    "pending", // لسه في الطريق / مع شركة الشحن
     "collected", // اتحصّل بالكامل
-    "partial",   // اتحصّل أقل من المتوقع
-    "failed",    // مرتجع / مارجعش فلوس
-  ]).default("pending").notNull(),
+    "partial", // اتحصّل أقل من المتوقع
+    "failed", // مرتجع / مارجعش فلوس
+  ])
+    .default("pending")
+    .notNull(),
   adName: varchar("adName", { length: 255 }),
   pageName: varchar("pageName", { length: 255 }),
   isDuplicate: boolean("isDuplicate").default(false).notNull(),
@@ -386,6 +449,36 @@ export const orderItems = mysqlTable("order_items", {
   productName: varchar("productName", { length: 200 }).notNull(),
   quantity: int("quantity").default(1).notNull(),
   unitPrice: decimal("unitPrice", { precision: 10, scale: 2 }),
+  grossAmountSnapshot: decimal("grossAmountSnapshot", {
+    precision: 18,
+    scale: 4,
+  }),
+  discountAmountSnapshot: decimal("discountAmountSnapshot", {
+    precision: 18,
+    scale: 4,
+  })
+    .default("0")
+    .notNull(),
+  netAmountSnapshot: decimal("netAmountSnapshot", { precision: 18, scale: 4 }),
+  customerShippingSnapshot: decimal("customerShippingSnapshot", {
+    precision: 18,
+    scale: 4,
+  })
+    .default("0")
+    .notNull(),
+  taxCodeSnapshot: varchar("taxCodeSnapshot", { length: 30 }),
+  taxAmountSnapshot: decimal("taxAmountSnapshot", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  projectedUnitCostSnapshot: decimal("projectedUnitCostSnapshot", {
+    precision: 18,
+    scale: 4,
+  }),
+  unitCostSnapshot: decimal("unitCostSnapshot", { precision: 18, scale: 4 }),
+  costCapturedAt: timestamp("costCapturedAt"),
+  reservedQuantity: int("reservedQuantity").default(0).notNull(),
+  stockOutQuantity: int("stockOutQuantity").default(0).notNull(),
+  returnedQuantity: int("returnedQuantity").default(0).notNull(),
   variantId: int("variantId"),
   size: varchar("size", { length: 100 }),
   color: varchar("color", { length: 100 }),
@@ -401,7 +494,18 @@ export const salesChannels = mysqlTable("sales_channels", {
   businessId: int("businessId").notNull(),
   name: varchar("name", { length: 100 }).notNull(),
   domain: varchar("domain", { length: 255 }),
-  platform: mysqlEnum("platform", ["easyorder", "shopify", "woocommerce", "whatsapp", "facebook", "instagram", "manual", "other"]).default("other").notNull(),
+  platform: mysqlEnum("platform", [
+    "easyorder",
+    "shopify",
+    "woocommerce",
+    "whatsapp",
+    "facebook",
+    "instagram",
+    "manual",
+    "other",
+  ])
+    .default("other")
+    .notNull(),
   apiToken: text("apiToken"),
   webhookSecret: text("webhookSecret"),
   webhookUrl: text("webhookUrl"),
@@ -410,13 +514,21 @@ export const salesChannels = mysqlTable("sales_channels", {
   isActive: boolean("isActive").default(true).notNull(),
   // ---- Sync status (set by an actual order sync) ----
   lastSyncAt: timestamp("lastSyncAt"),
-  lastSyncStatus: mysqlEnum("lastSyncStatus", ["never", "success", "error"]).default("never").notNull(),
+  lastSyncStatus: mysqlEnum("lastSyncStatus", ["never", "success", "error"])
+    .default("never")
+    .notNull(),
   lastSyncError: text("lastSyncError"),
   lastSyncedOrderCount: int("lastSyncedOrderCount").default(0).notNull(),
   // ---- Connection-test status (set by the read-only credential check; kept separate from
   // sync status so a failed import never looks like broken credentials, and vice versa) ----
   lastConnectionTestAt: timestamp("lastConnectionTestAt"),
-  lastConnectionStatus: mysqlEnum("lastConnectionStatus", ["never", "connected", "failed"]).default("never").notNull(),
+  lastConnectionStatus: mysqlEnum("lastConnectionStatus", [
+    "never",
+    "connected",
+    "failed",
+  ])
+    .default("never")
+    .notNull(),
   lastConnectionError: text("lastConnectionError"),
   /** Store name/identifier reported by the provider, when the endpoint exposes one. */
   externalStoreName: varchar("externalStoreName", { length: 200 }),
@@ -433,7 +545,9 @@ export const syncLogs = mysqlTable("sync_logs", {
   channelId: int("channelId"),
   provider: varchar("provider", { length: 30 }).notNull(), // 'easyorder'
   trigger: mysqlEnum("trigger", ["webhook", "manual", "retry"]).notNull(),
-  status: mysqlEnum("status", ["running", "success", "partial", "error"]).default("running").notNull(),
+  status: mysqlEnum("status", ["running", "success", "partial", "error"])
+    .default("running")
+    .notNull(),
   // Range requested for a manual sync (null for a single webhook event)
   rangeFrom: timestamp("rangeFrom"),
   rangeTo: timestamp("rangeTo"),
@@ -482,7 +596,12 @@ export const webhookLogs = mysqlTable("webhook_logs", {
   businessId: int("businessId").notNull().default(1),
   receivedAt: timestamp("receivedAt").defaultNow().notNull(),
   eventType: varchar("eventType", { length: 50 }).notNull(),
-  status: mysqlEnum("status", ["success", "duplicate", "error", "status_update"]).notNull(),
+  status: mysqlEnum("status", [
+    "success",
+    "duplicate",
+    "error",
+    "status_update",
+  ]).notNull(),
   externalOrderId: varchar("externalOrderId", { length: 100 }),
   customerName: varchar("customerName", { length: 200 }),
   customerPhone: varchar("customerPhone", { length: 30 }),
@@ -531,14 +650,7 @@ export const returns = mysqlTable("returns", {
   productName: varchar("productName", { length: 200 }).notNull(),
   quantity: int("quantity").notNull(),
   totalAmount: decimal("totalAmount", { precision: 10, scale: 2 }).notNull(),
-  returnReason: mysqlEnum("returnReason", [
-    "customer_refused",
-    "wrong_product",
-    "damaged",
-    "wrong_address",
-    "customer_not_available",
-    "other",
-  ]).notNull(),
+  returnReason: varchar("returnReason", { length: 80 }).notNull(),
   notes: text("notes"),
   stockRestored: boolean("stockRestored").default(false).notNull(),
   processedBy: int("processedBy"),
@@ -573,7 +685,9 @@ export const tasks = mysqlTable("tasks", {
   assignedToName: varchar("assignedToName", { length: 100 }),
   createdBy: int("createdBy").notNull(),
   createdByName: varchar("createdByName", { length: 100 }).notNull(),
-  status: mysqlEnum("taskStatus", ["new", "in_progress", "done"]).default("new").notNull(),
+  status: mysqlEnum("taskStatus", ["new", "in_progress", "done"])
+    .default("new")
+    .notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -585,7 +699,9 @@ export type InsertTask = typeof tasks.$inferInsert;
 export const printLogs = mysqlTable("print_logs", {
   id: int("id").autoincrement().primaryKey(),
   businessId: int("businessId").notNull().default(1),
-  type: mysqlEnum("printType", ["shipping_sheet", "labels"]).default("shipping_sheet").notNull(),
+  type: mysqlEnum("printType", ["shipping_sheet", "labels"])
+    .default("shipping_sheet")
+    .notNull(),
   orderIds: text("orderIds").notNull(),
   orderCount: int("orderCount").notNull(),
   printedBy: int("printedBy").notNull(),
@@ -665,7 +781,12 @@ export const scanLogs = mysqlTable("scan_logs", {
   serialNumber: varchar("serialNumber", { length: 30 }).notNull(),
   scannedBy: int("scannedBy").notNull(),
   scannedByName: varchar("scannedByName", { length: 100 }).notNull(),
-  result: mysqlEnum("result", ["success", "failed", "duplicate", "cancelled"]).notNull(),
+  result: mysqlEnum("result", [
+    "success",
+    "failed",
+    "duplicate",
+    "cancelled",
+  ]).notNull(),
   deviceInfo: varchar("deviceInfo", { length: 255 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -683,7 +804,9 @@ export const importBatches = mysqlTable("import_batches", {
   tenantId: int("tenantId"),
   label: varchar("label", { length: 150 }).notNull(),
   source: varchar("source", { length: 100 }).notNull(),
-  status: mysqlEnum("status", ["running", "completed", "failed", "rolled_back"]).default("running").notNull(),
+  status: mysqlEnum("status", ["running", "completed", "failed", "rolled_back"])
+    .default("running")
+    .notNull(),
   totalRows: int("totalRows").default(0).notNull(),
   importedCount: int("importedCount").default(0).notNull(),
   skippedCount: int("skippedCount").default(0).notNull(),
@@ -709,20 +832,26 @@ export type InsertImportBatch = typeof importBatches.$inferInsert;
 
 // تصنيفات المصروفات — جدول منفصل مش enum، لأن كل تاجر عنده تصنيفاته (إيجار، رواتب،
 // إعلانات، شحن، …) والـenum كان معناه migration مع كل تصنيف جديد.
-export const expenseCategories = mysqlTable("expense_categories", {
-  id: int("id").autoincrement().primaryKey(),
-  businessId: int("businessId").notNull(),
-  name: varchar("name", { length: 100 }).notNull(),
-  description: text("description"),
-  // تصنيفات النظام الأساسية — مش قابلة للحذف عشان المصروفات القديمة مايبقاش لها تصنيف
-  isSystem: boolean("isSystem").default(false).notNull(),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => ({
-  // نفس الاسم مرتين لنفس النشاط بيخلي التقارير تتفرّق على تصنيفين متطابقين
-  businessNameUnique: uniqueIndex("expense_categories_business_name_unique").on(table.businessId, table.name),
-}));
+export const expenseCategories = mysqlTable(
+  "expense_categories",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    description: text("description"),
+    // تصنيفات النظام الأساسية — مش قابلة للحذف عشان المصروفات القديمة مايبقاش لها تصنيف
+    isSystem: boolean("isSystem").default(false).notNull(),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    // نفس الاسم مرتين لنفس النشاط بيخلي التقارير تتفرّق على تصنيفين متطابقين
+    businessNameUnique: uniqueIndex(
+      "expense_categories_business_name_unique"
+    ).on(table.businessId, table.name),
+  })
+);
 
 export type ExpenseCategory = typeof expenseCategories.$inferSelect;
 export type InsertExpenseCategory = typeof expenseCategories.$inferInsert;
@@ -732,18 +861,45 @@ export const expenses = mysqlTable("expenses", {
   id: int("id").autoincrement().primaryKey(),
   businessId: int("businessId").notNull(),
   categoryId: int("categoryId"),
-  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
+  currencyCode: varchar("currencyCode", { length: 3 }).default("EGP").notNull(),
+  status: mysqlEnum("status", [
+    "draft",
+    "pending_approval",
+    "accrued",
+    "partially_paid",
+    "paid",
+    "voided",
+  ])
+    .default("draft")
+    .notNull(),
+  serviceFrom: timestamp("serviceFrom"),
+  serviceTo: timestamp("serviceTo"),
+  costCenterId: int("costCenterId"),
+  taxCode: varchar("taxCode", { length: 30 }),
+  taxAmount: decimal("taxAmount", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  recognizedAmount: decimal("recognizedAmount", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  paidAmount: decimal("paidAmount", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  voidedAt: timestamp("voidedAt"),
+  voidReason: text("voidReason"),
   description: text("description").notNull(),
   // تاريخ المصروف نفسه — مختلف عن createdAt (وقت الإدخال في النظام). مصروف امبارح
   // ممكن يتسجّل النهاردة، والتقارير لازم تحسبه على يومه مش على يوم الإدخال.
   expenseDate: timestamp("expenseDate").notNull(),
   // مرجع خارجي: رقم فاتورة أو إيصال
   reference: varchar("reference", { length: 100 }),
-  // المرفق: مسار/URL للفاتورة. الرفع نفسه مش متطبّق في المرحلة دي — العمود موجود عشان
-  // الواجهة تقدر تعرض رابط لو اتحط يدويًا، والرفع بياجي مع خدمة التخزين لاحقًا.
+  // المرفق بيرجع من endpoint رفع الأدلة المحمي، مش URL حر بيدخله المستخدم.
   attachmentUrl: varchar("attachmentUrl", { length: 500 }),
   createdBy: int("createdBy").notNull(),
   createdByName: varchar("createdByName", { length: 100 }).notNull(),
+  approvedBy: int("approvedBy"),
+  approvedAt: timestamp("approvedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -759,14 +915,14 @@ export const treasuryTransactions = mysqlTable("treasury_transactions", {
   // ممكن يبقى في اتجاهين: تعديل تحصيل ناقص بيطلع، وتصحيحه بيدخل.
   type: mysqlEnum("type", [
     "collection", // تحصيل أوردر
-    "refund",     // مرتجع
-    "expense",    // مصروف
-    "deposit",    // إيداع
+    "refund", // مرتجع
+    "expense", // مصروف
+    "deposit", // إيداع
     "withdrawal", // سحب
     "adjustment", // تسوية يدوية
   ]).notNull(),
   direction: mysqlEnum("direction", ["in", "out"]).notNull(),
-  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
   // الرصيد بعد الحركة — محسوب ومحفوظ وقت الإدخال، مش وقت العرض. لو حسبناه بجمع كل
   // الصفوف السابقة عند كل قراءة، أي حركة بتاريخ قديم بتتضاف بعدين كانت هتغيّر كل
   // الأرصدة اللي بعدها بأثر رجعي، والتاجر مايقدرش يطابق كشف قديم.
@@ -775,7 +931,14 @@ export const treasuryTransactions = mysqlTable("treasury_transactions", {
   notes: text("notes"),
   // ربط الحركة بمصدرها: أوردر، مصروف، مرتجع. nullable لأن الإيداع/السحب اليدوي
   // مالوش مصدر في جدول تاني.
-  referenceType: mysqlEnum("referenceType", ["order", "expense", "return", "manual"]).default("manual").notNull(),
+  referenceType: mysqlEnum("referenceType", [
+    "order",
+    "expense",
+    "return",
+    "manual",
+  ])
+    .default("manual")
+    .notNull(),
   referenceId: int("referenceId"),
   performedBy: int("performedBy").notNull(),
   performedByName: varchar("performedByName", { length: 100 }).notNull(),
@@ -785,7 +948,8 @@ export const treasuryTransactions = mysqlTable("treasury_transactions", {
 });
 
 export type TreasuryTransaction = typeof treasuryTransactions.$inferSelect;
-export type InsertTreasuryTransaction = typeof treasuryTransactions.$inferInsert;
+export type InsertTreasuryTransaction =
+  typeof treasuryTransactions.$inferInsert;
 
 // ==================== PAYROLL ====================
 //
@@ -805,42 +969,81 @@ export type InsertTreasuryTransaction = typeof treasuryTransactions.$inferInsert
  * القيم دي كانت هتبقى أرقامًا ثابتة في الكود (٣٠ يوم، إجازة الجمعة والسبت، …) وهي
  * بتختلف من تاجر للتاني ومن بلد للتانية. وجودها في جدول معناه إن تغييرها إعداد مش نشر.
  */
-export const payrollSettings = mysqlTable("payroll_settings", {
-  id: int("id").autoincrement().primaryKey(),
-  businessId: int("businessId").notNull(),
-  /** أيام العمل في الشهر — أساس حساب أجر اليوم للمرتب الشهري */
-  workingDaysPerMonth: int("workingDaysPerMonth").default(26).notNull(),
-  /**
-   * أساس خصم الغياب: أيام التقويم (÷30) ولا أيام العمل (÷workingDaysPerMonth).
-   * الفرق حقيقي في الجيب: مرتب ٣٠٠٠ وغياب يوم = ١٠٠ بالتقويم و١١٥.٣٨ بأيام العمل.
-   */
-  absenceDeductionBasis: mysqlEnum("absenceDeductionBasis", ["calendar_days", "working_days"])
-    .default("working_days").notNull(),
-  /** أيام الإجازة الأسبوعية كأرقام مفصولة بفواصل — 0=الأحد … 6=السبت. الافتراضي الجمعة والسبت. */
-  weekendDays: varchar("weekendDays", { length: 20 }).default("5,6").notNull(),
-  /**
-   * الأوفرتايم: يدوي (المستخدم بيكتب المبلغ)، أو محسوب من أجر الساعة × مضاعف.
-   * الافتراضي يدوي — مفيش نظام حضور بيسجّل ساعات لسه.
-   */
-  overtimeMode: mysqlEnum("overtimeMode", ["manual", "hourly_multiplier"]).default("manual").notNull(),
-  overtimeMultiplier: decimal("overtimeMultiplier", { precision: 5, scale: 2 }).default("1.50").notNull(),
-  /** ساعات اليوم — لحساب أجر الساعة لما يكون الأوفرتايم محسوبًا */
-  workHoursPerDay: decimal("workHoursPerDay", { precision: 4, scale: 2 }).default("8.00").notNull(),
-  currency: varchar("currency", { length: 10 }).default("EGP").notNull(),
-  /** تقريب الصافي — بعض التجار بيقرّبوا لأقرب ٥ أو ١٠ عشان الكاش */
-  roundingMode: mysqlEnum("roundingMode", ["none", "nearest_1", "nearest_5", "nearest_10"])
-    .default("none").notNull(),
-  defaultSalaryType: mysqlEnum("defaultSalaryType", ["monthly", "daily", "commission", "mixed"])
-    .default("monthly").notNull(),
-  defaultCommissionBasis: mysqlEnum("defaultCommissionBasis", ["confirmed", "prepared", "shipped", "delivered"])
-    .default("delivered").notNull(),
-  updatedBy: int("updatedBy"),
-  updatedByName: varchar("updatedByName", { length: 100 }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => ({
-  businessUnique: uniqueIndex("payroll_settings_business_unique").on(table.businessId),
-}));
+export const payrollSettings = mysqlTable(
+  "payroll_settings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    /** أيام العمل في الشهر — أساس حساب أجر اليوم للمرتب الشهري */
+    workingDaysPerMonth: int("workingDaysPerMonth").default(26).notNull(),
+    /**
+     * أساس خصم الغياب: أيام التقويم (÷30) ولا أيام العمل (÷workingDaysPerMonth).
+     * الفرق حقيقي في الجيب: مرتب ٣٠٠٠ وغياب يوم = ١٠٠ بالتقويم و١١٥.٣٨ بأيام العمل.
+     */
+    absenceDeductionBasis: mysqlEnum("absenceDeductionBasis", [
+      "calendar_days",
+      "working_days",
+    ])
+      .default("working_days")
+      .notNull(),
+    /** أيام الإجازة الأسبوعية كأرقام مفصولة بفواصل — 0=الأحد … 6=السبت. الافتراضي الجمعة والسبت. */
+    weekendDays: varchar("weekendDays", { length: 20 })
+      .default("5,6")
+      .notNull(),
+    /**
+     * الأوفرتايم: يدوي (المستخدم بيكتب المبلغ)، أو محسوب من أجر الساعة × مضاعف.
+     * الافتراضي يدوي — مفيش نظام حضور بيسجّل ساعات لسه.
+     */
+    overtimeMode: mysqlEnum("overtimeMode", ["manual", "hourly_multiplier"])
+      .default("manual")
+      .notNull(),
+    overtimeMultiplier: decimal("overtimeMultiplier", {
+      precision: 5,
+      scale: 2,
+    })
+      .default("1.50")
+      .notNull(),
+    /** ساعات اليوم — لحساب أجر الساعة لما يكون الأوفرتايم محسوبًا */
+    workHoursPerDay: decimal("workHoursPerDay", { precision: 4, scale: 2 })
+      .default("8.00")
+      .notNull(),
+    currency: varchar("currency", { length: 10 }).default("EGP").notNull(),
+    /** تقريب الصافي — بعض التجار بيقرّبوا لأقرب ٥ أو ١٠ عشان الكاش */
+    roundingMode: mysqlEnum("roundingMode", [
+      "none",
+      "nearest_1",
+      "nearest_5",
+      "nearest_10",
+    ])
+      .default("none")
+      .notNull(),
+    defaultSalaryType: mysqlEnum("defaultSalaryType", [
+      "monthly",
+      "daily",
+      "commission",
+      "mixed",
+    ])
+      .default("monthly")
+      .notNull(),
+    defaultCommissionBasis: mysqlEnum("defaultCommissionBasis", [
+      "confirmed",
+      "prepared",
+      "shipped",
+      "delivered",
+    ])
+      .default("delivered")
+      .notNull(),
+    updatedBy: int("updatedBy"),
+    updatedByName: varchar("updatedByName", { length: 100 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessUnique: uniqueIndex("payroll_settings_business_unique").on(
+      table.businessId
+    ),
+  })
+);
 
 export type PayrollSettings = typeof payrollSettings.$inferSelect;
 export type InsertPayrollSettings = typeof payrollSettings.$inferInsert;
@@ -852,124 +1055,180 @@ export type InsertPayrollSettings = typeof payrollSettings.$inferInsert;
  * بتتراكم، والدورة بتختار الإصدار الساري: أحدث `effectiveFrom` أقل من أو يساوي نهاية
  * الشهر المحسوب.
  */
-export const employeeSalaryProfiles = mysqlTable("employee_salary_profiles", {
-  id: int("id").autoincrement().primaryKey(),
-  businessId: int("businessId").notNull(),
-  employeeId: int("employeeId").notNull(),
-  salaryType: mysqlEnum("salaryType", ["monthly", "daily", "commission", "mixed"]).notNull(),
-  /** null للموظف اللي على عمولة صافية */
-  baseSalary: decimal("baseSalary", { precision: 10, scale: 2 }),
-  /** null لغير اليومي */
-  dailyRate: decimal("dailyRate", { precision: 10, scale: 2 }),
-  commissionType: mysqlEnum("commissionType", ["per_order", "percentage"]),
-  commissionValue: decimal("commissionValue", { precision: 10, scale: 2 }),
-  /**
-   * الحالة اللي بتستحق العمولة. إعداد لكل موظف مش افتراض في الكود: موظف التأكيدات
-   * بياخد على "مؤكد"، وموظف التجهيز على "تم التجهيز"، والمندوب على "تم التوصيل".
-   */
-  commissionBasis: mysqlEnum("commissionBasis", ["confirmed", "prepared", "shipped", "delivered"])
-    .default("delivered").notNull(),
-  effectiveFrom: timestamp("effectiveFrom").notNull(),
-  notes: text("notes"),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdBy: int("createdBy").notNull(),
-  createdByName: varchar("createdByName", { length: 100 }).notNull(),
-  updatedBy: int("updatedBy"),
-  updatedByName: varchar("updatedByName", { length: 100 }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => ({
-  // إصداران بنفس تاريخ السريان لنفس الموظف = اختيار عشوائي بين الاتنين وقت الحساب
-  employeeEffectiveUnique: uniqueIndex("employee_salary_profiles_employee_effective_unique")
-    .on(table.employeeId, table.effectiveFrom),
-}));
+export const employeeSalaryProfiles = mysqlTable(
+  "employee_salary_profiles",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    employeeId: int("employeeId").notNull(),
+    salaryType: mysqlEnum("salaryType", [
+      "monthly",
+      "daily",
+      "commission",
+      "mixed",
+    ]).notNull(),
+    /** null للموظف اللي على عمولة صافية */
+    baseSalary: decimal("baseSalary", { precision: 10, scale: 2 }),
+    /** null لغير اليومي */
+    dailyRate: decimal("dailyRate", { precision: 10, scale: 2 }),
+    commissionType: mysqlEnum("commissionType", ["per_order", "percentage"]),
+    commissionValue: decimal("commissionValue", { precision: 10, scale: 2 }),
+    /**
+     * الحالة اللي بتستحق العمولة. إعداد لكل موظف مش افتراض في الكود: موظف التأكيدات
+     * بياخد على "مؤكد"، وموظف التجهيز على "تم التجهيز"، والمندوب على "تم التوصيل".
+     */
+    commissionBasis: mysqlEnum("commissionBasis", [
+      "confirmed",
+      "prepared",
+      "shipped",
+      "delivered",
+    ])
+      .default("delivered")
+      .notNull(),
+    effectiveFrom: timestamp("effectiveFrom").notNull(),
+    notes: text("notes"),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdBy: int("createdBy").notNull(),
+    createdByName: varchar("createdByName", { length: 100 }).notNull(),
+    updatedBy: int("updatedBy"),
+    updatedByName: varchar("updatedByName", { length: 100 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    // إصداران بنفس تاريخ السريان لنفس الموظف = اختيار عشوائي بين الاتنين وقت الحساب
+    employeeEffectiveUnique: uniqueIndex(
+      "employee_salary_profiles_employee_effective_unique"
+    ).on(table.employeeId, table.effectiveFrom),
+  })
+);
 
 export type EmployeeSalaryProfile = typeof employeeSalaryProfiles.$inferSelect;
-export type InsertEmployeeSalaryProfile = typeof employeeSalaryProfiles.$inferInsert;
+export type InsertEmployeeSalaryProfile =
+  typeof employeeSalaryProfiles.$inferInsert;
 
 /** دورة رواتب شهرية — رأس الدورة */
-export const payrollPeriods = mysqlTable("payroll_periods", {
-  id: int("id").autoincrement().primaryKey(),
-  businessId: int("businessId").notNull(),
-  year: int("year").notNull(),
-  month: int("month").notNull(),
-  status: mysqlEnum("status", ["draft", "approved", "paid", "cancelled"]).default("draft").notNull(),
-  totalGross: decimal("totalGross", { precision: 12, scale: 2 }).default("0").notNull(),
-  totalNet: decimal("totalNet", { precision: 12, scale: 2 }).default("0").notNull(),
-  employeeCount: int("employeeCount").default(0).notNull(),
-  /**
-   * القيد المحاسبي المقابل للدفع. وجوده معناه إن الدورة اتدفعت فعلاً، وهو الحارس
-   * التاني ضد الدفع المزدوج بعد الفهرس الفريد على (businessId, year, month).
-   */
-  expenseId: int("expenseId"),
-  notes: text("notes"),
-  createdBy: int("createdBy").notNull(),
-  createdByName: varchar("createdByName", { length: 100 }).notNull(),
-  approvedBy: int("approvedBy"),
-  approvedByName: varchar("approvedByName", { length: 100 }),
-  approvedAt: timestamp("approvedAt"),
-  paidBy: int("paidBy"),
-  paidByName: varchar("paidByName", { length: 100 }),
-  paidAt: timestamp("paidAt"),
-  cancelledBy: int("cancelledBy"),
-  cancelledByName: varchar("cancelledByName", { length: 100 }),
-  cancelledAt: timestamp("cancelledAt"),
-  cancelReason: text("cancelReason"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => ({
-  // الحارس الأول ضد الدفع المزدوج — على مستوى قاعدة البيانات مش شرط في الكود ينفع يتخطّى
-  businessPeriodUnique: uniqueIndex("payroll_periods_business_period_unique")
-    .on(table.businessId, table.year, table.month),
-}));
+export const payrollPeriods = mysqlTable(
+  "payroll_periods",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    year: int("year").notNull(),
+    month: int("month").notNull(),
+    status: mysqlEnum("status", ["draft", "approved", "paid", "cancelled"])
+      .default("draft")
+      .notNull(),
+    totalGross: decimal("totalGross", { precision: 12, scale: 2 })
+      .default("0")
+      .notNull(),
+    totalNet: decimal("totalNet", { precision: 12, scale: 2 })
+      .default("0")
+      .notNull(),
+    employeeCount: int("employeeCount").default(0).notNull(),
+    /**
+     * القيد المحاسبي المقابل للدفع. وجوده معناه إن الدورة اتدفعت فعلاً، وهو الحارس
+     * التاني ضد الدفع المزدوج بعد الفهرس الفريد على (businessId, year, month).
+     */
+    expenseId: int("expenseId"),
+    notes: text("notes"),
+    createdBy: int("createdBy").notNull(),
+    createdByName: varchar("createdByName", { length: 100 }).notNull(),
+    approvedBy: int("approvedBy"),
+    approvedByName: varchar("approvedByName", { length: 100 }),
+    approvedAt: timestamp("approvedAt"),
+    paidBy: int("paidBy"),
+    paidByName: varchar("paidByName", { length: 100 }),
+    paidAt: timestamp("paidAt"),
+    cancelledBy: int("cancelledBy"),
+    cancelledByName: varchar("cancelledByName", { length: 100 }),
+    cancelledAt: timestamp("cancelledAt"),
+    cancelReason: text("cancelReason"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    // الحارس الأول ضد الدفع المزدوج — على مستوى قاعدة البيانات مش شرط في الكود ينفع يتخطّى
+    businessPeriodUnique: uniqueIndex(
+      "payroll_periods_business_period_unique"
+    ).on(table.businessId, table.year, table.month),
+  })
+);
 
 export type PayrollPeriod = typeof payrollPeriods.$inferSelect;
 export type InsertPayrollPeriod = typeof payrollPeriods.$inferInsert;
 
 /** سطر راتب لموظف واحد في دورة واحدة */
-export const payrollItems = mysqlTable("payroll_items", {
-  id: int("id").autoincrement().primaryKey(),
-  periodId: int("periodId").notNull(),
-  businessId: int("businessId").notNull(),
-  employeeId: int("employeeId").notNull(),
-  /** لقطة مجمّدة — كشف يناير لازم يفضل مقروءًا لو الموظف اتشال بعدين */
-  employeeName: varchar("employeeName", { length: 100 }).notNull(),
-  salaryType: mysqlEnum("salaryType", ["monthly", "daily", "commission", "mixed"]).notNull(),
-  /**
-   * إصدار ملف الراتب اللي اتحسب منه السطر ده، ولقطة JSON من قيمه وقت الإنشاء.
-   * الاتنين مع بعض: الـid للتتبّع، واللقطة عشان الكشف يفضل مفهومًا حتى لو الإصدار
-   * نفسه اتمسح. أي تعديل مستقبلي على الراتب مالوش أي أثر على الدورات القديمة.
-   */
-  salaryProfileId: int("salaryProfileId"),
-  profileSnapshot: text("profileSnapshot"),
-  baseSalary: decimal("baseSalary", { precision: 10, scale: 2 }).default("0").notNull(),
-  // إدخال يدوي في المرحلة دي — مفيش نظام حضور بعد. وحدة الحضور المستقبلية هتملاهم
-  // تلقائيًا، والأعمدة موجودة من دلوقتي عشان مايحتاجش migration وقتها.
-  attendanceDays: int("attendanceDays").default(0).notNull(),
-  absenceDays: int("absenceDays").default(0).notNull(),
-  overtimeHours: decimal("overtimeHours", { precision: 6, scale: 2 }).default("0").notNull(),
-  overtimeAmount: decimal("overtimeAmount", { precision: 10, scale: 2 }).default("0").notNull(),
-  bonuses: decimal("bonuses", { precision: 10, scale: 2 }).default("0").notNull(),
-  commissions: decimal("commissions", { precision: 10, scale: 2 }).default("0").notNull(),
-  /** شفافية: العمولة دي جات من كام أوردر */
-  commissionOrders: int("commissionOrders").default(0).notNull(),
-  absenceDeduction: decimal("absenceDeduction", { precision: 10, scale: 2 }).default("0").notNull(),
-  deductions: decimal("deductions", { precision: 10, scale: 2 }).default("0").notNull(),
-  advances: decimal("advances", { precision: 10, scale: 2 }).default("0").notNull(),
-  netSalary: decimal("netSalary", { precision: 10, scale: 2 }).default("0").notNull(),
-  /**
-   * أسماء الحقول اللي المستخدم عدّلها بإيده (JSON array).
-   * إعادة الحساب بتحدّث اللي مش موجود في القائمة دي بس — ده تنفيذ شرط "لا تكتب فوق
-   * التعديلات اليدوية". من غيره كان أول ضغط على "إعادة حساب" بيمسح شغل يدوي كامل.
-   */
-  manualFields: text("manualFields"),
-  notes: text("notes"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (table) => ({
-  periodEmployeeUnique: uniqueIndex("payroll_items_period_employee_unique")
-    .on(table.periodId, table.employeeId),
-}));
+export const payrollItems = mysqlTable(
+  "payroll_items",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    periodId: int("periodId").notNull(),
+    businessId: int("businessId").notNull(),
+    employeeId: int("employeeId").notNull(),
+    /** لقطة مجمّدة — كشف يناير لازم يفضل مقروءًا لو الموظف اتشال بعدين */
+    employeeName: varchar("employeeName", { length: 100 }).notNull(),
+    salaryType: mysqlEnum("salaryType", [
+      "monthly",
+      "daily",
+      "commission",
+      "mixed",
+    ]).notNull(),
+    /**
+     * إصدار ملف الراتب اللي اتحسب منه السطر ده، ولقطة JSON من قيمه وقت الإنشاء.
+     * الاتنين مع بعض: الـid للتتبّع، واللقطة عشان الكشف يفضل مفهومًا حتى لو الإصدار
+     * نفسه اتمسح. أي تعديل مستقبلي على الراتب مالوش أي أثر على الدورات القديمة.
+     */
+    salaryProfileId: int("salaryProfileId"),
+    profileSnapshot: text("profileSnapshot"),
+    baseSalary: decimal("baseSalary", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    // إدخال يدوي في المرحلة دي — مفيش نظام حضور بعد. وحدة الحضور المستقبلية هتملاهم
+    // تلقائيًا، والأعمدة موجودة من دلوقتي عشان مايحتاجش migration وقتها.
+    attendanceDays: int("attendanceDays").default(0).notNull(),
+    absenceDays: int("absenceDays").default(0).notNull(),
+    overtimeHours: decimal("overtimeHours", { precision: 6, scale: 2 })
+      .default("0")
+      .notNull(),
+    overtimeAmount: decimal("overtimeAmount", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    bonuses: decimal("bonuses", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    commissions: decimal("commissions", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    /** شفافية: العمولة دي جات من كام أوردر */
+    commissionOrders: int("commissionOrders").default(0).notNull(),
+    absenceDeduction: decimal("absenceDeduction", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    deductions: decimal("deductions", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    advances: decimal("advances", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    netSalary: decimal("netSalary", { precision: 10, scale: 2 })
+      .default("0")
+      .notNull(),
+    /**
+     * أسماء الحقول اللي المستخدم عدّلها بإيده (JSON array).
+     * إعادة الحساب بتحدّث اللي مش موجود في القائمة دي بس — ده تنفيذ شرط "لا تكتب فوق
+     * التعديلات اليدوية". من غيره كان أول ضغط على "إعادة حساب" بيمسح شغل يدوي كامل.
+     */
+    manualFields: text("manualFields"),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    periodEmployeeUnique: uniqueIndex(
+      "payroll_items_period_employee_unique"
+    ).on(table.periodId, table.employeeId),
+  })
+);
 
 export type PayrollItem = typeof payrollItems.$inferSelect;
 export type InsertPayrollItem = typeof payrollItems.$inferInsert;
@@ -983,11 +1242,17 @@ export const employeeAdvances = mysqlTable("employee_advances", {
   amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
   advanceDate: timestamp("advanceDate").notNull(),
   reason: text("reason"),
-  status: mysqlEnum("status", ["pending", "settled", "cancelled"]).default("pending").notNull(),
+  status: mysqlEnum("status", ["pending", "settled", "cancelled"])
+    .default("pending")
+    .notNull(),
   /** الدورة اللي اتخصمت فيها — بيتملى وقت اعتماد الدورة */
   settledPeriodId: int("settledPeriodId"),
-  /** المصروف المقابل وقت الصرف — الفلوس خرجت من الدُرج ساعتها */
+  /** Legacy link retained for old rows only. V2 treats an advance as a receivable. */
   expenseId: int("expenseId"),
+  sourceAccountId: int("sourceAccountId"),
+  receivableAccountId: int("receivableAccountId"),
+  financialTransactionId: int("financialTransactionId"),
+  evidenceUrl: varchar("evidenceUrl", { length: 500 }),
   createdBy: int("createdBy").notNull(),
   createdByName: varchar("createdByName", { length: 100 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -996,3 +1261,856 @@ export const employeeAdvances = mysqlTable("employee_advances", {
 
 export type EmployeeAdvance = typeof employeeAdvances.$inferSelect;
 export type InsertEmployeeAdvance = typeof employeeAdvances.$inferInsert;
+
+// ==================== ACCOUNTING CLOSING V2 ====================
+// These tables are intentionally additive. Legacy accounting remains readable during cutover;
+// new writes use immutable business events and business-scoped subledgers.
+
+export const businessEvents = mysqlTable(
+  "business_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    eventType: varchar("eventType", { length: 80 }).notNull(),
+    sourceType: varchar("sourceType", { length: 50 }).notNull(),
+    sourceReference: varchar("sourceReference", { length: 160 }).notNull(),
+    idempotencyKey: varchar("idempotencyKey", { length: 191 }).notNull(),
+    occurredAt: timestamp("occurredAt").notNull(),
+    accountingEffectiveAt: timestamp("accountingEffectiveAt").notNull(),
+    isPostClosingAdjustment: boolean("isPostClosingAdjustment")
+      .default(false)
+      .notNull(),
+    originalClosingId: int("originalClosingId"),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+    payloadJson: text("payloadJson").notNull(),
+    payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+    status: mysqlEnum("status", ["active", "voided", "reversed"])
+      .default("active")
+      .notNull(),
+    reversesEventId: int("reversesEventId"),
+    createdBy: int("createdBy"),
+    createdByName: varchar("createdByName", { length: 100 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    businessIdempotencyUnique: uniqueIndex(
+      "business_events_business_idempotency_unique"
+    ).on(table.businessId, table.idempotencyKey),
+    businessOccurredIndex: index("business_events_business_occurred_idx").on(
+      table.businessId,
+      table.occurredAt
+    ),
+    businessAccountingDateIndex: index(
+      "business_events_business_accounting_date_idx"
+    ).on(table.businessId, table.accountingEffectiveAt),
+    sourceIndex: index("business_events_source_idx").on(
+      table.businessId,
+      table.sourceType,
+      table.sourceReference
+    ),
+  })
+);
+
+export type BusinessEvent = typeof businessEvents.$inferSelect;
+export type InsertBusinessEvent = typeof businessEvents.$inferInsert;
+
+export const costCenters = mysqlTable(
+  "cost_centers",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    code: varchar("code", { length: 50 }).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessCodeUnique: uniqueIndex("cost_centers_business_code_unique").on(
+      table.businessId,
+      table.code
+    ),
+  })
+);
+
+export const businessConfigurationValues = mysqlTable(
+  "business_configuration_values",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    namespace: varchar("namespace", { length: 80 }).notNull(),
+    configKey: varchar("configKey", { length: 100 }).notNull(),
+    displayName: varchar("displayName", { length: 160 }).notNull(),
+    valueJson: text("valueJson"),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdBy: int("createdBy").notNull(),
+    updatedBy: int("updatedBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessNamespaceKeyUnique: uniqueIndex(
+      "business_configuration_namespace_key_unique"
+    ).on(table.businessId, table.namespace, table.configKey),
+  })
+);
+
+export const tenantRolePermissions = mysqlTable(
+  "tenant_role_permissions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    tenantId: int("tenantId").notNull(),
+    role: varchar("role", { length: 50 }).notNull(),
+    permission: varchar("permission", { length: 100 }).notNull(),
+    isAllowed: boolean("isAllowed").notNull(),
+    updatedBy: int("updatedBy").notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    tenantRolePermissionUnique: uniqueIndex("tenant_role_permission_unique").on(
+      table.tenantId,
+      table.role,
+      table.permission
+    ),
+  })
+);
+
+export const financialAccounts = mysqlTable(
+  "financial_accounts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    code: varchar("code", { length: 50 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    accountType: varchar("accountType", { length: 50 }).notNull(),
+    isCashEquivalent: boolean("isCashEquivalent").default(true).notNull(),
+    allowNegativeBalance: boolean("allowNegativeBalance")
+      .default(false)
+      .notNull(),
+    currencyCode: varchar("currencyCode", { length: 3 }).notNull(),
+    openingBalance: decimal("openingBalance", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    currentBalance: decimal("currentBalance", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    openingBalanceAt: timestamp("openingBalanceAt"),
+    openingEvidenceUrl: varchar("openingEvidenceUrl", { length: 500 }),
+    openingApprovedBy: int("openingApprovedBy"),
+    isActive: boolean("isActive").default(true).notNull(),
+    version: int("version").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessCodeUnique: uniqueIndex(
+      "financial_accounts_business_code_unique"
+    ).on(table.businessId, table.code),
+    businessTypeIndex: index("financial_accounts_business_type_idx").on(
+      table.businessId,
+      table.accountType
+    ),
+  })
+);
+
+export const financialTransactions = mysqlTable(
+  "financial_transactions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    businessEventId: int("businessEventId"),
+    transactionType: varchar("transactionType", { length: 60 }).notNull(),
+    sourceAccountId: int("sourceAccountId"),
+    targetAccountId: int("targetAccountId"),
+    amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
+    currencyCode: varchar("currencyCode", { length: 3 }).notNull(),
+    externalCounterparty: varchar("externalCounterparty", { length: 160 }),
+    description: text("description").notNull(),
+    evidenceUrl: varchar("evidenceUrl", { length: 500 }).notNull(),
+    occurredAt: timestamp("occurredAt").notNull(),
+    status: mysqlEnum("status", ["posted", "voided", "reversed"])
+      .default("posted")
+      .notNull(),
+    reversesTransactionId: int("reversesTransactionId"),
+    createdBy: int("createdBy").notNull(),
+    createdByName: varchar("createdByName", { length: 100 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    businessOccurredIndex: index(
+      "financial_transactions_business_occurred_idx"
+    ).on(table.businessId, table.occurredAt),
+  })
+);
+
+export const financialTransactionEntries = mysqlTable(
+  "financial_transaction_entries",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    transactionId: int("transactionId").notNull(),
+    businessId: int("businessId").notNull(),
+    accountId: int("accountId").notNull(),
+    direction: mysqlEnum("direction", ["in", "out"]).notNull(),
+    amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
+    balanceAfter: decimal("balanceAfter", {
+      precision: 18,
+      scale: 4,
+    }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    accountTransactionIndex: index(
+      "financial_entries_account_transaction_idx"
+    ).on(table.accountId, table.transactionId),
+  })
+);
+
+export const inventoryBalances = mysqlTable(
+  "inventory_balances",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    warehouseId: int("warehouseId").notNull(),
+    productId: int("productId").notNull(),
+    variantId: int("variantId"),
+    inventoryKey: varchar("inventoryKey", { length: 100 }).notNull(),
+    onHandQuantity: int("onHandQuantity").default(0).notNull(),
+    reservedQuantity: int("reservedQuantity").default(0).notNull(),
+    inventoryValue: decimal("inventoryValue", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    movingAverageCost: decimal("movingAverageCost", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    version: int("version").default(0).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessInventoryUnique: uniqueIndex(
+      "inventory_balances_business_key_unique"
+    ).on(table.businessId, table.warehouseId, table.inventoryKey),
+  })
+);
+
+export const inventoryReservations = mysqlTable(
+  "inventory_reservations",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    orderId: int("orderId").notNull(),
+    orderItemId: int("orderItemId").notNull(),
+    inventoryBalanceId: int("inventoryBalanceId").notNull(),
+    quantity: int("quantity").notNull(),
+    status: mysqlEnum("status", ["active", "consumed", "released"])
+      .default("active")
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    releasedAt: timestamp("releasedAt"),
+  },
+  table => ({
+    activeItemIndex: index("inventory_reservations_item_status_idx").on(
+      table.orderItemId,
+      table.status
+    ),
+  })
+);
+
+export const inventoryTransactions = mysqlTable(
+  "inventory_transactions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    businessEventId: int("businessEventId"),
+    inventoryBalanceId: int("inventoryBalanceId").notNull(),
+    transactionType: varchar("transactionType", { length: 60 }).notNull(),
+    quantityDelta: int("quantityDelta").notNull(),
+    unitCost: decimal("unitCost", { precision: 18, scale: 4 }).notNull(),
+    valueDelta: decimal("valueDelta", { precision: 18, scale: 4 }).notNull(),
+    quantityAfter: int("quantityAfter").notNull(),
+    valueAfter: decimal("valueAfter", { precision: 18, scale: 4 }).notNull(),
+    averageCostAfter: decimal("averageCostAfter", {
+      precision: 18,
+      scale: 4,
+    }).notNull(),
+    sourceType: varchar("sourceType", { length: 50 }).notNull(),
+    sourceId: int("sourceId"),
+    occurredAt: timestamp("occurredAt").notNull(),
+    createdBy: int("createdBy").notNull(),
+    createdByName: varchar("createdByName", { length: 100 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    balanceOccurredIndex: index(
+      "inventory_transactions_balance_occurred_idx"
+    ).on(table.inventoryBalanceId, table.occurredAt),
+  })
+);
+
+export const purchaseReceipts = mysqlTable("purchase_receipts", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  warehouseId: int("warehouseId").notNull(),
+  receiptType: varchar("receiptType", { length: 50 }).notNull(),
+  supplierName: varchar("supplierName", { length: 160 }).notNull(),
+  reference: varchar("reference", { length: 100 }),
+  receiptDate: timestamp("receiptDate").notNull(),
+  paymentStatus: mysqlEnum("paymentStatus", [
+    "unpaid",
+    "partially_paid",
+    "paid",
+  ])
+    .default("unpaid")
+    .notNull(),
+  totalAmount: decimal("totalAmount", { precision: 18, scale: 4 }).notNull(),
+  status: mysqlEnum("status", [
+    "draft",
+    "pending_approval",
+    "approved",
+    "voided",
+  ])
+    .default("draft")
+    .notNull(),
+  evidenceUrl: varchar("evidenceUrl", { length: 500 }),
+  reason: text("reason"),
+  createdBy: int("createdBy").notNull(),
+  approvedBy: int("approvedBy"),
+  approvedAt: timestamp("approvedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const purchaseReceiptItems = mysqlTable("purchase_receipt_items", {
+  id: int("id").autoincrement().primaryKey(),
+  receiptId: int("receiptId").notNull(),
+  businessId: int("businessId").notNull(),
+  productId: int("productId").notNull(),
+  variantId: int("variantId"),
+  quantity: int("quantity").notNull(),
+  unitCost: decimal("unitCost", { precision: 18, scale: 4 }).notNull(),
+  lineTotal: decimal("lineTotal", { precision: 18, scale: 4 }).notNull(),
+});
+
+export const returnInspections = mysqlTable("return_inspections", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  orderId: int("orderId").notNull(),
+  shipmentId: int("shipmentId"),
+  status: mysqlEnum("status", ["pending", "pending_approval", "approved"])
+    .default("pending")
+    .notNull(),
+  receivedAt: timestamp("receivedAt"),
+  inspectedBy: int("inspectedBy"),
+  approvedBy: int("approvedBy"),
+  approvedAt: timestamp("approvedAt"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const returnInspectionItems = mysqlTable("return_inspection_items", {
+  id: int("id").autoincrement().primaryKey(),
+  inspectionId: int("inspectionId").notNull(),
+  businessId: int("businessId").notNull(),
+  orderItemId: int("orderItemId").notNull(),
+  quantity: int("quantity").notNull(),
+  unitCostSnapshot: decimal("unitCostSnapshot", {
+    precision: 18,
+    scale: 4,
+  }).notNull(),
+  disposition: mysqlEnum("disposition", [
+    "restock",
+    "scrap",
+    "missing",
+  ]).notNull(),
+  reason: text("reason"),
+});
+
+export const shippingProviders = mysqlTable("shipping_providers", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 50 }).notNull().unique(),
+  name: varchar("name", { length: 120 }).notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const businessShippingProviders = mysqlTable(
+  "business_shipping_providers",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    providerId: int("providerId").notNull(),
+    displayName: varchar("displayName", { length: 120 }).notNull(),
+    codSettlementAccountId: int("codSettlementAccountId"),
+    statusMappingJson: text("statusMappingJson").notNull(),
+    rawWebhookRetentionDays: int("rawWebhookRetentionDays")
+      .default(365)
+      .notNull(),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessProviderUnique: uniqueIndex("business_shipping_provider_unique").on(
+      table.businessId,
+      table.providerId
+    ),
+  })
+);
+
+export const shippingRateVersions = mysqlTable(
+  "shipping_rate_versions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    businessShippingProviderId: int("businessShippingProviderId").notNull(),
+    governorate: varchar("governorate", { length: 100 }).notNull(),
+    shippingType: varchar("shippingType", { length: 50 }).notNull(),
+    paymentType: varchar("paymentType", { length: 50 }).notNull(),
+    priority: int("priority").default(0).notNull(),
+    effectiveFrom: timestamp("effectiveFrom").notNull(),
+    effectiveTo: timestamp("effectiveTo"),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdBy: int("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    lookupIndex: index("shipping_rates_lookup_idx").on(
+      table.businessId,
+      table.businessShippingProviderId,
+      table.governorate,
+      table.paymentType,
+      table.effectiveFrom
+    ),
+  })
+);
+
+export const shippingRateCharges = mysqlTable("shipping_rate_charges", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  rateVersionId: int("rateVersionId").notNull(),
+  chargeType: varchar("chargeType", { length: 60 }).notNull(),
+  calculationType: mysqlEnum("calculationType", [
+    "fixed",
+    "percentage",
+  ]).notNull(),
+  value: decimal("value", { precision: 18, scale: 4 }).notNull(),
+  percentageBase: mysqlEnum("percentageBase", [
+    "collected_amount",
+    "custom_fixed_base",
+  ]),
+  customFixedBase: decimal("customFixedBase", { precision: 18, scale: 4 }),
+  billingEvent: varchar("billingEvent", { length: 60 }).notNull(),
+  tolerance: decimal("tolerance", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+});
+
+export const shipments = mysqlTable(
+  "shipments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    orderId: int("orderId").notNull(),
+    businessShippingProviderId: int("businessShippingProviderId").notNull(),
+    externalShipmentId: varchar("externalShipmentId", { length: 120 }),
+    trackingNumber: varchar("trackingNumber", { length: 120 }),
+    officialDeliverySource: boolean("officialDeliverySource")
+      .default(true)
+      .notNull(),
+    currentStatus: varchar("currentStatus", { length: 60 }).notNull(),
+    dispatchedAt: timestamp("dispatchedAt"),
+    deliveredAt: timestamp("deliveredAt"),
+    returnedAt: timestamp("returnedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessExternalUnique: uniqueIndex(
+      "shipments_business_external_unique"
+    ).on(table.businessId, table.externalShipmentId),
+    orderIndex: index("shipments_business_order_idx").on(
+      table.businessId,
+      table.orderId
+    ),
+  })
+);
+
+export const shipmentEvents = mysqlTable(
+  "shipment_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    shipmentId: int("shipmentId").notNull(),
+    businessEventId: int("businessEventId"),
+    providerEventId: varchar("providerEventId", { length: 160 }),
+    providerStatusCode: varchar("providerStatusCode", { length: 60 }).notNull(),
+    normalizedEvent: varchar("normalizedEvent", { length: 60 }).notNull(),
+    occurredAt: timestamp("occurredAt").notNull(),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+    payloadJson: text("payloadJson").notNull(),
+    payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+    isManual: boolean("isManual").default(false).notNull(),
+    evidenceUrl: varchar("evidenceUrl", { length: 500 }),
+    createdBy: int("createdBy"),
+  },
+  table => ({
+    eventHashUnique: uniqueIndex("shipment_events_shipment_hash_unique").on(
+      table.shipmentId,
+      table.payloadHash
+    ),
+    occurredIndex: index("shipment_events_business_occurred_idx").on(
+      table.businessId,
+      table.occurredAt
+    ),
+  })
+);
+
+export const rawProviderWebhooks = mysqlTable(
+  "raw_provider_webhooks",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId"),
+    businessShippingProviderId: int("businessShippingProviderId"),
+    providerCode: varchar("providerCode", { length: 50 }).notNull(),
+    externalReference: varchar("externalReference", { length: 160 }),
+    payloadJson: text("payloadJson").notNull(),
+    payloadHash: varchar("payloadHash", { length: 64 }).notNull(),
+    processingStatus: mysqlEnum("processingStatus", [
+      "received",
+      "processed",
+      "unmatched",
+      "failed",
+    ])
+      .default("received")
+      .notNull(),
+    processingError: text("processingError"),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+    retainUntil: timestamp("retainUntil").notNull(),
+  },
+  table => ({
+    providerHashUnique: uniqueIndex(
+      "raw_provider_webhooks_provider_hash_unique"
+    ).on(table.providerCode, table.payloadHash),
+    retentionIndex: index("raw_provider_webhooks_retention_idx").on(
+      table.retainUntil
+    ),
+  })
+);
+
+export const shipmentChargeSnapshots = mysqlTable(
+  "shipment_charge_snapshots",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    orderId: int("orderId").notNull(),
+    shipmentId: int("shipmentId"),
+    rateChargeId: int("rateChargeId").notNull(),
+    chargeType: varchar("chargeType", { length: 60 }).notNull(),
+    calculationType: varchar("calculationType", { length: 30 }).notNull(),
+    valueSnapshot: decimal("valueSnapshot", {
+      precision: 18,
+      scale: 4,
+    }).notNull(),
+    percentageBaseSnapshot: varchar("percentageBaseSnapshot", { length: 40 }),
+    customFixedBaseSnapshot: decimal("customFixedBaseSnapshot", {
+      precision: 18,
+      scale: 4,
+    }),
+    billingEventSnapshot: varchar("billingEventSnapshot", {
+      length: 60,
+    }).notNull(),
+    expectedAmount: decimal("expectedAmount", {
+      precision: 18,
+      scale: 4,
+    }).notNull(),
+    toleranceSnapshot: decimal("toleranceSnapshot", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    recognizedAmount: decimal("recognizedAmount", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    recognizedAt: timestamp("recognizedAt"),
+  },
+  table => ({
+    orderSnapshotIndex: index("shipment_charge_snapshots_order_idx").on(
+      table.businessId,
+      table.orderId
+    ),
+    shipmentSnapshotIndex: index("shipment_charge_snapshots_shipment_idx").on(
+      table.shipmentId
+    ),
+  })
+);
+
+export const carrierSettlements = mysqlTable(
+  "carrier_settlements",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    businessShippingProviderId: int("businessShippingProviderId").notNull(),
+    reference: varchar("reference", { length: 120 }).notNull(),
+    statementDate: timestamp("statementDate").notNull(),
+    importHash: varchar("importHash", { length: 64 }).notNull(),
+    grossCollected: decimal("grossCollected", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    totalCharges: decimal("totalCharges", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    netTransferred: decimal("netTransferred", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    status: mysqlEnum("status", ["draft", "matched", "approved", "voided"])
+      .default("draft")
+      .notNull(),
+    evidenceUrl: varchar("evidenceUrl", { length: 500 }),
+    createdBy: int("createdBy").notNull(),
+    approvedBy: int("approvedBy"),
+    approvedAt: timestamp("approvedAt"),
+    targetAccountId: int("targetAccountId"),
+    transferTransactionId: int("transferTransactionId"),
+    chargesTransactionId: int("chargesTransactionId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    businessImportUnique: uniqueIndex(
+      "carrier_settlements_business_import_unique"
+    ).on(table.businessId, table.importHash),
+  })
+);
+
+export const carrierSettlementLines = mysqlTable("carrier_settlement_lines", {
+  id: int("id").autoincrement().primaryKey(),
+  settlementId: int("settlementId").notNull(),
+  businessId: int("businessId").notNull(),
+  shipmentId: int("shipmentId"),
+  externalReference: varchar("externalReference", { length: 160 }).notNull(),
+  grossCollected: decimal("grossCollected", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  actualCharges: decimal("actualCharges", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  netAmount: decimal("netAmount", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  matchStatus: mysqlEnum("matchStatus", ["matched", "suspense", "ignored"])
+    .default("suspense")
+    .notNull(),
+  differenceAmount: decimal("differenceAmount", { precision: 18, scale: 4 })
+    .default("0")
+    .notNull(),
+  rawLineJson: text("rawLineJson").notNull(),
+  notes: text("notes"),
+});
+
+export const expenseAccrualSchedules = mysqlTable(
+  "expense_accrual_schedules",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    expenseId: int("expenseId").notNull(),
+    accrualDate: timestamp("accrualDate").notNull(),
+    amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
+    status: mysqlEnum("status", ["scheduled", "recognized", "adjusted"])
+      .default("scheduled")
+      .notNull(),
+    closingId: int("closingId"),
+  },
+  table => ({
+    expenseDateUnique: uniqueIndex("expense_accrual_expense_date_unique").on(
+      table.expenseId,
+      table.accrualDate
+    ),
+  })
+);
+
+export const expensePayments = mysqlTable("expense_payments", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  expenseId: int("expenseId").notNull(),
+  financialTransactionId: int("financialTransactionId").notNull(),
+  amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
+  paidAt: timestamp("paidAt").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const adSpendEntries = mysqlTable(
+  "ad_spend_entries",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    expenseId: int("expenseId").notNull(),
+    spendDate: timestamp("spendDate").notNull(),
+    platformId: varchar("platformId", { length: 100 }).notNull(),
+    platformNameSnapshot: varchar("platformNameSnapshot", {
+      length: 120,
+    }).notNull(),
+    accountId: varchar("accountId", { length: 120 }).notNull(),
+    accountNameSnapshot: varchar("accountNameSnapshot", {
+      length: 160,
+    }).notNull(),
+    campaignId: varchar("campaignId", { length: 160 }).notNull(),
+    campaignNameSnapshot: varchar("campaignNameSnapshot", {
+      length: 200,
+    }).notNull(),
+    adSetId: varchar("adSetId", { length: 160 }),
+    adId: varchar("adId", { length: 160 }),
+    amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
+    manualMetricsJson: text("manualMetricsJson"),
+    overrideReason: text("overrideReason"),
+    notes: text("notes"),
+    createdBy: int("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    expenseUnique: uniqueIndex("ad_spend_expense_unique").on(table.expenseId),
+    campaignDateIndex: index("ad_spend_campaign_date_idx").on(
+      table.businessId,
+      table.campaignId,
+      table.spendDate
+    ),
+  })
+);
+
+export const accountingClosings = mysqlTable(
+  "accounting_closings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    sequenceNumber: int("sequenceNumber").notNull(),
+    periodType: mysqlEnum("periodType", [
+      "daily",
+      "weekly",
+      "monthly",
+      "custom",
+    ]).notNull(),
+    periodFrom: timestamp("periodFrom").notNull(),
+    periodTo: timestamp("periodTo").notNull(),
+    currencyCode: varchar("currencyCode", { length: 3 }).notNull(),
+    status: mysqlEnum("status", [
+      "draft",
+      "pending_approval",
+      "approved",
+      "locked",
+    ])
+      .default("draft")
+      .notNull(),
+    snapshotVersion: int("snapshotVersion").default(0).notNull(),
+    snapshotGeneratedAt: timestamp("snapshotGeneratedAt"),
+    snapshotSourceWatermark: int("snapshotSourceWatermark"),
+    isStale: boolean("isStale").default(false).notNull(),
+    totalsJson: text("totalsJson"),
+    createdBy: int("createdBy").notNull(),
+    createdByName: varchar("createdByName", { length: 100 }).notNull(),
+    submittedBy: int("submittedBy"),
+    submittedAt: timestamp("submittedAt"),
+    approvedBy: int("approvedBy"),
+    approvedAt: timestamp("approvedAt"),
+    lockedBy: int("lockedBy"),
+    lockedAt: timestamp("lockedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessSequenceUnique: uniqueIndex(
+      "accounting_closings_business_sequence_unique"
+    ).on(table.businessId, table.sequenceNumber),
+    businessPeriodIndex: index("accounting_closings_business_period_idx").on(
+      table.businessId,
+      table.periodFrom,
+      table.periodTo
+    ),
+  })
+);
+
+export const accountingClosingLines = mysqlTable(
+  "accounting_closing_lines",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    closingId: int("closingId").notNull(),
+    businessId: int("businessId").notNull(),
+    lineType: varchar("lineType", { length: 60 }).notNull(),
+    sourceType: varchar("sourceType", { length: 50 }).notNull(),
+    sourceId: int("sourceId"),
+    sourceReference: varchar("sourceReference", { length: 160 }).notNull(),
+    occurredAt: timestamp("occurredAt").notNull(),
+    amount: decimal("amount", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    quantity: int("quantity").default(0).notNull(),
+    snapshotJson: text("snapshotJson").notNull(),
+  },
+  table => ({
+    closingSourceUnique: uniqueIndex(
+      "accounting_closing_line_source_unique"
+    ).on(table.closingId, table.lineType, table.sourceReference),
+  })
+);
+
+export const accountingClosingAdjustments = mysqlTable(
+  "accounting_closing_adjustments",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    closingId: int("closingId").notNull(),
+    businessId: int("businessId").notNull(),
+    adjustmentType: varchar("adjustmentType", { length: 60 }).notNull(),
+    amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
+    originalOccurredAt: timestamp("originalOccurredAt"),
+    originalClosingId: int("originalClosingId"),
+    reason: text("reason").notNull(),
+    evidenceUrl: varchar("evidenceUrl", { length: 500 }),
+    createdBy: int("createdBy").notNull(),
+    createdByName: varchar("createdByName", { length: 100 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  }
+);
+
+export const accountingClosingActions = mysqlTable(
+  "accounting_closing_actions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    closingId: int("closingId").notNull(),
+    businessId: int("businessId").notNull(),
+    action: varchar("action", { length: 60 }).notNull(),
+    fromStatus: varchar("fromStatus", { length: 40 }),
+    toStatus: varchar("toStatus", { length: 40 }),
+    reason: text("reason"),
+    performedBy: int("performedBy").notNull(),
+    performedByName: varchar("performedByName", { length: 100 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  }
+);
+
+export const accountingEventMappings = mysqlTable(
+  "accounting_event_mappings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    eventType: varchar("eventType", { length: 80 }).notNull(),
+    mappingVersion: int("mappingVersion").notNull(),
+    effectiveFrom: timestamp("effectiveFrom").notNull(),
+    effectiveTo: timestamp("effectiveTo"),
+    mappingJson: text("mappingJson").notNull(),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdBy: int("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    businessEventVersionUnique: uniqueIndex(
+      "accounting_event_mapping_version_unique"
+    ).on(table.businessId, table.eventType, table.mappingVersion),
+    effectiveLookupIndex: index("accounting_event_mapping_effective_idx").on(
+      table.businessId,
+      table.eventType,
+      table.effectiveFrom
+    ),
+  })
+);
+
+export type FinancialAccount = typeof financialAccounts.$inferSelect;
+export type InsertFinancialAccount = typeof financialAccounts.$inferInsert;
+export type FinancialTransaction = typeof financialTransactions.$inferSelect;
+export type InventoryBalance = typeof inventoryBalances.$inferSelect;
+export type Shipment = typeof shipments.$inferSelect;
+export type AccountingClosing = typeof accountingClosings.$inferSelect;

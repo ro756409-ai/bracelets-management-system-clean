@@ -18,6 +18,7 @@ export type TrpcContext = {
   req: CreateExpressContextOptions["req"];
   res: CreateExpressContextOptions["res"];
   user: User | null;
+  employee: Employee | null;
   employeeManager?: boolean; // flag to indicate this is a manager employee session (not the true owner login)
   realEmployeeId?: number; // the actual employee ID when a manager employee is acting
   // The tenant (merchant account) this session belongs to — every business-scoped query must be
@@ -61,6 +62,13 @@ async function findActiveManagerById(employeeId: number): Promise<Employee | nul
   return null;
 }
 
+async function findActiveEmployeeById(employeeId: number): Promise<Employee | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [emp] = await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1);
+  return emp?.isActive ? emp : null;
+}
+
 export async function createContext(
   opts: CreateExpressContextOptions
 ): Promise<TrpcContext> {
@@ -79,6 +87,7 @@ export async function createContext(
             req: opts.req,
             res: opts.res,
             user: buildSyntheticAdminUser(emp),
+            employee: emp,
             realEmployeeId: emp.id,
             tenantId: emp.tenantId,
           };
@@ -105,6 +114,7 @@ export async function createContext(
             req: opts.req,
             res: opts.res,
             user: buildSyntheticAdminUser(emp),
+            employee: emp,
             employeeManager: true,
             realEmployeeId: emp.id,
             tenantId: emp.tenantId,
@@ -117,10 +127,36 @@ export async function createContext(
     // Employee token invalid, continue without user
   }
 
+
+  // 3. Non-admin employee session. It has a tenant and a real employee identity, but no
+  // synthetic admin user. Permission-aware procedures can authorize it explicitly.
+  try {
+    const token = opts.req.cookies?.[EMP_COOKIE];
+    if (token && JWT_SECRET) {
+      const payload = jwt.verify(token, JWT_SECRET) as any;
+      if (payload?.employeeId) {
+        const emp = await findActiveEmployeeById(payload.employeeId);
+        if (emp) {
+          if (emp.tenantId == null) rejectUnresolvedTenant();
+          return {
+            req: opts.req,
+            res: opts.res,
+            user: null,
+            employee: emp,
+            tenantId: emp.tenantId,
+          };
+        }
+      }
+    }
+  } catch (error) {
+    if (error instanceof TRPCError) throw error;
+  }
+
   return {
     req: opts.req,
     res: opts.res,
     tenantId: null,
     user: null,
+    employee: null,
   };
 }

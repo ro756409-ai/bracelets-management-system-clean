@@ -14,6 +14,8 @@ import cookieParser from "cookie-parser";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { startMaintenanceScheduler } from "../scheduler";
+import { registerEvidenceUploadRoutes } from "../evidenceUpload";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -42,6 +44,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // Cookie parser for employee sessions
   app.use(cookieParser());
+  registerEvidenceUploadRoutes(app);
   // Local owner/admin auth (POST /api/auth/login)
   registerLocalAuthRoutes(app);
   // Excel import routes
@@ -82,6 +85,7 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
+  startMaintenanceScheduler();
 }
 
 startServer().catch(console.error);

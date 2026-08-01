@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
+import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
+import { getDb } from "./db";
+import { businesses } from "../drizzle/schema";
+import { like } from "drizzle-orm";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
 
-function createAdminContext(): TrpcContext {
+function createAdminContext(tenantId: number): TrpcContext {
   const user: AuthenticatedUser = {
     id: 1,
     openId: "admin-user",
@@ -18,7 +22,7 @@ function createAdminContext(): TrpcContext {
   };
   return {
     user,
-    tenantId: 1,
+    tenantId,
     req: {
       protocol: "https",
       headers: {},
@@ -29,7 +33,7 @@ function createAdminContext(): TrpcContext {
   };
 }
 
-function createUserContext(): TrpcContext {
+function createUserContext(tenantId: number): TrpcContext {
   const user: AuthenticatedUser = {
     id: 2,
     openId: "regular-user",
@@ -43,7 +47,7 @@ function createUserContext(): TrpcContext {
   };
   return {
     user,
-    tenantId: 1,
+    tenantId,
     req: {
       protocol: "https",
       headers: {},
@@ -54,36 +58,53 @@ function createUserContext(): TrpcContext {
   };
 }
 
-describe("businesses router", () => {
-  it("activeList returns an array", async () => {
-    const ctx = createAdminContext();
-    const caller = appRouter.createCaller(ctx);
-    const result = await caller.businesses.activeList();
-    expect(Array.isArray(result)).toBe(true);
-  });
-
-  it("list returns businesses for admin", async () => {
-    const ctx = createAdminContext();
-    const caller = appRouter.createCaller(ctx);
-    const result = await caller.businesses.list();
-    expect(Array.isArray(result)).toBe(true);
-  });
-
-  it("create adds a new business (admin only)", async () => {
-    const ctx = createAdminContext();
-    const caller = appRouter.createCaller(ctx);
-    const result = await caller.businesses.create({
-      name: "Test Business",
-      slug: "test-biz-" + Date.now(),
+describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
+  "businesses router",
+  () => {
+    let fixture: CoreTestFixture;
+    const createdSlugPrefix = `test-biz-${Date.now()}`;
+    beforeAll(async () => {
+      fixture = await createCoreTestFixture("businesses");
     });
-    expect(result).toBeDefined();
-    expect(result.success).toBe(true);
-  });
+    afterAll(async () => {
+      const db = await getDb();
+      if (db)
+        await db
+          .delete(businesses)
+          .where(like(businesses.slug, `${createdSlugPrefix}%`));
+      await fixture?.cleanup();
+    });
 
-  it("non-admin can still call activeList (public procedure)", async () => {
-    const ctx = createUserContext();
-    const caller = appRouter.createCaller(ctx);
-    const result = await caller.businesses.activeList();
-    expect(Array.isArray(result)).toBe(true);
-  });
-});
+    it("activeList returns an array", async () => {
+      const ctx = createAdminContext(fixture.tenantId);
+      const caller = appRouter.createCaller(ctx);
+      const result = await caller.businesses.activeList();
+      expect(Array.isArray(result)).toBe(true);
+    });
+
+    it("list returns businesses for admin", async () => {
+      const ctx = createAdminContext(fixture.tenantId);
+      const caller = appRouter.createCaller(ctx);
+      const result = await caller.businesses.list();
+      expect(Array.isArray(result)).toBe(true);
+    });
+
+    it("create adds a new business (admin only)", async () => {
+      const ctx = createAdminContext(fixture.tenantId);
+      const caller = appRouter.createCaller(ctx);
+      const result = await caller.businesses.create({
+        name: "Test Business",
+        slug: `${createdSlugPrefix}-${Math.random().toString(36).slice(2, 7)}`,
+      });
+      expect(result).toBeDefined();
+      expect(result.success).toBe(true);
+    });
+
+    it("non-admin can still call activeList (public procedure)", async () => {
+      const ctx = createUserContext(fixture.tenantId);
+      const caller = appRouter.createCaller(ctx);
+      const result = await caller.businesses.activeList();
+      expect(Array.isArray(result)).toBe(true);
+    });
+  }
+);

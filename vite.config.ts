@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type Plugin, type ViteDevServer } from "vite";
+import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
 // =============================================================================
@@ -56,7 +56,7 @@ function writeToLogFile(source: LogSource, entries: unknown[]) {
   const logPath = path.join(LOG_DIR, `${source}.log`);
 
   // Format entries with timestamps
-  const lines = entries.map((entry) => {
+  const lines = entries.map(entry => {
     const ts = new Date().toISOString();
     return `[${ts}] ${JSON.stringify(entry)}`;
   });
@@ -132,7 +132,7 @@ function vitePluginManusDebugCollector(): Plugin {
         }
 
         let body = "";
-        req.on("data", (chunk) => {
+        req.on("data", chunk => {
           body += chunk.toString();
         });
 
@@ -150,7 +150,41 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+function optionalAnalyticsPlugin(): Plugin {
+  let endpoint = "";
+  let websiteId = "";
+  return {
+    name: "optional-analytics",
+    configResolved(config) {
+      const env = loadEnv(config.mode, config.envDir ?? PROJECT_ROOT, "");
+      endpoint = env.VITE_ANALYTICS_ENDPOINT?.replace(/\/$/, "") ?? "";
+      websiteId = env.VITE_ANALYTICS_WEBSITE_ID ?? "";
+    },
+    transformIndexHtml() {
+      if (!endpoint || !websiteId) return [];
+      return [
+        {
+          tag: "script",
+          attrs: {
+            defer: true,
+            src: `${endpoint}/umami`,
+            "data-website-id": websiteId,
+          },
+          injectTo: "body",
+        },
+      ];
+    },
+  };
+}
+
+const plugins = [
+  react(),
+  tailwindcss(),
+  jsxLocPlugin(),
+  vitePluginManusRuntime(),
+  vitePluginManusDebugCollector(),
+  optionalAnalyticsPlugin(),
+];
 
 export default defineConfig({
   plugins,

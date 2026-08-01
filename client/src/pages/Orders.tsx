@@ -28,6 +28,7 @@ import ImportExcelDialog from "@/components/ImportExcelDialog";
 import ImportWhatsAppDialog from "@/components/ImportWhatsAppDialog";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { cairoDateKey, cairoDayRange, previousDateKey } from "@/lib/cairoDate";
 import {
   PageHeader,
   StatCard,
@@ -47,6 +48,7 @@ import {
   countActiveFilters,
   type FilterDescriptor,
 } from "@/components/shared";
+import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 
 // QR Code renderer component
 function QRRenderer({ serialNumber, canvasId }: { serialNumber: string; canvasId: string }) {
@@ -58,43 +60,6 @@ function QRRenderer({ serialNumber, canvasId }: { serialNumber: string; canvasId
   }, [serialNumber, canvasId]);
   return null;
 }
-
-const GOVERNORATES = [
-  "القاهرة", "الجيزة", "الإسكندرية", "الدقهلية", "البحر الأحمر", "البحيرة",
-  "الفيوم", "الغربية", "الإسماعيلية", "المنوفية", "المنيا", "القليوبية",
-  "الوادي الجديد", "السويس", "أسوان", "أسيوط", "بني سويف", "بورسعيد",
-  "دمياط", "جنوب سيناء", "كفر الشيخ", "مطروح", "الأقصر", "قنا",
-  "شمال سيناء", "الشرقية", "سوهاج"
-];
-
-// Kept as the source of truth for source labels: these are the real business names
-// ("عتبة" / "فرحات للنحاس") the shared StatusBadge component cannot know about — its
-// generic ORDER_SOURCE map is used only for colour, the label always comes from here.
-const SOURCE_LABELS: Record<string, string> = {
-  easyorder: "Easy Order",
-  easyorder_ataba: "ويب سايت عتبه",
-  easyorder_farhat: "ويب سايت فرحات للنحاس",
-  shopify: "Shopify",
-  whatsapp: "واتساب",
-  manual: "يدوي",
-  facebook: "فيسبوك",
-};
-
-const RETURN_REASONS = [
-  { value: "customer_refused", label: "رفض العميل" },
-  { value: "wrong_product", label: "منتج خاطئ" },
-  { value: "damaged", label: "تالف" },
-  { value: "wrong_address", label: "عنوان خاطئ" },
-  { value: "customer_not_available", label: "العميل غير متاح" },
-  { value: "other", label: "أخرى" },
-];
-
-const CANCEL_REASONS = [
-  { value: "price", label: "السعر" },
-  { value: "not_serious", label: "غير جاد" },
-  { value: "wrong_number", label: "رقم خاطئ" },
-  { value: "duplicate", label: "مكرر" },
-];
 
 /** One dialog per destructive action would repeat five identical confirm/cancel dialogs;
  *  this discriminated union drives a single shared ConfirmDialog instead. */
@@ -110,7 +75,7 @@ const FILTER_DESCRIPTORS: FilterDescriptor<{
   adName: string; hideAssigned: boolean; employee: string; dateRange: DateRange;
 }>[] = [
   { key: "status", label: "الحالة", format: (v) => STATUS_LABEL(v) },
-  { key: "source", label: "المصدر", format: (v) => SOURCE_LABELS[v] ?? v },
+  { key: "source", label: "المصدر" },
   { key: "governorates", label: "المحافظة" },
   { key: "adName", label: "البيدج" },
   { key: "hideAssigned", label: "التوزيع", format: () => "غير الموزعة فقط" },
@@ -183,7 +148,7 @@ function buildOrderTimeline(order: any, employeeName?: string): TimelineEvent[] 
     events.push({ at, label, detail, tone });
   };
 
-  push(order.createdAt, "تم إنشاء الأوردر", "var(--muted-foreground)", SOURCE_LABELS[order.source] ?? order.source);
+  push(order.createdAt, "تم إنشاء الأوردر", "var(--muted-foreground)", order.source);
   push(order.assignedAt, "تم التوزيع", "var(--info)", employeeName);
   push(order.confirmedAt, "تم التأكيد", "var(--success)", order.confirmedByEmployeeName || undefined);
   push(order.cancelledAt, "تم الإلغاء", "var(--destructive)", order.cancelReason || undefined);
@@ -211,6 +176,10 @@ export default function Orders() {
   const [, navigate] = useLocation();
   const isAdmin = user?.role === 'admin';
   const { currentBusinessIds } = useBusinessContext();
+  const { values: GOVERNORATES } = useOperationalOptions("governorate");
+  const sourceOptions = useOperationalOptions("order_source").options;
+  const returnReasonOptions = useOperationalOptions("return_reason").options;
+  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
 
   const [activeTab, setActiveTab] = useState<'all' | 'today_confirmed'>('all');
   const [search, setSearch] = useState("");
@@ -329,23 +298,15 @@ export default function Orders() {
 
   const printedDateRange = useMemo(() => {
     if (statusFilter !== 'printed') return { from: undefined, to: undefined };
-    const now = new Date(Date.now() + 2 * 60 * 60 * 1000); // Cairo offset
+    const todayKey = cairoDateKey();
     if (printedDateFilter === 'today') {
-      const start = new Date(now.toISOString().slice(0, 10) + 'T00:00:00Z');
-      const end = new Date(now.toISOString().slice(0, 10) + 'T23:59:59Z');
-      return { from: start, to: end };
+      return cairoDayRange(todayKey);
     }
     if (printedDateFilter === 'yesterday') {
-      const y = new Date(now);
-      y.setUTCDate(y.getUTCDate() - 1);
-      const start = new Date(y.toISOString().slice(0, 10) + 'T00:00:00Z');
-      const end = new Date(y.toISOString().slice(0, 10) + 'T23:59:59Z');
-      return { from: start, to: end };
+      return cairoDayRange(previousDateKey(todayKey));
     }
     if (printedDateFilter === 'custom' && printedCustomDate) {
-      const start = new Date(printedCustomDate + 'T00:00:00Z');
-      const end = new Date(printedCustomDate + 'T23:59:59Z');
-      return { from: start, to: end };
+      return cairoDayRange(printedCustomDate);
     }
     return { from: undefined, to: undefined };
   }, [statusFilter, printedDateFilter, printedCustomDate]);
@@ -375,9 +336,7 @@ export default function Orders() {
   const { data: statusCounts } = trpc.orders.statusCounts.useQuery({ businessIds: currentBusinessIds });
   const confirmedDateParam = useMemo(() => {
     if (confirmedDateFilter === 'yesterday') {
-      const y = new Date(Date.now() + 2 * 60 * 60 * 1000); // Cairo
-      y.setUTCDate(y.getUTCDate() - 1);
-      return y.toISOString().slice(0, 10);
+      return previousDateKey(cairoDateKey());
     }
     if (confirmedDateFilter === 'custom' && confirmedCustomDate) {
       return confirmedCustomDate;
@@ -1194,7 +1153,7 @@ export default function Orders() {
                 <SelectTrigger className="h-9 w-40"><SelectValue placeholder="المصدر" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">كل المصادر</SelectItem>
-                  {Object.entries(SOURCE_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                  {sourceOptions.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
                 </SelectContent>
               </Select>
 
@@ -1633,7 +1592,7 @@ export default function Orders() {
               <Label>سبب الإرجاع <span className="text-destructive">*</span></Label>
               <Select value={returnReason} onValueChange={setReturnReason}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="اختر سبب الإرجاع" /></SelectTrigger>
-                <SelectContent>{RETURN_REASONS.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{returnReasonOptions.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
@@ -1671,7 +1630,7 @@ export default function Orders() {
               <Label>سبب الإلغاء <span className="text-destructive">*</span></Label>
               <Select value={cancelReason} onValueChange={setCancelReason}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="اختر السبب" /></SelectTrigger>
-                <SelectContent>{CANCEL_REASONS.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{cancelReasonOptions.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
@@ -2065,7 +2024,7 @@ export default function Orders() {
                   {order.color && <div><span className="text-muted-foreground">اللون:</span> <span className="font-semibold">{order.color}</span></div>}
                   {order.size && <div><span className="text-muted-foreground">المقاس:</span> <span className="font-semibold">{order.size}</span></div>}
                   <div><span className="text-muted-foreground">المبلغ:</span> <span className="font-bold text-primary">{Number(order.totalAmount).toLocaleString('ar-EG')} ج.م</span></div>
-                  <div><span className="text-muted-foreground">المصدر:</span> <span className="font-semibold">{SOURCE_LABELS[order.source] || order.source}</span></div>
+                  <div><span className="text-muted-foreground">المصدر:</span> <span className="font-semibold">{sourceOptions.find(option => option.value === order.source)?.label ?? order.source}</span></div>
                   {Array.isArray(order.items) && order.items.length > 0 && (
                     <div className="col-span-2 space-y-1.5 pt-1 border-t border-border">
                       <p className="type-caption">تفاصيل الحفر لكل قطعة:</p>
@@ -2235,16 +2194,24 @@ function CreateOrderDialog({
   products: any[];
   onSuccess: () => void;
 }) {
+  const { businesses } = useBusinessContext();
   const [form, setForm] = useState({
     customerName: "", customerPhone: "", customerAddress: "", governorate: "",
-    productId: "", quantity: "1", totalAmount: "", source: "manual", notes: "",
+    businessId: "", productId: "", quantity: "1", totalAmount: "", source: "", notes: "",
+    shippingProviderId: "", shippingType: "", paymentType: "",
   });
+  const businessId = Number(form.businessId) || undefined;
+  const governorates = trpc.accountingV2.configurationList.useQuery({ businessId: businessId!, namespace: "governorate", activeOnly: true }, { enabled: Boolean(businessId) });
+  const shippingTypes = trpc.accountingV2.configurationList.useQuery({ businessId: businessId!, namespace: "shipping_type", activeOnly: true }, { enabled: Boolean(businessId) });
+  const paymentTypes = trpc.accountingV2.configurationList.useQuery({ businessId: businessId!, namespace: "payment_type", activeOnly: true }, { enabled: Boolean(businessId) });
+  const orderSources = trpc.accountingV2.configurationList.useQuery({ businessId: businessId!, namespace: "order_source", activeOnly: true }, { enabled: Boolean(businessId) });
+  const shipping = trpc.accountingV2.shippingConfiguration.useQuery({ businessId: businessId! }, { enabled: Boolean(businessId) });
 
   const createMutation = trpc.orders.create.useMutation({
     onSuccess: (data) => {
       toast.success(`تم إنشاء الأوردر ${data.orderNumber}`);
       onSuccess();
-      setForm({ customerName: "", customerPhone: "", customerAddress: "", governorate: "", productId: "", quantity: "1", totalAmount: "", source: "manual", notes: "" });
+      setForm({ customerName: "", customerPhone: "", customerAddress: "", governorate: "", businessId: "", productId: "", quantity: "1", totalAmount: "", source: "", notes: "", shippingProviderId: "", shippingType: "", paymentType: "" });
     },
     onError: (e) => toast.error(e.message),
   });
@@ -2261,7 +2228,7 @@ function CreateOrderDialog({
   };
 
   const handleSubmit = () => {
-    if (!form.customerName || !form.customerPhone || !form.customerAddress || !form.governorate || !form.productId || !form.totalAmount) {
+    if (!form.businessId || !form.customerName || !form.customerPhone || !form.customerAddress || !form.governorate || !form.productId || !form.totalAmount || !form.source || !form.shippingProviderId || !form.shippingType || !form.paymentType) {
       toast.error("يرجى ملء جميع الحقول المطلوبة");
       return;
     }
@@ -2269,6 +2236,7 @@ function CreateOrderDialog({
       customerName: form.customerName, customerPhone: form.customerPhone, customerAddress: form.customerAddress,
       governorate: form.governorate, productId: Number(form.productId), productName: selectedProduct?.name ?? "",
       quantity: Number(form.quantity), totalAmount: form.totalAmount, source: form.source as any, notes: form.notes || undefined,
+      businessId: Number(form.businessId), projectedShippingProviderId: Number(form.shippingProviderId), projectedShippingType: form.shippingType, projectedPaymentType: form.paymentType,
     });
   };
 
@@ -2277,6 +2245,7 @@ function CreateOrderDialog({
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>إضافة أوردر جديد</DialogTitle></DialogHeader>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div><Label>النشاط <span className="text-destructive">*</span></Label><Select value={form.businessId} onValueChange={businessId => setForm(f => ({ ...f, businessId, governorate: "", shippingProviderId: "", shippingType: "", paymentType: "" }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار النشاط" /></SelectTrigger><SelectContent>{businesses.map(business => <SelectItem key={business.id} value={String(business.id)}>{business.name}</SelectItem>)}</SelectContent></Select></div>
           <div>
             <Label>اسم العميل <span className="text-destructive">*</span></Label>
             <Input value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} placeholder="الاسم الكامل" className="mt-1" />
@@ -2293,22 +2262,17 @@ function CreateOrderDialog({
             <Label>المحافظة <span className="text-destructive">*</span></Label>
             <Select value={form.governorate} onValueChange={v => setForm(f => ({ ...f, governorate: v }))}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="اختر المحافظة" /></SelectTrigger>
-              <SelectContent>{GOVERNORATES.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}</SelectContent>
+              <SelectContent>{governorates.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent>
             </Select>
           </div>
+          <div><Label>شركة الشحن <span className="text-destructive">*</span></Label><Select value={form.shippingProviderId} onValueChange={shippingProviderId => setForm(f => ({ ...f, shippingProviderId }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار الشركة" /></SelectTrigger><SelectContent>{shipping.data?.providers.map(row => <SelectItem key={row.id} value={String(row.id)}>{row.displayName}</SelectItem>)}</SelectContent></Select></div>
+          <div><Label>نوع الشحن <span className="text-destructive">*</span></Label><Select value={form.shippingType} onValueChange={shippingType => setForm(f => ({ ...f, shippingType }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار النوع" /></SelectTrigger><SelectContent>{shippingTypes.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent></Select></div>
+          <div><Label>نوع الدفع <span className="text-destructive">*</span></Label><Select value={form.paymentType} onValueChange={paymentType => setForm(f => ({ ...f, paymentType }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار النوع" /></SelectTrigger><SelectContent>{paymentTypes.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent></Select></div>
           <div>
             <Label>المصدر</Label>
             <Select value={form.source} onValueChange={v => setForm(f => ({ ...f, source: v }))}>
               <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="manual">يدوي</SelectItem>
-                <SelectItem value="easyorder">Easy Order</SelectItem>
-                <SelectItem value="easyorder_ataba">ويب سايت عتبه</SelectItem>
-                <SelectItem value="easyorder_farhat">ويب سايت فرحات للنحاس</SelectItem>
-                <SelectItem value="shopify">Shopify</SelectItem>
-                <SelectItem value="whatsapp">واتساب</SelectItem>
-                <SelectItem value="facebook">فيسبوك</SelectItem>
-              </SelectContent>
+              <SelectContent>{orderSources.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div>

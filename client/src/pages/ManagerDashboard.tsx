@@ -15,6 +15,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { BrandMark } from "@/components/BrandMark";
 import { toast } from "sonner";
+import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import {
   LayoutDashboard, ShoppingCart, Package, BarChart3, Users,
   LogOut, RefreshCw, Search, Plus, CheckCircle2, XCircle, Clock,
@@ -33,29 +34,16 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
   delivered: { label: "تم التسليم",   color: "text-[var(--success)]",  bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
 };
 
-const CANCEL_REASONS = [
-  { value: "price",        label: "السعر مرتفع" },
-  { value: "not_serious",  label: "غير جاد" },
-  { value: "wrong_number", label: "رقم خطأ" },
-  { value: "duplicate",    label: "طلب مكرر" },
-];
-
 const ROLE_LABELS: Record<string, string> = {
   agent: "موظف خدمة عملاء",
   warehouse: "مخزن",
   manager: "مدير",
 };
 
-const GOVERNORATES = [
-  "القاهرة","الجيزة","الإسكندرية","الدقهلية","البحيرة","الشرقية","المنوفية","الغربية",
-  "كفر الشيخ","القليوبية","الفيوم","بني سويف","المنيا","أسيوط","سوهاج","قنا","الأقصر",
-  "أسوان","البحر الأحمر","الوادي الجديد","مطروح","شمال سيناء","جنوب سيناء","بورسعيد",
-  "الإسماعيلية","السويس","دمياط"
-];
-
 type TabKey = "dashboard" | "orders" | "inventory" | "reports" | "employees" | "tasks";
 
 export default function ManagerDashboard() {
+  const { values: GOVERNORATES } = useOperationalOptions("governorate");
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -398,6 +386,9 @@ function StatCard({ label, value, color, bg }: { label: string; value: number; c
 
 // ==================== ORDERS TAB ====================
 function ManagerOrdersTab() {
+  const { values: GOVERNORATES } = useOperationalOptions("governorate");
+  const statusOptions = useOperationalOptions("order_status").options;
+  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [govFilter, setGovFilter] = useState<string>("all");
@@ -523,8 +514,8 @@ function ManagerOrdersTab() {
           <SelectTrigger className="w-[140px] bg-card"><SelectValue placeholder="الحالة" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">كل الحالات</SelectItem>
-            {Object.entries(STATUS_CONFIG).map(([k, v]) => (
-              <SelectItem key={k} value={k}>{v.label}</SelectItem>
+            {statusOptions.map(option => (
+              <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -729,7 +720,7 @@ function ManagerOrdersTab() {
               <Select value={cancelReason} onValueChange={setCancelReason}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="اختر السبب..." /></SelectTrigger>
                 <SelectContent>
-                  {CANCEL_REASONS.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
+              {cancelReasonOptions.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -887,6 +878,7 @@ function ManagerInventoryTab() {
 
 // ==================== REPORTS TAB ====================
 function ManagerReportsTab() {
+  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
   const [dateRange, setDateRange] = useState<"today" | "week" | "month">("month");
 
   const dateParams = useMemo(() => {
@@ -973,7 +965,7 @@ function ManagerReportsTab() {
               {cancellations.map((c: any, i: number) => {
                 const total = cancellations.reduce((s: number, x: any) => s + Number(x.count), 0);
                 const pct = total > 0 ? Math.round((Number(c.count) / total) * 100) : 0;
-                const reasonLabel = CANCEL_REASONS.find(r => r.value === c.cancelReason)?.label ?? c.cancelReason;
+                const reasonLabel = cancelReasonOptions.find(r => r.value === c.cancelReason)?.label ?? c.cancelReason;
                 return (
                   <div key={i}>
                     <div className="flex items-center justify-between text-sm mb-1">

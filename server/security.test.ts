@@ -54,13 +54,17 @@ describe("Fix 1: Express import/export routes protection", () => {
     // Verify the import exists by reading the file
     const fs = await import("fs");
     const content = fs.readFileSync("server/importExcel.ts", "utf-8");
-    expect(content).toContain('import { requireAdminOrManager } from "./authMiddleware"');
+    expect(content).toContain(
+      'import { requireAdminOrManager } from "./authMiddleware"'
+    );
   });
 
   it("exportExcel.ts imports requireAdminOrManager middleware", async () => {
     const fs = await import("fs");
     const content = fs.readFileSync("server/exportExcel.ts", "utf-8");
-    expect(content).toContain('import { requireAdminOrManager } from "./authMiddleware"');
+    expect(content).toContain(
+      'import { requireAdminOrManager } from "./authMiddleware"'
+    );
   });
 
   it("import preview route has auth middleware", async () => {
@@ -77,7 +81,9 @@ describe("Fix 1: Express import/export routes protection", () => {
   it("import execute route has auth middleware", async () => {
     const fs = await import("fs");
     const content = fs.readFileSync("server/importExcel.ts", "utf-8");
-    const executeSection = content.substring(content.indexOf("/api/import/execute"));
+    const executeSection = content.substring(
+      content.indexOf("/api/import/execute")
+    );
     expect(executeSection).toContain("requireAdminOrManager");
   });
 
@@ -100,28 +106,42 @@ describe("Fix 1: Express import/export routes protection", () => {
 describe("Fix 2: Backend role checks in tRPC procedures", () => {
   it("reports.dashboard uses adminProcedure", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
-    const reportsSection = content.substring(content.indexOf("// ==================== REPORTS ===================="));
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
+    const reportsSection = content.substring(
+      content.indexOf("// ==================== REPORTS ====================")
+    );
     expect(reportsSection).toContain("dashboard: adminProcedure");
   });
 
   it("reports.cancellationReasons uses adminProcedure", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
-    const reportsSection = content.substring(content.indexOf("// ==================== REPORTS ===================="));
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
+    const reportsSection = content.substring(
+      content.indexOf("// ==================== REPORTS ====================")
+    );
     expect(reportsSection).toContain("cancellationReasons: adminProcedure");
   });
 
   it("reports.dailyChart uses adminProcedure", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
-    const reportsSection = content.substring(content.indexOf("// ==================== REPORTS ===================="));
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
+    const reportsSection = content.substring(
+      content.indexOf("// ==================== REPORTS ====================")
+    );
     expect(reportsSection).toContain("dailyChart: adminProcedure");
   });
 
   it("products.addMovement uses adminProcedure", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
     expect(content).toContain("addMovement: adminProcedure");
   });
 });
@@ -132,13 +152,22 @@ describe("Fix 2: Backend role checks in tRPC procedures", () => {
 describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
   it("employeePortal.confirm has ownership check", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
     const portalSection = content.substring(
-      content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
+      content.indexOf(
+        "// ==================== EMPLOYEE PORTAL ===================="
+      )
     );
     // Find the confirm mutation section
-    const confirmIdx = portalSection.indexOf("confirm: requireEmployeePermission");
-    const confirmSection = portalSection.substring(confirmIdx, confirmIdx + 500);
+    const confirmIdx = portalSection.indexOf(
+      "confirm: requireEmployeePermission"
+    );
+    const confirmSection = portalSection.substring(
+      confirmIdx,
+      confirmIdx + 500
+    );
     expect(confirmSection).toContain("Ownership check");
     expect(confirmSection).toContain("emp.role !== 'manager'");
     expect(confirmSection).toContain("assignedEmployeeId !== emp.id");
@@ -146,23 +175,38 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
 
   it("employeePortal.postpone has ownership check", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
     const portalSection = content.substring(
-      content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
+      content.indexOf(
+        "// ==================== EMPLOYEE PORTAL ===================="
+      )
     );
-    const postponeIdx = portalSection.indexOf("postpone: requireEmployeePermission");
-    const postponeSection = portalSection.substring(postponeIdx, postponeIdx + 500);
+    const postponeIdx = portalSection.indexOf(
+      "postpone: requireEmployeePermission"
+    );
+    const postponeSection = portalSection.substring(
+      postponeIdx,
+      postponeIdx + 500
+    );
     expect(postponeSection).toContain("Ownership check");
     expect(postponeSection).toContain("emp.role !== 'manager'");
   });
 
   it("employeePortal.cancel has ownership check", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
     const portalSection = content.substring(
-      content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
+      content.indexOf(
+        "// ==================== EMPLOYEE PORTAL ===================="
+      )
     );
-    const cancelIdx = portalSection.indexOf("cancel: requireEmployeePermission");
+    const cancelIdx = portalSection.indexOf(
+      "cancel: requireEmployeePermission"
+    );
     const cancelSection = portalSection.substring(cancelIdx, cancelIdx + 500);
     expect(cancelSection).toContain("Ownership check");
     expect(cancelSection).toContain("emp.role !== 'manager'");
@@ -170,11 +214,17 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
 
   it("employeePortal.updateNotes has ownership check", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
     const portalSection = content.substring(
-      content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
+      content.indexOf(
+        "// ==================== EMPLOYEE PORTAL ===================="
+      )
     );
-    const notesIdx = portalSection.indexOf("updateNotes: requireEmployeePermission");
+    const notesIdx = portalSection.indexOf(
+      "updateNotes: requireEmployeePermission"
+    );
     const notesSection = portalSection.substring(notesIdx, notesIdx + 500);
     expect(notesSection).toContain("Ownership check");
     expect(notesSection).toContain("emp.role !== 'manager'");
@@ -182,21 +232,34 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
 
   it("manager employees bypass ownership check", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
     const portalSection = content.substring(
-      content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
+      content.indexOf(
+        "// ==================== EMPLOYEE PORTAL ===================="
+      )
     );
     // All ownership checks should check emp.role !== 'manager' (i.e., managers bypass)
-    const confirmIdx = portalSection.indexOf("confirm: requireEmployeePermission");
-    const confirmSection = portalSection.substring(confirmIdx, confirmIdx + 500);
+    const confirmIdx = portalSection.indexOf(
+      "confirm: requireEmployeePermission"
+    );
+    const confirmSection = portalSection.substring(
+      confirmIdx,
+      confirmIdx + 500
+    );
     expect(confirmSection).toContain("if (emp.role !== 'manager')");
   });
 
   it("employeePortal write actions require a role permission, not just an active session", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
     const portalSection = content.substring(
-      content.indexOf("// ==================== EMPLOYEE PORTAL ====================")
+      content.indexOf(
+        "// ==================== EMPLOYEE PORTAL ===================="
+      )
     );
     for (const [proc, perm] of [
       ["confirm", "orders.confirm"],
@@ -207,7 +270,9 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       ["updateCustomerInfo", "orders.update"],
       ["editOrder", "orders.update"],
     ] as const) {
-      expect(portalSection).toContain(`${proc}: requireEmployeePermission('${perm}')`);
+      expect(portalSection).toContain(
+        `${proc}: requireEmployeePermission('${perm}')`
+      );
     }
   });
 });
@@ -243,7 +308,9 @@ describe("Fix 4: Audit fields use resolveActingEmployeeId", () => {
       content.indexOf("update: protectedProcedure")
     );
     expect(createSection).toContain("resolveActingEmployeeId");
-    expect(createSection).not.toContain("emps.find(e => e.userId === ctx.user.id)");
+    expect(createSection).not.toContain(
+      "emps.find(e => e.userId === ctx.user.id)"
+    );
   });
 
   it("orders.update uses resolveActingEmployeeId", async () => {
@@ -254,7 +321,9 @@ describe("Fix 4: Audit fields use resolveActingEmployeeId", () => {
       content.indexOf("assign: adminProcedure")
     );
     expect(updateSection).toContain("resolveActingEmployeeId");
-    expect(updateSection).not.toContain("emps.find(e => e.userId === ctx.user.id)");
+    expect(updateSection).not.toContain(
+      "emps.find(e => e.userId === ctx.user.id)"
+    );
   });
 
   it("orders.assign uses resolveActingEmployeeId", async () => {
@@ -275,7 +344,9 @@ describe("Fix 4: Audit fields use resolveActingEmployeeId", () => {
       content.indexOf("movements: protectedProcedure")
     );
     expect(movementSection).toContain("resolveActingEmployeeId");
-    expect(movementSection).not.toContain("emps.find(e => e.userId === ctx.user.id)");
+    expect(movementSection).not.toContain(
+      "emps.find(e => e.userId === ctx.user.id)"
+    );
   });
 });
 
@@ -484,9 +555,17 @@ describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
     expect(hasPermission("viewer", "dashboard.view")).toBe(true);
     expect(hasPermission("viewer", "orders.view")).toBe(true);
     for (const permission of [
-      "orders.create", "orders.update", "orders.confirm", "orders.cancel",
-      "orders.export", "orders.import", "employees.view", "employees.manage",
-      "settings.view", "settings.manage", "audit.view",
+      "orders.create",
+      "orders.update",
+      "orders.confirm",
+      "orders.cancel",
+      "orders.export",
+      "orders.import",
+      "employees.view",
+      "employees.manage",
+      "settings.view",
+      "settings.manage",
+      "audit.view",
     ] as const) {
       expect(hasPermission("viewer", permission)).toBe(false);
     }
@@ -502,8 +581,12 @@ describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
 
   it("routers.ts defines requireEmployeePermission and applies it (not a broad any-employee fallback) to every sensitive employeePortal mutation", async () => {
     const fs = await import("fs");
-    const content = fs.readFileSync("server/routers.ts", "utf-8");
-    expect(content).toContain("function requireEmployeePermission(permission: Permission)");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
+    expect(content).toContain(
+      "function requireEmployeePermission(permission: Permission)"
+    );
     expect(content).toContain("hasPermission(emp.role, permission)");
     for (const [proc, permission] of [
       ["confirm", "orders.confirm"],
@@ -519,7 +602,9 @@ describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
       ["getOrderEditHistory", "orders.view"],
       ["stats", "dashboard.view"],
     ] as const) {
-      expect(content).toContain(`${proc}: requireEmployeePermission('${permission}')`);
+      expect(content).toContain(
+        `${proc}: requireEmployeePermission('${permission}')`
+      );
     }
   });
 

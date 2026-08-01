@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -48,13 +49,6 @@ const STATUS_SELECT_LABELS: Record<string, string> = {
   new: "جديد", confirmed: "مؤكد", postponed: "مؤجل", cancelled: "لاغي",
 };
 
-const CANCEL_REASONS = [
-  { value: "price",        label: "السعر مرتفع" },
-  { value: "not_serious",  label: "غير جاد" },
-  { value: "wrong_number", label: "رقم خطأ" },
-  { value: "duplicate",    label: "طلب مكرر" },
-];
-
 type Order = {
   id: number;
   orderNumber: string;
@@ -76,15 +70,10 @@ type Order = {
   reviewReason?: string | null;
 };
 
-const SOURCE_LABELS: Record<string, { label: string; color: string }> = {
-  easyorder: { label: "Easy Order", color: "bg-muted text-muted-foreground" },
-  facebook:  { label: "فيسبوك", color: "bg-muted text-muted-foreground" },
-  whatsapp:  { label: "واتسآب", color: "bg-muted text-muted-foreground" },
-  shopify:   { label: "Shopify", color: "bg-muted text-muted-foreground" },
-  manual:    { label: "يدوي", color: "bg-muted text-muted-foreground" },
-};
-
 export default function EmployeeDashboard() {
+  const { values: configuredGovernorates } = useOperationalOptions("governorate");
+  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
+  const sourceOptions = useOperationalOptions("order_source").options;
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -1292,9 +1281,9 @@ export default function EmployeeDashboard() {
                           <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusConf.bg} ${statusConf.color}`}>
                             {statusConf.label}
                           </span>
-                          {order.source && SOURCE_LABELS[order.source] && (
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SOURCE_LABELS[order.source].color}`}>
-                              {SOURCE_LABELS[order.source].label}
+                          {order.source && (
+                            <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                              {sourceOptions.find(option => option.value === order.source)?.label ?? order.source}
                             </span>
                           )}
                           {/* Orders whose items could not be mapped to the catalog need a
@@ -1635,7 +1624,7 @@ export default function EmployeeDashboard() {
                         <SelectValue placeholder="اختر المحافظة..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {["القاهرة","الجيزة","الإسكندرية","الدقهلية","البحر الأحمر","البحيرة","الفيوم","الغربية","الإسماعيلية","المنوفية","المنيا","القليوبية","الوادي الجديد","السويس","أسوان","أسيوط","بني سويف","بورسعيد","دمياط","جنوب سيناء","كفر الشيخ","مطروح","الأقصر","قنا","شمال سيناء","الشرقية","سوهاج","6 أكتوبر"].map(g => (
+                        {configuredGovernorates.map(g => (
                           <SelectItem key={g} value={g}>{g}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1937,7 +1926,7 @@ export default function EmployeeDashboard() {
                   <SelectValue placeholder="اختر السبب..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {CANCEL_REASONS.map(r => (
+                  {cancelReasonOptions.map(r => (
                     <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                   ))}
                 </SelectContent>
