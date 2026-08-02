@@ -1,223 +1,31 @@
-import { useState } from "react";
+import { useMemo } from "react";
 import { useLocation } from "wouter";
+import { ArrowRight, Printer, Truck } from "lucide-react";
+import { cairoArabicWeekday } from "@/lib/cairoDate";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/BrandMark";
-import { ArrowRight, Printer } from "lucide-react";
+import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 
-const SCHEDULE_IMAGE_URL = "https://d2xsxph8kpxj0f.cloudfront.net/310519663375135838/HcrR8sAS4ry64VmnqEHaLw/shipping-schedule_19917bee.jpeg";
-
-// بيانات جدول توزيع المحافظات (مطابقة للصورة)
-const SCHEDULE_DATA = [
-  {
-    day: "السبت",
-    governorates: "الاسكندرية - المنوفية - الشرقية - بني سويف - الاسماعيلية - السويس - بور سعيد - غربية - دقهلية - كفر الشيخ",
-    extra: "فيوم - بحيره",
-  },
-  {
-    day: "الاحد",
-    governorates: "الاسكندرية - المنوفية - الشرقية - بني سويف - الاسماعيلية - السويس - بور سعيد - غربية - دقهلية - كفر الشيخ",
-    extra: "بحيره",
-  },
-  {
-    day: "الاثنين",
-    governorates: "الاسكندرية - المنوفية - الشرقية - بني سويف - الاسماعيلية - السويس - بور سعيد - غربية - دقهلية - كفر الشيخ",
-    extra: "فيوم - دمياط",
-  },
-  {
-    day: "الثلاثاء",
-    governorates: "الاسكندرية - المنوفية - الشرقية - بني سويف - الاسماعيلية - السويس - بور سعيد - غربية - دقهلية - كفر الشيخ",
-    extra: "بحيره",
-  },
-  {
-    day: "الاربعاء",
-    governorates: "الاسكندرية - المنوفية - الشرقية - بني سويف - الاسماعيلية - السويس - بور سعيد - غربية - دقهلية - كفر الشيخ",
-    extra: "بحيره الساحل ومطروح",
-  },
-  {
-    day: "الخميس",
-    governorates: "الاسكندرية - المنوفية - الشرقية - بني سويف - الاسماعيلية - السويس - بور سعيد - غربية - دقهلية - كفر الشيخ",
-    extra: "فيوم - دمياط",
-  },
-];
-
-const NOTES = [
-  { text: "يتم استلام محافظات الصعيد يومي الاحد والاربعاء ويتم تسليم الشحنات خلال 48 الي 72 ساعة", color: "bg-destructive/10 border-destructive/30 text-destructive" },
-  { text: "حساب الصعيد يوم الاحد ويوم الخميس & حساب مطروح والساحل يوم الاربعاء من كل اسبوع", color: "bg-[var(--warning)]/10 border-[var(--warning)]/30 text-[var(--warning)]" },
-  { text: "الحساب متاح يومياً ماعدا الجمعة من الساعة 12 ظهراً الي الساعة 5 مساءً", color: "bg-[var(--info)]/10 border-[var(--info)]/30 text-[var(--info)]" },
-  { text: "يتم استلام المحافظات قبل ميعاد التسليم يوم بناءً على توزيع المحافظات في الجدول", color: "bg-[var(--info)]/10 border-[var(--info)]/30 text-[var(--info)]" },
-  { text: "مواعيد استلام الشحنات يومياً من الساعة 5 مساءً الي الساعة 10 مساءً", color: "bg-[var(--success)]/10 border-[var(--success)]/30 text-[var(--success)]" },
-];
-
-// تحديد اليوم الحالي
-function getTodayArabicDay(): string {
-  const days = ["الاحد", "الاثنين", "الثلاثاء", "الاربعاء", "الخميس", "الجمعة", "السبت"];
-  const now = new Date(Date.now() + 2 * 60 * 60 * 1000); // Cairo offset
-  return days[now.getUTCDay()];
-}
+const dayNames = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
 export default function ShippingSchedule() {
   const [, setLocation] = useLocation();
-  const [viewMode, setViewMode] = useState<'table' | 'image'>('table');
-  const todayDay = getTodayArabicDay();
-
-  // Check employee auth
-  const { data: employee, isLoading } = trpc.employeePortal.me.useQuery(undefined, {
-    retry: false,
-  });
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-amber-50 to-white">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--warning)]" />
-      </div>
-    );
-  }
-
-  if (!employee) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-amber-50 to-white">
-        <div className="text-center space-y-4">
-          <p className="text-muted-foreground">يرجى تسجيل الدخول أولاً</p>
-          <Button onClick={() => setLocation("/employee-login")}>تسجيل الدخول</Button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-background" dir="rtl">
-      {/* Header */}
-      <header
-        className="sticky top-0 z-40 shadow-md print:hidden"
-        style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}
-      >
-        <div className="flex items-center justify-between px-4 py-3 max-w-4xl mx-auto">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setLocation("/employee-dashboard")}
-              className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
-            >
-              <ArrowRight className="h-4 w-4" />
-            </button>
-            <BrandMark className="w-8 h-8" />
-            <div>
-              <p className="text-white font-bold text-sm leading-tight">جدول توزيع المحافظات</p>
-              <p className="text-white/70 text-xs">مواعيد الشحن والاستلام</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setViewMode(viewMode === 'table' ? 'image' : 'table')}
-              className="px-3 py-1.5 rounded-lg bg-white/10 text-white text-xs hover:bg-white/20 transition-colors"
-            >
-              {viewMode === 'table' ? 'عرض الصورة' : 'عرض الجدول'}
-            </button>
-            <button
-              onClick={() => window.print()}
-              className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
-              title="طباعة"
-            >
-              <Printer className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
-        {viewMode === 'image' ? (
-          /* عرض الصورة الأصلية */
-          <div className="bg-card rounded-2xl shadow-lg overflow-hidden border border-[var(--warning)]/20">
-            <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white text-center py-3 font-bold text-lg print:bg-[var(--info)]">
-              جدول توزيع المحافظات
-            </div>
-            <img
-              src={SCHEDULE_IMAGE_URL}
-              alt="جدول توزيع المحافظات"
-              className="w-full"
-            />
-          </div>
-        ) : (
-          /* عرض الجدول التفاعلي */
-          <>
-            <div className="bg-card rounded-2xl shadow-lg overflow-hidden border border-[var(--warning)]/20">
-              <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white text-center py-3 font-bold text-lg">
-                جدول توزيع المحافظات
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-[var(--info)]/10 border-b-2 border-[var(--info)]/30">
-                      <th className="py-3 px-4 text-right font-bold text-[var(--info)] w-24">اليوم</th>
-                      <th className="py-3 px-4 text-right font-bold text-[var(--info)]">المحافظات</th>
-                      <th className="py-3 px-4 text-right font-bold text-[var(--info)] w-40">إضافي</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {SCHEDULE_DATA.map((row, i) => {
-                      const isToday = row.day === todayDay;
-                      return (
-                        <tr
-                          key={i}
-                          className={`border-b transition-colors ${
-                            isToday
-                              ? 'bg-[var(--warning)]/10 border-[var(--warning)]/30 ring-2 ring-amber-400 ring-inset'
-                              : i % 2 === 0
-                              ? 'bg-card hover:bg-muted/50'
-                              : 'bg-muted/50/50 hover:bg-muted/50'
-                          }`}
-                        >
-                          <td className={`py-3 px-4 font-bold whitespace-nowrap ${isToday ? 'text-[var(--warning)]' : 'text-[var(--info)]'}`}>
-                            {row.day}
-                            {isToday && (
-                              <span className="block text-[10px] font-normal text-[var(--warning)] bg-[var(--warning)]/15 rounded px-1 mt-0.5 text-center">
-                                اليوم
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-foreground text-xs leading-relaxed">
-                            {row.governorates}
-                          </td>
-                          <td className="py-3 px-4 font-semibold text-[var(--info)] text-xs">
-                            {row.extra}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* ملاحظات مهمة */}
-            <div className="space-y-3">
-              <h3 className="font-bold text-foreground text-base">ملاحظات مهمة</h3>
-              {NOTES.map((note, i) => (
-                <div
-                  key={i}
-                  className={`rounded-xl border p-3 text-sm font-medium ${note.color}`}
-                >
-                  {note.text}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-
-        {/* Footer */}
-        <div className="text-center text-xs text-muted-foreground pb-4 print:hidden">
-          <p>إدارة — متجرك</p>
-        </div>
-      </div>
-
-      {/* Print styles */}
-      <style>{`
-        @media print {
-          header { display: none !important; }
-          .print\\:hidden { display: none !important; }
-          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        }
-      `}</style>
-    </div>
-  );
+  const { data: employee, isLoading } = trpc.employeePortal.me.useQuery(undefined, { retry: false });
+  const routes = useOperationalOptions("shipping_schedule_route");
+  const parsed = useMemo(() => (routes.data ?? []).flatMap(row => {
+    try {
+      const value = JSON.parse(row.valueJson ?? "{}") as { providerName?: string; dayOfWeek?: number; governorates?: string[]; priority?: number; notes?: string };
+      return value.providerName && Number.isInteger(value.dayOfWeek) && Array.isArray(value.governorates) ? [{ ...value, dayOfWeek: value.dayOfWeek!, providerName: value.providerName!, governorates: value.governorates!, priority: value.priority ?? 0 }] : [];
+    } catch { return []; }
+  }), [routes.data]);
+  const today = cairoArabicWeekday();
+  if (isLoading || routes.isLoading) return <div className="flex min-h-screen items-center justify-center">جاري تحميل جدول الشحن...</div>;
+  if (!employee) return <div className="flex min-h-screen items-center justify-center"><Button onClick={() => setLocation("/employee-login")}>تسجيل الدخول</Button></div>;
+  return <div className="min-h-screen bg-background" dir="rtl">
+    <header className="sticky top-0 z-40 bg-slate-950 text-white shadow print:hidden"><div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3"><div className="flex items-center gap-3"><button onClick={() => setLocation("/employee-dashboard")}><ArrowRight className="h-5 w-5" /></button><BrandMark className="h-8 w-8" /><div><strong>جدول توزيع الشحن</strong><p className="text-xs text-slate-300">إعدادات مستقلة لكل Business</p></div></div><button onClick={() => window.print()}><Printer className="h-5 w-5" /></button></div></header>
+    <main className="mx-auto max-w-5xl space-y-4 p-4"><div className="rounded-2xl border bg-card p-5"><h1 className="text-2xl font-black">مسارات شركات الشحن</h1><p className="mt-1 text-sm text-muted-foreground">اليوم: {today}. البيانات دي جاية من إعدادات الحسابات ومفيش جدول ثابت داخل الكود.</p></div>
+      {parsed.length === 0 ? <div className="rounded-2xl border border-dashed p-10 text-center text-muted-foreground"><Truck className="mx-auto mb-3 h-8 w-8" />مفيش مسارات شحن متضبطة للنشاط الحالي.</div> : dayNames.map((day, dayOfWeek) => { const rows = parsed.filter(route => route.dayOfWeek === dayOfWeek).sort((a, b) => b.priority - a.priority); if (!rows.length) return null; return <section key={day} className={`overflow-hidden rounded-2xl border ${day === today ? "border-emerald-500" : ""}`}><h2 className="bg-muted px-4 py-3 font-bold">{day}{day === today ? " · اليوم" : ""}</h2><div className="grid gap-3 p-4 md:grid-cols-2">{rows.map((route, index) => <article key={`${route.providerName}-${index}`} className="rounded-xl border p-4"><div className="flex justify-between"><strong>{route.providerName}</strong><span className="text-xs text-muted-foreground">Priority {route.priority}</span></div><p className="mt-2 text-sm">{route.governorates.join(" · ")}</p>{route.notes && <p className="mt-2 text-xs text-muted-foreground">{route.notes}</p>}</article>)}</div></section>; })}
+    </main>
+  </div>;
 }

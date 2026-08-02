@@ -1,10 +1,6 @@
 /**
- * Centralized role → permission mapping.
- *
- * This is intentionally a small, hardcoded table (not a database-driven
- * permissions system) — that's the "smallest safe change" for this release.
- * A full dynamic RBAC system (custom roles, per-tenant permission editing) is
- * explicitly deferred to the future System Administration module.
+ * Bootstrap role → permission mapping. Tenant overrides are loaded from the
+ * database by hasTenantPermission(), so daily permission changes need no deploy.
  *
  * "admin"/"super_admin"/"manager" employees are treated as full-access,
  * matching the existing behavior where a manager-role employee already gets
@@ -34,6 +30,23 @@ export const ALL_PERMISSIONS = [
   // مسؤوليتين مختلفتين: المدير بيبص، المحاسب بيسجّل.
   "accounting.view",
   "accounting.manage",
+  "closing.view",
+  "closing.create",
+  "closing.submit",
+  "closing.approve",
+  "closing.adjust",
+  "closing.lock",
+  "closing.export",
+  "financial_accounts.view",
+  "financial_accounts.manage",
+  "shipping_finance.view",
+  "shipping_finance.manage",
+  "shipping_finance.approve",
+  "inventory_costing.view",
+  "inventory_costing.manage",
+  "inventory_costing.approve",
+  "ad_spend.view",
+  "ad_spend.manage",
   // الرواتب. أربع صلاحيات مش واحدة عشان فصل المهام يبقى ممكن: المحاسب يجهّز ويدفع،
   // والاعتماد يفضل للإدارة — وده أهم حاجز إداري في وحدة بتحرّك فلوس شهريًا.
   "payroll.view",
@@ -68,6 +81,11 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
   accountant: [
     "dashboard.view", "orders.view", "orders.export", "settings.view", "audit.view",
     "accounting.view", "accounting.manage",
+    "closing.view", "closing.create", "closing.submit", "closing.adjust", "closing.export",
+    "financial_accounts.view", "financial_accounts.manage",
+    "shipping_finance.view", "shipping_finance.manage",
+    "inventory_costing.view",
+    "ad_spend.view", "ad_spend.manage",
     // بيجهّز الدورة ويدفعها، لكن مش بيعتمدها — الاعتماد قرار إداري
     "payroll.view", "payroll.manage", "payroll.pay",
   ],
@@ -87,4 +105,24 @@ export function permissionsForRole(role: string | null | undefined): readonly Pe
 
 export function hasPermission(role: string | null | undefined, permission: Permission): boolean {
   return permissionsForRole(role).includes(permission);
+}
+
+export async function hasTenantPermission(
+  tenantId: number,
+  role: string | null | undefined,
+  permission: Permission,
+): Promise<boolean> {
+  const [{ getDb }, { tenantRolePermissions }, { and, eq }] = await Promise.all([
+    import("./db"),
+    import("../drizzle/schema"),
+    import("drizzle-orm"),
+  ]);
+  const db = await getDb();
+  if (!db) return hasPermission(role, permission);
+  const [override] = await db.select().from(tenantRolePermissions).where(and(
+    eq(tenantRolePermissions.tenantId, tenantId),
+    eq(tenantRolePermissions.role, role ?? ""),
+    eq(tenantRolePermissions.permission, permission),
+  )).limit(1);
+  return override ? override.isAllowed : hasPermission(role, permission);
 }

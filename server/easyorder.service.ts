@@ -397,7 +397,7 @@ export async function upsertEasyOrder(
   }));
 
   try {
-    const existing = await getOrderByExternalId(normalized.externalOrderId);
+    const existing = await getOrderByExternalId(normalized.externalOrderId, opts.businessId);
 
     if (existing) {
       // Only overwrite when the provider says this payload is newer than what we stored.

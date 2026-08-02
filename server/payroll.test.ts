@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import fs from "fs";
-import { hasPermission, permissionsForRole, ALL_PERMISSIONS } from "./permissions";
+import {
+  hasPermission,
+  permissionsForRole,
+  ALL_PERMISSIONS,
+} from "./permissions";
 
 /**
  * حدود وحدة الرواتب.
@@ -13,7 +17,12 @@ import { hasPermission, permissionsForRole, ALL_PERMISSIONS } from "./permission
 
 describe("صلاحيات الرواتب", () => {
   it("الأربع صلاحيات مضافة للقائمة المركزية", () => {
-    for (const p of ["payroll.view", "payroll.manage", "payroll.approve", "payroll.pay"] as const) {
+    for (const p of [
+      "payroll.view",
+      "payroll.manage",
+      "payroll.approve",
+      "payroll.pay",
+    ] as const) {
       expect(ALL_PERMISSIONS).toContain(p);
     }
   });
@@ -35,10 +44,23 @@ describe("صلاحيات الرواتب", () => {
   });
 
   it("باقي الأدوار مالهاش أي صلاحية رواتب", () => {
-    const roles = ["viewer", "order_confirmation", "agent", "data_entry",
-      "facebook_entry", "shipping", "scanner", "warehouse"] as const;
+    const roles = [
+      "viewer",
+      "order_confirmation",
+      "agent",
+      "data_entry",
+      "facebook_entry",
+      "shipping",
+      "scanner",
+      "warehouse",
+    ] as const;
     for (const role of roles) {
-      for (const p of ["payroll.view", "payroll.manage", "payroll.approve", "payroll.pay"] as const) {
+      for (const p of [
+        "payroll.view",
+        "payroll.manage",
+        "payroll.approve",
+        "payroll.pay",
+      ] as const) {
         expect(hasPermission(role, p)).toBe(false);
       }
     }
@@ -61,9 +83,12 @@ describe("صلاحيات الرواتب", () => {
 describe("حواجز دورة حياة الرواتب", () => {
   const db = fs.readFileSync("server/db.ts", "utf-8");
   const payroll = db.slice(db.indexOf("// ==================== PAYROLL"));
+  const compactPayroll = payroll.replace(/\s+/g, " ");
 
   it("🔑 الدفع مرفوض لو فيه قيد مصروف بالفعل — الحارس ضد الدفع المزدوج", () => {
-    expect(payroll).toContain("if (period.expenseId) throw new Error(\"هذه الدورة مدفوعة بالفعل\")");
+    expect(payroll).toContain(
+      'if (period.expenseId) throw new Error("هذه الدورة مدفوعة بالفعل")'
+    );
   });
 
   it("الدفع من حالة معتمدة بس", () => {
@@ -71,7 +96,9 @@ describe("حواجز دورة حياة الرواتب", () => {
   });
 
   it("الاعتماد من مسودة بس", () => {
-    expect(payroll).toContain('if (period.status !== "draft") throw new Error("لا يمكن اعتماد دورة إلا وهي مسودة")');
+    expect(compactPayroll).toContain(
+      'if (period.status !== "draft") throw new Error("لا يمكن اعتماد دورة إلا وهي مسودة")'
+    );
   });
 
   it("إعادة الحساب ممنوعة بعد الاعتماد", () => {
@@ -91,7 +118,9 @@ describe("حواجز دورة حياة الرواتب", () => {
   });
 
   it("🔑 الإلغاء بيرجّع السُلف معلّقة", () => {
-    expect(payroll).toContain('status: "pending", settledPeriodId: null');
+    expect(compactPayroll).toContain(
+      'status: "pending", settledPeriodId: null'
+    );
   });
 
   it("سُلفة مُسوّاة مايتلغيش صرفها", () => {
@@ -113,26 +142,39 @@ describe("المخطط", () => {
   const migration = fs.readFileSync("drizzle/0033_funny_korg.sql", "utf-8");
 
   it("الخمس جداول موجودة", () => {
-    for (const t of ["payroll_settings", "employee_salary_profiles", "payroll_periods",
-      "payroll_items", "employee_advances"]) {
-      expect(schema).toContain(`mysqlTable("${t}"`);
+    for (const t of [
+      "payroll_settings",
+      "employee_salary_profiles",
+      "payroll_periods",
+      "payroll_items",
+      "employee_advances",
+    ]) {
+      expect(schema).toMatch(new RegExp(`mysqlTable\\(\\s*"${t}"`));
     }
   });
 
   it("🔑 أساس العمولة بيدعم الأربع حالات", () => {
-    expect(schema).toContain('"confirmed", "prepared", "shipped", "delivered"');
+    expect(schema).toMatch(
+      /"confirmed",\s*"prepared",\s*"shipped",\s*"delivered"/
+    );
   });
 
   it("🔑 الفهرس الفريد على (نشاط، سنة، شهر) — دورة واحدة للشهر", () => {
-    expect(migration).toContain("`payroll_periods_business_period_unique` UNIQUE(`businessId`,`year`,`month`)");
+    expect(migration).toContain(
+      "`payroll_periods_business_period_unique` UNIQUE(`businessId`,`year`,`month`)"
+    );
   });
 
   it("سطر واحد لكل موظف في الدورة", () => {
-    expect(migration).toContain("`payroll_items_period_employee_unique` UNIQUE(`periodId`,`employeeId`)");
+    expect(migration).toContain(
+      "`payroll_items_period_employee_unique` UNIQUE(`periodId`,`employeeId`)"
+    );
   });
 
   it("إصدار واحد لكل تاريخ سريان", () => {
-    expect(migration).toContain("`employee_salary_profiles_employee_effective_unique` UNIQUE(`employeeId`,`effectiveFrom`)");
+    expect(migration).toContain(
+      "`employee_salary_profiles_employee_effective_unique` UNIQUE(`employeeId`,`effectiveFrom`)"
+    );
   });
 
   it("🔑 لقطة ملف الراتب محفوظة على السطر", () => {

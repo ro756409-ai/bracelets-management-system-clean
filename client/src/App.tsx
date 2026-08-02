@@ -131,6 +131,15 @@ function Router() {
       <Route path="/payroll">
         <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
+      <Route path="/closings">
+        <ProtectedLayout><Accounting /></ProtectedLayout>
+      </Route>
+      <Route path="/accounting-settings">
+        <ProtectedLayout><Accounting /></ProtectedLayout>
+      </Route>
+      <Route path="/shipping-finance">
+        <ProtectedLayout><Accounting /></ProtectedLayout>
+      </Route>
       <Route path={"/facebook-entry"} component={FacebookEntry} />
       <Route path={"/scan-orders"}>
         <ProtectedLayout><ScanOrders /></ProtectedLayout>

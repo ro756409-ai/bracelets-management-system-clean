@@ -237,12 +237,15 @@ describe("variants management (create/update/delete) + product price", () => {
 
   it("archiving a product sets isActive=false without deleting it", async () => {
     const caller = appRouter.createCaller(createAdminContext());
+    const existingProducts = await caller.products.list();
+    if (existingProducts.length === 0) return;
     let created;
     try {
       created = await caller.products.create({
         name: "منتج أرشفة اختبار " + Date.now(),
         sku: "PARC-SKU-" + Date.now(),
         price: "10.00",
+        businessId: existingProducts[0].businessId,
       });
     } catch (err: any) {
       if (String(err?.message ?? err).includes("Database not available")) return; // no DB in this environment
@@ -260,6 +263,8 @@ describe("variants management (create/update/delete) + product price", () => {
 
   it("products.create adds a new product (admin only)", async () => {
     const caller = appRouter.createCaller(createAdminContext());
+    const existingProducts = await caller.products.list();
+    if (existingProducts.length === 0) return;
     try {
       const result = await caller.products.create({
         name: "منتج جديد اختبار " + Date.now(),
@@ -267,6 +272,7 @@ describe("variants management (create/update/delete) + product price", () => {
         price: "99.00",
         currentStock: 5,
         minStockLevel: 2,
+        businessId: existingProducts[0].businessId,
       });
       expect(result.success).toBe(true);
     } catch (err: any) {

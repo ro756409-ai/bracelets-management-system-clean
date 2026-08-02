@@ -12,9 +12,10 @@
 import { Request, Response, Express } from "express";
 import { timingSafeEqual } from "crypto";
 import { getDb } from "./db";
-import { orders } from "../drizzle/schema";
+import { businesses, orders } from "../drizzle/schema";
 import type { Order } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
+import { processProviderWebhook } from "./providerWebhookV2.service";
 
 type OrderStatus = Order["status"];
 
@@ -58,7 +59,7 @@ const BOSTA_STATUS_TO_ORDER_STATUS: Record<number, OrderStatus> = {
   22: "shipped",
   24: "shipped", // في طريق التسليم
   30: "delivered", // تم التسليم
-  31: "delivered", // تم التسليم جزئياً — أقرب حالة متاحة، راجع الملحوظة فوق
+  // 31 (partially delivered) is intentionally pending and never recognizes Revenue/COGS.
   41: "returned",
   42: "returned",
   43: "returned",
@@ -115,6 +116,28 @@ async function handleBostaWebhook(req: Request, res: Response) {
       return res.status(400).json({ error: "Missing shipment identifier" });
     }
 
+    const occurredAtRaw = payload.updatedAt || payload.updated_at || payload.timestamp;
+    const occurredAt = occurredAtRaw && !Number.isNaN(new Date(occurredAtRaw).getTime())
+      ? new Date(occurredAtRaw)
+      : new Date();
+    if (stateCode != null) {
+      try {
+        const v2 = await processProviderWebhook({
+          providerCode: "bosta",
+          externalShipmentId: shipmentId,
+          trackingNumber,
+          providerEventId: payload.eventId || payload.event_id,
+          providerStatusCode: String(stateCode),
+          occurredAt,
+          payload,
+        });
+        if (v2.status === "processed") return res.status(200).json({ ok: true, accountingV2: true });
+      } catch (error) {
+        console.error("[Bosta Webhook] Accounting V2 processing failed:", error);
+        return res.status(500).json({ error: "Accounting event processing failed" });
+      }
+    }
+
     // 4. تحديد الحالة العربية الكاملة (تُحفظ في bostaStatus دائمًا)
     const arabicStatus =
       (stateCode ? BOSTA_STATUS_MAP[stateCode] : undefined) ||
@@ -156,6 +179,12 @@ async function handleBostaWebhook(req: Request, res: Response) {
       );
       // نرجع 200 عشان Bosta ما تكررش الإرسال
       return res.status(200).json({ ok: true, message: "Order not found, ignored" });
+    }
+
+    const [business] = await drizzle.select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
+      .from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
+    if (business?.accountingGoLiveAt && stateCode != null) {
+      return res.status(200).json({ ok: true, message: "Provider event is unmatched in Business configuration; legacy mapping skipped" });
     }
 
     // 7. تحديث حالة الشحنة في قاعدة البيانات — bostaStatus دائمًا، status الأساسي فقط لو الكود مؤكد

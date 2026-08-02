@@ -13,15 +13,20 @@ export default defineConfig({
     },
   },
   test: {
+    setupFiles: [path.resolve(templateRoot, "vitest.setup.ts")],
     environment: "node",
     include: [
-      "server/**/*.test.ts", "server/**/*.spec.ts",
-      "shared/**/*.test.ts", "shared/**/*.spec.ts",
-      "scripts/**/*.test.ts", "scripts/**/*.spec.ts",
+      "server/**/*.test.ts",
+      "server/**/*.spec.ts",
+      "shared/**/*.test.ts",
+      "shared/**/*.spec.ts",
+      "scripts/**/*.test.ts",
+      "scripts/**/*.spec.ts",
       // Pure-logic tests only (filter/pagination/etc reducers) — no DOM, so `environment:
       // node` above still applies. Component rendering tests would need jsdom + RTL, which
       // this project does not currently depend on.
-      "client/src/**/*.test.ts", "client/src/**/*.spec.ts",
+      "client/src/**/*.test.ts",
+      "client/src/**/*.spec.ts",
     ],
   },
 });

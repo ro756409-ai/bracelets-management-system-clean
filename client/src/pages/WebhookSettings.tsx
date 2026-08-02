@@ -11,8 +11,6 @@ import {
 import { toast } from "sonner";
 
 const WEBHOOK_URL = `${window.location.origin}/api/webhooks/easyorder`;
-const WEBHOOK_SECRET = "engzQ2JMRHB4YQ==";
-const WEBHOOK_URL_WITH_SECRET = `${WEBHOOK_URL}?secret=${WEBHOOK_SECRET}`;
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "success") return <Badge className="bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/30 text-xs">✓ نجح</Badge>;
@@ -262,24 +260,25 @@ export default function WebhookSettings() {
             <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
               <li>افتح حساب Easy Order → الإعدادات → Public API → Webhooks</li>
               <li>اضغط "إنشاء Webhook"</li>
-              <li>انسخ الـ URL التالي كاملاً (يتضمن الـ Secret) وضعه في خانة URL</li>
+              <li>انسخ الـ URL التالي وضعه في خانة URL</li>
+              <li>استخدم الـ Secret المحفوظ في إعدادات قناة البيع كـ query parameter أو header</li>
               <li>اختر النوع: <strong>Orders</strong></li>
               <li>احفظ — الأوردرات الجديدة ستصل تلقائيًا</li>
             </ol>
             <div className="p-3 bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-lg text-sm text-[var(--warning)] mb-2">
-              <strong>مهم:</strong> انسخ الرابط التالي كاملاً — يتضمن الـ Secret مضمنًا في الرابط نفسه
+              <strong>مهم:</strong> النظام لا يعرض الـ Secret في المتصفح. اضبطه من إعدادات قناة البيع فقط.
             </div>
             <div className="flex items-center gap-2 p-3 bg-muted rounded-lg border">
               <code className="flex-1 text-xs font-mono text-foreground break-all">
-                {WEBHOOK_URL_WITH_SECRET}
+                {WEBHOOK_URL}
               </code>
-              <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(WEBHOOK_URL_WITH_SECRET); toast.success("تم نسخ الرابط الكامل"); }} className="shrink-0">
+              <Button variant="outline" size="sm" onClick={copyUrl} className="shrink-0">
                 <Copy className="w-4 h-4" />
                 نسخ
               </Button>
             </div>
             <div className="p-3 bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-lg text-sm text-[var(--info)]">
-              <strong>ملاحظة:</strong> الـ Secret مدمج في الرابط كـ query parameter — لا تحتاج لإضافة أي إعدادات إضافية.
+              <strong>ملاحظة:</strong> الطلبات من غير Secret مربوط بقناة نشطة يتم رفضها لحماية عزل بيانات التجار.
             </div>
           </CardContent>
         )}

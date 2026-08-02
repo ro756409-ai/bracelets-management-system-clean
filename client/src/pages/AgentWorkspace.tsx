@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,14 +32,8 @@ const STATUS_COLORS: Record<string, string> = {
   delivered: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/30",
 };
 
-const CANCEL_REASONS = [
-  { value: "price", label: "السعر" },
-  { value: "not_serious", label: "غير جاد" },
-  { value: "wrong_number", label: "رقم خاطئ" },
-  { value: "duplicate", label: "مكرر" },
-];
-
 export default function AgentWorkspace() {
+  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
   const { user } = useAuth();
   const utils = trpc.useUtils();
 
@@ -445,7 +440,7 @@ export default function AgentWorkspace() {
                   <SelectValue placeholder="اختر السبب" />
                 </SelectTrigger>
                 <SelectContent>
-                  {CANCEL_REASONS.map(r => (
+                  {cancelReasonOptions.map(r => (
                     <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                   ))}
                 </SelectContent>

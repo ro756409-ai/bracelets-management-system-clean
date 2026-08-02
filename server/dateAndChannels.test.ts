@@ -2,22 +2,21 @@ import { describe, it, expect } from "vitest";
 import { cairoStartOfDay, cairoEndOfDay, cairoTodayRange, cairoParseDateRange } from "./db";
 
 describe("Cairo Timezone Helpers", () => {
-  it("cairoStartOfDay returns 22:00 UTC of previous day for Cairo midnight", () => {
+  it("cairoStartOfDay respects Cairo daylight saving time", () => {
     // Cairo midnight = UTC 22:00 previous day
     const date = new Date("2025-05-10T10:30:00Z"); // Any time on May 10
     const result = cairoStartOfDay(date);
-    // Cairo date for this time is May 10 (10:30 UTC = 12:30 Cairo)
-    // Start of May 10 Cairo = May 9 22:00 UTC
-    expect(result.getUTCHours()).toBe(22);
+    // Egypt observes daylight saving time in May: Cairo midnight = 21:00 UTC.
+    expect(result.getUTCHours()).toBe(21);
     expect(result.getUTCDate()).toBe(9);
     expect(result.getUTCMonth()).toBe(4); // May = 4
   });
 
-  it("cairoEndOfDay returns 21:59:59.999 UTC of same day for Cairo end", () => {
+  it("cairoEndOfDay respects Cairo daylight saving time", () => {
     const date = new Date("2025-05-10T10:30:00Z");
     const result = cairoEndOfDay(date);
-    // End of May 10 Cairo = May 10 21:59:59.999 UTC
-    expect(result.getUTCHours()).toBe(21);
+    // End of May 10 Cairo = May 10 20:59:59.999 UTC while DST is active.
+    expect(result.getUTCHours()).toBe(20);
     expect(result.getUTCMinutes()).toBe(59);
     expect(result.getUTCSeconds()).toBe(59);
     expect(result.getUTCDate()).toBe(10);
@@ -32,10 +31,8 @@ describe("Cairo Timezone Helpers", () => {
 
   it("cairoParseDateRange parses YYYY-MM-DD correctly", () => {
     const { from, to } = cairoParseDateRange("2025-05-10");
-    // May 10 Cairo start = May 9 22:00 UTC
-    expect(from.toISOString()).toBe("2025-05-09T22:00:00.000Z");
-    // May 10 Cairo end = May 10 21:59:59.999 UTC
-    expect(to.toISOString()).toBe("2025-05-10T21:59:59.999Z");
+    expect(from.toISOString()).toBe("2025-05-09T21:00:00.000Z");
+    expect(to.toISOString()).toBe("2025-05-10T20:59:59.999Z");
   });
 
   it("cairoParseDateRange handles January 1st correctly", () => {

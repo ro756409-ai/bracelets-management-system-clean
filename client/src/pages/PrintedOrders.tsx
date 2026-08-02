@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Download, Printer, Search, RefreshCw } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { cairoDateKey, cairoDayRange, previousDateKey } from "@/lib/cairoDate";
 
 const STATUS_LABELS: Record<string, string> = {
   printed: "مطبوع",
@@ -25,19 +26,15 @@ export default function PrintedOrders() {
 
   // حساب نطاق التاريخ
   const dateRange = useMemo(() => {
-    const now = new Date(Date.now() + 2 * 60 * 60 * 1000); // Cairo +2
-    const todayStr = now.toISOString().slice(0, 10);
+    const todayStr = cairoDateKey();
     if (dateFilter === 'today') {
-      return { from: new Date(todayStr + 'T00:00:00Z'), to: new Date(todayStr + 'T23:59:59Z') };
+      return cairoDayRange(todayStr);
     }
     if (dateFilter === 'yesterday') {
-      const y = new Date(now);
-      y.setUTCDate(y.getUTCDate() - 1);
-      const yStr = y.toISOString().slice(0, 10);
-      return { from: new Date(yStr + 'T00:00:00Z'), to: new Date(yStr + 'T23:59:59Z') };
+      return cairoDayRange(previousDateKey(todayStr));
     }
     if (dateFilter === 'custom' && customDate) {
-      return { from: new Date(customDate + 'T00:00:00Z'), to: new Date(customDate + 'T23:59:59Z') };
+      return cairoDayRange(customDate);
     }
     return { from: undefined, to: undefined };
   }, [dateFilter, customDate]);

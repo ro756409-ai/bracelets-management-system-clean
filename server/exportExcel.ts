@@ -3,6 +3,7 @@ import { requireAdminOrManager } from "./authMiddleware";
 import XLSX from "xlsx-js-style";
 import QRCode from "qrcode";
 import { getOrders, getAllEmployees, getAllProducts, markOrdersAsPrinted, getAllBusinesses, getBusinessIdsByGroupId, getOrderItemsForOrders } from "./db";
+import { listShippingConfiguration } from "./shippingConfigV2.service";
 
 
 // ==================== SHARED HELPERS ====================
@@ -27,111 +28,6 @@ function formatAddress(address: string | null | undefined, governorate?: string)
     clean = clean.slice(0, -governorate.length).trim().replace(/[,،\-]+$/, "").trim();
   }
   return clean || governorate || "";
-}
-
-// Shipping agent mapping based on governorate
-const SHIPPING_AGENTS: Record<string, { agent: string; cost: number }> = {
-  // شيت القاهرة
-  "القاهرة": { agent: "القاهرة", cost: 60 },
-  "الجيزة": { agent: "القاهرة", cost: 60 },
-  "القليوبية": { agent: "القاهرة", cost: 60 },
-  "6 أكتوبر": { agent: "القاهرة", cost: 60 },
-  "العاشر من رمضان": { agent: "القاهرة", cost: 60 },
-  // شيت وجه بحري
-  "الشرقية": { agent: "وجه بحري", cost: 60 },
-  "الفيوم": { agent: "وجه بحري", cost: 60 },
-  "بني سويف": { agent: "وجه بحري", cost: 60 },
-  "الدقهلية": { agent: "وجه بحري", cost: 60 },
-  "السويس": { agent: "وجه بحري", cost: 60 },
-  "الإسماعيلية": { agent: "وجه بحري", cost: 60 },
-  "بورسعيد": { agent: "وجه بحري", cost: 60 },
-  "دمياط": { agent: "وجه بحري", cost: 60 },
-  "الإسكندرية": { agent: "وجه بحري", cost: 60 },
-  "البحيرة": { agent: "وجه بحري", cost: 60 },
-  "كفر الشيخ": { agent: "وجه بحري", cost: 60 },
-  "الغربية": { agent: "وجه بحري", cost: 60 },
-  "المنوفية": { agent: "وجه بحري", cost: 60 },
-  // شيت الصعيد
-  "أسوان": { agent: "الصعيد", cost: 75 },
-  "الأقصر": { agent: "الصعيد", cost: 75 },
-  "سوهاج": { agent: "الصعيد", cost: 75 },
-  "أسيوط": { agent: "الصعيد", cost: 75 },
-  "قنا": { agent: "الصعيد", cost: 75 },
-  "البحر الأحمر": { agent: "الصعيد", cost: 75 },
-  "الوادي الجديد": { agent: "الصعيد", cost: 75 },
-  "المنيا": { agent: "الصعيد", cost: 75 },
-  // محافظات أخرى
-  "شمال سيناء": { agent: "وجه بحري", cost: 75 },
-  "جنوب سيناء": { agent: "وجه بحري", cost: 75 },
-  "مرسى مطروح": { agent: "وجه بحري", cost: 75 },
-};
-
-const GOV_ALIASES: Record<string, string> = {
-  // القاهرة
-  "القاهره": "القاهرة", "قاهرة": "القاهرة", "القاعره": "القاهرة", "للقاهرة": "القاهرة",
-  "القاهرة مدينة الشروق": "القاهرة", "المرج": "القاهرة",
-  "شبرا الخيمه": "القليوبية", "مركز طوخ قليوبيه": "القليوبية",
-  "جيزه": "الجيزة", "جيزه هرم": "الجيزة", "الجبزه": "الجيزة",
-  "بولاق الدكرور": "الجيزة", "الهرم": "الجيزة",
-  "اكتوبر": "6 أكتوبر", "أكتوبر": "6 أكتوبر", "ستة أكتوبر": "6 أكتوبر",
-  "٧اكتوبر": "6 أكتوبر", "تجمع الخامس": "6 أكتوبر",
-  "October": "6 أكتوبر", "Giza": "الجيزة",
-  "العاشر": "العاشر من رمضان", "عاشر رمضان": "العاشر من رمضان",
-  // الإسكندرية
-  "الأسكندرية": "الإسكندرية", "الأسكندريه": "الإسكندرية",
-  "اسكندرية": "الإسكندرية", "السكندري": "الإسكندرية",
-  // البحيرة
-  "البحيىه": "البحيرة", "بحيرة": "البحيرة",
-  "دمنهور": "البحيرة", "دمنهور بحيره": "البحيرة",
-  "مدينه النوباريه بحيره": "البحيرة",
-  // الإسماعيلية
-  "الاسماعليه": "الإسماعيلية",
-  // بورسعيد
-  "بور سعيد": "بورسعيد",
-  // الغربية
-  "الغرابية": "الغربية", "طنطا": "الغربية",
-  "السنطه": "الغربية",
-  // المنوفية
-  "محفظية المنوفي مدينة السدات": "المنوفية",
-  // الدقهلية
-  "المنصوره": "الدقهلية", "المنصورة بلقاس شارع المحكمة": "الدقهلية",
-  // البحر الأحمر
-  "الغردقه": "البحر الأحمر", "الغردقة": "البحر الأحمر",
-  "الغردقه شار": "البحر الأحمر",
-  // مرسى مطروح
-  "مطروح": "مرسى مطروح",
-  // الوادي الجديد
-  "الوادى الجديد": "الوادي الجديد",
-  // أسيوط
-  "أسيوط مركز ديروط": "أسيوط",
-  // أسوان
-  "أسون ابوريش بحري الخطاره": "أسوان", "أسكنه": "أسوان",
-  // الأقصر
-  "Luxor": "الأقصر",
-  // سوهاج
-  "دار السلام": "سوهاج",
-  // الفيوم (وجه بحري)
-  "فيوم": "الفيوم",
-};
-
-function normalizeGovForShipping(gov: string): string {
-  if (!gov) return "";
-  const g = gov.trim();
-  if (SHIPPING_AGENTS[g]) return g;
-  if (GOV_ALIASES[g]) return GOV_ALIASES[g];
-  const gLower = g.toLowerCase();
-  for (const [alias, canonical] of Object.entries(GOV_ALIASES)) {
-    if (gLower === alias.toLowerCase()) return canonical;
-  }
-  for (const key of Object.keys(SHIPPING_AGENTS)) {
-    if (g.includes(key) || key.includes(g)) return key;
-  }
-  return g;
-}
-
-function getShippingInfo(governorate: string) {
-  const normalizedGov = normalizeGovForShipping(governorate);
-  return SHIPPING_AGENTS[normalizedGov] || { agent: "غير محدد", cost: 60 };
 }
 
 function extractEngravingType(fullName: string): string {
@@ -373,19 +269,24 @@ async function exportShippingSheet(req: Request, res: Response) {
     const empMap = new Map(employees.map((e: any) => [e.id, e.name]));
     const businesses = await getAllBusinesses();
     const bizMap = new Map(businesses.map((b: any) => [b.id, b.name]));
+    const providerMap = new Map<number, string>();
+    for (const businessId of [...new Set(exportOrders.map((order: any) => Number(order.businessId)))]) {
+      const configuration = await listShippingConfiguration(businessId);
+      for (const provider of configuration.providers) providerMap.set(provider.id, provider.displayName);
+    }
 
     // Group orders by shipping agent
     const agentGroups: Record<string, any[]> = {};
     for (const order of exportOrders) {
-      const agentInfo = getShippingInfo(order.governorate);
-      if (!agentGroups[agentInfo.agent]) agentGroups[agentInfo.agent] = [];
-      agentGroups[agentInfo.agent].push({ ...order, shippingCost: order.shippingFees ? Number(order.shippingFees) : agentInfo.cost });
+      const agentName = providerMap.get(Number(order.projectedShippingProviderId)) ?? "غير محدد";
+      if (!agentGroups[agentName]) agentGroups[agentName] = [];
+      agentGroups[agentName].push({ ...order, shippingCost: Number(order.projectedShippingCostSnapshot ?? 0) });
     }
 
     const wb = XLSX.utils.book_new();
     const today = new Date().toLocaleDateString("ar-EG");
 
-    const agentOrder = ["القاهرة", "وجه بحري", "الصعيد", "غير محدد"];
+    const agentOrder = [...providerMap.values(), "غير محدد"];
     const sortedAgents = Object.entries(agentGroups).sort(([a], [b]) => {
       const ai = agentOrder.indexOf(a);
       const bi = agentOrder.indexOf(b);
