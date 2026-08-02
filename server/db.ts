@@ -3589,6 +3589,66 @@ export async function replaceOrderItemsFromEditor(
 
     const head = lines[0];
     const totalQuantity = lines.reduce((sum, l) => sum + l.quantity, 0);
+
+    // Stock reconciliation.
+    //
+    // confirmOrder() deducts stock from the HEADER (`order.productId` × `order.quantity`)
+    // whenever the business is pre-Go-Live. Rewriting the header here without compensating
+    // would leave the deduction stranded at the old number: confirm two, edit to five, and
+    // the warehouse ships five while the books show two gone.
+    //
+    // editOrderFull() covered the quantity case, but by calling updateProductStock() AND
+    // addInventoryMovement() — which calls updateProductStock() itself — so it moved stock
+    // twice per edit. That bug is left alone here rather than copied: this path writes one
+    // ledger row and applies its delta once.
+    //
+    // Post-Go-Live is deliberately excluded. Stock there is reservations and dispatches,
+    // not `products.currentStock`, and the guard above already refuses once any of it has
+    // moved. Movements are written through `tx` so a failure rolls the lines back with them.
+    if (order.status === "confirmed" && !business?.accountingGoLiveAt) {
+      const oldProductId = order.productId;
+      const oldQuantity = order.quantity ?? 0;
+      const moves: { productId: number; delta: number }[] = [];
+      if (oldProductId != null && head.productId === oldProductId) {
+        const diff = totalQuantity - oldQuantity;
+        if (diff !== 0) moves.push({ productId: oldProductId, delta: -diff });
+      } else {
+        // Product swapped — give the old one back in full, take the new one in full.
+        if (oldProductId != null && oldQuantity > 0)
+          moves.push({ productId: oldProductId, delta: oldQuantity });
+        if (head.productId != null && totalQuantity > 0)
+          moves.push({ productId: head.productId, delta: -totalQuantity });
+      }
+
+      for (const move of moves) {
+        const [product] = await tx
+          .select({ id: products.id, currentStock: products.currentStock })
+          .from(products)
+          .where(eq(products.id, move.productId))
+          .limit(1)
+          .for("update");
+        if (!product) continue; // product deleted since the order was placed
+        if (move.delta < 0 && product.currentStock < -move.delta) {
+          throw new Error(
+            `المخزون غير كافي للتعديل (المتاح: ${product.currentStock}، المطلوب: ${-move.delta})`
+          );
+        }
+        await tx.insert(inventoryMovements).values({
+          businessId: order.businessId,
+          productId: move.productId,
+          type: move.delta < 0 ? "out" : "in",
+          quantity: Math.abs(move.delta),
+          reason: `تعديل بنود أوردر ${order.orderNumber}`,
+          orderId: order.id,
+          performedBy: editor.id,
+        });
+        await tx
+          .update(products)
+          .set({ currentStock: sql`${products.currentStock} + ${move.delta}` })
+          .where(eq(products.id, move.productId));
+      }
+    }
+
     const headerUpdates = {
       productId: head.productId,
       productName: head.productName.trim(),

@@ -250,11 +250,14 @@ export default function EmployeeDashboard() {
   );
 
   // The order's real lines, loaded only while the edit dialog is open for that order.
-  const { data: orderItemsData, isLoading: orderItemsLoading } =
-    trpc.employeePortal.orderItems.useQuery(
-      { orderId: editDialog.orderId ?? 0 },
-      { enabled: editDialog.open && editDialog.orderId != null, retry: false }
-    );
+  const {
+    data: orderItemsData,
+    isLoading: orderItemsLoading,
+    error: orderItemsError,
+  } = trpc.employeePortal.orderItems.useQuery(
+    { orderId: editDialog.orderId ?? 0 },
+    { enabled: editDialog.open && editDialog.orderId != null, retry: false }
+  );
 
   // Build query params with optional date filter + business group filter
   const dateFilterParams = useMemo(() => {
@@ -337,7 +340,8 @@ export default function EmployeeDashboard() {
   });
 
   const openNoAnswerDialog = (orderId: number) => {
-    setBusyOrderId(orderId);
+    // Deliberately does NOT mark the row busy — opening a dialog is not a write, and
+    // marking it here left the marker stranded when the employee backed out.
     setNoAnswerAttempts("");
     setNoAnswerDialog({ open: true, orderId });
   };
@@ -361,6 +365,10 @@ export default function EmployeeDashboard() {
    */
   function handleStatusSelect(order: any, next: string) {
     if (next === order.status) return;
+    // The dropdown writes the same `orders.status` the four buttons do, so it needs the
+    // same in-flight guard — otherwise picking a status and then tapping a button races,
+    // and the order lands on whichever reply comes back last.
+    if (statusWriteInFlight) return;
     if (next === "cancelled") {
       setCancelDialog({ open: true, orderId: order.id });
       setCancelReason(""); setCancelNotes(""); setCancelOtherReason("");
@@ -379,6 +387,7 @@ export default function EmployeeDashboard() {
         return;
       }
     }
+    setBusyOrderId(order.id);
     updateStatusMutation.mutate({ orderId: order.id, status: next as any });
   }
 
@@ -709,15 +718,20 @@ export default function EmployeeDashboard() {
       issues.push("التليفون البديل غير صحيح");
     if (!editGovernorate.trim()) issues.push("المحافظة مطلوبة");
     if (editAddress.trim().length < 5) issues.push("العنوان قصير جداً (٥ أحرف على الأقل)");
-    if (editLines.length === 0) issues.push("لازم بند واحد على الأقل");
-    if (editLines.some(l => !l.productId && !l.productName.trim()))
-      issues.push("فيه بند من غير منتج");
-    if (editLines.some(l => l.discount > l.quantity * l.unitPrice))
-      issues.push("فيه بند خصمه أكبر من قيمته");
+    // Only judge the basket once it has arrived. While the query is in flight `editLines`
+    // is legitimately empty, and complaining about it flashed "بيانات ناقصة — لازم بند
+    // واحد على الأقل" at the employee every single time the dialog opened.
+    if (!orderItemsLoading) {
+      if (editLines.length === 0) issues.push("لازم بند واحد على الأقل");
+      if (editLines.some(l => !l.productId && !l.productName.trim()))
+        issues.push("فيه بند من غير منتج");
+      if (editLines.some(l => l.discount > l.quantity * l.unitPrice))
+        issues.push("فيه بند خصمه أكبر من قيمته");
+    }
     return issues;
   }, [
     editCustomerName, editCustomerPhone, editCustomerPhone2, editGovernorate,
-    editAddress, editLines,
+    editAddress, editLines, orderItemsLoading,
   ]);
 
   async function saveEdit() {
@@ -1965,6 +1979,16 @@ export default function EmployeeDashboard() {
                 <Package className="h-4 w-4" />
                 بنود الأوردر
               </p>
+              {/* Without this the employee saw an empty basket, a red "لازم بند واحد"
+                  warning and a dead Save button, with nothing saying why. */}
+              {orderItemsError && (
+                <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 p-2">
+                  <p className="flex items-start gap-1.5 text-xs text-destructive">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>تعذّر تحميل بنود الأوردر — {orderItemsError.message}. اقفل النافذة وافتحها تاني.</span>
+                  </p>
+                </div>
+              )}
               <OrderItemsEditor
                 lines={editLines}
                 onChange={lines => { setEditLines(lines); setEditLinesDirty(true); }}
@@ -2258,6 +2282,7 @@ export default function EmployeeDashboard() {
               onClick={() => {
                 if (!noAnswerDialog.orderId) return;
                 const attempts = noAnswerAttempts ? Number(noAnswerAttempts) : undefined;
+                setBusyOrderId(noAnswerDialog.orderId);
                 noAnswerMutation.mutate({ orderId: noAnswerDialog.orderId, callAttempts: attempts });
               }}
             >

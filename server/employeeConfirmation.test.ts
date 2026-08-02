@@ -204,6 +204,94 @@ describe("كتابة بنود الأوردر", () => {
     expect(fn).toContain("return db.transaction(async tx => {");
     expect(fn).toContain('.for("update")');
   });
+});
+
+/**
+ * confirmOrder() بتخصم المخزون من رأس الأوردر (productId × quantity) قبل الـGo-Live.
+ * تعديل البنود بيعيد كتابة الرأس، فلو مافيش تسوية بيفضل الخصم على الرقم القديم:
+ * تأكيد قطعتين، تعديل لخمسة، المخزن بيطلّع خمسة والدفاتر شايفة اتنين.
+ */
+describe("تسوية المخزون بعد تعديل البنود", () => {
+  // محدودة بالدالة نفسها: `db.slice(indexOf(...))` لوحدها بتاخد باقي الملف كله،
+  // فتأكيدات الـ"not.toContain" كانت بتقع على دوال تانية مالهاش دعوة.
+  const start = db.indexOf("export async function replaceOrderItemsFromEditor");
+  const fn = db.slice(
+    start,
+    db.indexOf("\nexport async function replaceOrderItems(", start)
+  );
+
+  it("🔑 التسوية بتحصل للأوردر المؤكد بس — غير المؤكد مااتخصمش أصلاً", () => {
+    expect(fn).toContain('if (order.status === "confirmed" && !business?.accountingGoLiveAt)');
+  });
+
+  it("🔑 نفس المنتج: الفرق بس", () => {
+    expect(fn).toContain("const diff = totalQuantity - oldQuantity;");
+    expect(fn).toContain("moves.push({ productId: oldProductId, delta: -diff })");
+  });
+
+  it("🔑 المنتج اتغيّر: القديم بيرجع كامل والجديد بيتخصم كامل", () => {
+    expect(fn).toContain("moves.push({ productId: oldProductId, delta: oldQuantity })");
+    expect(fn).toContain("moves.push({ productId: head.productId, delta: -totalQuantity })");
+  });
+
+  it("🔑 الحركة بتتكتب مرة واحدة — مش زي editOrderFull اللي بيحرّك المخزون مرتين", () => {
+    // editOrderFull بينادي updateProductStock ثم addInventoryMovement، والتانية
+    // بتنادي updateProductStock جوّاها — فالكمية بتتخصم مرتين. المسار ده بيكتب
+    // صف حركة واحد وبيطبّق الفرق مرة واحدة.
+    expect(fn).toContain("await tx.insert(inventoryMovements).values({");
+    expect(fn).toContain("currentStock: sql`${products.currentStock} + ${move.delta}`");
+    // على الكود مش على النص: التعليق اللي فوق الدالة بيشرح بق editOrderFull وبيذكر
+    // اسمي الدالتين، فالفحص لازم يكون على استدعاء فعلي (`await ...(`) مش على ورودهم.
+    expect(fn).not.toContain("await updateProductStock(");
+    expect(fn).not.toContain("await addInventoryMovement(");
+  });
+
+  it("مخزون غير كافي بيرفض التعديل قبل ما يتكتب", () => {
+    expect(fn).toContain("if (move.delta < 0 && product.currentStock < -move.delta)");
+    expect(fn).toContain("المخزون غير كافي للتعديل");
+  });
+
+  it("منتج اتمسح من الكتالوج مابيكسرش التعديل", () => {
+    expect(fn).toContain("if (!product) continue;");
+  });
+
+  it("🔑 التسوية جوه نفس الـtransaction — فشلها بيرجّع البنود معاها", () => {
+    const block = fn.slice(fn.indexOf("if (order.status === \"confirmed\""));
+    expect(block.slice(0, block.indexOf("const headerUpdates"))).not.toContain("await db.");
+  });
+
+  it("بعد Go-Live متستثناة — المخزون هناك حجز وصرف مش عمود currentStock", () => {
+    expect(fn).toContain("!business?.accountingGoLiveAt");
+  });
+});
+
+describe("حالات الحافة في الواجهة", () => {
+  const page = fs.readFileSync("client/src/pages/EmployeeDashboard.tsx", "utf-8");
+
+  it("🔑 تحذير «بيانات ناقصة» مايظهرش والبنود لسه بتحمّل", () => {
+    expect(page).toContain("if (!orderItemsLoading) {");
+  });
+
+  it("🔑 فشل تحميل البنود بيتقال للموظف مش بيسيبه قدام زرار ميت", () => {
+    expect(page).toContain("تعذّر تحميل بنود الأوردر");
+    expect(page).toContain("orderItemsError");
+  });
+
+  it("🔑 قائمة الحالة عليها نفس حارس التزامن بتاع الأزرار", () => {
+    const fn = page.slice(page.indexOf("function handleStatusSelect"));
+    expect(fn.slice(0, fn.indexOf("\n  }"))).toContain("if (statusWriteInFlight) return;");
+  });
+
+  it("علامة الانشغال بتتحط وقت الكتابة مش وقت فتح الديالوج", () => {
+    const open = page.slice(page.indexOf("const openNoAnswerDialog"));
+    expect(open.slice(0, open.indexOf("\n  };"))).not.toContain("setBusyOrderId");
+    expect(page).toContain("setBusyOrderId(noAnswerDialog.orderId);");
+    expect(page).toContain("setBusyOrderId(order.id);\n    updateStatusMutation.mutate(");
+  });
+
+  it("كل كتابة حالة بتفضّي العلامة مهما كانت النتيجة", () => {
+    expect((page.match(/onSettled: \(\) => setBusyOrderId\(null\)/g) ?? []).length).toBe(5);
+  });
 
   it("🔑 التعديل بيتسجّل في سجل التعديلات وسجل النشاط", () => {
     const fn = db.slice(db.indexOf("export async function replaceOrderItemsFromEditor"));
