@@ -169,8 +169,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       confirmIdx + 500
     );
     expect(confirmSection).toContain("Ownership check");
-    expect(confirmSection).toContain("emp.role !== 'manager'");
-    expect(confirmSection).toContain("assignedEmployeeId !== emp.id");
+    expect(confirmSection).toContain("assertEmployeeOwnsOrder(emp, input.orderId");
   });
 
   it("employeePortal.postpone has ownership check", async () => {
@@ -190,8 +189,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       postponeIdx,
       postponeIdx + 500
     );
-    expect(postponeSection).toContain("Ownership check");
-    expect(postponeSection).toContain("emp.role !== 'manager'");
+    expect(postponeSection).toContain("assertEmployeeOwnsOrder(emp, input.orderId");
   });
 
   it("employeePortal.cancel has ownership check", async () => {
@@ -208,8 +206,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       "cancel: requireEmployeePermission"
     );
     const cancelSection = portalSection.substring(cancelIdx, cancelIdx + 500);
-    expect(cancelSection).toContain("Ownership check");
-    expect(cancelSection).toContain("emp.role !== 'manager'");
+    expect(cancelSection).toContain("assertEmployeeOwnsOrder(emp, input.orderId");
   });
 
   it("employeePortal.updateNotes has ownership check", async () => {
@@ -226,8 +223,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       "updateNotes: requireEmployeePermission"
     );
     const notesSection = portalSection.substring(notesIdx, notesIdx + 500);
-    expect(notesSection).toContain("Ownership check");
-    expect(notesSection).toContain("emp.role !== 'manager'");
+    expect(notesSection).toContain("assertEmployeeOwnsOrder(emp, input.orderId");
   });
 
   it("manager employees bypass ownership check", async () => {
@@ -240,15 +236,14 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
         "// ==================== EMPLOYEE PORTAL ===================="
       )
     );
-    // All ownership checks should check emp.role !== 'manager' (i.e., managers bypass)
-    const confirmIdx = portalSection.indexOf(
-      "confirm: requireEmployeePermission"
+    // The bypass moved into assertEmployeeOwnsOrder and became tier-based. It used to
+    // compare against the literal role 'manager', which wrongly denied an admin or
+    // super_admin employee — both senior to a manager — access to the orders they supervise.
+    expect(portalSection).toContain("assertEmployeeOwnsOrder(emp, input.orderId");
+    expect(content).toContain(
+      "if (!isAdminTierRole(emp.role) && order.assignedEmployeeId !== emp.id)"
     );
-    const confirmSection = portalSection.substring(
-      confirmIdx,
-      confirmIdx + 500
-    );
-    expect(confirmSection).toContain("if (emp.role !== 'manager')");
+    expect(portalSection).not.toContain("if (emp.role !== 'manager') {");
   });
 
   it("employeePortal write actions require a role permission, not just an active session", async () => {

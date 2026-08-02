@@ -14,6 +14,8 @@
  * testable and runs identically on server and client.
  */
 
+import { GOVERNORATE_NAMES } from "./egyptLocations";
+
 export type FieldConfidence = "high" | "medium" | "low" | "missing";
 
 export interface ParsedField<T> {
@@ -161,12 +163,13 @@ const QTY_WORD_PATTERN = Object.keys(ARABIC_NUMBER_WORDS)
 const FILLER_PREFIX_RE = /^(?:و\s*)?(?:يا\s+)?(?:ريت\s+|لو\s+سمحت\s+|من\s+فضلك\s+)?(?:انا\s+|أنا\s+)?(?:عايز[ةه]?|عاوز[ةه]?|اريد|أريد|محتاج[ةه]?|هاخد|ها?خد|ابغى|ممكن)\s+/;
 
 // ==================== Governorates ====================
-export const GOVERNORATES = [
-  "القاهرة", "الجيزة", "الإسكندرية", "الدقهلية", "الشرقية", "القليوبية", "الغربية",
-  "المنوفية", "البحيرة", "كفر الشيخ", "دمياط", "بورسعيد", "الإسماعيلية", "السويس",
-  "الفيوم", "بني سويف", "المنيا", "أسيوط", "سوهاج", "قنا", "الأقصر", "أسوان",
-  "البحر الأحمر", "الوادي الجديد", "مطروح", "شمال سيناء", "جنوب سيناء",
-];
+/**
+ * Re-exported from shared/egyptLocations.ts so the parser and the confirmation
+ * employee's dropdown cannot drift apart: a governorate this parser writes into
+ * `orders.governorate` must be selectable in the edit modal, or the order opens with
+ * a blank governorate and the employee has to retype what the parser already knew.
+ */
+export const GOVERNORATES: readonly string[] = GOVERNORATE_NAMES;
 
 const GOVERNORATE_ALIASES: Record<string, string> = {
   "قاهره": "القاهرة", "مصر الجديده": "القاهرة", "مدينه نصر": "القاهرة", "المعادي": "القاهرة",

@@ -26,6 +26,11 @@ import { StatCard, ConfirmDialog, WhatsAppButton } from "@/components/shared";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getMissingConfirmationFields } from "@/lib/orderConfirmationValidation";
 import { EMPLOYEE_SETTABLE_ORDER_STATUSES } from "@shared/const";
+import { GovernorateCitySelect } from "@/components/employee/GovernorateCitySelect";
+import {
+  OrderItemsEditor, newLineKey, linesTotal,
+  type EditorLine,
+} from "@/components/employee/OrderItemsEditor";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new:       { label: "جديد",         color: "text-primary",            bg: "bg-accent border-primary/30" },
@@ -70,8 +75,48 @@ type Order = {
   reviewReason?: string | null;
 };
 
+/**
+ * Standard cancellation reasons, used when the business has not configured its own.
+ * Kept short and mutually exclusive — a reason list people scroll is a reason list people
+ * stop reading, and the whole point is that the number in the cancelled column means something.
+ */
+const DEFAULT_CANCEL_REASONS = [
+  "العميل غيّر رأيه",
+  "السعر غالي",
+  "طلب بالخطأ",
+  "مش متاح للتوصيل في منطقته",
+  "المنتج مش متوفر",
+  "أوردر مكرر",
+  "رقم غلط أو مش موجود",
+  "العميل مش بيرد",
+] as const;
+
+/** Sentinel for the free-text option. Not a stored value — the typed text is what's saved. */
+const OTHER_CANCEL_REASON = "__other__";
+
+/**
+ * Every header field joined into one string, compared against the same string taken when
+ * the dialog opened. Cheaper to maintain than a dirty flag on each of nine onChange
+ * handlers — one that gets forgotten silently loses the unsaved-changes warning.
+ */
+function headerFingerprint(values: Record<string, string>): string {
+  return Object.keys(values)
+    .sort()
+    .map(k => `${k}=${values[k].trim()}`)
+    .join("");
+}
+
+/** Egyptian mobile: 11 digits on one of the four live prefixes. */
+function isValidEgyptianMobile(phone: string): boolean {
+  return /^01[0125]\d{8}$/.test(phone.replace(/[\s-]/g, ""));
+}
+
 export default function EmployeeDashboard() {
-  const { values: configuredGovernorates } = useOperationalOptions("governorate");
+  // Governorates the business curated, if any. When the list is empty — which it was for
+  // every business, nobody having filled the table in — GovernorateCitySelect falls back to
+  // the full national list from shared/egyptLocations.ts instead of rendering nothing.
+  const governorateOptions = useOperationalOptions("governorate");
+  const configuredGovernorates = governorateOptions.values;
   const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
   const sourceOptions = useOperationalOptions("order_source").options;
   const [, setLocation] = useLocation();
@@ -89,6 +134,11 @@ export default function EmployeeDashboard() {
   const [postponeNotes, setPostponeNotes] = useState("");
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancelNotes, setCancelNotes] = useState("");
+  /** Which order has a status write in flight — scopes the busy state to one card. */
+  const [busyOrderId, setBusyOrderId] = useState<number | null>(null);
+  /** Free text behind the "سبب آخر" option — kept apart so switching back to a preset
+   *  does not smuggle the typed text into the saved reason. */
+  const [cancelOtherReason, setCancelOtherReason] = useState("");
 
   // Notes editing state
   const [editingNotes, setEditingNotes] = useState<Record<number, string>>({});
@@ -108,9 +158,6 @@ export default function EmployeeDashboard() {
 
   // Edit order state
   const [editDialog, setEditDialog] = useState<{ open: boolean; orderId: number | null }>({ open: false, orderId: null });
-  const [editProductName, setEditProductName] = useState("");
-  const [editQuantity, setEditQuantity] = useState<number>(1);
-  const [editTotalAmount, setEditTotalAmount] = useState<number>(0);
   const [editNotes, setEditNotes] = useState("");
   const [editGovernorate, setEditGovernorate] = useState("");
   const [editAddress, setEditAddress] = useState("");
@@ -121,9 +168,17 @@ export default function EmployeeDashboard() {
   const [editShippingFees, setEditShippingFees] = useState<number>(0);
   const [editPaymentMethod, setEditPaymentMethod] = useState<string>("cod");
   const [editEmployeeNotes, setEditEmployeeNotes] = useState("");
-  const [editColor, setEditColor] = useState("");
-  const [editSize, setEditSize] = useState("");
   const [showEditHistory, setShowEditHistory] = useState(false);
+  // The order's real lines. `editLines` replaces the old single productName/quantity/
+  // color/size fields — those described one product because `orders` only holds one, which
+  // is exactly what this screen needed to stop doing.
+  const [editLines, setEditLines] = useState<EditorLine[]>([]);
+  const [editLinesDirty, setEditLinesDirty] = useState(false);
+  const [editItemsDerived, setEditItemsDerived] = useState(false);
+  // Snapshot of every field as the dialog opened, so "did anything change?" is a comparison
+  // rather than a flag every onChange has to remember to set.
+  const [editBaseline, setEditBaseline] = useState<string>("");
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   // Tasks state
   const [showTasksPanel, setShowTasksPanel] = useState(false);
@@ -194,6 +249,13 @@ export default function EmployeeDashboard() {
     selectedBusinessIds ? { businessIds: selectedBusinessIds } : undefined
   );
 
+  // The order's real lines, loaded only while the edit dialog is open for that order.
+  const { data: orderItemsData, isLoading: orderItemsLoading } =
+    trpc.employeePortal.orderItems.useQuery(
+      { orderId: editDialog.orderId ?? 0 },
+      { enabled: editDialog.open && editDialog.orderId != null, retry: false }
+    );
+
   // Build query params with optional date filter + business group filter
   const dateFilterParams = useMemo(() => {
     const params: { status?: string; limit: number; dateFrom?: Date; dateTo?: Date; businessIds?: number[] } = {
@@ -235,6 +297,7 @@ export default function EmployeeDashboard() {
       utils.employeePortal.stats.invalidate();
     },
     onError: (e) => toast.error(e.message),
+    onSettled: () => setBusyOrderId(null),
   });
 
   const postponeMutation = trpc.employeePortal.postpone.useMutation({
@@ -246,17 +309,19 @@ export default function EmployeeDashboard() {
       utils.employeePortal.stats.invalidate();
     },
     onError: (e) => toast.error(e.message),
+    onSettled: () => setBusyOrderId(null),
   });
 
   const cancelMutation = trpc.employeePortal.cancel.useMutation({
     onSuccess: () => {
       toast.success("تم إلغاء الأوردر");
       setCancelDialog({ open: false, orderId: null });
-      setCancelReason(""); setCancelNotes("");
+      setCancelReason(""); setCancelNotes(""); setCancelOtherReason("");
       utils.employeePortal.myOrders.invalidate();
       utils.employeePortal.stats.invalidate();
     },
     onError: (e) => toast.error(e.message),
+    onSettled: () => setBusyOrderId(null),
   });
 
   const noAnswerMutation = trpc.employeePortal.markNoAnswer.useMutation({
@@ -268,9 +333,11 @@ export default function EmployeeDashboard() {
       utils.employeePortal.stats.invalidate();
     },
     onError: (e) => toast.error(e.message),
+    onSettled: () => setBusyOrderId(null),
   });
 
   const openNoAnswerDialog = (orderId: number) => {
+    setBusyOrderId(orderId);
     setNoAnswerAttempts("");
     setNoAnswerDialog({ open: true, orderId });
   };
@@ -282,6 +349,7 @@ export default function EmployeeDashboard() {
       utils.employeePortal.stats.invalidate();
     },
     onError: (e) => toast.error(e.message),
+    onSettled: () => setBusyOrderId(null),
   });
 
   /**
@@ -295,7 +363,7 @@ export default function EmployeeDashboard() {
     if (next === order.status) return;
     if (next === "cancelled") {
       setCancelDialog({ open: true, orderId: order.id });
-      setCancelReason(""); setCancelNotes("");
+      setCancelReason(""); setCancelNotes(""); setCancelOtherReason("");
       return;
     }
     if (next === "postponed") {
@@ -322,15 +390,22 @@ export default function EmployeeDashboard() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Two mutations, one Save button. The header fields (customer, address, notes) and the
+  // basket live in different tables and have different guards, so they cannot be one call —
+  // but the employee must not have to know that. saveEdit() below sequences them and only
+  // closes the dialog once both have landed.
+  //
+  // Neither handler closes the dialog on its own: a failed save has to leave the typed
+  // values on screen, otherwise the employee loses the call they just made.
   const editOrderMutation = trpc.employeePortal.editOrder.useMutation({
-    onSuccess: () => {
-      toast.success("✅ تم تعديل الأوردر بنجاح");
-      utils.employeePortal.myOrders.invalidate();
-      utils.employeePortal.stats.invalidate();
-      setEditDialog({ open: false, orderId: null });
-    },
-    onError: (e) => toast.error(e.message),
+    onError: e => toast.error(e.message),
   });
+
+  const editItemsMutation = trpc.employeePortal.editOrderItems.useMutation({
+    onError: e => toast.error(e.message),
+  });
+
+  const editSaving = editOrderMutation.isPending || editItemsMutation.isPending;
 
   const markDuplicateMutation = trpc.employeePortal.markDuplicate.useMutation({
     onSuccess: () => {
@@ -516,6 +591,40 @@ export default function EmployeeDashboard() {
     setManualSerial("");
   };
 
+  // Hydrate the editor once the lines arrive. Guarded on `editLinesDirty` so a slow refetch
+  // can never overwrite rows the employee is in the middle of typing.
+  useEffect(() => {
+    if (!editDialog.open || !orderItemsData || editLinesDirty) return;
+    setEditItemsDerived(orderItemsData.derivedFromHeader);
+    setEditShippingFees(Number(orderItemsData.shippingFees ?? 0));
+    setEditLines(
+      orderItemsData.items.map(item => {
+        const quantity = Math.max(1, item.quantity ?? 1);
+        const discount = Number(item.discount ?? 0);
+        // A legacy line has no unitPrice. Reconstructing it from the order total is the
+        // only honest reading: it is what the customer paid per piece.
+        const unitPrice =
+          item.unitPrice != null
+            ? Number(item.unitPrice)
+            : Math.max(
+                0,
+                (Number(orderItemsData.totalAmount ?? 0) -
+                  Number(orderItemsData.shippingFees ?? 0)) /
+                  quantity
+              );
+        return {
+          key: newLineKey(),
+          productId: item.productId ?? null,
+          productName: item.productName ?? "",
+          variantId: item.variantId ?? null,
+          quantity,
+          unitPrice: Number(unitPrice.toFixed(2)),
+          discount,
+        } satisfies EditorLine;
+      })
+    );
+  }, [editDialog.open, orderItemsData, editLinesDirty]);
+
   const handleSaveNotes = (orderId: number) => {
     const notes = editingNotes[orderId];
     if (notes === undefined) return;
@@ -523,13 +632,10 @@ export default function EmployeeDashboard() {
     setEditingNotes(prev => { const n = { ...prev }; delete n[orderId]; return n; });
   };
 
-  // نفس الـ17 setState كانوا متكتوبين مرتين: مرة في زرار "تعديل بيانات" ومرة في
+  // نفس الـsetState كانوا متكتوبين مرتين: مرة في زرار "تعديل بيانات" ومرة في
   // اختصار الكيبورد E. أي حقل جديد كان لازم يتضاف في المكانين وإلا يفتح بقيمة قديمة.
   function openEditDialogFor(order: any) {
     setEditDialog({ open: true, orderId: order.id });
-    setEditProductName(order.productName ?? "");
-    setEditQuantity(order.quantity ?? 1);
-    setEditTotalAmount(Number(order.totalAmount));
     setEditNotes(order.notes ?? "");
     setEditGovernorate(order.governorate ?? "");
     setEditAddress(order.customerAddress ?? "");
@@ -540,9 +646,132 @@ export default function EmployeeDashboard() {
     setEditShippingFees(Number(order.shippingFees || 0));
     setEditPaymentMethod(order.paymentMethod ?? "cod");
     setEditEmployeeNotes(order.employeeNotes ?? "");
-    setEditColor(order.color ?? "");
-    setEditSize(order.size ?? "");
     setShowEditHistory(false);
+    // Lines arrive from their own query; clear the previous order's so the editor never
+    // shows one order's basket under another's customer.
+    setEditLines([]);
+    setEditLinesDirty(false);
+    setEditItemsDerived(false);
+    setEditBaseline(
+      headerFingerprint({
+        customerName: order.customerName ?? "",
+        customerPhone: order.customerPhone ?? "",
+        customerPhone2: order.customerPhone2 ?? "",
+        governorate: order.governorate ?? "",
+        city: order.city ?? "",
+        address: order.customerAddress ?? "",
+        paymentMethod: order.paymentMethod ?? "cod",
+        notes: order.notes ?? "",
+        employeeNotes: order.employeeNotes ?? "",
+      })
+    );
+  }
+
+  const editHeaderDirty =
+    editBaseline !== "" &&
+    editBaseline !==
+      headerFingerprint({
+        customerName: editCustomerName,
+        customerPhone: editCustomerPhone,
+        customerPhone2: editCustomerPhone2,
+        governorate: editGovernorate,
+        city: editCity,
+        address: editAddress,
+        paymentMethod: editPaymentMethod,
+        notes: editNotes,
+        employeeNotes: editEmployeeNotes,
+      });
+  const editDirty = editHeaderDirty || editLinesDirty;
+
+  function closeEditDialog() {
+    setEditDialog({ open: false, orderId: null });
+    setEditLines([]);
+    setEditLinesDirty(false);
+    setEditBaseline("");
+    setConfirmDiscard(false);
+  }
+
+  /** Close attempt — asks first when there is unsaved work, closes straight away otherwise. */
+  function requestCloseEditDialog() {
+    if (editDirty) {
+      setConfirmDiscard(true);
+      return;
+    }
+    closeEditDialog();
+  }
+
+  const editIssues = useMemo(() => {
+    const issues: string[] = [];
+    if (!editCustomerName.trim()) issues.push("اسم العميل مطلوب");
+    if (!isValidEgyptianMobile(editCustomerPhone))
+      issues.push("رقم الهاتف غير صحيح (١١ رقم يبدأ بـ010/011/012/015)");
+    if (editCustomerPhone2.trim() && !isValidEgyptianMobile(editCustomerPhone2))
+      issues.push("التليفون البديل غير صحيح");
+    if (!editGovernorate.trim()) issues.push("المحافظة مطلوبة");
+    if (editAddress.trim().length < 5) issues.push("العنوان قصير جداً (٥ أحرف على الأقل)");
+    if (editLines.length === 0) issues.push("لازم بند واحد على الأقل");
+    if (editLines.some(l => !l.productId && !l.productName.trim()))
+      issues.push("فيه بند من غير منتج");
+    if (editLines.some(l => l.discount > l.quantity * l.unitPrice))
+      issues.push("فيه بند خصمه أكبر من قيمته");
+    return issues;
+  }, [
+    editCustomerName, editCustomerPhone, editCustomerPhone2, editGovernorate,
+    editAddress, editLines,
+  ]);
+
+  async function saveEdit() {
+    const orderId = editDialog.orderId;
+    if (orderId == null || editSaving) return; // double-submit guard
+    if (editIssues.length > 0) {
+      toast.error(`بيانات ناقصة:\n${editIssues.join("\n")}`);
+      return;
+    }
+    try {
+      // Items first: it is the call that can be refused outright (stock already out), and
+      // it is the one that rewrites totalAmount. Running it second would leave the header
+      // saved and the basket rejected, which reads to the employee as a successful save.
+      if (editLinesDirty) {
+        await editItemsMutation.mutateAsync({
+          orderId,
+          items: editLines.map(l => ({
+            productId: l.productId,
+            productName: l.productName,
+            variantId: l.variantId,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            discount: l.discount,
+          })),
+          shippingFees: editShippingFees,
+        });
+      }
+      if (editHeaderDirty) {
+        await editOrderMutation.mutateAsync({
+          orderId,
+          customerName: editCustomerName,
+          customerPhone: editCustomerPhone,
+          customerPhone2: editCustomerPhone2,
+          customerAddress: editAddress,
+          governorate: editGovernorate,
+          city: editCity,
+          paymentMethod: editPaymentMethod,
+          // Sent unconditionally, not `|| undefined`: an employee who deletes a stale note
+          // means it, and `undefined` would silently keep the old text.
+          notes: editNotes,
+          employeeNotes: editEmployeeNotes,
+          // shippingFees only when the items call did not already write it.
+          ...(editLinesDirty ? {} : { shippingFees: editShippingFees }),
+        });
+      }
+      toast.success("✅ تم حفظ التعديلات");
+      utils.employeePortal.myOrders.invalidate();
+      utils.employeePortal.stats.invalidate();
+      utils.employeePortal.orderItems.invalidate({ orderId });
+      closeEditDialog();
+    } catch {
+      // Each mutation's onError already surfaced the message. The dialog deliberately
+      // stays open with the typed values intact.
+    }
   }
 
   const handleLogout = async () => {
@@ -552,8 +781,10 @@ export default function EmployeeDashboard() {
   };
 
   const handlePostpone = () => {
+    if (postponeMutation.isPending) return; // double-submit guard
     if (!postponeDate) { toast.error("يرجى تحديد تاريخ التأجيل"); return; }
     if (!postponeDialog.orderId) return;
+    setBusyOrderId(postponeDialog.orderId);
     postponeMutation.mutate({
       orderId: postponeDialog.orderId,
       postponedTo: new Date(postponeDate),
@@ -561,12 +792,34 @@ export default function EmployeeDashboard() {
     });
   };
 
+  // Reasons the business configured, falling back to the standard set. Same failure the
+  // governorate dropdown had: the configuration table was empty, so the list rendered with
+  // no options and — because a reason is mandatory — cancelling was impossible.
+  const cancelReasons = useMemo(() => {
+    const configured = cancelReasonOptions.filter(o => o.value && o.label);
+    return configured.length > 0
+      ? configured
+      : DEFAULT_CANCEL_REASONS.map(r => ({ value: r, label: r }));
+  }, [cancelReasonOptions]);
+
+  const cancelReasonIsOther = cancelReason === OTHER_CANCEL_REASON;
+  const cancelReasonResolved = cancelReasonIsOther
+    ? cancelOtherReason.trim()
+    : cancelReason;
+
   const handleCancel = () => {
-    if (!cancelReason) { toast.error("يرجى اختيار سبب الإلغاء"); return; }
+    if (cancelMutation.isPending) return; // double-submit guard
+    if (!cancelReason) { toast.error("اختر سبب الإلغاء"); return; }
+    if (cancelReasonIsOther && !cancelOtherReason.trim()) {
+      toast.error("اكتب سبب الإلغاء");
+      return;
+    }
     if (!cancelDialog.orderId) return;
+    setBusyOrderId(cancelDialog.orderId);
     cancelMutation.mutate({
+      // The server column is 80 chars; a typed reason has to fit or the write fails.
+      cancelReason: cancelReasonResolved.slice(0, 80),
       orderId: cancelDialog.orderId,
-      cancelReason: cancelReason as any,
       notes: cancelNotes || undefined,
     });
   };
@@ -606,13 +859,27 @@ export default function EmployeeDashboard() {
   // Blocks تأكيد with a clear reason instead of letting an order through with data the
   // confirmation call cannot act on (no phone to call, no address to ship to, ...).
   function handleConfirmOrder(order: any) {
+    if (statusWriteInFlight) return; // double-tap guard
     const missing = getMissingConfirmationFields(order);
     if (missing.length > 0) {
       toast.error(`لا يمكن التأكيد — بيانات ناقصة: ${missing.join("، ")}`);
       return;
     }
+    setBusyOrderId(order.id);
     confirmMutation.mutate({ orderId: order.id });
   }
+
+  /**
+   * True while any status-changing call is in flight. Every one of these writes the same
+   * `orders.status`, so letting two race means the order lands on whichever reply arrives
+   * last — an order the employee cancelled coming back as confirmed.
+   */
+  const statusWriteInFlight =
+    confirmMutation.isPending ||
+    cancelMutation.isPending ||
+    postponeMutation.isPending ||
+    noAnswerMutation.isPending ||
+    updateStatusMutation.isPending;
 
   // ==================== Next / previous navigation within the expanded order ====================
   const expandedIndex = filteredOrders.findIndex(o => o.id === expandedOrder);
@@ -650,7 +917,7 @@ export default function EmployeeDashboard() {
           break;
         case "x":
           setCancelDialog({ open: true, orderId: order.id });
-          setCancelReason(""); setCancelNotes("");
+          setCancelReason(""); setCancelNotes(""); setCancelOtherReason("");
           break;
         case "e":
           openEditDialogFor(order);
@@ -1263,6 +1530,10 @@ export default function EmployeeDashboard() {
               const statusConf = STATUS_CONFIG[order.status] ?? STATUS_CONFIG.new;
               const isExpanded = expandedOrder === order.id;
               const canAct = order.status === "new" || order.status === "postponed" || order.status === "no_answer";
+              // Whole action row locked while any status write for THIS order is in flight.
+              // Scoped per order, not globally: a slow confirm on one card must not freeze
+              // the other forty on screen.
+              const rowBusy = busyOrderId === order.id && statusWriteInFlight;
 
               return (
                 <div
@@ -1375,36 +1646,52 @@ export default function EmployeeDashboard() {
                     {/* جريد مش flex-wrap: مع الالتفاف الحر كانت الأزرار بتتوزّع ٣ + ١،
                         فيفضل زرار يتيم في سطر لوحده وشكل الشريط يتغيّر من كارت للتاني.
                         الجريد بيثبّت الصفّين: أربعة قرارات فوق، وثلاث وسائل تواصل تحت. */}
+                    {/* h-11 = 44px, the smallest reliable touch target. These were 36px and
+                        sit four to a row on a 320px screen, so a mistap here changed an
+                        order's status. Icons are shrink-0 and labels text-xs so nothing
+                        overflows at that width. `busyOrderId` disables the whole row while a
+                        status write is in flight — the guard against a double tap sending
+                        both "تأكيد" and "لم يرد". */}
                     {canAct && (
                       <div className="grid grid-cols-4 gap-1.5">
                         <Button
                           size="sm"
-                          className="h-9 bg-[var(--success)] px-1 text-[var(--success-foreground)] hover:opacity-90"
+                          className="h-11 gap-1 bg-[var(--success)] px-1 text-xs text-[var(--success-foreground)] hover:opacity-90"
                           onClick={() => handleConfirmOrder(order)}
-                          disabled={confirmMutation.isPending}
+                          disabled={rowBusy}
                         >
-                          <CheckCircle2 className="h-4 w-4 ml-1" /> تأكيد
+                          {confirmMutation.isPending && busyOrderId === order.id
+                            ? <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />
+                            : <CheckCircle2 className="h-4 w-4 shrink-0" />}
+                          تأكيد
                         </Button>
                         <Button
                           size="sm" variant="outline"
-                          className="h-9 border-[var(--warning)]/50 px-1 text-[var(--warning)] hover:bg-[var(--warning)]/10"
+                          className="h-11 gap-1 border-[var(--warning)]/50 px-1 text-xs text-[var(--warning)] hover:bg-[var(--warning)]/10"
                           onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}
+                          disabled={rowBusy}
                         >
-                          <Clock className="h-4 w-4 ml-1" /> تأجيل
+                          <Clock className="h-4 w-4 shrink-0" />
+                          تأجيل
                         </Button>
                         <Button
                           size="sm" variant="outline"
-                          className="h-9 border-destructive/50 px-1 text-destructive hover:bg-destructive/10"
-                          onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); }}
+                          className="h-11 gap-1 border-destructive/50 px-1 text-xs text-destructive hover:bg-destructive/10"
+                          onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); setCancelOtherReason(""); }}
+                          disabled={rowBusy}
                         >
-                          <XCircle className="h-4 w-4 ml-1" /> إلغاء
+                          <XCircle className="h-4 w-4 shrink-0" />
+                          إلغاء
                         </Button>
                         <Button
-                          size="sm" variant="outline" className="h-9 px-1"
+                          size="sm" variant="outline" className="h-11 gap-1 px-1 text-xs"
                           onClick={() => openNoAnswerDialog(order.id)}
-                          disabled={noAnswerMutation.isPending}
+                          disabled={rowBusy}
                         >
-                          <PhoneOff className="h-4 w-4 ml-1" /> لم يرد
+                          {noAnswerMutation.isPending && busyOrderId === order.id
+                            ? <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />
+                            : <PhoneOff className="h-4 w-4 shrink-0" />}
+                          لم يرد
                         </Button>
                       </div>
                     )}
@@ -1434,16 +1721,16 @@ export default function EmployeeDashboard() {
                     </div>
 
                     <div className="grid grid-cols-3 gap-1.5">
-                      <WhatsAppButton phone={order.customerPhone} size="sm" className="h-9 w-full px-1" />
+                      <WhatsAppButton phone={order.customerPhone} size="sm" className="h-11 w-full px-1 text-xs" />
                       <Button
                         size="sm" variant="outline"
-                        className="h-9 gap-1 border-[var(--info)]/40 px-1 text-[var(--info)] hover:bg-[var(--info)]/10"
+                        className="h-11 gap-1 border-[var(--info)]/40 px-1 text-xs text-[var(--info)] hover:bg-[var(--info)]/10"
                         onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}
                       >
-                        <Phone className="h-4 w-4" /> اتصال
+                        <Phone className="h-4 w-4 shrink-0" /> اتصال
                       </Button>
-                      <Button size="sm" variant="outline" className="h-9 gap-1 px-1" onClick={() => openEditDialogFor(order)}>
-                        <Edit2 className="h-4 w-4" /> تعديل
+                      <Button size="sm" variant="outline" className="h-11 gap-1 px-1 text-xs" onClick={() => openEditDialogFor(order)}>
+                        <Edit2 className="h-4 w-4 shrink-0" /> تعديل
                       </Button>
                     </div>
                   </div>
@@ -1559,18 +1846,39 @@ export default function EmployeeDashboard() {
       </div>
 
       {/* Edit Order Dialog - شاشة تعديل شاملة */}
-      <Dialog open={editDialog.open} onOpenChange={open => setEditDialog(d => ({ ...d, open }))}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" dir="rtl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Edit2 className="h-5 w-5 text-[var(--info)]" />
-              تعديل بيانات الأوردر
+      {/* ==================== EDIT ORDER DIALOG ====================
+          Layout note: the content is a three-row grid (header / scrolling body / footer)
+          rather than one scrolling box. On a phone the old version scrolled the footer off
+          the bottom, so Save sat below the fold behind the keyboard and employees closed
+          the dialog looking for it. Now only the middle row scrolls and the buttons stay put. */}
+      <Dialog
+        open={editDialog.open}
+        onOpenChange={open => { if (!open) requestCloseEditDialog(); }}
+      >
+        <DialogContent
+          className="grid max-h-[92dvh] w-[calc(100%-1rem)] max-w-lg grid-rows-[auto_1fr_auto] gap-0 overflow-hidden p-0 sm:w-full"
+          dir="rtl"
+          onInteractOutside={e => { if (editDirty) e.preventDefault(); }}
+          onEscapeKeyDown={e => { if (editDirty) { e.preventDefault(); requestCloseEditDialog(); } }}
+        >
+          <DialogHeader className="border-b px-4 py-3 text-start sm:px-6">
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Edit2 className="h-5 w-5 shrink-0 text-[var(--info)]" />
+              <span className="min-w-0 truncate">تعديل بيانات الأوردر</span>
+              {editDirty && (
+                <span className="ms-auto shrink-0 rounded-full bg-[var(--warning)]/15 px-2 py-0.5 text-[11px] font-semibold text-[var(--warning)]">
+                  غير محفوظ
+                </span>
+              )}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+
+          {/* overflow-x-hidden: long product names and Arabic addresses were pushing the
+              grid sideways at 320px and giving the whole dialog a horizontal scrollbar. */}
+          <div className="space-y-4 overflow-y-auto overflow-x-hidden px-4 py-4 sm:px-6">
             {/* قسم بيانات العميل */}
-            <div className="bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-lg p-3">
-              <p className="text-sm font-semibold text-[var(--info)] mb-3 flex items-center gap-1">
+            <div className="rounded-lg border border-[var(--info)]/30 bg-[var(--info)]/10 p-3">
+              <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-[var(--info)]">
                 <User className="h-4 w-4" />
                 بيانات العميل
               </p>
@@ -1581,19 +1889,23 @@ export default function EmployeeDashboard() {
                     value={editCustomerName}
                     onChange={e => setEditCustomerName(e.target.value)}
                     placeholder="اسم العميل..."
-                    className={`mt-1 ${!editCustomerName ? 'border-destructive/30 bg-destructive/10' : ''}`}
+                    className={`mt-1 h-10 ${!editCustomerName ? "border-destructive/30 bg-destructive/10" : ""}`}
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <Label>رقم التليفون <span className="text-destructive">*</span></Label>
                     <Input
                       value={editCustomerPhone}
                       onChange={e => setEditCustomerPhone(e.target.value)}
                       placeholder="01xxxxxxxxx"
-                      className={`mt-1 ${!editCustomerPhone || editCustomerPhone.length < 10 ? 'border-destructive/30 bg-destructive/10' : ''}`}
+                      inputMode="tel"
+                      className={`mt-1 h-10 ${!isValidEgyptianMobile(editCustomerPhone) ? "border-destructive/30 bg-destructive/10" : ""}`}
                       dir="ltr"
                     />
+                    {!isValidEgyptianMobile(editCustomerPhone) && (
+                      <p className="mt-1 text-xs text-destructive">١١ رقم يبدأ بـ 010 / 011 / 012 / 015</p>
+                    )}
                   </div>
                   <div>
                     <Label>تليفون بديل</Label>
@@ -1601,7 +1913,8 @@ export default function EmployeeDashboard() {
                       value={editCustomerPhone2}
                       onChange={e => setEditCustomerPhone2(e.target.value)}
                       placeholder="01xxxxxxxxx"
-                      className="mt-1"
+                      inputMode="tel"
+                      className={`mt-1 h-10 ${editCustomerPhone2.trim() && !isValidEgyptianMobile(editCustomerPhone2) ? "border-destructive/30 bg-destructive/10" : ""}`}
                       dir="ltr"
                     />
                   </div>
@@ -1610,149 +1923,64 @@ export default function EmployeeDashboard() {
             </div>
 
             {/* قسم بيانات الشحن */}
-            <div className="bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-lg p-3">
-              <p className="text-sm font-semibold text-[var(--success)] mb-3 flex items-center gap-1">
+            <div className="rounded-lg border border-[var(--success)]/30 bg-[var(--success)]/10 p-3">
+              <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-[var(--success)]">
                 <Truck className="h-4 w-4" />
                 بيانات الشحن
               </p>
               <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label>المحافظة <span className="text-destructive">*</span></Label>
-                    <Select value={editGovernorate} onValueChange={setEditGovernorate}>
-                      <SelectTrigger className={`mt-1 ${!editGovernorate ? 'border-destructive/30 bg-destructive/10' : ''}`}>
-                        <SelectValue placeholder="اختر المحافظة..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {configuredGovernorates.map(g => (
-                          <SelectItem key={g} value={g}>{g}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {!editGovernorate && <p className="text-xs text-destructive mt-1">مطلوبة</p>}
-                  </div>
-                  <div>
-                    <Label>المدينة / المركز</Label>
-                    <Input
-                      value={editCity}
-                      onChange={e => setEditCity(e.target.value)}
-                      placeholder="المدينة أو المركز..."
-                      className="mt-1"
-                    />
-                  </div>
-                </div>
+                <GovernorateCitySelect
+                  governorate={editGovernorate}
+                  city={editCity}
+                  onGovernorateChange={value => {
+                    setEditGovernorate(value);
+                    // City belongs to the old governorate; keeping it would ship a Cairo
+                    // district to Aswan. Cleared only when the governorate actually moves.
+                    if (value !== editGovernorate) setEditCity("");
+                  }}
+                  onCityChange={setEditCity}
+                  configuredGovernorates={configuredGovernorates}
+                  isLoading={governorateOptions.isLoading}
+                  isError={governorateOptions.isError}
+                />
                 <div>
                   <Label>العنوان التفصيلي <span className="text-destructive">*</span></Label>
                   <Textarea
                     value={editAddress}
                     onChange={e => setEditAddress(e.target.value)}
                     placeholder="الشارع، المنطقة، علامة مميزة..."
-                    className={`mt-1 ${!editAddress || editAddress.length < 5 ? 'border-destructive/30 bg-destructive/10' : ''}`}
+                    className={`mt-1 ${editAddress.trim().length < 5 ? "border-destructive/30 bg-destructive/10" : ""}`}
                     rows={2}
                   />
-                  {(!editAddress || editAddress.length < 5) && <p className="text-xs text-destructive mt-1">العنوان مطلوب (أكثر من 5 حروف)</p>}
+                  {editAddress.trim().length < 5 && (
+                    <p className="mt-1 text-xs text-destructive">العنوان مطلوب (أكثر من ٥ حروف)</p>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* قسم المنتجات */}
-            <div className="bg-[var(--purple)]/10 border border-[var(--purple)]/30 rounded-lg p-3">
-              <p className="text-sm font-semibold text-[var(--purple)] mb-3 flex items-center gap-1">
+            {/* قسم البنود */}
+            <div className="rounded-lg border border-[var(--purple)]/30 bg-[var(--purple)]/10 p-3">
+              <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-[var(--purple)]">
                 <Package className="h-4 w-4" />
-                المنتجات
+                بنود الأوردر
               </p>
-              <div className="space-y-3">
-                <div>
-                  <Label>نوع المنتج / الحفر</Label>
-                  <Select
-                    value={editProductName}
-                    onValueChange={val => {
-                      setEditProductName(val);
-                      const prod = productsList?.find((p: any) => p.name === val);
-                      if (prod && prod.price) setEditTotalAmount(Number(prod.price) * editQuantity + editShippingFees);
-                    }}
-                  >
-                    <SelectTrigger className="mt-1">
-                      <SelectValue placeholder="اختر نوع المنتج..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {productsList?.map((p: any) => (
-                        <SelectItem key={p.id} value={p.name}>
-                          <div className="flex items-center justify-between gap-4 w-full">
-                            <span>{p.name}</span>
-                            {p.price && <span className="text-xs text-muted-foreground">{Number(p.price)} ج.م</span>}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {editProductName && (
-                    <button type="button" className="text-xs text-muted-foreground mt-1 underline" onClick={() => setEditProductName("")}>مسح الاختيار</button>
-                  )}
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <Label>الكمية <span className="text-destructive">*</span></Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      value={editQuantity}
-                      onChange={e => {
-                        const qty = Number(e.target.value);
-                        setEditQuantity(qty);
-                        const prod = productsList?.find((p: any) => p.name === editProductName);
-                        if (prod && prod.price) setEditTotalAmount(Number(prod.price) * qty + editShippingFees);
-                      }}
-                      className="mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label>رسوم الشحن</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={editShippingFees}
-                      onChange={e => setEditShippingFees(Number(e.target.value))}
-                      className="mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label>الإجمالي</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={editTotalAmount}
-                      onChange={e => setEditTotalAmount(Number(e.target.value))}
-                      className="mt-1 font-bold"
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label>اللون</Label>
-                    <Input
-                      value={editColor}
-                      onChange={e => setEditColor(e.target.value)}
-                      placeholder="مثلاً: أسود، ذهبي..."
-                      className="mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label>المقاس</Label>
-                    <Input
-                      value={editSize}
-                      onChange={e => setEditSize(e.target.value)}
-                      placeholder="مثلاً: L, XL, 120×200..."
-                      className="mt-1"
-                    />
-                  </div>
-                </div>
-              </div>
+              <OrderItemsEditor
+                lines={editLines}
+                onChange={lines => { setEditLines(lines); setEditLinesDirty(true); }}
+                products={(productsList ?? []) as any}
+                variants={(stockVariants ?? []) as any}
+                shippingFees={editShippingFees}
+                onShippingFeesChange={value => { setEditShippingFees(value); setEditLinesDirty(true); }}
+                derivedFromHeader={editItemsDerived}
+                isLoading={orderItemsLoading && editLines.length === 0}
+                disabled={editSaving}
+              />
             </div>
 
             {/* قسم ملخص الطلب */}
-            <div className="bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-lg p-3">
-              <p className="text-sm font-semibold text-[var(--warning)] mb-3 flex items-center gap-1">
+            <div className="rounded-lg border border-[var(--warning)]/30 bg-[var(--warning)]/10 p-3">
+              <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-[var(--warning)]">
                 <ShoppingBag className="h-4 w-4" />
                 ملخص الطلب
               </p>
@@ -1760,7 +1988,7 @@ export default function EmployeeDashboard() {
                 <div>
                   <Label>وسيلة الدفع</Label>
                   <Select value={editPaymentMethod} onValueChange={setEditPaymentMethod}>
-                    <SelectTrigger className="mt-1">
+                    <SelectTrigger className="mt-1 w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1794,17 +2022,14 @@ export default function EmployeeDashboard() {
             </div>
 
             {/* تنبيه بيانات ناقصة */}
-            {(!editCustomerName || !editCustomerPhone || editCustomerPhone.length < 10 || !editGovernorate || !editAddress || editAddress.length < 5) && (
-              <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-2">
-                <p className="text-xs text-destructive font-semibold flex items-center gap-1">
+            {editIssues.length > 0 && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-2">
+                <p className="flex items-center gap-1 text-xs font-semibold text-destructive">
                   <AlertCircle className="h-3.5 w-3.5" />
-                  بيانات ناقصة - لن يتم تصدير هذا الأوردر في شيت الشحن
+                  بيانات ناقصة — الأوردر مش هيتصدّر في شيت الشحن
                 </p>
-                <ul className="text-xs text-destructive mt-1 list-disc list-inside">
-                  {!editCustomerName && <li>اسم العميل مطلوب</li>}
-                  {(!editCustomerPhone || editCustomerPhone.length < 10) && <li>رقم الهاتف غير صحيح</li>}
-                  {!editGovernorate && <li>المحافظة مطلوبة</li>}
-                  {(!editAddress || editAddress.length < 5) && <li>العنوان ناقص</li>}
+                <ul className="mt-1 list-inside list-disc text-xs text-destructive">
+                  {editIssues.map(issue => <li key={issue}>{issue}</li>)}
                 </ul>
               </div>
             )}
@@ -1819,48 +2044,52 @@ export default function EmployeeDashboard() {
             </button>
             {showEditHistory && editDialog.orderId && <EditHistoryPanel orderId={editDialog.orderId} />}
           </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setEditDialog({ open: false, orderId: null })}>إلغاء</Button>
-            <Button
-              disabled={editQuantity < 1 || editOrderMutation.isPending || !editCustomerName || !editGovernorate || !editCustomerPhone}
-              onClick={() => {
-                if (!editDialog.orderId) return;
-                // Validation checks
-                const issues: string[] = [];
-                if (!editCustomerName?.trim()) issues.push("اسم العميل مطلوب");
-                if (!editCustomerPhone || editCustomerPhone.length < 10) issues.push("رقم الهاتف غير صحيح (يجب أن يكون 10 أرقام على الأقل)");
-                if (!editGovernorate?.trim()) issues.push("المحافظة مطلوبة");
-                if (!editAddress || editAddress.trim().length < 5) issues.push("العنوان قصير جداً (يجب 5 أحرف على الأقل)");
-                if (issues.length > 0) {
-                  toast.error(`⚠️ بيانات ناقصة:\n${issues.join('\n')}`);
-                  return;
-                }
-                editOrderMutation.mutate({
-                  orderId: editDialog.orderId,
-                  quantity: editQuantity,
-                  totalAmount: editTotalAmount,
-                  productName: editProductName || undefined,
-                  notes: editNotes || undefined,
-                  governorate: editGovernorate || undefined,
-                  customerAddress: editAddress || undefined,
-                  customerName: editCustomerName || undefined,
-                  customerPhone: editCustomerPhone || undefined,
-                  customerPhone2: editCustomerPhone2 || undefined,
-                  city: editCity || undefined,
-                  shippingFees: editShippingFees,
-                  paymentMethod: editPaymentMethod || undefined,
-                  employeeNotes: editEmployeeNotes || undefined,
-                  color: editColor || null,
-                  size: editSize || null,
-                });
-              }}
-              className="bg-[var(--info)] hover:bg-[var(--info)]"
-            >
-              {editOrderMutation.isPending ? "جاري الحفظ..." : "حفظ التعديلات"}
-            </Button>
+
+          {/* Sticky footer. The running total lives here because on a phone the items list
+              is scrolled well past by the time the employee reaches Save. */}
+          <DialogFooter className="flex-col gap-2 border-t bg-background px-4 py-3 sm:flex-row sm:px-6">
+            <div className="flex w-full items-center justify-between text-sm sm:w-auto sm:me-auto">
+              <span className="text-muted-foreground">الإجمالي</span>
+              <span className="ms-3 text-base font-black tabular-nums">
+                {linesTotal(editLines, editShippingFees).toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span className="ms-1 text-xs font-normal">ج.م</span>
+              </span>
+            </div>
+            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+              <Button
+                variant="outline"
+                className="h-11 gap-1.5"
+                onClick={requestCloseEditDialog}
+                disabled={editSaving}
+              >
+                <XCircle className="h-4 w-4" />
+                إلغاء
+              </Button>
+              <Button
+                className="h-11 gap-1.5 bg-[var(--info)] hover:bg-[var(--info)]"
+                disabled={editSaving || editIssues.length > 0 || !editDirty}
+                onClick={saveEdit}
+              >
+                {editSaving
+                  ? <><RefreshCw className="h-4 w-4 animate-spin" />جاري الحفظ...</>
+                  : <><Save className="h-4 w-4" />حفظ التعديلات</>}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Unsaved-changes guard. Confirming here is the only path that throws away typed work. */}
+      <ConfirmDialog
+        open={confirmDiscard}
+        onOpenChange={setConfirmDiscard}
+        title="فيه تعديلات مش محفوظة"
+        description="لو قفلت دلوقتي هتضيع التعديلات اللي عملتها على الأوردر ده."
+        confirmLabel="اقفل وامسح التعديلات"
+        cancelLabel="ارجع للتعديل"
+        tone="destructive"
+        onConfirm={closeEditDialog}
+      />
 
       {/* Postpone Dialog */}
       <Dialog open={postponeDialog.open} onOpenChange={open => setPostponeDialog(d => ({ ...d, open }))}>
@@ -1896,14 +2125,24 @@ export default function EmployeeDashboard() {
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPostponeDialog({ open: false, orderId: null })}>إلغاء</Button>
+          <DialogFooter className="grid grid-cols-2 gap-2 sm:flex">
+            <Button
+              variant="outline"
+              className="h-11 gap-1.5"
+              onClick={() => setPostponeDialog({ open: false, orderId: null })}
+              disabled={postponeMutation.isPending}
+            >
+              <ChevronRight className="h-4 w-4" />
+              رجوع
+            </Button>
             <Button
               onClick={handlePostpone}
-              disabled={postponeMutation.isPending}
-              className="bg-[var(--warning)] hover:bg-[var(--warning)] text-white"
+              disabled={postponeMutation.isPending || !postponeDate}
+              className="h-11 gap-1.5 bg-[var(--warning)] text-white hover:bg-[var(--warning)]"
             >
-              {postponeMutation.isPending ? "جاري..." : "تأجيل"}
+              {postponeMutation.isPending
+                ? <><RefreshCw className="h-4 w-4 animate-spin" />جاري التأجيل...</>
+                : <><Clock className="h-4 w-4" />تأجيل</>}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1919,37 +2158,65 @@ export default function EmployeeDashboard() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            <p className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+              الإلغاء بيتسجّل باسمك وبوقته وسببه في سجل النشاط.
+            </p>
             <div>
               <Label>سبب الإلغاء <span className="text-destructive">*</span></Label>
-              <Select value={cancelReason} onValueChange={setCancelReason}>
-                <SelectTrigger className="mt-1">
+              <Select value={cancelReason || undefined} onValueChange={setCancelReason}>
+                <SelectTrigger className={`mt-1 w-full ${!cancelReason ? "border-destructive/30 bg-destructive/10" : ""}`}>
                   <SelectValue placeholder="اختر السبب..." />
                 </SelectTrigger>
-                <SelectContent>
-                  {cancelReasonOptions.map(r => (
+                <SelectContent className="max-h-[45vh]">
+                  {cancelReasons.map(r => (
                     <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                   ))}
+                  <SelectItem value={OTHER_CANCEL_REASON}>سبب آخر…</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            {cancelReasonIsOther && (
+              <div>
+                <Label>اكتب السبب <span className="text-destructive">*</span></Label>
+                <Input
+                  value={cancelOtherReason}
+                  onChange={e => setCancelOtherReason(e.target.value)}
+                  placeholder="السبب بالتفصيل..."
+                  maxLength={80}
+                  autoFocus
+                  className={`mt-1 h-10 ${!cancelOtherReason.trim() ? "border-destructive/30 bg-destructive/10" : ""}`}
+                />
+              </div>
+            )}
             <div>
               <Label>ملاحظة (اختياري)</Label>
               <Input
                 value={cancelNotes}
                 onChange={e => setCancelNotes(e.target.value)}
                 placeholder="تفاصيل إضافية..."
-                className="mt-1"
+                className="mt-1 h-10"
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelDialog({ open: false, orderId: null })}>رجوع</Button>
+          <DialogFooter className="grid grid-cols-2 gap-2 sm:flex">
+            <Button
+              variant="outline"
+              className="h-11 gap-1.5"
+              onClick={() => setCancelDialog({ open: false, orderId: null })}
+              disabled={cancelMutation.isPending}
+            >
+              <ChevronRight className="h-4 w-4" />
+              رجوع
+            </Button>
             <Button
               onClick={handleCancel}
-              disabled={cancelMutation.isPending}
+              disabled={cancelMutation.isPending || !cancelReasonResolved}
               variant="destructive"
+              className="h-11 gap-1.5"
             >
-              {cancelMutation.isPending ? "جاري..." : "تأكيد الإلغاء"}
+              {cancelMutation.isPending
+                ? <><RefreshCw className="h-4 w-4 animate-spin" />جاري الإلغاء...</>
+                : <><XCircle className="h-4 w-4" />تأكيد الإلغاء</>}
             </Button>
           </DialogFooter>
         </DialogContent>

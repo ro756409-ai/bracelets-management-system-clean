@@ -107,10 +107,11 @@ export default function TodayShipments() {
 
   const queryDate = useMemo(() => selectedDate, [selectedDate]);
 
-  const { data: shipmentsData, isLoading, refetch } = trpc.employeePortal.todayShipments.useQuery(
-    { date: queryDate },
-    { refetchInterval: 120000 }
-  );
+  const { data: shipmentsData, isLoading, refetch, error: shipmentsError } =
+    trpc.employeePortal.todayShipments.useQuery(
+      { date: queryDate },
+      { refetchInterval: 120000, retry: false }
+    );
 
   const toggleAgent = (name: string) => {
     setExpandedAgents(prev => ({ ...prev, [name]: !prev[name] }));
@@ -153,6 +154,24 @@ export default function TodayShipments() {
   };
 
   const isToday = selectedDate === new Date().toISOString().split("T")[0];
+
+  // todayShipments now requires shipping_ops.view. A confirmation employee who still has
+  // the URL bookmarked lands here — say so plainly instead of showing an empty manifest
+  // that reads like "there are no shipments today".
+  if (shipmentsError) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center" dir="rtl">
+        <Truck className="h-10 w-10 text-muted-foreground" />
+        <div>
+          <p className="text-lg font-bold">شحنات اليوم مش من مهامك</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            الشاشة دي لموظفي الشحن والإدارة. بيانات شحن أوردراتك موجودة جوه كل أوردر في شاشتك.
+          </p>
+        </div>
+        <Button onClick={() => setLocation("/employee-dashboard")}>الرجوع لشاشتي</Button>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background" dir="rtl">

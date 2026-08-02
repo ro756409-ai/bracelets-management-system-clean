@@ -3429,6 +3429,207 @@ async function replaceOrderItemsInTransaction(
   );
 }
 
+/**
+ * A line as the confirmation employee typed it: an explicit price and discount per row,
+ * not a total to be split afterwards.
+ */
+export type OrderItemEditorLine = {
+  productId: number | null;
+  productName: string;
+  variantId: number | null;
+  quantity: number;
+  unitPrice: number;
+  /** Discount in currency on the whole line, not per unit. */
+  discount: number;
+  size?: string | null;
+  color?: string | null;
+};
+
+export type OrderItemsEditResult = {
+  itemCount: number;
+  totalQuantity: number;
+  productsNet: string;
+  shippingFees: string;
+  totalAmount: string;
+};
+
+/**
+ * Rewrite an order's lines from the confirmation screen, and re-roll the order header to
+ * match — both inside one transaction.
+ *
+ * Separate from replaceOrderItems() on purpose. That one starts from `orders.totalAmount`
+ * and splits it across lines proportionally, because its callers (import, webhook) know a
+ * total and not a price breakdown. Here it is the other way round: the employee is looking
+ * at the customer and typing "two of these at 250, one of those at 300, minus 50" — so the
+ * lines are the truth and the total is derived. Routing this through the allocating path
+ * would silently redistribute a discount the employee attached to one specific line.
+ *
+ * The header stays in sync because `orders.productName`, `.quantity`, `.totalAmount` are
+ * read all over the app (orders table, Bosta export, dashboards) and are the only product
+ * data older screens know about. First line wins for the display fields; quantity and money
+ * are true sums.
+ */
+export async function replaceOrderItemsFromEditor(
+  orderId: number,
+  lines: OrderItemEditorLine[],
+  shippingFeesInput: number | undefined,
+  editor: { id: number; name: string; role: string }
+): Promise<OrderItemsEditResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (lines.length === 0) throw new Error("الأوردر لازم يكون فيه بند واحد على الأقل");
+
+  for (const line of lines) {
+    if (!Number.isInteger(line.quantity) || line.quantity <= 0)
+      throw new Error("الكمية لازم تكون رقم صحيح أكبر من صفر");
+    if (!(line.unitPrice >= 0)) throw new Error("السعر لازم يكون صفر أو أكثر");
+    if (!(line.discount >= 0)) throw new Error("الخصم لازم يكون صفر أو أكثر");
+    if (multiplyMoney(line.quantity, line.unitPrice) < toMinorUnits(line.discount))
+      throw new Error(`الخصم أكبر من قيمة البند: ${line.productName}`);
+    if (!line.productName.trim()) throw new Error("اسم المنتج مطلوب في كل بند");
+  }
+
+  return db.transaction(async tx => {
+    const [order] = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!order) throw new Error("الأوردر غير موجود");
+
+    // Same guard replaceOrderItemsInTransaction enforces: once stock has left the warehouse
+    // or cost has been captured, the lines are an accounting record and editing them in
+    // place would desynchronise inventory and COGS. Confirmation happens before that point.
+    const existing = await tx
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId))
+      .for("update");
+    if (
+      existing.some(
+        (item: OrderItem) => item.stockOutQuantity > 0 || item.costCapturedAt != null
+      )
+    ) {
+      throw new Error(
+        "لا يمكن تعديل بنود الأوردر بعد خروج المخزون؛ استخدم Reversal موثق"
+      );
+    }
+
+    const grossPerLine = lines.map(l => multiplyMoney(l.quantity, l.unitPrice));
+    const discountPerLine = lines.map(l => toMinorUnits(l.discount));
+    const netPerLine = grossPerLine.map((gross, i) => gross - discountPerLine[i]);
+    const productsNet = netPerLine.reduce((sum, n) => sum + n, 0n);
+
+    const shippingMinor = toMinorUnits(
+      shippingFeesInput ?? order.shippingFees ?? "0"
+    );
+    if (shippingMinor < 0n) throw new Error("رسوم الشحن لازم تكون صفر أو أكثر");
+    const totalMinor = productsNet + shippingMinor;
+
+    // Shipping is spread by unit count, matching how replaceOrderItemsInTransaction does it,
+    // so a line's `customerShippingSnapshot` means the same thing whichever path wrote it.
+    const shippingAllocations = allocateProportionally(
+      shippingMinor,
+      lines.map(l => BigInt(l.quantity))
+    );
+
+    const [business] = await tx
+      .select()
+      .from(businesses)
+      .where(eq(businesses.id, order.businessId))
+      .limit(1);
+    const keys = lines
+      .filter(l => l.productId != null)
+      .map(l => `product:${l.productId}:variant:${l.variantId ?? "base"}`);
+    const balances =
+      business?.defaultWarehouseId && keys.length > 0
+        ? await tx
+            .select()
+            .from(inventoryBalances)
+            .where(
+              and(
+                eq(inventoryBalances.businessId, order.businessId),
+                eq(inventoryBalances.warehouseId, business.defaultWarehouseId),
+                inArray(inventoryBalances.inventoryKey, keys)
+              )
+            )
+        : [];
+    const costByKey = new Map(
+      balances.map((b: { inventoryKey: string; movingAverageCost: string }) => [
+        b.inventoryKey,
+        b.movingAverageCost,
+      ])
+    );
+
+    await tx.delete(orderItems).where(eq(orderItems.orderId, orderId));
+    await tx.insert(orderItems).values(
+      lines.map((line, i) => {
+        const key =
+          line.productId == null
+            ? null
+            : `product:${line.productId}:variant:${line.variantId ?? "base"}`;
+        return {
+          orderId,
+          productId: line.productId,
+          productName: line.productName.trim(),
+          quantity: line.quantity,
+          unitPrice: line.unitPrice.toFixed(2),
+          grossAmountSnapshot: fromMinorUnits(grossPerLine[i]),
+          discountAmountSnapshot: fromMinorUnits(discountPerLine[i]),
+          netAmountSnapshot: fromMinorUnits(netPerLine[i]),
+          customerShippingSnapshot: fromMinorUnits(shippingAllocations[i]),
+          projectedUnitCostSnapshot: key ? (costByKey.get(key) ?? null) : null,
+          variantId: line.variantId,
+          size: line.size ?? null,
+          color: line.color ?? null,
+        };
+      })
+    );
+
+    const head = lines[0];
+    const totalQuantity = lines.reduce((sum, l) => sum + l.quantity, 0);
+    const headerUpdates = {
+      productId: head.productId,
+      productName: head.productName.trim(),
+      variantId: head.variantId,
+      size: head.size ?? null,
+      color: head.color ?? null,
+      quantity: totalQuantity,
+      totalAmount: fromMinorUnits(totalMinor, 2),
+      shippingFees: fromMinorUnits(shippingMinor, 2),
+      lastUpdatedBy: editor.id,
+      lastUpdatedAt: new Date(),
+    };
+    await tx.update(orders).set(headerUpdates).where(eq(orders.id, orderId));
+
+    // One log line describing the whole basket. Field-by-field diffing the way editOrderFull
+    // does would produce noise ("الكمية 2 → 5") that hides what actually changed.
+    const summary = lines
+      .map(l => `${l.productName} ×${l.quantity} @ ${l.unitPrice}`)
+      .join(" | ");
+    await tx.insert(orderEditLogs).values({
+      orderId,
+      field: "orderItems",
+      oldValue: existing
+        .map((i: OrderItem) => `${i.productName} ×${i.quantity}`)
+        .join(" | "),
+      newValue: summary,
+      editedBy: editor.id,
+      editedByName: editor.name,
+      editedByRole: editor.role,
+    });
+
+    return {
+      itemCount: lines.length,
+      totalQuantity,
+      productsNet: fromMinorUnits(productsNet, 2),
+      shippingFees: fromMinorUnits(shippingMinor, 2),
+      totalAmount: fromMinorUnits(totalMinor, 2),
+    };
+  });
+}
+
 export async function replaceOrderItems(
   orderId: number,
   items: OrderItemWrite[]

@@ -47,6 +47,10 @@ export const ALL_PERMISSIONS = [
   "inventory_costing.approve",
   "ad_spend.view",
   "ad_spend.manage",
+  // شاشات تشغيل الشحن (شحنات اليوم، جدول توزيع المسارات). منفصلة عن shipping_finance
+  // لأن دي تشغيل يومي بيعمله موظف الشحن، وتلك فلوس وتسويات. موظف التأكيدات مالوش
+  // الاتنين — بيشوف بيانات الشحن جوه الأوردر بتاعه وبس.
+  "shipping_ops.view",
   // الرواتب. أربع صلاحيات مش واحدة عشان فصل المهام يبقى ممكن: المحاسب يجهّز ويدفع،
   // والاعتماد يفضل للإدارة — وده أهم حاجز إداري في وحدة بتحرّك فلوس شهريًا.
   "payroll.view",
@@ -113,7 +117,7 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
   agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update"],
   data_entry: ["orders.view", "orders.create"],
   facebook_entry: ["orders.view", "orders.create"],
-  shipping: ["orders.view", "orders.export"],
+  shipping: ["orders.view", "orders.export", "shipping_ops.view"],
   scanner: ["orders.view"],
   warehouse: ["dashboard.view", "orders.view"],
 };

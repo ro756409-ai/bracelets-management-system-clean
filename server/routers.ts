@@ -54,6 +54,7 @@ import {
   getAllVariantsWithProduct,
   replaceOrderItems,
   getOrderItems,
+  replaceOrderItemsFromEditor,
   getOrderItemsForOrders,
 } from "./db";
 import { employees } from "../drizzle/schema";
@@ -208,6 +209,29 @@ function requireEmployeePermission(permission: Permission) {
     }
     return next({ ctx });
   });
+}
+
+/**
+ * "Is this order yours?" — the per-order half of employee-portal authorization, paired with
+ * requireEmployeePermission's "can your role do this at all?".
+ *
+ * Admin-tier employees are exempt because they supervise the whole queue. Note this checks
+ * the tier, not the literal role "manager": an `admin` or `super_admin` employee is senior
+ * to a manager and was previously failing the check that only named "manager".
+ *
+ * Returns the order so callers don't fetch it twice.
+ */
+async function assertEmployeeOwnsOrder(
+  emp: { id: number; role: string },
+  orderId: number,
+  message: string
+) {
+  const order = await getOrderById(orderId);
+  if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
+  if (!isAdminTierRole(emp.role) && order.assignedEmployeeId !== emp.id) {
+    throw new TRPCError({ code: "FORBIDDEN", message });
+  }
+  return order;
 }
 
 /**
@@ -2821,15 +2845,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         // Ownership check: agents can only confirm their own assigned orders
-        if (emp.role !== "manager") {
-          const order = await getOrderById(input.orderId);
-          if (!order || order.assignedEmployeeId !== emp.id) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "هذا الأوردر غير مخصص لك",
-            });
-          }
-        }
+        await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
         await confirmOrder(input.orderId, emp.id, emp.name);
         await addActivityLog({
           action: "confirm_order",
@@ -2854,15 +2870,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         // Ownership check: agents can only postpone their own assigned orders
-        if (emp.role !== "manager") {
-          const order = await getOrderById(input.orderId);
-          if (!order || order.assignedEmployeeId !== emp.id) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "هذا الأوردر غير مخصص لك",
-            });
-          }
-        }
+        await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
         await postponeOrder(
           input.orderId,
           input.postponedTo,
@@ -2893,15 +2901,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         // Ownership check: agents can only cancel their own assigned orders
-        if (emp.role !== "manager") {
-          const order = await getOrderById(input.orderId);
-          if (!order || order.assignedEmployeeId !== emp.id) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "هذا الأوردر غير مخصص لك",
-            });
-          }
-        }
+        await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
         await cancelOrder(
           input.orderId,
           input.cancelReason,
@@ -2930,15 +2930,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
-        if (emp.role !== "manager") {
-          const order = await getOrderById(input.orderId);
-          if (!order || order.assignedEmployeeId !== emp.id) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "هذا الأوردر غير مخصص لك",
-            });
-          }
-        }
+        await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
         await updateOrder(input.orderId, {
           status: "no_answer",
           lastUpdatedBy: emp.id,
@@ -2978,7 +2970,7 @@ export const appRouter = router({
             message: "الأوردر غير موجود",
           });
         // نفس شرط الملكية الموجود في confirm/cancel/postpone
-        if (emp.role !== "manager" && order.assignedEmployeeId !== emp.id) {
+        if (!isAdminTierRole(emp.role) && order.assignedEmployeeId !== emp.id) {
           throw new TRPCError({
             code: "FORBIDDEN",
             message: "هذا الأوردر غير مخصص لك",
@@ -3060,15 +3052,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         // Ownership check: agents can only update notes on their own assigned orders
-        if (emp.role !== "manager") {
-          const order = await getOrderById(input.orderId);
-          if (!order || order.assignedEmployeeId !== emp.id) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "هذا الأوردر غير مخصص لك",
-            });
-          }
-        }
+        await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
         await updateOrder(input.orderId, {
           notes: input.notes,
           lastUpdatedBy: emp.id,
@@ -3090,15 +3074,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         // Ownership check
-        if (emp.role !== "manager") {
-          const order = await getOrderById(input.orderId);
-          if (!order || order.assignedEmployeeId !== emp.id) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "هذا الأوردر غير مخصص لك",
-            });
-          }
-        }
+        await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
         const updates: any = { lastUpdatedBy: emp.id };
         if (input.governorate) updates.governorate = input.governorate;
         if (input.customerAddress)
@@ -3217,15 +3193,11 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         const { orderId, ...updates } = input;
         // الموظف يعدل أوردراته فقط (إلا لو مدير)
-        if (emp.role !== "manager") {
-          const order = await getOrderById(orderId);
-          if (!order || order.assignedEmployeeId !== emp.id) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "لا يمكنك تعديل أوردر غير مسند إليك",
-            });
-          }
-        }
+        await assertEmployeeOwnsOrder(
+          emp,
+          orderId,
+          "لا يمكنك تعديل أوردر غير مسند إليك"
+        );
         const result = await editOrderFull(orderId, updates, {
           id: emp.id,
           name: emp.name,
@@ -3241,12 +3213,163 @@ export const appRouter = router({
           orderId: z.number(),
         })
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        const emp = (ctx as any).employee;
+        await assertEmployeeOwnsOrder(
+          emp,
+          input.orderId,
+          "لا يمكنك عرض سجل أوردر غير مسند إليك"
+        );
         return getOrderEditLogs(input.orderId);
       }),
 
+    // ==================== ORDER ITEMS ====================
+    // The real lines, from `order_items`. The order header carries only one product, so an
+    // order of "two of these plus one of those" reads as a single row there — this is the
+    // only place the employee sees what the customer actually ordered.
+    orderItems: requireEmployeePermission("orders.view")
+      .input(z.object({ orderId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        const emp = (ctx as any).employee;
+        const order = await assertEmployeeOwnsOrder(
+          emp,
+          input.orderId,
+          "لا يمكنك عرض بنود أوردر غير مسند إليك"
+        );
+        const items = await getOrderItems(input.orderId);
+        // An order created before order_items was populated has none. Rather than showing an
+        // empty basket — which the employee would "fix" by adding lines, silently doubling
+        // the order — synthesise one line from the header and mark it so the UI can say so.
+        if (items.length === 0) {
+          return {
+            items: [
+              {
+                id: null,
+                productId: order.productId,
+                productName: order.productName,
+                variantId: order.variantId ?? null,
+                variantName: null,
+                quantity: order.quantity,
+                unitPrice: null,
+                discount: "0",
+                size: order.size ?? null,
+                color: order.color ?? null,
+              },
+            ],
+            derivedFromHeader: true,
+            shippingFees: order.shippingFees ?? "0",
+            totalAmount: order.totalAmount,
+          };
+        }
+        return {
+          items: items.map(i => ({
+            id: i.id,
+            productId: i.productId,
+            productName: i.productName,
+            variantId: i.variantId,
+            variantName: i.variantName,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            discount: i.discountAmountSnapshot,
+            size: i.size,
+            color: i.color,
+          })),
+          derivedFromHeader: false,
+          shippingFees: order.shippingFees ?? "0",
+          totalAmount: order.totalAmount,
+        };
+      }),
+
+    editOrderItems: requireEmployeePermission("orders.update")
+      .input(
+        z.object({
+          orderId: z.number(),
+          items: z
+            .array(
+              z.object({
+                productId: z.number().nullable(),
+                productName: z.string().min(1).max(200),
+                variantId: z.number().nullable(),
+                quantity: z.number().int().min(1).max(999),
+                unitPrice: z.number().min(0).max(1_000_000),
+                discount: z.number().min(0).max(1_000_000),
+                size: z.string().max(100).nullable().optional(),
+                color: z.string().max(100).nullable().optional(),
+              })
+            )
+            .min(1, "الأوردر لازم يكون فيه بند واحد على الأقل")
+            .max(20, "أقصى عدد بنود ٢٠"),
+          shippingFees: z.number().min(0).max(100_000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const emp = (ctx as any).employee;
+        await assertEmployeeOwnsOrder(
+          emp,
+          input.orderId,
+          "لا يمكنك تعديل بنود أوردر غير مسند إليك"
+        );
+        const result = await replaceOrderItemsFromEditor(
+          input.orderId,
+          input.items.map(i => ({
+            productId: i.productId,
+            productName: i.productName,
+            variantId: i.variantId,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            discount: i.discount,
+            size: i.size ?? null,
+            color: i.color ?? null,
+          })),
+          input.shippingFees,
+          { id: emp.id, name: emp.name, role: emp.role }
+        );
+        await addActivityLog({
+          action: "edit_order_items",
+          entityType: "order",
+          entityId: input.orderId,
+          description: `تعديل بنود أوردر #${input.orderId} — ${result.itemCount} بند، إجمالي ${result.totalAmount}`,
+          metadata: { itemCount: result.itemCount, totalAmount: result.totalAmount },
+          performedBy: emp.id,
+          performedByName: emp.name,
+          performedByRole: "employee",
+        });
+        return { success: true, ...result };
+      }),
+
     // ==================== SHIPMENTS TODAY ====================
-    todayShipments: employeePortalProcedure
+    // Shipping operations, not order confirmation. Was employeePortalProcedure, which
+    // only asks "is this an active employee" — so an order_confirmation agent could pull
+    // the whole day's shipment manifest across every business in the tenant.
+    // The shipping-schedule page read these through accountingV2.configurationListForBusinesses,
+    // which is authenticatedProcedure — any employee at all. Same data, behind the same
+    // permission the rest of the shipping screens use.
+    shippingRoutes: requireEmployeePermission("shipping_ops.view").query(
+      async ({ ctx }) => {
+        const emp = (ctx as any).employee;
+        const tenantId = requireTenantId(emp);
+        const businessIds = (await scopeBusinessIds(tenantId, {})) ?? [];
+        const db = await getDb();
+        if (!db || businessIds.length === 0) return [];
+        const rows = await db
+          .select()
+          .from(businessConfigurationValues)
+          .where(
+            and(
+              inArray(businessConfigurationValues.businessId, businessIds),
+              eq(businessConfigurationValues.namespace, "shipping_schedule_route"),
+              eq(businessConfigurationValues.isActive, true)
+            )
+          )
+          .orderBy(
+            businessConfigurationValues.sortOrder,
+            businessConfigurationValues.displayName
+          );
+        return rows;
+      }
+    ),
+
+    todayShipments: requireEmployeePermission("shipping_ops.view")
       .input(
         z.object({
           date: z.string().optional(), // YYYY-MM-DD format, defaults to today
