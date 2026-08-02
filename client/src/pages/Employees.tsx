@@ -32,7 +32,10 @@ const ROLE_LABELS: Record<EmployeeRoleValue, string> = {
   manager: "مدير",
   facebook_entry: "إدخال فيسبوك",
   scanner: "موظف اسكان",
-  super_admin: "مسؤول عام",
+  // "المالك" is the owner tier (server/permissions.ts OWNER_ROLES) — the only role
+  // allowed to permanently delete orders, lock a closing period, or rewrite the
+  // permission map. Named for what it means to the merchant, not for the enum value.
+  super_admin: "المالك (كل الصلاحيات)",
   admin: "مسؤول إداري",
   data_entry: "إدخال بيانات",
   order_confirmation: "تأكيد الطلبات",

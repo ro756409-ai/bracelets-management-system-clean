@@ -63,6 +63,7 @@ import { normalizeEgyptianPhone } from "../shared/phone";
 import {
   ALL_PERMISSIONS,
   isAdminTierRole,
+  isOwnerRole,
   hasPermission,
   EMPLOYEE_ROLE_VALUES,
   permissionsForRole,
@@ -313,6 +314,7 @@ import {
   deleteEmployee,
   searchEmployees,
   countActiveAdminTierEmployees,
+  countActiveOwnerEmployees,
   getAllProducts,
   getProductById,
   createProduct,
@@ -416,9 +418,16 @@ const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx });
 });
 
-// Owner-only procedure: only the real owner (not manager employees)
+// Owner-only procedure: destructive, unrecoverable actions.
+//
+// The guard used to be `if (ctx.employee) throw` — meant as "reject manager
+// employees, allow the real owner". But every branch of createContext() attaches
+// an employee row, the /login owner session included, so the condition was always
+// true and these procedures were denied to every account that can exist. The tier
+// is now the `super_admin` role (labelled "المالك" in the employees screen), which
+// is assignable, auditable, and visible to the person running the business.
 const ownerProcedure = adminProcedure.use(({ ctx, next }) => {
-  if (ctx.employee) {
+  if (!isOwnerRole(ctx.employee?.role)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "هذا الإجراء متاح للمالك فقط",
@@ -426,6 +435,36 @@ const ownerProcedure = adminProcedure.use(({ ctx, next }) => {
   }
   return next({ ctx });
 });
+
+/**
+ * Gate on who may hand out (or take away) the owner tier.
+ *
+ * Without this the tier would be decorative: every admin-tier account can edit
+ * employees, so any manager could promote themselves and inherit the destructive
+ * actions the tier exists to withhold.
+ *
+ * The one exception is bootstrap. A fresh install has no owner (scripts/seed-admin.ts
+ * seeds a `manager`), so the first owner has to come from somewhere — while zero
+ * active owners exist, any admin may create one. After that it is owner-to-owner only.
+ */
+async function assertMayAssignOwnerRole(
+  ctx: { employee?: { role?: string | null } | null },
+  targetRole: string | undefined,
+  currentRole: string | null | undefined
+): Promise<void> {
+  const grants = targetRole !== undefined && isOwnerRole(targetRole);
+  const revokes =
+    targetRole !== undefined && !isOwnerRole(targetRole) && isOwnerRole(currentRole);
+  if (!grants && !revokes) return;
+  if (isOwnerRole(ctx.employee?.role)) return;
+
+  if (grants && (await countActiveOwnerEmployees()) === 0) return; // bootstrap
+
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "صلاحية المالك لا يمنحها أو يسحبها إلا المالك",
+  });
+}
 
 // Helper: resolve the real employee ID for audit fields
 // For manager employees using the admin dashboard, ctx.realEmployeeId has the actual employee ID
@@ -1592,6 +1631,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await assertMayAssignOwnerRole(ctx, input.role, null);
         const businessId = await scopeBusinessId(
           ctx.tenantId,
           input.businessId
@@ -1619,6 +1659,8 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الموظف غير موجود",
           });
+
+        await assertMayAssignOwnerRole(ctx, data.role, target.role);
 
         const revokesAdminAccess =
           data.isActive === false ||

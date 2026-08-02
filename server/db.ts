@@ -490,8 +490,32 @@ export async function searchEmployees(filters: EmployeeFilters) {
 }
 
 const ADMIN_TIER_ROLES_FOR_QUERY = ["super_admin", "admin", "manager"] as const;
+/** Literal mirror of OWNER_ROLES — inArray() needs the enum literals, not the widened type. */
+const OWNER_ROLES_FOR_QUERY = ["super_admin"] as const;
 
 /** Number of currently-active admin-tier employees (super_admin/admin/manager). */
+/**
+ * Active accounts holding the owner tier. Used to decide whether granting the
+ * owner role is a bootstrap (no owner exists yet — any admin may create the
+ * first one) or an escalation (an owner exists — only an owner may grant it).
+ */
+export async function countActiveOwnerEmployees(
+  excludeId?: number
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const conditions: any[] = [
+    eq(employees.isActive, true),
+    inArray(employees.role, OWNER_ROLES_FOR_QUERY),
+  ];
+  if (excludeId) conditions.push(sql`${employees.id} != ${excludeId}`);
+  const rows = await db
+    .select({ id: employees.id })
+    .from(employees)
+    .where(and(...conditions));
+  return rows.length;
+}
+
 export async function countActiveAdminTierEmployees(
   excludeId?: number
 ): Promise<number> {

@@ -1,3 +1,21 @@
+-- ============================================================================
+-- 🔴🔴🔴  DO NOT RUN. NOT A MIGRATION. DESTRUCTIVE ON PRODUCTION.  🔴🔴🔴
+--
+-- This file is deliberately NOT registered in drizzle/meta/_journal.json, so
+-- `drizzle-kit migrate` skips it. It is kept only as a record of a one-off
+-- renumbering that was considered and never adopted. Running it by hand would:
+--
+--   1. Rewrite every `orders.orderNumber` — order numbers are printed on
+--      customer invoices and Bosta AWBs. Renumbering silently breaks the link
+--      between a shipment and its order, with no way back.
+--   2. `ALTER TABLE orders MODIFY COLUMN status ENUM(...)` with a list that
+--      omits `printed` and `returned`. MySQL turns every row holding a dropped
+--      enum value into '' — permanent data loss across the whole orders table.
+--
+-- If order numbering ever genuinely needs to change, it needs a fresh, reviewed,
+-- forward-only migration with a verified backup — not this file.
+-- ============================================================================
+
 -- Migration: إعادة ترقيم الأوردرات + إضافة حالة no_answer
 -- 1. تعديل عمود orderNumber ليكون varchar(20) (كان varchar(20) بالفعل)
 -- 2. إعادة ترقيم الأوردرات الموجودة بالترتيب الزمني من 1

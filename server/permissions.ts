@@ -72,6 +72,25 @@ export function isAdminTierRole(role: string | null | undefined): boolean {
   return ADMIN_TIER_ROLES.includes(role as EmployeeRole);
 }
 
+/**
+ * Owner tier — the narrow set of destructive, unrecoverable actions (permanently
+ * deleting orders, locking a closing period, rewriting the tenant permission map).
+ *
+ * This used to be expressed in routers.ts as "the session has no employee row",
+ * which was unreachable: every branch of createContext() attaches an employee
+ * row, including the /login owner session. So the owner-only procedures were
+ * denied to *everyone*. The tier is now a role, which makes it assignable from
+ * the employees screen and visible to the person using the system.
+ *
+ * Deliberately narrower than ADMIN_TIER_ROLES: "manager" runs the business day
+ * to day and must not be able to permanently destroy records.
+ */
+export const OWNER_ROLES: readonly EmployeeRole[] = ["super_admin"];
+
+export function isOwnerRole(role: string | null | undefined): boolean {
+  return OWNER_ROLES.includes(role as EmployeeRole);
+}
+
 const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
   super_admin: ALL_PERMISSIONS,
   admin: ALL_PERMISSIONS,
