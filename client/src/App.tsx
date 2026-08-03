@@ -9,6 +9,7 @@ import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Orders from "./pages/Orders";
+import DailyLedger from "./pages/DailyLedger";
 import AgentWorkspace from "./pages/AgentWorkspace";
 import Employees from "./pages/Employees";
 import Inventory from "./pages/Inventory";
@@ -133,6 +134,9 @@ function Router() {
       </Route>
       <Route path="/closings">
         <ProtectedLayout><Accounting /></ProtectedLayout>
+      </Route>
+      <Route path="/daily-ledger">
+        <ProtectedLayout><DailyLedger /></ProtectedLayout>
       </Route>
       <Route path="/accounting-settings">
         <ProtectedLayout><Accounting /></ProtectedLayout>

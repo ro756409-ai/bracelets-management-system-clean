@@ -26,7 +26,7 @@ import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
-  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote,
+  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -107,7 +107,12 @@ const MENU_GROUPS: MenuGroup[] = [
     // أربعة بنود تحت بعض كانت بتخلي القائمة تبان أطول من غير ما تضيف وجهة حقيقية.
     label: "الحسابات",
     icon: Wallet,
-    items: [{ icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true }],
+    items: [
+      // First in the group on purpose: this is where the accountant starts the day, and
+      // the older screen is where they go to look things up afterwards.
+      { icon: CalendarDays, label: "مركز التسجيل اليومي", path: "/daily-ledger", adminOnly: true },
+      { icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true },
+    ],
   },
   {
     label: "التقارير",

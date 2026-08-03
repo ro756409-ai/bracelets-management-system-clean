@@ -28,7 +28,12 @@ type ExpenseDraftInput = {
   serviceFrom: string;
   serviceTo: string;
   reference?: string;
-  evidenceUrl: string;
+  /**
+   * Optional, matching the nullable column. It used to be required all the way up to the
+   * router, which made a routine 200 EGP cash expense impossible to record without first
+   * producing a link for it.
+   */
+  evidenceUrl?: string;
   taxCode?: string;
   taxAmount?: string;
   actor: Actor;
@@ -76,7 +81,7 @@ export async function createExpenseDraft(input: ExpenseDraftInput) {
       description: input.description,
       expenseDate: from,
       reference: input.reference ?? null,
-      attachmentUrl: input.evidenceUrl,
+      attachmentUrl: input.evidenceUrl ?? null,
       createdBy: input.actor.id,
       createdByName: input.actor.name,
     });

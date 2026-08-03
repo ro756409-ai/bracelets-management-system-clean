@@ -5,6 +5,7 @@ import {
   and,
   or,
   gte,
+  lt,
   lte,
   sql,
   inArray,
@@ -4765,6 +4766,119 @@ export async function getTreasurySummary(
         .netProfit,
     pendingCollection: Number(pending?.amount ?? 0),
     recentTransactions,
+  };
+}
+
+/**
+ * One day's numbers for the daily entry screen.
+ *
+ * getTreasurySummary() answers the same shape but only ever for today, because the
+ * dashboard that uses it only ever asks about today. The accountant records yesterday's
+ * movements this morning, so the day has to be a parameter — and the totals must come from
+ * that day's rows rather than from "everything so far", or reopening an older day shows
+ * today's figures under yesterday's date.
+ *
+ * Read-only aggregate: no writes, no side effects.
+ */
+export async function getDailyLedgerSummary(input: {
+  businessIds?: number[] | null;
+  /** Cairo-local day, `YYYY-MM-DD`. Defaults to today. */
+  dateKey?: string;
+}) {
+  const db = await getDb();
+  const dayKey = input.dateKey || businessDateKey(new Date(), CAIRO_TIMEZONE);
+  // toExclusive, so the window is [from, toExclusive) — a movement stamped exactly at
+  // midnight belongs to the next day, not to both.
+  const { from, toExclusive } = businessDayRange(dayKey, CAIRO_TIMEZONE);
+  const empty = {
+    dateKey: dayKey,
+    balance: 0,
+    collections: 0,
+    expenses: 0,
+    deposits: 0,
+    withdrawals: 0,
+    net: 0,
+    movementCount: 0,
+    ordersToday: 0,
+    confirmedToday: 0,
+    pendingCollection: 0,
+    movements: [] as TreasuryTransaction[],
+  };
+  if (!db) return empty;
+
+  const scope =
+    input.businessIds && input.businessIds.length > 0
+      ? [inArray(treasuryTransactions.businessId, input.businessIds)]
+      : [];
+  const dayWindow = [
+    gte(treasuryTransactions.transactionDate, from),
+    lt(treasuryTransactions.transactionDate, toExclusive),
+  ];
+
+  const [totals] = await db
+    .select({
+      collections: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'collection' AND ${treasuryTransactions.direction} = 'in' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+      expenses: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'expense' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+      deposits: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'deposit' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+      withdrawals: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'withdrawal' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+      inflow: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'in' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+      outflow: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'out' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
+      movementCount: sql<number>`COUNT(*)`,
+    })
+    .from(treasuryTransactions)
+    .where(and(...dayWindow, ...scope));
+
+  const orderScope =
+    input.businessIds && input.businessIds.length > 0
+      ? [inArray(orders.businessId, input.businessIds)]
+      : [];
+
+  const [orderCounts] = await db
+    .select({
+      total: sql<number>`COUNT(*)`,
+      confirmed: sql<number>`SUM(CASE WHEN ${orders.status} = 'confirmed' THEN 1 ELSE 0 END)`,
+    })
+    .from(orders)
+    .where(and(gte(orders.createdAt, from), lt(orders.createdAt, toExclusive), ...orderScope));
+
+  // Money already out with the courier and not yet collected — deliberately not limited to
+  // the selected day: cash owed from two months ago is still owed today.
+  const [pending] = await db
+    .select({
+      amount: sql<string>`COALESCE(SUM(${orders.totalAmount} - COALESCE(${orders.collectedAmount}, 0)), 0)`,
+    })
+    .from(orders)
+    .where(
+      and(
+        inArray(orders.status, ["printed", "preparing", "shipped", "delivered", "returned"] as any),
+        inArray(orders.collectionStatus, ["pending", "partial"] as any),
+        ...orderScope
+      )
+    );
+
+  const movements = await db
+    .select()
+    .from(treasuryTransactions)
+    .where(and(...dayWindow, ...scope))
+    .orderBy(desc(treasuryTransactions.transactionDate), desc(treasuryTransactions.id))
+    .limit(100);
+
+  return {
+    dateKey: dayKey,
+    balance: await getTreasuryBalance(input.businessIds),
+    collections: Number(totals?.collections ?? 0),
+    expenses: Number(totals?.expenses ?? 0),
+    deposits: Number(totals?.deposits ?? 0),
+    withdrawals: Number(totals?.withdrawals ?? 0),
+    // Everything in minus everything out — not collections minus expenses. Deposits,
+    // withdrawals and refunds move cash too, and counting only two kinds made the figure
+    // disagree with the balance.
+    net: Number(totals?.inflow ?? 0) - Number(totals?.outflow ?? 0),
+    movementCount: Number(totals?.movementCount ?? 0),
+    ordersToday: Number(orderCounts?.total ?? 0),
+    confirmedToday: Number(orderCounts?.confirmed ?? 0),
+    pendingCollection: Number(pending?.amount ?? 0),
+    movements,
   };
 }
 

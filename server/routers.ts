@@ -398,6 +398,7 @@ import {
   getTreasuryTransactions,
   addTreasuryTransaction,
   getTreasurySummary,
+  getDailyLedgerSummary,
   getExpenseCategories,
   createExpenseCategory,
   updateExpenseCategory,
@@ -5831,6 +5832,30 @@ export const appRouter = router({
       }),
 
     /** لوحة الخزنة — أرقام النهاردة والشهر وآخر ١٠ حركات */
+    // ---------- مركز التسجيل اليومي ----------
+    /**
+     * أرقام يوم واحد. منفصلة عن treasurySummary لأن دي بتاخد اليوم كمُدخل — المحاسب بيسجّل
+     * حركات إمبارح الصبح، فلو الأرقام دايمًا «النهاردة» كان فتح يوم قديم هيوريه أرقام
+     * النهاردة تحت تاريخ إمبارح.
+     */
+    dailySummary: permissionProcedure("accounting.view")
+      .input(
+        z
+          .object({
+            businessIds: z.array(z.number()).optional(),
+            /** يوم بتوقيت القاهرة، YYYY-MM-DD. الافتراضي النهاردة. */
+            dateKey: z
+              .string()
+              .regex(/^\d{4}-\d{2}-\d{2}$/, "التاريخ لازم يكون YYYY-MM-DD")
+              .optional(),
+          })
+          .optional()
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+        return getDailyLedgerSummary({ businessIds, dateKey: input?.dateKey });
+      }),
+
     treasurySummary: permissionProcedure("accounting.view")
       .input(
         z
@@ -6007,7 +6032,11 @@ export const appRouter = router({
           taxCode: z.string().max(30).optional(),
           taxAmount: z.number().min(0).optional(),
           reference: z.string().max(100).optional(),
-          attachmentUrl: z.string().min(1).max(500),
+          // Optional, matching the column, which has always been nullable. Requiring it
+          // meant an accountant recording thirty small movements a day had to produce a
+          // link for each one — including the 200 EGP paid to the cleaner — so the screen
+          // went unused and the numbers were kept somewhere else.
+          attachmentUrl: z.string().max(500).optional(),
           businessId: z.number(),
         })
       )
