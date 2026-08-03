@@ -362,15 +362,19 @@ describe("webhook log DB structure", () => {
 // ==================== Sales Channel Matching Tests ====================
 
 describe("ربط Webhook بقناة البيع", () => {
+  // The explicit timeout is about `server/db.ts` being ~5,900 lines that pull in the whole
+  // schema: the first import of it in a worker costs seconds, and under full-suite parallel
+  // load that overran the 5s default and failed the run intermittently. The test passes
+  // standalone every time — it was the budget that was wrong, not the assertion.
   it("getSalesChannelByWebhookSecret is exported from db", async () => {
     const { getSalesChannelByWebhookSecret } = await import("./db");
     expect(typeof getSalesChannelByWebhookSecret).toBe("function");
-  });
+  }, 30_000);
 
   it("getSalesChannelByPlatformAndBusiness is exported from db", async () => {
     const { getSalesChannelByPlatformAndBusiness } = await import("./db");
     expect(typeof getSalesChannelByPlatformAndBusiness).toBe("function");
-  });
+  }, 30_000);
 
   it("webhook handler sets websiteId and businessId in createOrder call", () => {
     // Simulate the logic: if a channel is matched, websiteId and businessId are set

@@ -51,6 +51,17 @@ export const ALL_PERMISSIONS = [
   // لأن دي تشغيل يومي بيعمله موظف الشحن، وتلك فلوس وتسويات. موظف التأكيدات مالوش
   // الاتنين — بيشوف بيانات الشحن جوه الأوردر بتاعه وبس.
   "shipping_ops.view",
+  // ==================== الحسابات — الطبقة الدقيقة ====================
+  // `accounting.view/manage` كانت خشنة زيادة: «manage» كانت بتعني إدخال حركة وإقفال يوم
+  // واعتماد تسوية في نفس الوقت. الفصل ده بيخلّي المالك يدّي مدير الحسابات حق الإدخال من
+  // غير حق الاعتماد — وده أهم حاجز إداري في نظام بيحرّك فلوس كل يوم.
+  "accounting.create",
+  "accounting.approve",
+  // التحويل بين الخزنة والبنك بيحرّك فلوس حقيقية بين حسابين، فمنفصل عن مجرد تسجيل مصروف.
+  "treasury.transfer",
+  "settlements.create",
+  // رؤية الأرباح قرار منفصل عن رؤية الحركات: ممكن محاسب يسجّل من غير ما يشوف الهامش.
+  "reports.view_profit",
   // الرواتب. أربع صلاحيات مش واحدة عشان فصل المهام يبقى ممكن: المحاسب يجهّز ويدفع،
   // والاعتماد يفضل للإدارة — وده أهم حاجز إداري في وحدة بتحرّك فلوس شهريًا.
   "payroll.view",
@@ -111,6 +122,10 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     "ad_spend.view", "ad_spend.manage",
     // بيجهّز الدورة ويدفعها، لكن مش بيعتمدها — الاعتماد قرار إداري
     "payroll.view", "payroll.manage", "payroll.pay",
+    // الطبقة الدقيقة: بيدخّل ويحوّل ويسجّل تسويات، لكن **مش** بيعتمد ولا بيشوف الأرباح.
+    // الاتنين دول (`accounting.approve` و`reports.view_profit`) بيمنحهم المالك يدويًا لو
+    // حب — عن طريق tenant_role_permissions من غير أي Deploy.
+    "accounting.create", "treasury.transfer", "settlements.create",
   ],
   viewer: ["dashboard.view", "orders.view"],
   order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update"],

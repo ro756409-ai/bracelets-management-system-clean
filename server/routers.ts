@@ -5775,7 +5775,9 @@ export const appRouter = router({
   // لبورتال المحاسب، لكن ربطها بمسار دخول منفصل مش جزء من المرحلة دي.
   accounting: router({
     /** مؤشرات لوحة الحسابات */
-    dashboard: adminProcedure
+    // كانت adminProcedure — يعني أي حساب من طبقة الإدارة يشوف الأرباح والهوامش، حتى لو
+    // المالك مش عايز كده. رؤية الربح قرار منفصل عن الإدارة، فبقت وراء صلاحيتها.
+    dashboard: permissionProcedure("reports.view_profit")
       .input(
         z
           .object({

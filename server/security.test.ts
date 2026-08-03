@@ -104,15 +104,31 @@ describe("Fix 1: Express import/export routes protection", () => {
 // Fix 2: Backend role checks in tRPC
 // ============================================================
 describe("Fix 2: Backend role checks in tRPC procedures", () => {
-  it("reports.dashboard uses adminProcedure", async () => {
+  it("reports.dashboard is permission-gated, not merely admin-gated", async () => {
     const fs = await import("fs");
     const content = fs
       .readFileSync("server/routers.ts", "utf-8")
       .replaceAll('"', "'");
-    const reportsSection = content.substring(
-      content.indexOf("// ==================== REPORTS ====================")
-    );
-    expect(reportsSection).toContain("dashboard: adminProcedure");
+    // Bounded to the reports router. The old version sliced from the REPORTS marker to the
+    // end of the file, so it was matching `accounting.dashboard` — a different router
+    // several thousand lines further down — and passed while reports.dashboard was
+    // something else entirely.
+    const start = content.indexOf("// ==================== REPORTS ====================");
+    const reportsSection = content.slice(start, content.indexOf("\n  broadcast: router(", start));
+    expect(reportsSection).toContain("dashboard: permissionProcedure('accounting.view')");
+    expect(reportsSection).not.toContain("dashboard: adminProcedure");
+  });
+
+  it("accounting.dashboard is behind the profit permission", async () => {
+    const fs = await import("fs");
+    const content = fs
+      .readFileSync("server/routers.ts", "utf-8")
+      .replaceAll('"', "'");
+    // Was adminProcedure: every admin-tier account could read margins whether or not the
+    // owner intended it. Seeing profit is a separate decision from being an administrator.
+    const start = content.indexOf("\n  accounting: router({");
+    const section = content.slice(start, start + 2000);
+    expect(section).toContain("dashboard: permissionProcedure('reports.view_profit')");
   });
 
   it("reports.cancellationReasons uses adminProcedure", async () => {
