@@ -26,11 +26,10 @@ import { StatCard, ConfirmDialog, WhatsAppButton } from "@/components/shared";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getMissingConfirmationFields } from "@/lib/orderConfirmationValidation";
 import { EMPLOYEE_SETTABLE_ORDER_STATUSES } from "@shared/const";
-import { GovernorateCitySelect } from "@/components/employee/GovernorateCitySelect";
 import {
-  OrderItemsEditor, newLineKey, linesTotal,
-  type EditorLine,
-} from "@/components/employee/OrderItemsEditor";
+  OrderEditDialog, isValidEgyptianMobile,
+  type OrderEditSavePayload,
+} from "@/components/orders/OrderEditDialog";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new:       { label: "جديد",         color: "text-primary",            bg: "bg-accent border-primary/30" },
@@ -94,23 +93,6 @@ const DEFAULT_CANCEL_REASONS = [
 /** Sentinel for the free-text option. Not a stored value — the typed text is what's saved. */
 const OTHER_CANCEL_REASON = "__other__";
 
-/**
- * Every header field joined into one string, compared against the same string taken when
- * the dialog opened. Cheaper to maintain than a dirty flag on each of nine onChange
- * handlers — one that gets forgotten silently loses the unsaved-changes warning.
- */
-function headerFingerprint(values: Record<string, string>): string {
-  return Object.keys(values)
-    .sort()
-    .map(k => `${k}=${values[k].trim()}`)
-    .join("");
-}
-
-/** Egyptian mobile: 11 digits on one of the four live prefixes. */
-function isValidEgyptianMobile(phone: string): boolean {
-  return /^01[0125]\d{8}$/.test(phone.replace(/[\s-]/g, ""));
-}
-
 export default function EmployeeDashboard() {
   // Governorates the business curated, if any. When the list is empty — which it was for
   // every business, nobody having filled the table in — GovernorateCitySelect falls back to
@@ -158,27 +140,7 @@ export default function EmployeeDashboard() {
 
   // Edit order state
   const [editDialog, setEditDialog] = useState<{ open: boolean; orderId: number | null }>({ open: false, orderId: null });
-  const [editNotes, setEditNotes] = useState("");
-  const [editGovernorate, setEditGovernorate] = useState("");
-  const [editAddress, setEditAddress] = useState("");
-  const [editCustomerName, setEditCustomerName] = useState("");
-  const [editCustomerPhone, setEditCustomerPhone] = useState("");
-  const [editCustomerPhone2, setEditCustomerPhone2] = useState("");
-  const [editCity, setEditCity] = useState("");
-  const [editShippingFees, setEditShippingFees] = useState<number>(0);
-  const [editPaymentMethod, setEditPaymentMethod] = useState<string>("cod");
-  const [editEmployeeNotes, setEditEmployeeNotes] = useState("");
   const [showEditHistory, setShowEditHistory] = useState(false);
-  // The order's real lines. `editLines` replaces the old single productName/quantity/
-  // color/size fields — those described one product because `orders` only holds one, which
-  // is exactly what this screen needed to stop doing.
-  const [editLines, setEditLines] = useState<EditorLine[]>([]);
-  const [editLinesDirty, setEditLinesDirty] = useState(false);
-  const [editItemsDerived, setEditItemsDerived] = useState(false);
-  // Snapshot of every field as the dialog opened, so "did anything change?" is a comparison
-  // rather than a flag every onChange has to remember to set.
-  const [editBaseline, setEditBaseline] = useState<string>("");
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   // Tasks state
   const [showTasksPanel, setShowTasksPanel] = useState(false);
@@ -600,40 +562,6 @@ export default function EmployeeDashboard() {
     setManualSerial("");
   };
 
-  // Hydrate the editor once the lines arrive. Guarded on `editLinesDirty` so a slow refetch
-  // can never overwrite rows the employee is in the middle of typing.
-  useEffect(() => {
-    if (!editDialog.open || !orderItemsData || editLinesDirty) return;
-    setEditItemsDerived(orderItemsData.derivedFromHeader);
-    setEditShippingFees(Number(orderItemsData.shippingFees ?? 0));
-    setEditLines(
-      orderItemsData.items.map(item => {
-        const quantity = Math.max(1, item.quantity ?? 1);
-        const discount = Number(item.discount ?? 0);
-        // A legacy line has no unitPrice. Reconstructing it from the order total is the
-        // only honest reading: it is what the customer paid per piece.
-        const unitPrice =
-          item.unitPrice != null
-            ? Number(item.unitPrice)
-            : Math.max(
-                0,
-                (Number(orderItemsData.totalAmount ?? 0) -
-                  Number(orderItemsData.shippingFees ?? 0)) /
-                  quantity
-              );
-        return {
-          key: newLineKey(),
-          productId: item.productId ?? null,
-          productName: item.productName ?? "",
-          variantId: item.variantId ?? null,
-          quantity,
-          unitPrice: Number(unitPrice.toFixed(2)),
-          discount,
-        } satisfies EditorLine;
-      })
-    );
-  }, [editDialog.open, orderItemsData, editLinesDirty]);
-
   const handleSaveNotes = (orderId: number) => {
     const notes = editingNotes[orderId];
     if (notes === undefined) return;
@@ -641,151 +569,58 @@ export default function EmployeeDashboard() {
     setEditingNotes(prev => { const n = { ...prev }; delete n[orderId]; return n; });
   };
 
-  // نفس الـsetState كانوا متكتوبين مرتين: مرة في زرار "تعديل بيانات" ومرة في
-  // اختصار الكيبورد E. أي حقل جديد كان لازم يتضاف في المكانين وإلا يفتح بقيمة قديمة.
   function openEditDialogFor(order: any) {
     setEditDialog({ open: true, orderId: order.id });
-    setEditNotes(order.notes ?? "");
-    setEditGovernorate(order.governorate ?? "");
-    setEditAddress(order.customerAddress ?? "");
-    setEditCustomerName(order.customerName ?? "");
-    setEditCustomerPhone(order.customerPhone ?? "");
-    setEditCustomerPhone2(order.customerPhone2 ?? "");
-    setEditCity(order.city ?? "");
-    setEditShippingFees(Number(order.shippingFees || 0));
-    setEditPaymentMethod(order.paymentMethod ?? "cod");
-    setEditEmployeeNotes(order.employeeNotes ?? "");
     setShowEditHistory(false);
-    // Lines arrive from their own query; clear the previous order's so the editor never
-    // shows one order's basket under another's customer.
-    setEditLines([]);
-    setEditLinesDirty(false);
-    setEditItemsDerived(false);
-    setEditBaseline(
-      headerFingerprint({
-        customerName: order.customerName ?? "",
-        customerPhone: order.customerPhone ?? "",
-        customerPhone2: order.customerPhone2 ?? "",
-        governorate: order.governorate ?? "",
-        city: order.city ?? "",
-        address: order.customerAddress ?? "",
-        paymentMethod: order.paymentMethod ?? "cod",
-        notes: order.notes ?? "",
-        employeeNotes: order.employeeNotes ?? "",
-      })
-    );
   }
 
-  const editHeaderDirty =
-    editBaseline !== "" &&
-    editBaseline !==
-      headerFingerprint({
-        customerName: editCustomerName,
-        customerPhone: editCustomerPhone,
-        customerPhone2: editCustomerPhone2,
-        governorate: editGovernorate,
-        city: editCity,
-        address: editAddress,
-        paymentMethod: editPaymentMethod,
-        notes: editNotes,
-        employeeNotes: editEmployeeNotes,
+  /**
+   * Two mutations, one Save button. The header fields and the basket live in different
+   * tables with different guards, so they cannot be one call — but the employee must not
+   * have to know that. Items go first: it is the call that can be refused outright (stock
+   * already out) and the one that rewrites totalAmount, so running it second would leave
+   * the header saved and the basket rejected, which reads as a successful save.
+   *
+   * Throwing is how the dialog learns to stay open with the typed values intact.
+   */
+  async function saveEdit(payload: OrderEditSavePayload) {
+    const { orderId, header, headerDirty, items, itemsDirty, shippingFees } = payload;
+    if (itemsDirty) {
+      await editItemsMutation.mutateAsync({
+        orderId,
+        items: items.map(l => ({
+          productId: l.productId,
+          productName: l.productName,
+          variantId: l.variantId,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          discount: l.discount,
+        })),
+        shippingFees,
       });
-  const editDirty = editHeaderDirty || editLinesDirty;
-
-  function closeEditDialog() {
-    setEditDialog({ open: false, orderId: null });
-    setEditLines([]);
-    setEditLinesDirty(false);
-    setEditBaseline("");
-    setConfirmDiscard(false);
-  }
-
-  /** Close attempt — asks first when there is unsaved work, closes straight away otherwise. */
-  function requestCloseEditDialog() {
-    if (editDirty) {
-      setConfirmDiscard(true);
-      return;
     }
-    closeEditDialog();
-  }
-
-  const editIssues = useMemo(() => {
-    const issues: string[] = [];
-    if (!editCustomerName.trim()) issues.push("اسم العميل مطلوب");
-    if (!isValidEgyptianMobile(editCustomerPhone))
-      issues.push("رقم الهاتف غير صحيح (١١ رقم يبدأ بـ010/011/012/015)");
-    if (editCustomerPhone2.trim() && !isValidEgyptianMobile(editCustomerPhone2))
-      issues.push("التليفون البديل غير صحيح");
-    if (!editGovernorate.trim()) issues.push("المحافظة مطلوبة");
-    if (editAddress.trim().length < 5) issues.push("العنوان قصير جداً (٥ أحرف على الأقل)");
-    // Only judge the basket once it has arrived. While the query is in flight `editLines`
-    // is legitimately empty, and complaining about it flashed "بيانات ناقصة — لازم بند
-    // واحد على الأقل" at the employee every single time the dialog opened.
-    if (!orderItemsLoading) {
-      if (editLines.length === 0) issues.push("لازم بند واحد على الأقل");
-      if (editLines.some(l => !l.productId && !l.productName.trim()))
-        issues.push("فيه بند من غير منتج");
-      if (editLines.some(l => l.discount > l.quantity * l.unitPrice))
-        issues.push("فيه بند خصمه أكبر من قيمته");
+    if (headerDirty) {
+      await editOrderMutation.mutateAsync({
+        orderId,
+        customerName: header.customerName,
+        customerPhone: header.customerPhone,
+        customerPhone2: header.customerPhone2,
+        customerAddress: header.customerAddress,
+        governorate: header.governorate,
+        city: header.city,
+        paymentMethod: header.paymentMethod,
+        // Sent unconditionally, not `|| undefined`: an employee who deletes a stale note
+        // means it, and `undefined` would silently keep the old text.
+        notes: header.notes,
+        employeeNotes: header.employeeNotes,
+        // shippingFees only when the items call did not already write it.
+        ...(itemsDirty ? {} : { shippingFees }),
+      });
     }
-    return issues;
-  }, [
-    editCustomerName, editCustomerPhone, editCustomerPhone2, editGovernorate,
-    editAddress, editLines, orderItemsLoading,
-  ]);
-
-  async function saveEdit() {
-    const orderId = editDialog.orderId;
-    if (orderId == null || editSaving) return; // double-submit guard
-    if (editIssues.length > 0) {
-      toast.error(`بيانات ناقصة:\n${editIssues.join("\n")}`);
-      return;
-    }
-    try {
-      // Items first: it is the call that can be refused outright (stock already out), and
-      // it is the one that rewrites totalAmount. Running it second would leave the header
-      // saved and the basket rejected, which reads to the employee as a successful save.
-      if (editLinesDirty) {
-        await editItemsMutation.mutateAsync({
-          orderId,
-          items: editLines.map(l => ({
-            productId: l.productId,
-            productName: l.productName,
-            variantId: l.variantId,
-            quantity: l.quantity,
-            unitPrice: l.unitPrice,
-            discount: l.discount,
-          })),
-          shippingFees: editShippingFees,
-        });
-      }
-      if (editHeaderDirty) {
-        await editOrderMutation.mutateAsync({
-          orderId,
-          customerName: editCustomerName,
-          customerPhone: editCustomerPhone,
-          customerPhone2: editCustomerPhone2,
-          customerAddress: editAddress,
-          governorate: editGovernorate,
-          city: editCity,
-          paymentMethod: editPaymentMethod,
-          // Sent unconditionally, not `|| undefined`: an employee who deletes a stale note
-          // means it, and `undefined` would silently keep the old text.
-          notes: editNotes,
-          employeeNotes: editEmployeeNotes,
-          // shippingFees only when the items call did not already write it.
-          ...(editLinesDirty ? {} : { shippingFees: editShippingFees }),
-        });
-      }
-      toast.success("✅ تم حفظ التعديلات");
-      utils.employeePortal.myOrders.invalidate();
-      utils.employeePortal.stats.invalidate();
-      utils.employeePortal.orderItems.invalidate({ orderId });
-      closeEditDialog();
-    } catch {
-      // Each mutation's onError already surfaced the message. The dialog deliberately
-      // stays open with the typed values intact.
-    }
+    toast.success("✅ تم حفظ التعديلات");
+    utils.employeePortal.myOrders.invalidate();
+    utils.employeePortal.stats.invalidate();
+    utils.employeePortal.orderItems.invalidate({ orderId });
   }
 
   const handleLogout = async () => {
@@ -839,6 +674,10 @@ export default function EmployeeDashboard() {
   };
 
   const reviewCount = (ordersData?.orders ?? []).filter((o: any) => o.needsReview).length;
+
+  /** The order the edit dialog is open on — the dialog reads its opening values from this. */
+  const editingOrder =
+    (ordersData?.orders ?? []).find((o: any) => o.id === editDialog.orderId) ?? null;
 
   const filteredOrders = (ordersData?.orders ?? []).filter((o: any) => {
     if (activeTab === "needs_review" && !o.needsReview) return false;
@@ -1860,205 +1699,25 @@ export default function EmployeeDashboard() {
       </div>
 
       {/* Edit Order Dialog - شاشة تعديل شاملة */}
-      {/* ==================== EDIT ORDER DIALOG ====================
-          Layout note: the content is a three-row grid (header / scrolling body / footer)
-          rather than one scrolling box. On a phone the old version scrolled the footer off
-          the bottom, so Save sat below the fold behind the keyboard and employees closed
-          the dialog looking for it. Now only the middle row scrolls and the buttons stay put. */}
-      <Dialog
+      {/* تعديل الأوردر — نفس المكوّن اللي بتستخدمه شاشة المالك. الفرق بينهم على السيرفر
+          بس: الشاشة دي بتعدي على employeePortal (كوكي الموظف + صلاحية + فحص ملكية)،
+          وشاشة المالك على orders (جلسة إدارية + نطاق النشاط). */}
+      <OrderEditDialog
         open={editDialog.open}
-        onOpenChange={open => { if (!open) requestCloseEditDialog(); }}
-      >
-        <DialogContent
-          className="grid max-h-[92dvh] w-[calc(100%-1rem)] max-w-lg grid-rows-[auto_1fr_auto] gap-0 overflow-hidden p-0 sm:w-full"
-          dir="rtl"
-          onInteractOutside={e => { if (editDirty) e.preventDefault(); }}
-          onEscapeKeyDown={e => { if (editDirty) { e.preventDefault(); requestCloseEditDialog(); } }}
-        >
-          <DialogHeader className="border-b px-4 py-3 text-start sm:px-6">
-            <DialogTitle className="flex items-center gap-2 text-base">
-              <Edit2 className="h-5 w-5 shrink-0 text-[var(--info)]" />
-              <span className="min-w-0 truncate">تعديل بيانات الأوردر</span>
-              {editDirty && (
-                <span className="ms-auto shrink-0 rounded-full bg-[var(--warning)]/15 px-2 py-0.5 text-[11px] font-semibold text-[var(--warning)]">
-                  غير محفوظ
-                </span>
-              )}
-            </DialogTitle>
-          </DialogHeader>
-
-          {/* overflow-x-hidden: long product names and Arabic addresses were pushing the
-              grid sideways at 320px and giving the whole dialog a horizontal scrollbar. */}
-          <div className="space-y-4 overflow-y-auto overflow-x-hidden px-4 py-4 sm:px-6">
-            {/* قسم بيانات العميل */}
-            <div className="rounded-lg border border-[var(--info)]/30 bg-[var(--info)]/10 p-3">
-              <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-[var(--info)]">
-                <User className="h-4 w-4" />
-                بيانات العميل
-              </p>
-              <div className="space-y-3">
-                <div>
-                  <Label>اسم العميل <span className="text-destructive">*</span></Label>
-                  <Input
-                    value={editCustomerName}
-                    onChange={e => setEditCustomerName(e.target.value)}
-                    placeholder="اسم العميل..."
-                    className={`mt-1 h-10 ${!editCustomerName ? "border-destructive/30 bg-destructive/10" : ""}`}
-                  />
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <Label>رقم التليفون <span className="text-destructive">*</span></Label>
-                    <Input
-                      value={editCustomerPhone}
-                      onChange={e => setEditCustomerPhone(e.target.value)}
-                      placeholder="01xxxxxxxxx"
-                      inputMode="tel"
-                      className={`mt-1 h-10 ${!isValidEgyptianMobile(editCustomerPhone) ? "border-destructive/30 bg-destructive/10" : ""}`}
-                      dir="ltr"
-                    />
-                    {!isValidEgyptianMobile(editCustomerPhone) && (
-                      <p className="mt-1 text-xs text-destructive">١١ رقم يبدأ بـ 010 / 011 / 012 / 015</p>
-                    )}
-                  </div>
-                  <div>
-                    <Label>تليفون بديل</Label>
-                    <Input
-                      value={editCustomerPhone2}
-                      onChange={e => setEditCustomerPhone2(e.target.value)}
-                      placeholder="01xxxxxxxxx"
-                      inputMode="tel"
-                      className={`mt-1 h-10 ${editCustomerPhone2.trim() && !isValidEgyptianMobile(editCustomerPhone2) ? "border-destructive/30 bg-destructive/10" : ""}`}
-                      dir="ltr"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* قسم بيانات الشحن */}
-            <div className="rounded-lg border border-[var(--success)]/30 bg-[var(--success)]/10 p-3">
-              <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-[var(--success)]">
-                <Truck className="h-4 w-4" />
-                بيانات الشحن
-              </p>
-              <div className="space-y-3">
-                <GovernorateCitySelect
-                  governorate={editGovernorate}
-                  city={editCity}
-                  onGovernorateChange={value => {
-                    setEditGovernorate(value);
-                    // City belongs to the old governorate; keeping it would ship a Cairo
-                    // district to Aswan. Cleared only when the governorate actually moves.
-                    if (value !== editGovernorate) setEditCity("");
-                  }}
-                  onCityChange={setEditCity}
-                  configuredGovernorates={configuredGovernorates}
-                  isLoading={governorateOptions.isLoading}
-                  isError={governorateOptions.isError}
-                />
-                <div>
-                  <Label>العنوان التفصيلي <span className="text-destructive">*</span></Label>
-                  <Textarea
-                    value={editAddress}
-                    onChange={e => setEditAddress(e.target.value)}
-                    placeholder="الشارع، المنطقة، علامة مميزة..."
-                    className={`mt-1 ${editAddress.trim().length < 5 ? "border-destructive/30 bg-destructive/10" : ""}`}
-                    rows={2}
-                  />
-                  {editAddress.trim().length < 5 && (
-                    <p className="mt-1 text-xs text-destructive">العنوان مطلوب (أكثر من ٥ حروف)</p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* قسم البنود */}
-            <div className="rounded-lg border border-[var(--purple)]/30 bg-[var(--purple)]/10 p-3">
-              <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-[var(--purple)]">
-                <Package className="h-4 w-4" />
-                بنود الأوردر
-              </p>
-              {/* Without this the employee saw an empty basket, a red "لازم بند واحد"
-                  warning and a dead Save button, with nothing saying why. */}
-              {orderItemsError && (
-                <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 p-2">
-                  <p className="flex items-start gap-1.5 text-xs text-destructive">
-                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <span>تعذّر تحميل بنود الأوردر — {orderItemsError.message}. اقفل النافذة وافتحها تاني.</span>
-                  </p>
-                </div>
-              )}
-              <OrderItemsEditor
-                lines={editLines}
-                onChange={lines => { setEditLines(lines); setEditLinesDirty(true); }}
-                products={(productsList ?? []) as any}
-                variants={(stockVariants ?? []) as any}
-                shippingFees={editShippingFees}
-                onShippingFeesChange={value => { setEditShippingFees(value); setEditLinesDirty(true); }}
-                derivedFromHeader={editItemsDerived}
-                isLoading={orderItemsLoading && editLines.length === 0}
-                disabled={editSaving}
-              />
-            </div>
-
-            {/* قسم ملخص الطلب */}
-            <div className="rounded-lg border border-[var(--warning)]/30 bg-[var(--warning)]/10 p-3">
-              <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-[var(--warning)]">
-                <ShoppingBag className="h-4 w-4" />
-                ملخص الطلب
-              </p>
-              <div className="space-y-3">
-                <div>
-                  <Label>وسيلة الدفع</Label>
-                  <Select value={editPaymentMethod} onValueChange={setEditPaymentMethod}>
-                    <SelectTrigger className="mt-1 w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="cod">كاش عند الاستلام (COD)</SelectItem>
-                      <SelectItem value="prepaid">مدفوع مسبقاً</SelectItem>
-                      <SelectItem value="partial">دفع جزئي</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>ملاحظات العميل</Label>
-                  <Textarea
-                    value={editNotes}
-                    onChange={e => setEditNotes(e.target.value)}
-                    placeholder="ملاحظات من العميل..."
-                    className="mt-1"
-                    rows={2}
-                  />
-                </div>
-                <div>
-                  <Label>ملاحظات الموظف (داخلية)</Label>
-                  <Textarea
-                    value={editEmployeeNotes}
-                    onChange={e => setEditEmployeeNotes(e.target.value)}
-                    placeholder="ملاحظات داخلية للموظف..."
-                    className="mt-1 bg-muted/50"
-                    rows={2}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* تنبيه بيانات ناقصة */}
-            {editIssues.length > 0 && (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-2">
-                <p className="flex items-center gap-1 text-xs font-semibold text-destructive">
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  بيانات ناقصة — الأوردر مش هيتصدّر في شيت الشحن
-                </p>
-                <ul className="mt-1 list-inside list-disc text-xs text-destructive">
-                  {editIssues.map(issue => <li key={issue}>{issue}</li>)}
-                </ul>
-              </div>
-            )}
-
-            {/* سجل التعديلات */}
+        onOpenChange={open => { if (!open) setEditDialog({ open: false, orderId: null }); }}
+        order={editingOrder}
+        items={orderItemsData}
+        itemsLoading={orderItemsLoading}
+        itemsError={orderItemsError}
+        products={(productsList ?? []) as any}
+        variants={(stockVariants ?? []) as any}
+        configuredGovernorates={configuredGovernorates}
+        governoratesLoading={governorateOptions.isLoading}
+        governoratesError={governorateOptions.isError}
+        saving={editSaving}
+        onSave={saveEdit}
+        footerSlot={
+          <>
             <button
               type="button"
               className="text-xs text-[var(--info)] underline"
@@ -2066,53 +1725,11 @@ export default function EmployeeDashboard() {
             >
               {showEditHistory ? "إخفاء سجل التعديلات" : "عرض سجل التعديلات"}
             </button>
-            {showEditHistory && editDialog.orderId && <EditHistoryPanel orderId={editDialog.orderId} />}
-          </div>
-
-          {/* Sticky footer. The running total lives here because on a phone the items list
-              is scrolled well past by the time the employee reaches Save. */}
-          <DialogFooter className="flex-col gap-2 border-t bg-background px-4 py-3 sm:flex-row sm:px-6">
-            <div className="flex w-full items-center justify-between text-sm sm:w-auto sm:me-auto">
-              <span className="text-muted-foreground">الإجمالي</span>
-              <span className="ms-3 text-base font-black tabular-nums">
-                {linesTotal(editLines, editShippingFees).toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                <span className="ms-1 text-xs font-normal">ج.م</span>
-              </span>
-            </div>
-            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
-              <Button
-                variant="outline"
-                className="h-11 gap-1.5"
-                onClick={requestCloseEditDialog}
-                disabled={editSaving}
-              >
-                <XCircle className="h-4 w-4" />
-                إلغاء
-              </Button>
-              <Button
-                className="h-11 gap-1.5 bg-[var(--info)] hover:bg-[var(--info)]"
-                disabled={editSaving || editIssues.length > 0 || !editDirty}
-                onClick={saveEdit}
-              >
-                {editSaving
-                  ? <><RefreshCw className="h-4 w-4 animate-spin" />جاري الحفظ...</>
-                  : <><Save className="h-4 w-4" />حفظ التعديلات</>}
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Unsaved-changes guard. Confirming here is the only path that throws away typed work. */}
-      <ConfirmDialog
-        open={confirmDiscard}
-        onOpenChange={setConfirmDiscard}
-        title="فيه تعديلات مش محفوظة"
-        description="لو قفلت دلوقتي هتضيع التعديلات اللي عملتها على الأوردر ده."
-        confirmLabel="اقفل وامسح التعديلات"
-        cancelLabel="ارجع للتعديل"
-        tone="destructive"
-        onConfirm={closeEditDialog}
+            {showEditHistory && editDialog.orderId && (
+              <EditHistoryPanel orderId={editDialog.orderId} />
+            )}
+          </>
+        }
       />
 
       {/* Postpone Dialog */}

@@ -2487,6 +2487,120 @@ export const appRouter = router({
         return { success: true, order: result };
       }),
 
+    // ==================== ORDER ITEMS (owner / admin side) ====================
+    // The employee portal has had orderItems/editOrderItems since the confirmation screen
+    // was rebuilt; the admin side had no way to read or write order_items at all, which is
+    // why the owner's edit dialog still described a whole basket as one text field.
+    //
+    // Same db functions as the employee path, deliberately: one place decides how a line is
+    // priced, how the header is re-rolled and how stock is reconciled. What differs is the
+    // gate — admin session and tenant scope here, employee cookie plus per-order ownership
+    // there — so sharing the UI does not share the authorization.
+    orderItems: adminProcedure
+      .input(z.object({ orderId: z.number() }))
+      .query(async ({ ctx, input }) => {
+        const order = await getOrderById(input.orderId);
+        if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
+        await requireScopedBusinessId(ctx.tenantId, order.businessId);
+        const items = await getOrderItems(input.orderId);
+        // An order created before order_items was populated has none. Rather than showing
+        // an empty basket — which the user would "fix" by adding lines, silently doubling
+        // the order — synthesise one line from the header and mark it so the UI can say so.
+        if (items.length === 0) {
+          return {
+            items: [
+              {
+                id: null,
+                productId: order.productId,
+                productName: order.productName,
+                variantId: order.variantId ?? null,
+                variantName: null,
+                quantity: order.quantity,
+                unitPrice: null,
+                discount: "0",
+                size: order.size ?? null,
+                color: order.color ?? null,
+              },
+            ],
+            derivedFromHeader: true,
+            shippingFees: order.shippingFees ?? "0",
+            totalAmount: order.totalAmount,
+          };
+        }
+        return {
+          items: items.map(i => ({
+            id: i.id,
+            productId: i.productId,
+            productName: i.productName,
+            variantId: i.variantId,
+            variantName: i.variantName,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            discount: i.discountAmountSnapshot,
+            size: i.size,
+            color: i.color,
+          })),
+          derivedFromHeader: false,
+          shippingFees: order.shippingFees ?? "0",
+          totalAmount: order.totalAmount,
+        };
+      }),
+
+    editOrderItems: adminProcedure
+      .input(
+        z.object({
+          orderId: z.number(),
+          items: z
+            .array(
+              z.object({
+                productId: z.number().nullable(),
+                productName: z.string().min(1).max(200),
+                variantId: z.number().nullable(),
+                quantity: z.number().int().min(1).max(999),
+                unitPrice: z.number().min(0).max(1_000_000),
+                discount: z.number().min(0).max(1_000_000),
+                size: z.string().max(100).nullable().optional(),
+                color: z.string().max(100).nullable().optional(),
+              })
+            )
+            .min(1, "الأوردر لازم يكون فيه بند واحد على الأقل")
+            .max(20, "أقصى عدد بنود ٢٠"),
+          shippingFees: z.number().min(0).max(100_000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const order = await getOrderById(input.orderId);
+        if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
+        await requireScopedBusinessId(ctx.tenantId, order.businessId);
+        const actingEmpId = await resolveActingEmployeeId(ctx);
+        const result = await replaceOrderItemsFromEditor(
+          input.orderId,
+          input.items.map(i => ({
+            productId: i.productId,
+            productName: i.productName,
+            variantId: i.variantId,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            discount: i.discount,
+            size: i.size ?? null,
+            color: i.color ?? null,
+          })),
+          input.shippingFees,
+          { id: actingEmpId ?? 0, name: ctx.user.name || "Admin", role: "admin" }
+        );
+        await addActivityLog({
+          action: "edit_order_items",
+          entityType: "order",
+          entityId: input.orderId,
+          description: `تعديل بنود أوردر #${input.orderId} — ${result.itemCount} بند، إجمالي ${result.totalAmount}`,
+          metadata: { itemCount: result.itemCount, totalAmount: result.totalAmount },
+          performedBy: ctx.user.id,
+          performedByName: ctx.user.name ?? "مدير",
+          performedByRole: ctx.user.role ?? "admin",
+        });
+        return { success: true, ...result };
+      }),
+
     // جلب سجل تعديلات أوردر
     getEditHistory: protectedProcedure
       .input(

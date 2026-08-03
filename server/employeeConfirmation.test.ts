@@ -11,7 +11,7 @@ import {
 /**
  * شاشة موظف التأكيدات.
  *
- * الحسابات النقية متغطّية في `client/src/components/employee/OrderItemsEditor.test.ts`
+ * الحسابات النقية متغطّية في `client/src/components/orders/OrderItemsEditor.test.ts`
  * و`shared/egyptLocations.test.ts`. الملف ده بيغطي الحاجات اللي مالهاش دالة نقية:
  * الصلاحيات، وحواجز الملكية، وحارس الكتابة على البنود. الحواجز بتتفحص على المصدر لأن
  * تشغيلها محتاج قاعدة بيانات مش موجودة في الساندبوكس — والاختبار بيقول ده صراحة بدل
@@ -21,6 +21,8 @@ import {
 const routers = fs.readFileSync("server/routers.ts", "utf-8");
 const compactRouters = routers.replace(/\s+/g, " ");
 const db = fs.readFileSync("server/db.ts", "utf-8");
+/** النافذة المشتركة اللي بتستخدمها شاشة الموظف وشاشة المالك. */
+const dialog = fs.readFileSync("client/src/components/orders/OrderEditDialog.tsx", "utf-8");
 
 describe("صلاحيات موظف التأكيدات — المسموح", () => {
   const role = "order_confirmation";
@@ -269,12 +271,12 @@ describe("حالات الحافة في الواجهة", () => {
   const page = fs.readFileSync("client/src/pages/EmployeeDashboard.tsx", "utf-8");
 
   it("🔑 تحذير «بيانات ناقصة» مايظهرش والبنود لسه بتحمّل", () => {
-    expect(page).toContain("if (!orderItemsLoading) {");
+    expect(dialog).toContain("if (!itemsLoading) {");
   });
 
   it("🔑 فشل تحميل البنود بيتقال للموظف مش بيسيبه قدام زرار ميت", () => {
-    expect(page).toContain("تعذّر تحميل بنود الأوردر");
-    expect(page).toContain("orderItemsError");
+    expect(dialog).toContain("تعذّر تحميل بنود الأوردر");
+    expect(dialog).toContain("itemsError");
   });
 
   it("🔑 قائمة الحالة عليها نفس حارس التزامن بتاع الأزرار", () => {
@@ -334,25 +336,29 @@ describe("واجهة الشاشة", () => {
   });
 
   it("🔑 تحذير قبل إغلاق نافذة فيها تعديلات مش محفوظة", () => {
-    expect(page).toContain("function requestCloseEditDialog()");
-    expect(page).toContain("setConfirmDiscard(true)");
-    expect(page).toContain("فيه تعديلات مش محفوظة");
+    expect(dialog).toContain("function requestClose()");
+    expect(dialog).toContain("setConfirmDiscard(true)");
+    expect(dialog).toContain("فيه تعديلات مش محفوظة");
   });
 
   it("🔑 النافذة مابتتقفلش لو الحفظ فشل", () => {
     // closeEditDialog بتتنادى بعد الـawait مش في onSuccess بتاع كل mutation
     expect(page).toContain("toast.success(\"✅ تم حفظ التعديلات\");");
-    const save = page.slice(page.indexOf("async function saveEdit()"));
-    expect(save.slice(0, save.indexOf("\n  }"))).toContain("catch {");
+    const save = page.slice(page.indexOf("async function saveEdit("));
+    expect(dialog).toContain("} catch {");
   });
 
   it("🔑 الملاحظات بتتبعت زي ما هي — مسحها بيتحفظ مش بيتجاهَل", () => {
-    expect(page).toContain("notes: editNotes,");
-    expect(page).not.toContain("notes: editNotes || undefined");
+    // مقصورة على دالة الحفظ: `|| undefined` مشروعة في حتت تانية في الصفحة، والمقصود
+    // هنا إن الملاحظات تحديدًا بتتبعت زي ما هي عشان مسحها يتحفظ.
+    const save = page.slice(page.indexOf("async function saveEdit("));
+    const body = save.slice(0, save.indexOf("\n  }"));
+    expect(body).toContain("notes: header.notes,");
+    expect(body).not.toContain("notes: header.notes || undefined");
   });
 
   it("المدينة بتتصفّر لما المحافظة تتغيّر بس", () => {
-    expect(page).toContain("if (value !== editGovernorate) setEditCity(\"\");");
+    expect(dialog).toContain("value !== header.governorate");
   });
 
   it("🔑 مافيش أثر للحقول القديمة بتاعة المنتج الواحد", () => {
@@ -362,15 +368,15 @@ describe("واجهة الشاشة", () => {
   });
 
   it("التحقق من رقم الموبايل المصري", () => {
-    expect(page).toContain("function isValidEgyptianMobile");
-    expect(page).toContain("/^01[0125]\\d{8}$/");
+    expect(dialog).toContain("export function isValidEgyptianMobile");
+    expect(dialog).toContain("/^01[0125]\\d{8}$/");
   });
 });
 
 describe("مساحة الضغط والـRTL", () => {
   const page = fs.readFileSync("client/src/pages/EmployeeDashboard.tsx", "utf-8");
   const editor = fs.readFileSync(
-    "client/src/components/employee/OrderItemsEditor.tsx",
+    "client/src/components/orders/OrderItemsEditor.tsx",
     "utf-8"
   );
 
@@ -382,12 +388,12 @@ describe("مساحة الضغط والـRTL", () => {
   });
 
   it("أزرار الحفظ والإلغاء ثابتة أسفل النافذة", () => {
-    expect(page).toContain("grid-rows-[auto_1fr_auto]");
-    expect(page).toContain("max-h-[92dvh]");
+    expect(dialog).toContain("grid-rows-[auto_1fr_auto]");
+    expect(dialog).toContain("max-h-[92dvh]");
   });
 
   it("🔑 مافيش تمرير أفقي — الجسم بيمرّر رأسيًا بس", () => {
-    expect(page).toContain("overflow-y-auto overflow-x-hidden");
+    expect(dialog).toContain("overflow-y-auto overflow-x-hidden");
   });
 
   it("خصائص منطقية مش يمين/شمال ثابتة — الشاشة RTL", () => {

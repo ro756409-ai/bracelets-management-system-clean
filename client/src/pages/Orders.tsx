@@ -1,6 +1,9 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import {
+  OrderEditDialog, type OrderEditSavePayload,
+} from "@/components/orders/OrderEditDialog";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -270,21 +273,9 @@ export default function Orders() {
     { enabled: detailOrderId != null }
   );
 
-  // Edit order state
+  // Edit order state — the dialog owns the form; the page owns which order is open.
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editOrderId, setEditOrderId] = useState<number | null>(null);
-  const [editProductName, setEditProductName] = useState("");
-  const [editQuantity, setEditQuantity] = useState<number>(1);
-  const [editTotalAmount, setEditTotalAmount] = useState<number>(0);
-  const [editNotes, setEditNotes] = useState("");
-  const [editColor, setEditColor] = useState("");
-  const [editSize, setEditSize] = useState("");
-  const [editCustomerName, setEditCustomerName] = useState("");
-  const [editCustomerPhone, setEditCustomerPhone] = useState("");
-  const [editCustomerPhone2, setEditCustomerPhone2] = useState("");
-  const [editCustomerAddress, setEditCustomerAddress] = useState("");
-  const [editGovernorate, setEditGovernorate] = useState("");
-  const [editShippingFees, setEditShippingFees] = useState<number>(0);
 
   const [hideAssigned, setHideAssigned] = useState(true);
   // فلتر "الموظف المسؤول" — الـAPI كان بيدعم assignedEmployeeId من الأول، الناقص كان الواجهة.
@@ -351,6 +342,10 @@ export default function Orders() {
   });
   const { data: products } = trpc.products.list.useQuery(
     currentBusinessIds && currentBusinessIds.length === 1 ? { businessId: currentBusinessIds[0] } : undefined
+  );
+  // Variants for the edit dialog's per-line "نوع الحفر" select.
+  const { data: variantsList } = trpc.variants.all.useQuery(
+    currentBusinessIds && currentBusinessIds.length ? { businessIds: currentBusinessIds } : undefined
   );
   const { data: adNames } = trpc.orders.distinctAdNames.useQuery();
   const { data: employees } = trpc.employees.activeList.useQuery(
@@ -447,15 +442,71 @@ export default function Orders() {
     onError: (e) => toast.error(e.message),
   });
 
+  // Two mutations, one Save button — same split as the confirmation screen. Neither
+  // handler closes the dialog: a failed save has to leave the typed values on screen.
   const editOrderMutation = trpc.orders.editOrder.useMutation({
-    onSuccess: () => {
-      toast.success("✅ تم تعديل الأوردر بنجاح");
-      utils.orders.list.invalidate();
-      utils.orders.todayConfirmed.invalidate();
-      setShowEditDialog(false);
-    },
-    onError: (e) => toast.error(e.message),
+    onError: e => toast.error(e.message),
   });
+
+  const editItemsMutation = trpc.orders.editOrderItems.useMutation({
+    onError: e => toast.error(e.message),
+  });
+
+  const editSaving = editOrderMutation.isPending || editItemsMutation.isPending;
+
+  const { data: editItemsData, isLoading: editItemsLoading, error: editItemsError } =
+    trpc.orders.orderItems.useQuery(
+      { orderId: editOrderId ?? 0 },
+      { enabled: showEditDialog && editOrderId != null, retry: false }
+    );
+
+  /** The order the dialog is open on, read from the list the page already has. */
+  const editingOrder =
+    (data?.orders ?? []).find((o: any) => o.id === editOrderId) ?? null;
+
+  /**
+   * Items first: it is the call that can be refused outright (stock already out) and the
+   * one that rewrites totalAmount, so running it second would leave the header saved and
+   * the basket rejected — which reads to the user as a successful save.
+   *
+   * Throwing is how the dialog learns to stay open with the typed values intact.
+   */
+  async function saveOrderEdit(payload: OrderEditSavePayload) {
+    const { orderId, header, headerDirty, items, itemsDirty, shippingFees } = payload;
+    if (itemsDirty) {
+      await editItemsMutation.mutateAsync({
+        orderId,
+        items: items.map((l: any) => ({
+          productId: l.productId,
+          productName: l.productName,
+          variantId: l.variantId,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          discount: l.discount,
+        })),
+        shippingFees,
+      });
+    }
+    if (headerDirty) {
+      await editOrderMutation.mutateAsync({
+        orderId,
+        customerName: header.customerName,
+        customerPhone: header.customerPhone,
+        customerPhone2: header.customerPhone2,
+        customerAddress: header.customerAddress,
+        governorate: header.governorate,
+        city: header.city,
+        paymentMethod: header.paymentMethod,
+        // Sent unconditionally, not `|| undefined`: clearing a stale note is meant.
+        notes: header.notes,
+        ...(itemsDirty ? {} : { shippingFees }),
+      });
+    }
+    toast.success("✅ تم حفظ التعديلات");
+    utils.orders.list.invalidate();
+    utils.orders.todayConfirmed.invalidate();
+    utils.orders.orderItems.invalidate({ orderId });
+  }
 
   const duplicateOrderMutation = trpc.orders.duplicate.useMutation({
     onSuccess: (data) => {
@@ -533,18 +584,6 @@ export default function Orders() {
 
   const openEditFor = (order: any) => {
     setEditOrderId(order.id);
-    setEditProductName(order.productName ?? "");
-    setEditQuantity(order.quantity ?? 1);
-    setEditTotalAmount(Number(order.totalAmount));
-    setEditNotes(order.notes ?? "");
-    setEditColor(order.color ?? "");
-    setEditSize(order.size ?? "");
-    setEditCustomerName(order.customerName ?? "");
-    setEditCustomerPhone(order.customerPhone ?? "");
-    setEditCustomerPhone2(order.customerPhone2 ?? "");
-    setEditCustomerAddress(order.customerAddress ?? "");
-    setEditGovernorate(order.governorate ?? "");
-    setEditShippingFees(Number(order.shippingFees ?? 0));
     setShowEditDialog(true);
   };
 
@@ -1486,102 +1525,23 @@ export default function Orders() {
       <ImportWhatsAppDialog open={showWhatsAppImportDialog} onClose={() => setShowWhatsAppImportDialog(false)} onSuccess={() => utils.orders.list.invalidate()} />
 
       {/* Edit Order Dialog */}
-      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>تعديل بيانات الأوردر</DialogTitle></DialogHeader>
-          <div className="space-y-5">
-            <div className="bg-accent/40 border border-border rounded-lg p-4 space-y-3">
-              <h4 className="font-semibold text-sm">بيانات العميل</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <Label>اسم العميل</Label>
-                  <Input value={editCustomerName} onChange={e => setEditCustomerName(e.target.value)} placeholder="اسم العميل الكامل" className="mt-1" />
-                </div>
-                <div>
-                  <Label>رقم الهاتف</Label>
-                  <Input value={editCustomerPhone} onChange={e => setEditCustomerPhone(e.target.value)} placeholder="01xxxxxxxxx" className="mt-1" dir="ltr" />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <Label>رقم هاتف بديل</Label>
-                  <Input value={editCustomerPhone2} onChange={e => setEditCustomerPhone2(e.target.value)} placeholder="اختياري" className="mt-1" dir="ltr" />
-                </div>
-                <div>
-                  <Label>المحافظة</Label>
-                  <Select value={editGovernorate} onValueChange={setEditGovernorate}>
-                    <SelectTrigger className="mt-1"><SelectValue placeholder="اختر المحافظة" /></SelectTrigger>
-                    <SelectContent>{GOVERNORATES.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div>
-                <Label>العنوان التفصيلي</Label>
-                <Input value={editCustomerAddress} onChange={e => setEditCustomerAddress(e.target.value)} placeholder="الشارع، المنطقة، الحي..." className="mt-1" />
-              </div>
-            </div>
-
-            <div className="bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-lg p-4 space-y-3">
-              <h4 className="font-semibold text-sm text-[var(--warning)]">بيانات المنتج</h4>
-              <div>
-                <Label>اسم المنتج</Label>
-                <Input value={editProductName} onChange={e => setEditProductName(e.target.value)} placeholder="اسم المنتج..." className="mt-1" />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <Label>الكمية <span className="text-destructive">*</span></Label>
-                  <Input type="number" min={1} value={editQuantity} onChange={e => setEditQuantity(Number(e.target.value))} className="mt-1" />
-                </div>
-                <div>
-                  <Label>المبلغ الإجمالي</Label>
-                  <Input type="number" min={0} value={editTotalAmount} onChange={e => setEditTotalAmount(Number(e.target.value))} className="mt-1" />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <Label>اللون</Label>
-                  <Input value={editColor} onChange={e => setEditColor(e.target.value)} placeholder="مثلاً: أسود، ذهبي..." className="mt-1" />
-                </div>
-                <div>
-                  <Label>المقاس</Label>
-                  <Input value={editSize} onChange={e => setEditSize(e.target.value)} placeholder="مثلاً: L, XL, 120×200..." className="mt-1" />
-                </div>
-              </div>
-              <div>
-                <Label>رسوم الشحن</Label>
-                <Input type="number" min={0} value={editShippingFees} onChange={e => setEditShippingFees(Number(e.target.value))} className="mt-1" />
-              </div>
-            </div>
-
-            <div>
-              <Label>ملاحظات</Label>
-              <Textarea value={editNotes} onChange={e => setEditNotes(e.target.value)} placeholder="ملاحظات إضافية..." className="mt-1" rows={2} />
-            </div>
-            <p className="text-xs text-muted-foreground bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded p-2">
-              ⚠️ لو كان الأوردر مؤكد، سيتم تعديل الجرد تلقائياً
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowEditDialog(false)}>رجوع</Button>
-            <Button
-              disabled={editQuantity < 1 || editOrderMutation.isPending}
-              onClick={() => {
-                if (!editOrderId) return;
-                editOrderMutation.mutate({
-                  orderId: editOrderId, quantity: editQuantity, totalAmount: editTotalAmount, shippingFees: editShippingFees,
-                  productName: editProductName || undefined, notes: editNotes || undefined,
-                  color: editColor || null, size: editSize || null,
-                  customerName: editCustomerName || undefined, customerPhone: editCustomerPhone || undefined,
-                  customerPhone2: editCustomerPhone2 || undefined, customerAddress: editCustomerAddress || undefined,
-                  governorate: editGovernorate || undefined,
-                });
-              }}
-            >
-              {editOrderMutation.isPending ? "جاري الحفظ..." : "حفظ التعديل"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* تعديل الأوردر — نفس المكوّن اللي بتستخدمه شاشة موظف التأكيدات. الفرق بينهم على
+          السيرفر بس: الشاشة دي بتعدي على راوتر orders (جلسة إدارية + نطاق النشاط)،
+          وشاشة الموظف على employeePortal (كوكي + صلاحية + فحص ملكية الأوردر). */}
+      <OrderEditDialog
+        open={showEditDialog}
+        onOpenChange={open => { setShowEditDialog(open); if (!open) setEditOrderId(null); }}
+        order={editingOrder}
+        items={editItemsData}
+        itemsLoading={editItemsLoading}
+        itemsError={editItemsError}
+        products={(products ?? []) as any}
+        variants={(variantsList ?? []) as any}
+        configuredGovernorates={GOVERNORATES}
+        saving={editSaving}
+        onSave={saveOrderEdit}
+        showEmployeeNotes={false}
+      />
 
       {/* Return Dialog */}
       <Dialog open={showReturnDialog} onOpenChange={setShowReturnDialog}>
