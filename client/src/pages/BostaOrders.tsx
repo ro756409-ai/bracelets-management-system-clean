@@ -21,7 +21,7 @@ import {
   WhatsAppButton,
 } from "@/components/shared";
 import { useBusinessContext } from "@/contexts/BusinessContext";
-import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 
 type BostaCategory =
   | "sent_today"
@@ -80,7 +80,7 @@ function CategoryBadge({ order }: { order: any }) {
 }
 
 export default function BostaOrders() {
-  const { values: GOVERNORATES } = useOperationalOptions("governorate");
+  const { values: GOVERNORATES } = useGovernorateOptions();
   const [, setLocation] = useLocation();
   const { currentBusinessIds } = useBusinessContext();
   const [category, setCategory] = useState<BostaCategory | undefined>(

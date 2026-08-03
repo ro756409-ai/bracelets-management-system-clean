@@ -52,6 +52,7 @@ import {
   type FilterDescriptor,
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 
 // QR Code renderer component
 function QRRenderer({ serialNumber, canvasId }: { serialNumber: string; canvasId: string }) {
@@ -179,7 +180,10 @@ export default function Orders() {
   const [, navigate] = useLocation();
   const isAdmin = user?.role === 'admin';
   const { currentBusinessIds } = useBusinessContext();
-  const { values: GOVERNORATES } = useOperationalOptions("governorate");
+  // Same shared source as every other screen. The edit dialog falls back on its own,
+  // but the two governorate FILTERS on this page read this list directly and were
+  // rendering empty for exactly the same reason.
+  const { values: GOVERNORATES } = useGovernorateOptions();
   const sourceOptions = useOperationalOptions("order_source").options;
   const returnReasonOptions = useOperationalOptions("return_reason").options;
   const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;

@@ -4419,6 +4419,9 @@ export const appRouter = router({
           customerName: z.string().min(1),
           customerPhone: z.string().min(5),
           governorate: z.string().min(1),
+          // createOrder has always accepted a city; updateOrder never did, so a city typed
+          // at creation could be read but never corrected.
+          city: z.string().max(100).optional(),
           customerAddress: z.string().min(1),
           selectedProducts: z
             .array(
@@ -4481,6 +4484,7 @@ export const appRouter = router({
             customerName: input.customerName,
             customerPhone: input.customerPhone,
             governorate: input.governorate,
+            city: input.city ?? null,
             customerAddress: input.customerAddress,
             productId: firstProductId,
             productName: productNames,

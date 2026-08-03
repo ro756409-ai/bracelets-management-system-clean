@@ -27,6 +27,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
+import { GovernorateCitySelect } from "@/components/orders/GovernorateCitySelect";
 
 // ID منتج كفر مرتبة ووتر بروف
 const WATERPROOF_PRODUCT_ID = 60001;
@@ -114,7 +116,10 @@ const EMPTY_FORM: FormState = {
 const DRAFT_STORAGE_KEY = "facebookEntryDraft";
 
 export default function FacebookEntry() {
-  const { values: EGYPT_GOVERNORATES } = useOperationalOptions("governorate");
+  // Was useOperationalOptions("governorate") directly, which returns the empty
+  // configuration table — so the data-entry employee saw a governorate dropdown with no
+  // options and could not set one at all.
+  const governorateOptions = useGovernorateOptions();
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [pasteText, setPasteText] = useState("");
   const [showPaste, setShowPaste] = useState(false);
@@ -574,6 +579,7 @@ export default function FacebookEntry() {
       customerName: editForm.customerName,
       customerPhone: editForm.customerPhone,
       governorate: editForm.governorate,
+      city: editForm.city || undefined,
       customerAddress: editForm.customerAddress,
       // The edit dialog only ever holds resolved items, but narrow explicitly rather than
       // asserting — an unresolved line is skipped here instead of being sent with no product.
@@ -792,35 +798,19 @@ export default function FacebookEntry() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-sm font-medium flex items-center gap-1">
-                      <MapPin className="h-3.5 w-3.5" /> المحافظة *
-                    </Label>
-                    <Select
-                      value={form.governorate}
-                      onValueChange={(v) => setForm((f) => ({ ...f, governorate: v }))}
-                    >
-                      <SelectTrigger className={`h-10 ${fieldClass("governorate")}`}>
-                        <SelectValue placeholder="اختر" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {EGYPT_GOVERNORATES.map((g) => (
-                          <SelectItem key={g} value={g}>{g}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm font-medium">المدينة / المنطقة</Label>
-                    <Input
-                      placeholder="مثال: أبو حماد"
-                      value={form.city}
-                      onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
-                      className={`h-10 ${fieldClass("city")}`}
-                    />
-                  </div>
-                </div>
+                {/* نفس المكوّن اللي بتستخدمه شاشة المالك وشاشة التأكيدات — المدينة بتتفلتر
+                    حسب المحافظة، وبتتصفّر لما المحافظة تتغيّر. */}
+                <GovernorateCitySelect
+                  governorate={form.governorate}
+                  city={form.city}
+                  onGovernorateChange={(v) =>
+                    setForm((f) => (v !== f.governorate ? { ...f, governorate: v, city: "" } : { ...f, governorate: v }))
+                  }
+                  onCityChange={(v) => setForm((f) => ({ ...f, city: v }))}
+                  configuredGovernorates={governorateOptions.values}
+                  isLoading={governorateOptions.isLoading}
+                  isError={governorateOptions.isError}
+                />
 
                 <div className="space-y-1.5">
                   <Label className="text-sm font-medium">العنوان التفصيلي *</Label>
@@ -1324,25 +1314,19 @@ export default function FacebookEntry() {
               />
             </div>
 
-            {/* Governorate */}
-            <div className="space-y-1.5">
-              <Label className="text-sm font-medium flex items-center gap-1">
-                <MapPin className="h-3.5 w-3.5" /> المحافظة *
-              </Label>
-              <Select
-                value={editForm.governorate}
-                onValueChange={(v) => setEditForm((f) => ({ ...f, governorate: v }))}
-              >
-                <SelectTrigger className="h-10">
-                  <SelectValue placeholder="اختر المحافظة" />
-                </SelectTrigger>
-                <SelectContent>
-                  {EGYPT_GOVERNORATES.map((g) => (
-                    <SelectItem key={g} value={g}>{g}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {/* المحافظة والمدينة — نفس المكوّن المشترك. فورم التعديل ده مكانش فيه حقل
+                مدينة خالص، فالمدينة اللي الموظف كتبها وقت الإنشاء مكانش ينفع يعدّلها. */}
+            <GovernorateCitySelect
+              governorate={editForm.governorate}
+              city={editForm.city}
+              onGovernorateChange={(v) =>
+                setEditForm((f) => (v !== f.governorate ? { ...f, governorate: v, city: "" } : { ...f, governorate: v }))
+              }
+              onCityChange={(v) => setEditForm((f) => ({ ...f, city: v }))}
+              configuredGovernorates={governorateOptions.values}
+              isLoading={governorateOptions.isLoading}
+              isError={governorateOptions.isError}
+            />
 
             {/* Address */}
             <div className="space-y-1.5">

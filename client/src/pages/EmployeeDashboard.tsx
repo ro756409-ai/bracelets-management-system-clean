@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -97,7 +98,7 @@ export default function EmployeeDashboard() {
   // Governorates the business curated, if any. When the list is empty — which it was for
   // every business, nobody having filled the table in — GovernorateCitySelect falls back to
   // the full national list from shared/egyptLocations.ts instead of rendering nothing.
-  const governorateOptions = useOperationalOptions("governorate");
+  const governorateOptions = useGovernorateOptions();
   const configuredGovernorates = governorateOptions.values;
   const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
   const sourceOptions = useOperationalOptions("order_source").options;

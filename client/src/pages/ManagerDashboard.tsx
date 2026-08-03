@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { BrandMark } from "@/components/BrandMark";
 import { toast } from "sonner";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import {
   LayoutDashboard, ShoppingCart, Package, BarChart3, Users,
   LogOut, RefreshCw, Search, Plus, CheckCircle2, XCircle, Clock,
@@ -43,7 +44,7 @@ const ROLE_LABELS: Record<string, string> = {
 type TabKey = "dashboard" | "orders" | "inventory" | "reports" | "employees" | "tasks";
 
 export default function ManagerDashboard() {
-  const { values: GOVERNORATES } = useOperationalOptions("governorate");
+  const { values: GOVERNORATES } = useGovernorateOptions();
   const [, setLocation] = useLocation();
   const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -386,7 +387,7 @@ function StatCard({ label, value, color, bg }: { label: string; value: number; c
 
 // ==================== ORDERS TAB ====================
 function ManagerOrdersTab() {
-  const { values: GOVERNORATES } = useOperationalOptions("governorate");
+  const { values: GOVERNORATES } = useGovernorateOptions();
   const statusOptions = useOperationalOptions("order_status").options;
   const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
   const [search, setSearch] = useState("");
