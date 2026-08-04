@@ -54,13 +54,17 @@ const MOVEMENT_LABELS: Record<string, string> = {
 };
 
 export default function DailyLedger() {
-  const { currentBusinessIds } = useBusinessContext();
+  const { currentBusinessIds, currentGroup } = useBusinessContext();
   const utils = trpc.useUtils();
 
   const [dateKey, setDateKey] = useState(cairoToday);
   const [action, setAction] = useState<ActionKind | null>(null);
 
   // Form state, shared by the three actions — they differ in which fields show, not in shape.
+  // The brand is a field of the movement, so it belongs in the form. It used to be read
+  // from the page header, which selects a GROUP — and a group holds several brands, so the
+  // form asked the user to "pick one brand above" when there was no such control above.
+  const [businessId, setBusinessId] = useState<string>("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [notes, setNotes] = useState("");
@@ -74,18 +78,27 @@ export default function DailyLedger() {
   );
   const categories = trpc.accounting.expenseCategories.useQuery(scope, { retry: false });
 
-  /** The single brand a movement is recorded against. */
-  const businessId = currentBusinessIds?.length === 1 ? currentBusinessIds[0] : undefined;
+  /** Brands in the selected group — what the form offers. */
+  const brands = currentGroup?.businesses ?? [];
+  /** Chosen brand, or the only one when the group holds a single brand. */
+  const chosenBusinessId =
+    businessId ? Number(businessId) : brands.length === 1 ? brands[0].id : undefined;
 
-  function resetForm() {
+  /** `keepBrand` on the "save and add another" path — the next movement is usually the
+   *  same brand, and re-picking it every time is the kind of friction that stops a screen
+   *  being used. */
+  function resetForm(keepBrand = false) {
+    if (!keepBrand) setBusinessId("");
     setAmount("");
     setDescription("");
     setNotes("");
     setCategoryId("");
+    setTouched({});
   }
 
   function closeForm() {
     setAction(null);
+    setSubmitAttempted(false);
     resetForm();
   }
 
@@ -105,19 +118,57 @@ export default function DailyLedger() {
 
   const saving = expenseMutation.isPending || treasuryMutation.isPending;
 
-  const issues = useMemo(() => {
-    const out: string[] = [];
+  /**
+   * A rule set per action, not one shared set.
+   *
+   * The three used to share a single validator, which is only correct while the three
+   * happen to require the same fields — the moment one gains a field the shared version is
+   * wrong for the other two, silently. Each action now states its own requirements against
+   * its own backend contract, and the errors are keyed by field so they can be shown next
+   * to the input that is actually wrong.
+   */
+  type FieldErrors = Partial<Record<"businessId" | "amount" | "description" | "categoryId", string>>;
+
+  function validateCommon(): FieldErrors {
+    const errors: FieldErrors = {};
     const value = Number(amount);
-    if (!amount.trim() || !Number.isFinite(value) || value <= 0)
-      out.push("المبلغ لازم يكون رقم أكبر من صفر");
-    if (!description.trim()) out.push("البيان مطلوب");
-    if (businessId == null) out.push("اختر براند واحد من فوق قبل التسجيل");
-    return out;
-  }, [amount, description, businessId]);
+    if (!amount.trim()) errors.amount = "المبلغ مطلوب";
+    else if (!Number.isFinite(value)) errors.amount = "المبلغ لازم يكون رقم";
+    else if (value <= 0) errors.amount = "المبلغ لازم يكون أكبر من صفر";
+    if (!description.trim()) errors.description = "البيان مطلوب";
+    // Required by every one of the three backends, and now answerable inside the form.
+    if (chosenBusinessId == null) errors.businessId = "اختر البراند";
+    return errors;
+  }
+
+  /** accounting.expenseCreate: amount · description · expenseDate · businessId. */
+  const validateExpense = validateCommon;
+  /** accounting.treasuryCreate (deposit): type · amount · description · businessId. */
+  const validateDeposit = validateCommon;
+  /** accounting.treasuryCreate (withdrawal): identical contract to deposit. */
+  const validateWithdrawal = validateCommon;
+
+  const errors: FieldErrors = useMemo(() => {
+    if (!action) return {};
+    if (action === "expense") return validateExpense();
+    if (action === "deposit") return validateDeposit();
+    return validateWithdrawal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [action, amount, description, chosenBusinessId]);
+
+  const hasErrors = Object.keys(errors).length > 0;
+
+  /** Which fields the user has left, so a pristine form is not red before it is filled. */
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const showError = (field: keyof FieldErrors) =>
+    (touched[field] || submitAttempted) ? errors[field] : undefined;
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
   /** `keepOpen` is the "save and add another" path — the form stays up, the amount clears. */
   async function save(keepOpen: boolean) {
-    if (!action || saving || issues.length > 0 || businessId == null) return;
+    if (!action || saving) return;
+    setSubmitAttempted(true);
+    if (hasErrors || chosenBusinessId == null) return;
     const value = Number(amount);
     // The date carries the accountant's chosen day at midday Cairo, so the row lands inside
     // that day's window no matter which hour they are actually typing.
@@ -125,7 +176,7 @@ export default function DailyLedger() {
     try {
       if (action === "expense") {
         await expenseMutation.mutateAsync({
-          businessId,
+          businessId: chosenBusinessId,
           amount: value,
           description: description.trim(),
           expenseDate: when,
@@ -133,7 +184,7 @@ export default function DailyLedger() {
         });
       } else {
         await treasuryMutation.mutateAsync({
-          businessId,
+          businessId: chosenBusinessId,
           type: action,
           amount: value,
           description: description.trim(),
@@ -143,7 +194,8 @@ export default function DailyLedger() {
       }
       toast.success(`✅ ${ACTION_META[action].label} — اتسجّل`);
       await refresh();
-      if (keepOpen) resetForm();
+      setSubmitAttempted(false);
+      if (keepOpen) resetForm(true);
       else closeForm();
     } catch {
       // The mutation's onError showed the message; the form stays open with the values.
@@ -202,12 +254,12 @@ export default function DailyLedger() {
           </Button>
         </div>
 
-        {currentBusinessIds && currentBusinessIds.length !== 1 && (
-          <p className="mt-3 flex items-start gap-1.5 rounded-md bg-[var(--warning)]/10 p-2 text-xs text-[var(--warning)]">
+        {brands.length > 1 && (
+          <p className="mt-3 flex items-start gap-1.5 rounded-md bg-muted/60 p-2 text-xs text-muted-foreground">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
-              الأرقام دي مجمّعة لكل البراندات. عشان تسجّل حركة، اختر <strong>براند واحد</strong> من
-              أعلى الصفحة — كل حركة لازم تبقى على براند معروف.
+              الأرقام دي مجمّعة لـ<strong className="text-foreground">{brands.length} براندات</strong>.
+              كل حركة بتتسجّل على براند بتختاره جوّه النموذج.
             </span>
           </p>
         )}
@@ -363,7 +415,39 @@ export default function DailyLedger() {
           </DialogHeader>
 
           <div className="space-y-3 overflow-y-auto overflow-x-hidden px-4 py-4 sm:px-6">
-            {/* المبلغ أول حقل عن قصد — هو اللي المحاسب بيبدأ بيه */}
+            {/* البراند حقل في النموذج، مش في ترويسة الصفحة. الترويسة بتختار مجموعة،
+                والمجموعة فيها كذا براند — فطلب «اختر براند من فوق» كان بيشاور على حاجة
+                مش موجودة. بيتخفي لما المجموعة فيها براند واحد لأنه بيتحدد لوحده. */}
+            {brands.length > 1 && (
+              <div>
+                <Label>البراند <span className="text-destructive">*</span></Label>
+                <Select
+                  value={businessId || undefined}
+                  onValueChange={v => { setBusinessId(v); setTouched(t => ({ ...t, businessId: true })); }}
+                >
+                  <SelectTrigger
+                    className={`mt-1 !h-11 w-full ${showError("businessId") ? "border-destructive bg-destructive/10" : ""}`}
+                  >
+                    <SelectValue placeholder="اختر البراند..." />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[45vh]">
+                    {brands.map(b => (
+                      <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {showError("businessId") && (
+                  <p className="mt-1 text-xs text-destructive">{showError("businessId")}</p>
+                )}
+              </div>
+            )}
+            {brands.length === 1 && (
+              <p className="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                البراند: <strong className="text-foreground">{brands[0].name}</strong>
+              </p>
+            )}
+
+            {/* المبلغ بعد البراند — هو اللي المحاسب بيبدأ بيه فعليًا لما البراند واحد */}
             <div>
               <Label>المبلغ <span className="text-destructive">*</span></Label>
               <Input
@@ -371,12 +455,16 @@ export default function DailyLedger() {
                 inputMode="decimal"
                 min={0}
                 step="0.01"
-                autoFocus
+                autoFocus={brands.length <= 1}
                 value={amount}
                 onChange={e => setAmount(e.target.value)}
+                onBlur={() => setTouched(t => ({ ...t, amount: true }))}
                 placeholder="0.00"
-                className="mt-1 h-12 text-lg font-bold"
+                className={`mt-1 h-12 text-lg font-bold ${showError("amount") ? "border-destructive bg-destructive/10" : ""}`}
               />
+              {showError("amount") && (
+                <p className="mt-1 text-xs text-destructive">{showError("amount")}</p>
+              )}
             </div>
 
             <div>
@@ -384,16 +472,20 @@ export default function DailyLedger() {
               <Input
                 value={description}
                 onChange={e => setDescription(e.target.value)}
+                onBlur={() => setTouched(t => ({ ...t, description: true }))}
                 placeholder={action === "expense" ? "مثال: إعلانات فيسبوك" : "مثال: إيداع من العميل"}
-                className="mt-1 h-10"
+                className={`mt-1 h-10 ${showError("description") ? "border-destructive bg-destructive/10" : ""}`}
               />
+              {showError("description") && (
+                <p className="mt-1 text-xs text-destructive">{showError("description")}</p>
+              )}
             </div>
 
             {action === "expense" && (
               <div>
                 <Label>التصنيف</Label>
                 <Select value={categoryId || undefined} onValueChange={setCategoryId}>
-                  <SelectTrigger className="mt-1 h-10 w-full">
+                  <SelectTrigger className="mt-1 !h-11 w-full">
                     <SelectValue placeholder="بدون تصنيف" />
                   </SelectTrigger>
                   <SelectContent className="max-h-[45vh]">
@@ -423,13 +515,7 @@ export default function DailyLedger() {
               </div>
             )}
 
-            {issues.length > 0 && (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-2">
-                <ul className="list-inside list-disc text-xs text-destructive">
-                  {issues.map(i => <li key={i}>{i}</li>)}
-                </ul>
-              </div>
-            )}
+
           </div>
 
           <DialogFooter className="flex-col gap-2 border-t bg-background px-4 py-3 sm:flex-row sm:px-6">
@@ -446,7 +532,7 @@ export default function DailyLedger() {
               variant="outline"
               className="h-11 gap-1.5"
               onClick={() => save(true)}
-              disabled={saving || issues.length > 0}
+              disabled={saving}
             >
               <Plus className="h-4 w-4" />
               حفظ وإضافة تاني
@@ -454,7 +540,7 @@ export default function DailyLedger() {
             <Button
               className="h-11 gap-1.5"
               onClick={() => save(false)}
-              disabled={saving || issues.length > 0}
+              disabled={saving}
             >
               {saving
                 ? <><RefreshCw className="h-4 w-4 animate-spin" />جاري الحفظ...</>
