@@ -1,11 +1,14 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
   businessEvents,
   inventoryBalances,
+  inventoryMovements,
   inventoryReservations,
   inventoryTransactions,
   orderItems,
   orders,
+  productVariants,
+  products,
   purchaseReceiptItems,
   purchaseReceipts,
   returnInspectionItems,
@@ -19,6 +22,65 @@ import { createBusinessEventInTransaction, type Actor } from "./accountingV2.ser
 
 export function makeInventoryKey(productId: number, variantId?: number | null): string {
   return `product:${productId}:variant:${variantId ?? "base"}`;
+}
+
+/**
+ * Keep the operational stock counters in step with an inventory_transactions posting.
+ *
+ * There are two inventory representations in this codebase and they had drifted apart:
+ * `inventory_balances` (per warehouse, valued, weighted-average) is what the accounting
+ * screens, the closing and the profit report read, while `products.currentStock` /
+ * `product_variants.currentStock` plus the `inventory_movements` log are what the stock
+ * screen, the low-stock alert and confirmOrder read. approvePurchaseReceipt only ever wrote
+ * the first pair, so receiving a hundred bracelets moved the accountant's number and left
+ * the storekeeper's at zero.
+ *
+ * This is not a second ledger. Both destinations already existed and both are already
+ * written by other flows; this is the one place that writes them together, inside the
+ * caller's transaction, so an inventory posting can no longer land in one and miss the
+ * other. Every caller must be a flow that has already written inventory_transactions.
+ *
+ * Parent/variant follows the existing rule exactly: a product with variants holds no stock
+ * of its own (see getLowStockProducts), so a variant line moves the variant counter and
+ * never the parent's.
+ */
+async function mirrorLegacyStock(
+  tx: any,
+  input: {
+    businessId: number;
+    warehouseId: number;
+    productId: number;
+    variantId: number | null;
+    /** Signed: positive receives, negative reverses. */
+    quantityDelta: number;
+    reason: string;
+    notes?: string | null;
+    performedBy: number;
+  }
+) {
+  if (input.quantityDelta === 0) return;
+  await tx.insert(inventoryMovements).values({
+    businessId: input.businessId,
+    warehouseId: input.warehouseId,
+    productId: input.productId,
+    variantId: input.variantId,
+    type: input.quantityDelta > 0 ? "in" : "out",
+    quantity: Math.abs(input.quantityDelta),
+    reason: input.reason,
+    notes: input.notes ?? null,
+    performedBy: input.performedBy,
+  });
+  if (input.variantId != null) {
+    await tx
+      .update(productVariants)
+      .set({ currentStock: sql`${productVariants.currentStock} + ${input.quantityDelta}` })
+      .where(eq(productVariants.id, input.variantId));
+    return;
+  }
+  await tx
+    .update(products)
+    .set({ currentStock: sql`${products.currentStock} + ${input.quantityDelta}` })
+    .where(eq(products.id, input.productId));
 }
 
 export async function getInventoryControlData(businessId: number) {
@@ -413,6 +475,16 @@ export async function approvePurchaseReceipt(input: { businessId: number; receip
         createdBy: input.actor.id,
         createdByName: input.actor.name,
       });
+      await mirrorLegacyStock(tx, {
+        businessId: input.businessId,
+        warehouseId: receipt.warehouseId,
+        productId: line.productId,
+        variantId: line.variantId,
+        quantityDelta: line.quantity,
+        reason: `purchase_receipt:${receipt.id}`,
+        notes: receipt.supplierName,
+        performedBy: input.actor.id,
+      });
       balanceByKey.set(key, {
         ...balance,
         onHandQuantity: next.quantity,
@@ -424,6 +496,129 @@ export async function approvePurchaseReceipt(input: { businessId: number; receip
     await tx.update(purchaseReceipts).set({ status: "approved", approvedBy: input.actor.id, approvedAt: new Date() })
       .where(eq(purchaseReceipts.id, receipt.id));
     return { eventId, duplicate: false };
+  });
+}
+
+/**
+ * Cancel a Purchase Receipt without erasing what it did.
+ *
+ * A draft or a pending receipt never touched stock, so voiding it is a status change and
+ * nothing more. An approved one has already moved quantity and value, so the only honest
+ * cancellation is an equal and opposite posting: a second business event, a reversing
+ * inventory_transactions row per line, and the matching reversal of the operational
+ * counters. Nothing is deleted — `purchase-receipt:{id}:approved` and its transactions stay
+ * exactly where they are, and the audit reads forwards as receive-then-reverse.
+ *
+ * The reversal leaves at the CURRENT weighted average rather than at the price the goods
+ * came in at. That is what applyStockOut does for every other outbound movement in this
+ * system and reversing that choice here would be a second costing method by the back door.
+ *
+ * Refusing rather than going negative is deliberate: the closing refuses to run against a
+ * negative balance, so a void that pushed one below zero would trade a wrong receipt for a
+ * blocked month-end.
+ */
+export async function voidPurchaseReceipt(input: {
+  businessId: number;
+  receiptId: number;
+  reason: string;
+  actor: Actor;
+}) {
+  if (!input.reason.trim()) throw new Error("إلغاء إذن الاستلام يتطلب سببًا موثقًا");
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const [receipt] = await tx.select().from(purchaseReceipts).where(and(
+      eq(purchaseReceipts.id, input.receiptId), eq(purchaseReceipts.businessId, input.businessId),
+    )).limit(1).for("update");
+    if (!receipt) throw new Error("إذن الاستلام خارج نطاق هذا النشاط");
+    if (receipt.status === "voided") throw new Error("إذن الاستلام ملغي بالفعل");
+
+    if (receipt.status !== "approved") {
+      await tx.update(purchaseReceipts).set({ status: "voided", reason: input.reason })
+        .where(eq(purchaseReceipts.id, receipt.id));
+      return { reversed: false, eventId: null, duplicate: false };
+    }
+
+    const lines = await tx.select().from(purchaseReceiptItems).where(eq(purchaseReceiptItems.receiptId, receipt.id));
+    const keys = lines.map((line: typeof purchaseReceiptItems.$inferSelect) => makeInventoryKey(line.productId, line.variantId));
+    const balances = await tx.select().from(inventoryBalances).where(and(
+      eq(inventoryBalances.businessId, input.businessId),
+      eq(inventoryBalances.warehouseId, receipt.warehouseId),
+      inArray(inventoryBalances.inventoryKey, keys),
+    )).orderBy(asc(inventoryBalances.id)).for("update");
+    const balanceByKey = new Map(balances.map((balance: typeof inventoryBalances.$inferSelect) => [balance.inventoryKey, balance]));
+
+    const eventResult = await createBusinessEventInTransaction(tx, {
+      businessId: input.businessId,
+      eventType: "inventory.purchase_reversed",
+      sourceType: "purchase_receipt",
+      sourceReference: String(receipt.id),
+      idempotencyKey: `purchase-receipt:${receipt.id}:voided`,
+      occurredAt: new Date(),
+      payload: { receiptId: receipt.id, reason: input.reason, lines },
+      actor: input.actor,
+    });
+    if (eventResult.duplicate) return { reversed: true, eventId: eventResult.event.id, duplicate: true };
+    const eventId = eventResult.event.id;
+
+    for (const line of lines) {
+      const key = makeInventoryKey(line.productId, line.variantId);
+      const balance: any = balanceByKey.get(key);
+      if (!balance) throw new Error(`لا يوجد رصيد مخزون لبند إذن الاستلام #${line.id}`);
+      if (line.quantity > balance.onHandQuantity) {
+        throw new Error(
+          `لا يمكن إلغاء الإذن: الكمية المستلمة (${line.quantity}) أكبر من المتاح حاليًا (${balance.onHandQuantity}) — اتصرف في جزء منها بالفعل`
+        );
+      }
+      const next = applyStockOut({
+        quantity: balance.onHandQuantity,
+        inventoryValue: balance.inventoryValue,
+        movingAverageCost: balance.movingAverageCost,
+      }, line.quantity);
+      await tx.update(inventoryBalances).set({
+        onHandQuantity: next.quantity,
+        inventoryValue: next.inventoryValue,
+        movingAverageCost: next.movingAverageCost,
+        version: balance.version + 1,
+      }).where(eq(inventoryBalances.id, balance.id));
+      await tx.insert(inventoryTransactions).values({
+        businessId: input.businessId,
+        businessEventId: eventId,
+        inventoryBalanceId: balance.id,
+        transactionType: "purchase_reversal",
+        quantityDelta: -line.quantity,
+        unitCost: next.unitCostSnapshot,
+        valueDelta: `-${next.valueOut}`,
+        quantityAfter: next.quantity,
+        valueAfter: next.inventoryValue,
+        averageCostAfter: next.movingAverageCost,
+        sourceType: "purchase_receipt_item",
+        sourceId: line.id,
+        occurredAt: new Date(),
+        createdBy: input.actor.id,
+        createdByName: input.actor.name,
+      });
+      await mirrorLegacyStock(tx, {
+        businessId: input.businessId,
+        warehouseId: receipt.warehouseId,
+        productId: line.productId,
+        variantId: line.variantId,
+        quantityDelta: -line.quantity,
+        reason: `purchase_receipt_void:${receipt.id}`,
+        notes: input.reason,
+        performedBy: input.actor.id,
+      });
+      balanceByKey.set(key, {
+        ...balance,
+        onHandQuantity: next.quantity,
+        inventoryValue: next.inventoryValue,
+        movingAverageCost: next.movingAverageCost,
+        version: balance.version + 1,
+      });
+    }
+    await tx.update(purchaseReceipts).set({ status: "voided", reason: input.reason })
+      .where(eq(purchaseReceipts.id, receipt.id));
+    return { reversed: true, eventId, duplicate: false };
   });
 }
 

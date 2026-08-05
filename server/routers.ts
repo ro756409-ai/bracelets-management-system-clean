@@ -102,6 +102,7 @@ import {
   reserveOrderInventory,
   submitPurchaseReceipt,
   submitReturnInspection,
+  voidPurchaseReceipt,
 } from "./inventoryV2.service";
 import {
   createConfiguredShipment,
@@ -1175,6 +1176,25 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) =>
         approvePurchaseReceipt({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    purchaseReceiptVoid: permissionProcedure("inventory_costing.approve")
+      .input(
+        z.object({
+          businessId: z.number(),
+          receiptId: z.number(),
+          reason: z.string().min(1).max(500),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        voidPurchaseReceipt({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx.tenantId,

@@ -26,7 +26,7 @@ import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
-  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays,
+  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -112,6 +112,7 @@ const MENU_GROUPS: MenuGroup[] = [
       // the older screen is where they go to look things up afterwards.
       { icon: CalendarDays, label: "مركز التسجيل اليومي", path: "/daily-ledger", adminOnly: true },
       { icon: Users, label: "تجهيز المرتبات", path: "/salary-preparation", adminOnly: true },
+      { icon: PackagePlus, label: "إذن استلام بضاعة", path: "/goods-receipt", adminOnly: true },
       { icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true },
     ],
   },

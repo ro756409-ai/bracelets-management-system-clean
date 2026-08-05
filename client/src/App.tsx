@@ -10,6 +10,7 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Orders from "./pages/Orders";
 import DailyLedger from "./pages/DailyLedger";
+import GoodsReceipt from "./pages/GoodsReceipt";
 import SalaryPreparation from "./pages/SalaryPreparation";
 import AgentWorkspace from "./pages/AgentWorkspace";
 import Employees from "./pages/Employees";
@@ -141,6 +142,9 @@ function Router() {
       </Route>
       <Route path="/daily-ledger">
         <ProtectedLayout><DailyLedger /></ProtectedLayout>
+      </Route>
+      <Route path="/goods-receipt">
+        <ProtectedLayout><GoodsReceipt /></ProtectedLayout>
       </Route>
       <Route path="/accounting-settings">
         <ProtectedLayout><Accounting /></ProtectedLayout>

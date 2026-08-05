@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import {
   Wallet, Receipt, ArrowDownCircle, ArrowUpCircle, HandCoins, CalendarDays,
   Plus, RefreshCw, Save, XCircle, AlertCircle, TrendingUp, Package, Clock,
+  PackagePlus, Truck,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
@@ -264,6 +265,11 @@ export default function DailyLedger() {
     { label: "إيداعات", value: s?.deposits, icon: ArrowDownCircle, tone: "var(--success)" },
     { label: "سحوبات", value: s?.withdrawals, icon: ArrowUpCircle, tone: "var(--warning)" },
     { label: "فلوس عند الشحن", value: s?.pendingCollection, icon: Clock, tone: "var(--warning)" },
+    // المشتريات كتلات حقايق منفصلة: البضاعة اللي دخلت، الفلوس اللي اتدفعت للمورد،
+    // واللي عليك ليه. دمجهم في رقم واحد هو اللي بيخلّي فاتورة مش مدفوعة تبان كمصروف مدفوع.
+    { label: "بضاعة مستلمة", value: s?.goodsReceivedValue, icon: PackagePlus, tone: "var(--info)" },
+    { label: "مدفوعات موردين", value: s?.supplierPaid, icon: Truck, tone: "var(--success)" },
+    { label: "مستحق للموردين", value: s?.supplierDue, icon: Clock, tone: "var(--warning)", due: true },
   ];
 
   return (
@@ -338,6 +344,12 @@ export default function DailyLedger() {
                 <p className="mt-1.5 text-lg font-black tabular-nums">
                   {summary.isLoading ? (
                     <span className="inline-block h-5 w-20 animate-pulse rounded bg-muted" />
+                  ) : v === null ? (
+                    // فرق مقصود بين «صفر» و«مش موجود». مفيش مسار تسجيل مدفوعات موردين في
+                    // النظام لسه، فصفر هنا كان هيتقري «مادفعناش النهاردة» بدل «مابنسجّلش».
+                    <span className="text-sm font-normal text-muted-foreground">
+                      — لسه مفيش مسار دفع موردين
+                    </span>
                   ) : (
                     <>
                       {c.signed && Number(v ?? 0) > 0 ? "+" : ""}

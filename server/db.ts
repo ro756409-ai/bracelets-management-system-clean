@@ -90,6 +90,7 @@ import {
   inventoryBalances,
   businessConfigurationValues,
   businessShippingProviders,
+  purchaseReceipts,
 } from "../drizzle/schema";
 import {
   calcPayrollLine,
@@ -4804,6 +4805,10 @@ export async function getDailyLedgerSummary(input: {
     ordersToday: 0,
     confirmedToday: 0,
     pendingCollection: 0,
+    goodsReceivedValue: 0,
+    goodsReceivedCount: 0,
+    supplierDue: 0,
+    supplierPaid: null as number | null,
     movements: [] as TreasuryTransaction[],
   };
   if (!db) return empty;
@@ -4904,6 +4909,50 @@ export async function getDailyLedgerSummary(input: {
       )
     );
 
+  // ── Purchases, as three separate facts rather than one ──
+  //
+  // Receiving goods, owing the supplier and paying the supplier are three different events
+  // and only the last one moves cash. Folding them together is how an unpaid purchase ends
+  // up displayed as a paid expense.
+
+  const receiptScope =
+    input.businessIds && input.businessIds.length > 0
+      ? [inArray(purchaseReceipts.businessId, input.businessIds)]
+      : [];
+
+  // Received today: valued at what the goods cost, scoped on approvedAt — the moment the
+  // posting happened — not on receiptDate, which is the date the user typed on the paper.
+  const [goodsReceived] = await db
+    .select({
+      value: sql<string>`COALESCE(SUM(${purchaseReceipts.totalAmount}), 0)`,
+      count: sql<number>`COUNT(*)`,
+    })
+    .from(purchaseReceipts)
+    .where(
+      and(
+        eq(purchaseReceipts.status, "approved" as any),
+        gte(purchaseReceipts.approvedAt, from),
+        lt(purchaseReceipts.approvedAt, toExclusive),
+        ...receiptScope
+      )
+    );
+
+  // Owed to suppliers: every approved receipt not marked paid. Not day-scoped, for the same
+  // reason unpaid expenses are not — last month's invoice is still owed today. A voided
+  // receipt is not a liability, and a draft one is not either: nothing was received.
+  const [supplierDue] = await db
+    .select({
+      amount: sql<string>`COALESCE(SUM(${purchaseReceipts.totalAmount}), 0)`,
+    })
+    .from(purchaseReceipts)
+    .where(
+      and(
+        eq(purchaseReceipts.status, "approved" as any),
+        inArray(purchaseReceipts.paymentStatus, ["unpaid", "partially_paid"] as any),
+        ...receiptScope
+      )
+    );
+
   const movements = await db
     .select()
     .from(treasuryTransactions)
@@ -4927,6 +4976,13 @@ export async function getDailyLedgerSummary(input: {
     ordersToday: Number(orderCounts?.total ?? 0),
     confirmedToday: Number(orderCounts?.confirmed ?? 0),
     pendingCollection: Number(pending?.amount ?? 0),
+    goodsReceivedValue: Number(goodsReceived?.value ?? 0),
+    goodsReceivedCount: Number(goodsReceived?.count ?? 0),
+    supplierDue: Number(supplierDue?.amount ?? 0),
+    // Deliberately null, not 0. There is no supplier payment record anywhere in the schema,
+    // so "zero paid today" would be a claim this data cannot support. Null lets the screen
+    // say the figure does not exist yet instead of inventing a reassuring number.
+    supplierPaid: null as number | null,
     movements,
   };
 }
