@@ -93,3 +93,60 @@ describe("الرسائل جنب حقولها", () => {
     }
   });
 });
+
+describe("المصروف مستحق مش مدفوع", () => {
+  const db = fs.readFileSync("server/db.ts", "utf-8");
+  const fn = db.slice(
+    db.indexOf("export async function getDailyLedgerSummary"),
+    db.indexOf("// ==================== PAYROLL")
+  );
+
+  it("🔑 المدفوع بيتقرا من expense_payments مش من الخزنة", () => {
+    // createExpenseDraft بيعمل مسودة في `expenses` ومفيش صف خزنة، فعدّ صفوف الخزنة
+    // من نوع 'expense' كان بيرجّع صفر لكل مصروف اتسجّل من الشاشة.
+    expect(fn).toContain("from(expensePayments)");
+    expect(fn).toContain("gte(expensePayments.paidAt, from)");
+    expect(fn).not.toContain("${treasuryTransactions.type} = 'expense'");
+  });
+
+  it("🔑 المستحق = المبلغ ناقص المدفوع، للحالات غير المدفوعة", () => {
+    expect(fn).toContain("${expenses.amount} - ${expenses.paidAmount}");
+    for (const st of ["draft", "pending_approval", "accrued", "partially_paid"]) {
+      expect(fn, st).toContain(`"${st}"`);
+    }
+  });
+
+  it("الملغي مش التزام فمش محسوب", () => {
+    const due = fn.slice(fn.indexOf("const [dueExpenses]"));
+    expect(due.slice(0, due.indexOf("];"))).not.toContain('"voided"');
+  });
+
+  it("🔑 المستحق مش محدود باليوم — اللي عليك من الأسبوع اللي فات لسه عليك", () => {
+    const due = fn.slice(fn.indexOf("const [dueExpenses]"), fn.indexOf("// Money already out"));
+    expect(due).not.toContain("gte(expenses.expenseDate");
+    expect(due).not.toContain("toExclusive");
+  });
+
+  it("الرقمين منفصلين في المخرجات", () => {
+    expect(fn).toContain("expensesPaid:");
+    expect(fn).toContain("expensesDue:");
+    expect(fn).not.toContain("\n    expenses: Number(");
+  });
+
+  it("🔑 الشاشة بتفرّق بينهم وبتقول للمحاسب", () => {
+    expect(page).toContain("مصروفات مدفوعة");
+    expect(page).toContain("مصروفات مستحقة");
+    expect(page).toContain("مستحق وغير مدفوع");
+    expect(page).toContain("حركات الخزنة اليوم");
+  });
+
+  it("🔑 مفيش حركة خزنة مصطنعة — فرع المصروف بينادي expenseCreate وبس", () => {
+    // الفحص على **فرع المصروف** نفسه، مش على الدالة كلها: الدالة فيها فرع تاني
+    // للإيداع والسحب بينادي treasuryCreate بشكل مشروع، والفحص العام كان بيقع عليه.
+    const i = code.indexOf('if (action === "expense") {');
+    const branch = code.slice(i, code.indexOf("} else {", i));
+    expect(branch).toContain("expenseMutation.mutateAsync");
+    expect(branch).not.toContain("treasuryMutation");
+    expect(branch).not.toContain("collectionMutation");
+  });
+});

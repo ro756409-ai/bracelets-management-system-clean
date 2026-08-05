@@ -66,6 +66,7 @@ import {
   InsertExpenseCategory,
   ExpenseCategory,
   expenses,
+  expensePayments,
   InsertExpense,
   Expense,
   treasuryTransactions,
@@ -4794,7 +4795,8 @@ export async function getDailyLedgerSummary(input: {
     dateKey: dayKey,
     balance: 0,
     collections: 0,
-    expenses: 0,
+    expensesPaid: 0,
+    expensesDue: 0,
     deposits: 0,
     withdrawals: 0,
     net: 0,
@@ -4818,7 +4820,6 @@ export async function getDailyLedgerSummary(input: {
   const [totals] = await db
     .select({
       collections: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'collection' AND ${treasuryTransactions.direction} = 'in' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
-      expenses: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'expense' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
       deposits: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'deposit' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
       withdrawals: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.type} = 'withdrawal' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
       inflow: sql<string>`COALESCE(SUM(CASE WHEN ${treasuryTransactions.direction} = 'in' THEN ${treasuryTransactions.amount} ELSE 0 END), 0)`,
@@ -4840,6 +4841,53 @@ export async function getDailyLedgerSummary(input: {
     })
     .from(orders)
     .where(and(gte(orders.createdAt, from), lt(orders.createdAt, toExclusive), ...orderScope));
+
+  // ── Expenses, read from the expense lifecycle rather than from the cash ledger ──
+  //
+  // createExpenseDraft writes a DRAFT into `expenses`; no money moves and no treasury row
+  // exists. Counting treasury rows of type 'expense' therefore reported zero for every
+  // expense entered here, which made the screen quietly disagree with what the accountant
+  // had just typed. These two read where the truth actually lives.
+
+  // Paid: an expense is paid when payExpense posts a financial transaction and records the
+  // payment. `expense_payments.paidAt` is the moment the money left, so it is what a day's
+  // "paid expenses" means.
+  const [paidExpenses] = await db
+    .select({
+      amount: sql<string>`COALESCE(SUM(${expensePayments.amount}), 0)`,
+    })
+    .from(expensePayments)
+    .where(
+      and(
+        gte(expensePayments.paidAt, from),
+        lt(expensePayments.paidAt, toExclusive),
+        ...(input.businessIds && input.businessIds.length > 0
+          ? [inArray(expensePayments.businessId, input.businessIds)]
+          : [])
+      )
+    );
+
+  // Due: what is owed and not yet paid. Deliberately not limited to the selected day —
+  // an unpaid expense from last week is still owed today, exactly like money sitting with
+  // the courier. `voided` is excluded because a voided expense is not a liability.
+  const [dueExpenses] = await db
+    .select({
+      amount: sql<string>`COALESCE(SUM(${expenses.amount} - ${expenses.paidAmount}), 0)`,
+    })
+    .from(expenses)
+    .where(
+      and(
+        inArray(expenses.status, [
+          "draft",
+          "pending_approval",
+          "accrued",
+          "partially_paid",
+        ] as any),
+        ...(input.businessIds && input.businessIds.length > 0
+          ? [inArray(expenses.businessId, input.businessIds)]
+          : [])
+      )
+    );
 
   // Money already out with the courier and not yet collected — deliberately not limited to
   // the selected day: cash owed from two months ago is still owed today.
@@ -4867,7 +4915,8 @@ export async function getDailyLedgerSummary(input: {
     dateKey: dayKey,
     balance: await getTreasuryBalance(input.businessIds),
     collections: Number(totals?.collections ?? 0),
-    expenses: Number(totals?.expenses ?? 0),
+    expensesPaid: Number(paidExpenses?.amount ?? 0),
+    expensesDue: Number(dueExpenses?.amount ?? 0),
     deposits: Number(totals?.deposits ?? 0),
     withdrawals: Number(totals?.withdrawals ?? 0),
     // Everything in minus everything out — not collections minus expenses. Deposits,

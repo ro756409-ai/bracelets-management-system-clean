@@ -255,7 +255,11 @@ export default function DailyLedger() {
   const cards = [
     { label: "رصيد الخزنة", value: s?.balance, icon: Wallet, tone: "var(--info)", always: true },
     { label: "تحصيلات اليوم", value: s?.collections, icon: HandCoins, tone: "var(--success)" },
-    { label: "مصروفات اليوم", value: s?.expenses, icon: Receipt, tone: "var(--destructive)" },
+    // Two separate figures on purpose. A draft expense has not moved any money, so folding
+    // it into one "expenses" number would overstate what left the business today — and
+    // leaving it out entirely was what made the screen disagree with what was just entered.
+    { label: "مصروفات مدفوعة", value: s?.expensesPaid, icon: Receipt, tone: "var(--destructive)" },
+    { label: "مصروفات مستحقة", value: s?.expensesDue, icon: Clock, tone: "var(--warning)", due: true },
     { label: "صافي اليوم", value: s?.net, icon: TrendingUp, tone: "var(--purple)", signed: true },
     { label: "إيداعات", value: s?.deposits, icon: ArrowDownCircle, tone: "var(--success)" },
     { label: "سحوبات", value: s?.withdrawals, icon: ArrowUpCircle, tone: "var(--warning)" },
@@ -388,8 +392,10 @@ export default function DailyLedger() {
 
       {/* حركات اليوم */}
       <SectionCard
-        title="حركات اليوم"
-        description={s ? `${s.movementCount} حركة` : undefined}
+        title="حركات الخزنة اليوم"
+        description={
+          s ? `${s.movementCount} حركة نقدية — المصروفات المستحقة مش هنا لأنها لسه ماخرجتش` : undefined
+        }
       >
         {summary.isLoading ? (
           <div className="space-y-2">
@@ -590,6 +596,14 @@ export default function DailyLedger() {
                 <p className="mt-1 text-xs text-destructive">{showError("description")}</p>
               )}
             </div>
+            )}
+
+            {action === "expense" && (
+              <p className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning)]/10 p-2 text-xs text-[var(--warning)]">
+                المصروف بيتسجّل <strong>مستحق وغير مدفوع</strong> — مفيش فلوس بتنزل من
+                الخزنة دلوقتي. بيظهر في «مصروفات مستحقة»، وبيتحوّل لمدفوع لما يتعتمد
+                ويتدفع من شاشة المصروفات.
+              </p>
             )}
 
             {action === "expense" && (
