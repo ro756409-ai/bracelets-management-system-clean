@@ -176,6 +176,36 @@ export function applyRounding(amount: number, mode: RoundingMode): number {
  * الصافي مش مسقوف عند الصفر: صافي سالب رقم صحيح (سُلف أكبر من المستحق) ولازم يبان
  * عشان يتسوّى، مش يتخبّى وراء صفر.
  */
+/**
+ * الصافي من مكوّناته — التعريف الوحيد للمعادلة في المشروع كله.
+ *
+ * اتفصلت من `calcPayrollLine` عشان شاشة تجهيز المرتبات تعرض نفس الرقم اللي السيرفر
+ * هيحسبه بالظبط. لو كل واحدة كتبت المعادلة عندها، أول تعديل في واحدة بيخلي الشاشة
+ * توري رقم والدفع ينزّل رقم تاني — والفرق مايظهرش غير بعد ما الفلوس تطلع.
+ *
+ * البونص والخصومات والسلف بتتقص عند صفر: قيمة سالبة معناها الخصم بقى إضافة، وده
+ * بيقلب معنى الحقل من غير ما حد ياخد باله.
+ */
+export function netFromComponents(c: {
+  baseSalary: number;
+  overtimeAmount: number;
+  bonuses: number;
+  commissions: number;
+  absenceDeduction: number;
+  deductions: number;
+  advances: number;
+}): number {
+  return (
+    c.baseSalary +
+    c.overtimeAmount +
+    Math.max(0, c.bonuses) +
+    c.commissions -
+    c.absenceDeduction -
+    Math.max(0, c.deductions) -
+    Math.max(0, c.advances)
+  );
+}
+
 export function calcPayrollLine(
   profile: SalaryProfileInput,
   line: PayrollLineInput,
@@ -192,13 +222,15 @@ export function calcPayrollLine(
     ? 0 // الشهري الصافي مالوش عمولة — لو التاجر عايز الاتنين يستخدم "مختلط"
     : calcCommission(profile, line);
 
-  const net = baseSalary
-    + overtimeAmount
-    + Math.max(0, line.bonuses)
-    + commissions
-    - absenceDeduction
-    - Math.max(0, line.deductions)
-    - Math.max(0, line.advances);
+  const net = netFromComponents({
+    baseSalary,
+    overtimeAmount,
+    bonuses: line.bonuses,
+    commissions,
+    absenceDeduction,
+    deductions: line.deductions,
+    advances: line.advances,
+  });
 
   return {
     baseSalary: applyRounding(baseSalary, "none"),

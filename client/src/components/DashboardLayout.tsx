@@ -111,6 +111,7 @@ const MENU_GROUPS: MenuGroup[] = [
       // First in the group on purpose: this is where the accountant starts the day, and
       // the older screen is where they go to look things up afterwards.
       { icon: CalendarDays, label: "مركز التسجيل اليومي", path: "/daily-ledger", adminOnly: true },
+      { icon: Users, label: "تجهيز المرتبات", path: "/salary-preparation", adminOnly: true },
       { icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true },
     ],
   },
