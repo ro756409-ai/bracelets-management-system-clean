@@ -53,6 +53,8 @@ import {
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
+import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
+import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
 
 // QR Code renderer component
 function QRRenderer({ serialNumber, canvasId }: { serialNumber: string; canvasId: string }) {
@@ -1522,6 +1524,7 @@ export default function Orders() {
         open={showCreateDialog}
         onClose={() => setShowCreateDialog(false)}
         products={products ?? []}
+        variants={(variantsList ?? []) as CatalogVariant[]}
         onSuccess={() => { utils.orders.list.invalidate(); utils.orders.statusCounts.invalidate(); setShowCreateDialog(false); }}
       />
 
@@ -2150,59 +2153,128 @@ export default function Orders() {
   );
 }
 
+/**
+ * Shown under a select whose list comes from per-business configuration and is empty.
+ *
+ * An empty-but-enabled dropdown reads as a broken screen. These lists are real data the
+ * merchant owns — nobody can invent a shipping company or a payment type on their behalf —
+ * so the honest thing is to say where the value comes from and open the door to it.
+ */
+function EmptyConfigHint({ show, label, onGo }: { show: boolean; label: string; onGo: () => void }) {
+  if (!show) return null;
+  return (
+    <p className="mt-1 text-xs text-muted-foreground">
+      مفيش {label} مسجّلة.{" "}
+      <button type="button" onClick={onGo} className="text-primary underline underline-offset-2">
+        سجّلها من الإعدادات
+      </button>
+    </p>
+  );
+}
+
 function CreateOrderDialog({
-  open, onClose, products, onSuccess
+  open, onClose, products, variants, onSuccess
 }: {
   open: boolean;
   onClose: () => void;
   products: any[];
+  variants: CatalogVariant[];
   onSuccess: () => void;
 }) {
+  const [, navigate] = useLocation();
   const { businesses } = useBusinessContext();
   const [form, setForm] = useState({
     customerName: "", customerPhone: "", customerAddress: "", governorate: "",
-    businessId: "", productId: "", quantity: "1", totalAmount: "", source: "", notes: "",
+    businessId: "", productId: "", variantId: "", quantity: "1", totalAmount: "", source: "", notes: "",
     shippingProviderId: "", shippingType: "", paymentType: "",
   });
   const businessId = Number(form.businessId) || undefined;
-  const governorates = trpc.accountingV2.configurationList.useQuery({ businessId: businessId!, namespace: "governorate", activeOnly: true }, { enabled: Boolean(businessId) });
+
+  // Everything below the brand select is keyed on the chosen brand, so before one is picked
+  // the five dependent queries are disabled and their lists render empty. A merchant with a
+  // single brand has no decision to make there — picking it for them is what makes the rest
+  // of the form populate at all, instead of looking broken.
+  useEffect(() => {
+    if (!open || form.businessId || businesses.length !== 1) return;
+    setForm(f => ({ ...f, businessId: String(businesses[0].id) }));
+  }, [open, businesses, form.businessId]);
+
+  // Governorate and source both have a shared fallback for exactly the reason this dialog
+  // was reported broken: the configuration table is empty in production. The remaining three
+  // lists below have no fallback on purpose — see EmptyConfigHint.
+  const governorateOptions = useGovernorateOptions();
+  const sourceOptions = useOrderSourceOptions();
   const shippingTypes = trpc.accountingV2.configurationList.useQuery({ businessId: businessId!, namespace: "shipping_type", activeOnly: true }, { enabled: Boolean(businessId) });
   const paymentTypes = trpc.accountingV2.configurationList.useQuery({ businessId: businessId!, namespace: "payment_type", activeOnly: true }, { enabled: Boolean(businessId) });
-  const orderSources = trpc.accountingV2.configurationList.useQuery({ businessId: businessId!, namespace: "order_source", activeOnly: true }, { enabled: Boolean(businessId) });
   const shipping = trpc.accountingV2.shippingConfiguration.useQuery({ businessId: businessId! }, { enabled: Boolean(businessId) });
+
+  const emptyForm = {
+    customerName: "", customerPhone: "", customerAddress: "", governorate: "", businessId: "",
+    productId: "", variantId: "", quantity: "1", totalAmount: "", source: "", notes: "",
+    shippingProviderId: "", shippingType: "", paymentType: "",
+  };
 
   const createMutation = trpc.orders.create.useMutation({
     onSuccess: (data) => {
       toast.success(`تم إنشاء الأوردر ${data.orderNumber}`);
       onSuccess();
-      setForm({ customerName: "", customerPhone: "", customerAddress: "", governorate: "", businessId: "", productId: "", quantity: "1", totalAmount: "", source: "", notes: "", shippingProviderId: "", shippingType: "", paymentType: "" });
+      setForm(emptyForm);
     },
     onError: (e) => toast.error(e.message),
   });
 
   const selectedProduct = products.find(p => p.id === Number(form.productId));
+  const productVariants = useMemo(
+    () => variants.filter(v => v.productId === Number(form.productId)),
+    [variants, form.productId]
+  );
+  const selectedVariant = productVariants.find(v => v.id === Number(form.variantId));
+
+  // A variant carries its own price when it has one — an engraving costs what the engraving
+  // costs, not what the parent product costs.
+  const unitPrice = Number(selectedVariant?.price ?? selectedProduct?.price ?? 0);
 
   const handleProductChange = (productId: string) => {
     const product = products.find(p => p.id === Number(productId));
-    setForm(f => ({ ...f, productId, totalAmount: product ? String(Number(product.price) * Number(f.quantity)) : f.totalAmount }));
+    // The old variant belongs to the old product; keeping it would ship the wrong engraving.
+    setForm(f => ({ ...f, productId, variantId: "", totalAmount: product ? String(Number(product.price) * Number(f.quantity)) : f.totalAmount }));
+  };
+
+  const handleVariantChange = (variantId: string) => {
+    const variant = productVariants.find(v => v.id === Number(variantId));
+    const price = Number(variant?.price ?? selectedProduct?.price ?? 0);
+    setForm(f => ({ ...f, variantId, totalAmount: price ? String(price * Number(f.quantity)) : f.totalAmount }));
   };
 
   const handleQuantityChange = (qty: string) => {
-    setForm(f => ({ ...f, quantity: qty, totalAmount: selectedProduct ? String(Number(selectedProduct.price) * Number(qty)) : f.totalAmount }));
+    setForm(f => ({ ...f, quantity: qty, totalAmount: unitPrice ? String(unitPrice * Number(qty)) : f.totalAmount }));
   };
 
   const handleSubmit = () => {
-    if (!form.businessId || !form.customerName || !form.customerPhone || !form.customerAddress || !form.governorate || !form.productId || !form.totalAmount || !form.source || !form.shippingProviderId || !form.shippingType || !form.paymentType) {
+    // The three shipping/payment fields are deliberately NOT in this list. createOrderInTransaction
+    // requires them only for a business past its accounting Go-Live, and refuses the order itself
+    // when they are missing — with a message naming them. Demanding them here as well means a
+    // merchant who has not configured a shipping company yet cannot record an order at all, which
+    // is what made this form unusable.
+    if (!form.businessId || !form.customerName || !form.customerPhone || !form.customerAddress || !form.governorate || !form.productId || !form.totalAmount || !form.source) {
       toast.error("يرجى ملء جميع الحقول المطلوبة");
       return;
     }
     createMutation.mutate({
       customerName: form.customerName, customerPhone: form.customerPhone, customerAddress: form.customerAddress,
       governorate: form.governorate, productId: Number(form.productId), productName: selectedProduct?.name ?? "",
+      variantId: form.variantId ? Number(form.variantId) : undefined,
       quantity: Number(form.quantity), totalAmount: form.totalAmount, source: form.source as any, notes: form.notes || undefined,
-      businessId: Number(form.businessId), projectedShippingProviderId: Number(form.shippingProviderId), projectedShippingType: form.shippingType, projectedPaymentType: form.paymentType,
+      businessId: Number(form.businessId),
+      projectedShippingProviderId: form.shippingProviderId ? Number(form.shippingProviderId) : undefined,
+      projectedShippingType: form.shippingType || undefined,
+      projectedPaymentType: form.paymentType || undefined,
     });
   };
+
+  const goToSettings = () => { onClose(); navigate("/accounting-settings"); };
+  /** Nothing below the brand select can load until a brand is chosen. */
+  const noBusiness = !businessId;
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -2226,17 +2298,38 @@ function CreateOrderDialog({
             <Label>المحافظة <span className="text-destructive">*</span></Label>
             <Select value={form.governorate} onValueChange={v => setForm(f => ({ ...f, governorate: v }))}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="اختر المحافظة" /></SelectTrigger>
-              <SelectContent>{governorates.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent>
+              <SelectContent>{governorateOptions.values.map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div><Label>شركة الشحن <span className="text-destructive">*</span></Label><Select value={form.shippingProviderId} onValueChange={shippingProviderId => setForm(f => ({ ...f, shippingProviderId }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار الشركة" /></SelectTrigger><SelectContent>{shipping.data?.providers.map(row => <SelectItem key={row.id} value={String(row.id)}>{row.displayName}</SelectItem>)}</SelectContent></Select></div>
-          <div><Label>نوع الشحن <span className="text-destructive">*</span></Label><Select value={form.shippingType} onValueChange={shippingType => setForm(f => ({ ...f, shippingType }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار النوع" /></SelectTrigger><SelectContent>{shippingTypes.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent></Select></div>
-          <div><Label>نوع الدفع <span className="text-destructive">*</span></Label><Select value={form.paymentType} onValueChange={paymentType => setForm(f => ({ ...f, paymentType }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار النوع" /></SelectTrigger><SelectContent>{paymentTypes.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent></Select></div>
           <div>
-            <Label>المصدر</Label>
+            <Label>شركة الشحن</Label>
+            <Select value={form.shippingProviderId} onValueChange={shippingProviderId => setForm(f => ({ ...f, shippingProviderId }))} disabled={noBusiness}>
+              <SelectTrigger className="mt-1"><SelectValue placeholder={noBusiness ? "اختار النشاط الأول" : "اختار الشركة"} /></SelectTrigger>
+              <SelectContent>{shipping.data?.providers.map(row => <SelectItem key={row.id} value={String(row.id)}>{row.displayName}</SelectItem>)}</SelectContent>
+            </Select>
+            <EmptyConfigHint show={!noBusiness && !shipping.isLoading && (shipping.data?.providers.length ?? 0) === 0} label="شركات شحن" onGo={goToSettings} />
+          </div>
+          <div>
+            <Label>نوع الشحن</Label>
+            <Select value={form.shippingType} onValueChange={shippingType => setForm(f => ({ ...f, shippingType }))} disabled={noBusiness}>
+              <SelectTrigger className="mt-1"><SelectValue placeholder={noBusiness ? "اختار النشاط الأول" : "اختار النوع"} /></SelectTrigger>
+              <SelectContent>{shippingTypes.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent>
+            </Select>
+            <EmptyConfigHint show={!noBusiness && !shippingTypes.isLoading && (shippingTypes.data?.length ?? 0) === 0} label="أنواع شحن" onGo={goToSettings} />
+          </div>
+          <div>
+            <Label>نوع الدفع</Label>
+            <Select value={form.paymentType} onValueChange={paymentType => setForm(f => ({ ...f, paymentType }))} disabled={noBusiness}>
+              <SelectTrigger className="mt-1"><SelectValue placeholder={noBusiness ? "اختار النشاط الأول" : "اختار النوع"} /></SelectTrigger>
+              <SelectContent>{paymentTypes.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent>
+            </Select>
+            <EmptyConfigHint show={!noBusiness && !paymentTypes.isLoading && (paymentTypes.data?.length ?? 0) === 0} label="أنواع دفع" onGo={goToSettings} />
+          </div>
+          <div>
+            <Label>المصدر <span className="text-destructive">*</span></Label>
             <Select value={form.source} onValueChange={v => setForm(f => ({ ...f, source: v }))}>
-              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-              <SelectContent>{orderSources.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent>
+              <SelectTrigger className="mt-1"><SelectValue placeholder="اختار المصدر" /></SelectTrigger>
+              <SelectContent>{sourceOptions.options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div>
@@ -2246,6 +2339,15 @@ function CreateOrderDialog({
               <SelectContent>{products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name} - {Number(p.price).toLocaleString('ar-EG')} ج.م</SelectItem>)}</SelectContent>
             </Select>
           </div>
+          {productVariants.length > 0 && (
+            <div>
+              <Label>نوع الحفر / المقاس</Label>
+              <Select value={form.variantId} onValueChange={handleVariantChange}>
+                <SelectTrigger className="mt-1"><SelectValue placeholder="اختر النوع" /></SelectTrigger>
+                <SelectContent>{productVariants.map(v => <SelectItem key={v.id} value={String(v.id)}>{variantLabel(v)}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          )}
           <div>
             <Label>الكمية</Label>
             <Input type="number" min="1" value={form.quantity} onChange={e => handleQuantityChange(e.target.value)} className="mt-1" />

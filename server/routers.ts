@@ -2140,14 +2140,20 @@ export const appRouter = router({
           governorate: z.string().min(2),
           productId: z.number(),
           productName: z.string(),
+          variantId: z.number().optional(),
           quantity: z.number().min(1).default(1),
           totalAmount: z.string(),
           source: z.string().min(1),
           notes: z.string().optional(),
           businessId: z.number(),
-          projectedShippingProviderId: z.number(),
-          projectedShippingType: z.string().min(1),
-          projectedPaymentType: z.string().min(1),
+          // Optional here on purpose. createOrderInTransaction is the one place that knows
+          // whether a business is past its accounting Go-Live, and it already refuses the
+          // order — by name — when these are missing and required. Requiring them at the
+          // edge too meant a business that has not configured a shipping company yet could
+          // not record an order at all, which is not a rule anyone asked for.
+          projectedShippingProviderId: z.number().optional(),
+          projectedShippingType: z.string().min(1).optional(),
+          projectedPaymentType: z.string().min(1).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -2168,6 +2174,7 @@ export const appRouter = router({
             {
               productId: input.productId,
               productName: input.productName,
+              variantId: input.variantId,
               quantity: input.quantity,
               unitPrice: Number(input.totalAmount) / input.quantity,
             },
