@@ -29,12 +29,15 @@ import { toast } from "sonner";
  * بيسيب النموذج مفتوح بمبلغ فاضي، لأن اللي بيسجّل مصروف نادرًا بيسجّل واحد بس.
  */
 
-type ActionKind = "expense" | "deposit" | "withdrawal";
+type ActionKind = "expense" | "deposit" | "withdrawal" | "collection";
 
 const ACTION_META: Record<ActionKind, { label: string; icon: typeof Receipt; tone: string }> = {
   expense: { label: "إضافة مصروف", icon: Receipt, tone: "var(--destructive)" },
   deposit: { label: "إيداع في الخزنة", icon: ArrowDownCircle, tone: "var(--success)" },
   withdrawal: { label: "سحب من الخزنة", icon: ArrowUpCircle, tone: "var(--warning)" },
+  // Not a free-text movement like the other three: the money belongs to an order, so the
+  // form picks the order and the amount defaults to what is still owed on it.
+  collection: { label: "تسجيل تحصيل", icon: HandCoins, tone: "var(--success)" },
 };
 
 /** Cairo-local YYYY-MM-DD — the day the accountant means, not the browser's UTC day. */
@@ -69,6 +72,9 @@ export default function DailyLedger() {
   const [description, setDescription] = useState("");
   const [notes, setNotes] = useState("");
   const [categoryId, setCategoryId] = useState<string>("");
+  /** Collection only: which order is being collected. */
+  const [orderId, setOrderId] = useState<string>("");
+  const [orderSearch, setOrderSearch] = useState("");
 
   const scope = currentBusinessIds?.length ? { businessIds: currentBusinessIds } : undefined;
 
@@ -77,6 +83,13 @@ export default function DailyLedger() {
     { retry: false }
   );
   const categories = trpc.accounting.expenseCategories.useQuery(scope, { retry: false });
+
+  // Orders the courier still owes money on. Loaded only while the collection form is open,
+  // and re-queried as the accountant types — they are looking for one order among hundreds.
+  const pendingOrders = trpc.accounting.collectionList.useQuery(
+    { ...(scope ?? {}), collectionStatus: "pending", search: orderSearch || undefined, limit: 25 },
+    { enabled: action === "collection", retry: false }
+  );
 
   /** Brands in the selected group — what the form offers. */
   const brands = currentGroup?.businesses ?? [];
@@ -93,6 +106,8 @@ export default function DailyLedger() {
     setDescription("");
     setNotes("");
     setCategoryId("");
+    setOrderId("");
+    setOrderSearch("");
     setTouched({});
   }
 
@@ -115,8 +130,12 @@ export default function DailyLedger() {
   const treasuryMutation = trpc.accounting.treasuryCreate.useMutation({
     onError: e => toast.error(e.message),
   });
+  const collectionMutation = trpc.accounting.collectionRecord.useMutation({
+    onError: e => toast.error(e.message),
+  });
 
-  const saving = expenseMutation.isPending || treasuryMutation.isPending;
+  const saving =
+    expenseMutation.isPending || treasuryMutation.isPending || collectionMutation.isPending;
 
   /**
    * A rule set per action, not one shared set.
@@ -127,7 +146,7 @@ export default function DailyLedger() {
    * its own backend contract, and the errors are keyed by field so they can be shown next
    * to the input that is actually wrong.
    */
-  type FieldErrors = Partial<Record<"businessId" | "amount" | "description" | "categoryId", string>>;
+  type FieldErrors = Partial<Record<"businessId" | "amount" | "description" | "categoryId" | "orderId", string>>;
 
   function validateCommon(): FieldErrors {
     const errors: FieldErrors = {};
@@ -148,13 +167,31 @@ export default function DailyLedger() {
   /** accounting.treasuryCreate (withdrawal): identical contract to deposit. */
   const validateWithdrawal = validateCommon;
 
+  /**
+   * accounting.collectionRecord: orderId · collectedAmount.
+   *
+   * Deliberately not validateCommon. There is no description — the order is the
+   * description — and no brand, because the order already belongs to one. Reusing the
+   * shared rules here would demand two fields this form does not and should not have.
+   */
+  function validateCollection(): FieldErrors {
+    const errors: FieldErrors = {};
+    if (!orderId) errors.orderId = "اختر الأوردر";
+    const value = Number(amount);
+    if (!amount.trim()) errors.amount = "المبلغ مطلوب";
+    else if (!Number.isFinite(value)) errors.amount = "المبلغ لازم يكون رقم";
+    else if (value <= 0) errors.amount = "المبلغ لازم يكون أكبر من صفر";
+    return errors;
+  }
+
   const errors: FieldErrors = useMemo(() => {
     if (!action) return {};
     if (action === "expense") return validateExpense();
+    if (action === "collection") return validateCollection();
     if (action === "deposit") return validateDeposit();
     return validateWithdrawal();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [action, amount, description, chosenBusinessId]);
+  }, [action, amount, description, chosenBusinessId, orderId]);
 
   const hasErrors = Object.keys(errors).length > 0;
 
@@ -168,13 +205,23 @@ export default function DailyLedger() {
   async function save(keepOpen: boolean) {
     if (!action || saving) return;
     setSubmitAttempted(true);
-    if (hasErrors || chosenBusinessId == null) return;
+    if (hasErrors) return;
+    // Collection carries its brand through the order; the other three need one chosen.
+    if (action !== "collection" && chosenBusinessId == null) return;
     const value = Number(amount);
     // The date carries the accountant's chosen day at midday Cairo, so the row lands inside
     // that day's window no matter which hour they are actually typing.
     const when = new Date(`${dateKey}T12:00:00+02:00`);
     try {
-      if (action === "expense") {
+      if (action === "collection") {
+        await collectionMutation.mutateAsync({
+          orderId: Number(orderId),
+          collectedAmount: value,
+          collectedAt: when,
+        });
+      } else if (chosenBusinessId == null) {
+        return; // unreachable: guarded above, but keeps the type honest
+      } else if (action === "expense") {
         await expenseMutation.mutateAsync({
           businessId: chosenBusinessId,
           amount: value,
@@ -418,7 +465,7 @@ export default function DailyLedger() {
             {/* البراند حقل في النموذج، مش في ترويسة الصفحة. الترويسة بتختار مجموعة،
                 والمجموعة فيها كذا براند — فطلب «اختر براند من فوق» كان بيشاور على حاجة
                 مش موجودة. بيتخفي لما المجموعة فيها براند واحد لأنه بيتحدد لوحده. */}
-            {brands.length > 1 && (
+            {action !== "collection" && brands.length > 1 && (
               <div>
                 <Label>البراند <span className="text-destructive">*</span></Label>
                 <Select
@@ -441,10 +488,72 @@ export default function DailyLedger() {
                 )}
               </div>
             )}
-            {brands.length === 1 && (
+            {action !== "collection" && brands.length === 1 && (
               <p className="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
                 البراند: <strong className="text-foreground">{brands[0].name}</strong>
               </p>
+            )}
+
+            {action === "collection" && (
+              <div>
+                <Label>الأوردر <span className="text-destructive">*</span></Label>
+                <Input
+                  value={orderSearch}
+                  onChange={e => setOrderSearch(e.target.value)}
+                  placeholder="ابحث برقم الأوردر أو اسم العميل..."
+                  className="mt-1 h-10"
+                />
+                <div
+                  className={`mt-2 max-h-52 overflow-y-auto rounded-md border ${showError("orderId") ? "border-destructive" : ""}`}
+                >
+                  {pendingOrders.isLoading ? (
+                    <div className="space-y-1 p-2">
+                      {[0, 1].map(i => <div key={i} className="h-10 animate-pulse rounded bg-muted" />)}
+                    </div>
+                  ) : (pendingOrders.data?.orders ?? []).length === 0 ? (
+                    <p className="p-4 text-center text-xs text-muted-foreground">
+                      مفيش أوردرات مستنية تحصيل
+                      {orderSearch ? " بالبحث ده" : ""}.
+                    </p>
+                  ) : (
+                    (pendingOrders.data?.orders ?? []).map((o: any) => {
+                      const outstanding =
+                        Number(o.totalAmount ?? 0) - Number(o.collectedAmount ?? 0);
+                      return (
+                        <button
+                          key={o.id}
+                          type="button"
+                          onClick={() => {
+                            setOrderId(String(o.id));
+                            // Default to what is still owed — the common case is collecting
+                            // the whole remainder, and retyping it invites a typo.
+                            setAmount(String(outstanding));
+                            setTouched(t => ({ ...t, orderId: true }));
+                          }}
+                          className={`flex w-full items-center justify-between gap-2 border-b p-2.5 text-start last:border-0 transition ${
+                            String(o.id) === orderId ? "bg-[var(--success)]/10" : "hover:bg-muted/60"
+                          }`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold">
+                              {o.orderNumber}
+                            </span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {o.customerName}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-sm font-bold tabular-nums">
+                            {money(outstanding)}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+                {showError("orderId") && (
+                  <p className="mt-1 text-xs text-destructive">{showError("orderId")}</p>
+                )}
+              </div>
             )}
 
             {/* المبلغ بعد البراند — هو اللي المحاسب بيبدأ بيه فعليًا لما البراند واحد */}
@@ -467,6 +576,7 @@ export default function DailyLedger() {
               )}
             </div>
 
+            {action !== "collection" && (
             <div>
               <Label>البيان <span className="text-destructive">*</span></Label>
               <Input
@@ -480,6 +590,7 @@ export default function DailyLedger() {
                 <p className="mt-1 text-xs text-destructive">{showError("description")}</p>
               )}
             </div>
+            )}
 
             {action === "expense" && (
               <div>
@@ -502,7 +613,9 @@ export default function DailyLedger() {
               </div>
             )}
 
-            {action !== "expense" && (
+            {/* الملاحظات للإيداع والسحب بس — `collectionRecord` مابيقبلش ملاحظات، وعرض
+                خانة الكلام اللي هيتكتب فيها هيتضيع أسوأ من إنها مش موجودة. */}
+            {(action === "deposit" || action === "withdrawal") && (
               <div>
                 <Label>ملاحظات</Label>
                 <Textarea
