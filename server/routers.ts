@@ -102,6 +102,7 @@ import {
   reserveOrderInventory,
   submitPurchaseReceipt,
   submitReturnInspection,
+  transferStock,
   voidPurchaseReceipt,
 } from "./inventoryV2.service";
 import {
@@ -1176,6 +1177,39 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) =>
         approvePurchaseReceipt({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    // تحويل مخزون بين مخزنين — مسار الورشة. صلاحية manage مش approve: ده نقل عهدة
+    // داخلي مابيغيّرش إجمالي المخزون ولا قيمته، مش قرار مالي.
+    stockTransfer: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          fromWarehouseId: z.number(),
+          toWarehouseId: z.number(),
+          reference: z.string().min(1).max(100),
+          reason: z.string().min(1).max(500),
+          occurredAt: z.date(),
+          lines: z
+            .array(
+              z.object({
+                productId: z.number(),
+                variantId: z.number().nullish(),
+                quantity: z.number().int().positive(),
+              })
+            )
+            .min(1),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        transferStock({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx.tenantId,
