@@ -59,6 +59,7 @@ const TABS = [
   { key: "collections", label: "التحصيلات", path: "/collections", icon: Banknote },
   { key: "inventory", label: "المخزون", path: "/goods-receipt", icon: PackageCheck },
   { key: "expenses", label: "المصروفات", path: "/expenses", icon: Receipt },
+  { key: "advertising", label: "الإعلانات", path: "/advertising", icon: TrendingUp },
   { key: "payroll", label: "المرتبات", path: "/payroll", icon: Users },
   { key: "treasury", label: "سجل الخزنة", path: "/treasury", icon: Wallet },
 ] as const;

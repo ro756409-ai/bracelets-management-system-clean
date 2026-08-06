@@ -404,6 +404,7 @@ import {
   getDailyLedgerSummary,
   getAccountingControlCenter,
   getTreasuryHistoryWithBalances,
+  listAdCampaigns,
   getExpenseCategories,
   createExpenseCategory,
   updateExpenseCategory,
@@ -1060,7 +1061,7 @@ export const appRouter = router({
           serviceFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
           serviceTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
           reference: z.string().max(100).optional(),
-          evidenceUrl: z.string().min(1),
+          evidenceUrl: z.string().max(500).optional(),
           platformId: z.string().min(1),
           platformName: z.string().min(1),
           accountId: z.string().min(1),
@@ -1070,6 +1071,7 @@ export const appRouter = router({
           adSetId: z.string().optional(),
           adId: z.string().optional(),
           manualMetrics: z.record(z.string(), z.number()).optional(),
+          // المرفق اختياري — createAdSpendDraft بيعمل مسودة، والمسودة مابتحركش فلوس
           overrideReason: z.string().optional(),
           notes: z.string().optional(),
         })
@@ -5964,6 +5966,20 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         const businessIds = await scopeBusinessIds(ctx.tenantId, input);
         return getTreasuryHistoryWithBalances({ ...input, businessIds });
+      }),
+
+    /** حملات الإعلانات في فترة — صفوف خام، والحساب في shared/adMetrics. */
+    adCampaigns: permissionProcedure("accounting.view")
+      .input(
+        z.object({
+          businessIds: z.array(z.number()).optional(),
+          dateFrom: z.date(),
+          dateTo: z.date(),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        return listAdCampaigns({ ...input, businessIds });
       }),
 
     dailySummary: permissionProcedure("accounting.view")

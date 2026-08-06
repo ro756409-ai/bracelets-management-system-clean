@@ -21,9 +21,11 @@ const page = fs.readFileSync("client/src/pages/Accounting.tsx", "utf-8");
 const codeOnly = (src: string) =>
   src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*/g, "");
 
+// النهاية على أول دالة بعدها مباشرة — أي دالة جديدة تتزرع بينهم كانت هتدخل القصّة
+// وتخلّي التأكيدات تقيس كود مش بتاعها.
 const controlCenterFn = codeOnly(db).slice(
   codeOnly(db).indexOf("export async function getAccountingControlCenter"),
-  codeOnly(db).indexOf("export async function getTreasuryHistoryWithBalances")
+  codeOnly(db).indexOf("export async function listAdCampaigns")
 );
 // النهاية لازم تكون كود مش تعليق: codeOnly بتشيل الـ`//`، فعلامة القسم بتختفي و
 // indexOf بترجّع -1 والقصّة بتاخد نص الملف.

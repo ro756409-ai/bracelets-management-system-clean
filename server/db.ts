@@ -5147,6 +5147,72 @@ export async function getAccountingControlCenter(input: {
 }
 
 /**
+ * حملات الإعلانات في فترة — الصفوف الخام، والحساب فوقها في الواجهة والاختبار.
+ *
+ * قراءة بحتة من `ad_spend_entries` ومعاها مبلغ المصروف المرتبط بيها. المقاييس (أوردرات،
+ * رسايل، إيراد) متخزّنة في `manualMetricsJson` وهو عمود JSON حر موجود من الأصل، فمفيش
+ * عمود جديد ولا جدول.
+ *
+ * الحساب نفسه في `shared/adMetrics` عشان الشاشة والاختبار يقيسوا نفس المعادلة.
+ */
+export async function listAdCampaigns(input: {
+  businessIds?: number[] | null;
+  dateFrom: Date;
+  dateTo: Date;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const ids = input.businessIds && input.businessIds.length > 0 ? input.businessIds : null;
+
+  const rows = await db
+    .select({
+      id: adSpendEntries.id,
+      spendDate: adSpendEntries.spendDate,
+      platformName: adSpendEntries.platformNameSnapshot,
+      accountName: adSpendEntries.accountNameSnapshot,
+      campaignName: adSpendEntries.campaignNameSnapshot,
+      amount: adSpendEntries.amount,
+      metricsJson: adSpendEntries.manualMetricsJson,
+      notes: adSpendEntries.notes,
+      expenseStatus: expenses.status,
+      paidAmount: expenses.paidAmount,
+    })
+    .from(adSpendEntries)
+    .innerJoin(expenses, eq(expenses.id, adSpendEntries.expenseId))
+    .where(
+      and(
+        gte(adSpendEntries.spendDate, input.dateFrom),
+        lt(adSpendEntries.spendDate, input.dateTo),
+        ...(ids ? [inArray(adSpendEntries.businessId, ids)] : [])
+      )
+    )
+    .orderBy(desc(adSpendEntries.spendDate), desc(adSpendEntries.id));
+
+  return rows.map(r => {
+    // بيانات قديمة أو مكتوبة بره الشاشة ماتوقعش الصفحة.
+    let metrics: Record<string, number> = {};
+    try { metrics = r.metricsJson ? JSON.parse(r.metricsJson) : {}; } catch { metrics = {}; }
+    const kind = metrics.messages > 0 ? ("messages" as const) : ("sales" as const);
+    return {
+      id: r.id,
+      spendDate: r.spendDate,
+      platformName: r.platformName,
+      accountName: r.accountName,
+      campaignName: r.campaignName,
+      spend: Number(r.amount),
+      kind,
+      orders: Number(metrics.orders ?? 0),
+      messages: Number(metrics.messages ?? 0),
+      revenue: metrics.revenue != null ? Number(metrics.revenue) : null,
+      notes: r.notes,
+      // الحالة معروضة عشان المعلن يعرف إن المصروف اتسجّل بس لسه ماخرجش من الخزنة.
+      expenseStatus: r.expenseStatus,
+      paidAmount: Number(r.paidAmount ?? 0),
+    };
+  });
+}
+
+/**
  * حركات الخزنة ومعاها الرصيد قبل كل واحدة.
  *
  * `balanceBefore` مش عمود في الجدول ومش محتاج يبقى: الرصيد بعد الحركة محفوظ، والاتجاه
