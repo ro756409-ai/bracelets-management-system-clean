@@ -107,7 +107,14 @@ export async function createPurchaseReceiptDraft(input: {
   supplierName: string;
   reference?: string;
   receiptDate: Date;
-  evidenceUrl: string;
+  /**
+   * اختياري على المسودة، إجباري عند الاعتماد (شوف approvePurchaseReceipt).
+   *
+   * كان إجباري من أول لحظة، فالمحاسب اللي البضاعة قدامه والفاتورة لسه مع السواق مكانش
+   * يقدر يحفظ ولا حتى مسودة. المسودة مابتحركش مخزون ولا فلوس، فمفيش حاجة تستاهل ورقة
+   * لسه ماوصلتش.
+   */
+  evidenceUrl?: string;
   reason?: string;
   actor: Actor;
   items: Array<{ productId: number; variantId?: number; quantity: number; unitCost: string }>;
@@ -137,7 +144,7 @@ export async function createPurchaseReceiptDraft(input: {
       receiptDate: input.receiptDate,
       totalAmount: fromMinorUnits(total),
       status: "draft",
-      evidenceUrl: input.evidenceUrl,
+      evidenceUrl: input.evidenceUrl?.trim() || null,
       reason: input.reason ?? null,
       createdBy: input.actor.id,
     });
@@ -403,6 +410,10 @@ export async function approvePurchaseReceipt(input: { businessId: number; receip
     if (!receipt) throw new Error("Purchase Receipt is outside this business");
     if (receipt.status !== "pending_approval") throw new Error("Only a pending Purchase Receipt can be approved");
     if (receipt.createdBy === input.actor.id) throw new Error("Maker cannot approve their own Purchase Receipt");
+    // الورقة شرط هنا مش عند المسودة: دي اللحظة اللي المخزون بيتحرك فيها فعلًا، وهي
+    // اللي محتاجة يكون وراها مستند.
+    if (!receipt.evidenceUrl?.trim())
+      throw new Error("الاعتماد يتطلب مستند — ضيف رابط الفاتورة على الإذن الأول");
     const lines = await tx.select().from(purchaseReceiptItems).where(eq(purchaseReceiptItems.receiptId, receipt.id));
     if (lines.length === 0) throw new Error("Purchase Receipt has no items");
     const keys = lines.map(line => makeInventoryKey(line.productId, line.variantId));

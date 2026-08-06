@@ -53,6 +53,7 @@ import {
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
+import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
 
@@ -2182,7 +2183,7 @@ function CreateOrderDialog({
   onSuccess: () => void;
 }) {
   const [, navigate] = useLocation();
-  const { businesses } = useBusinessContext();
+  const { brands, selectedId: autoBrandId, isEmpty: noBrands } = useBrandOptions();
   const [form, setForm] = useState({
     customerName: "", customerPhone: "", customerAddress: "", governorate: "",
     businessId: "", productId: "", variantId: "", quantity: "1", totalAmount: "", source: "", notes: "",
@@ -2191,13 +2192,12 @@ function CreateOrderDialog({
   const businessId = Number(form.businessId) || undefined;
 
   // Everything below the brand select is keyed on the chosen brand, so before one is picked
-  // the five dependent queries are disabled and their lists render empty. A merchant with a
-  // single brand has no decision to make there — picking it for them is what makes the rest
-  // of the form populate at all, instead of looking broken.
+  // the five dependent queries are disabled and their lists render empty. useBrandOptions
+  // resolves the single-brand case for us; this only mirrors it into the form state.
   useEffect(() => {
-    if (!open || form.businessId || businesses.length !== 1) return;
-    setForm(f => ({ ...f, businessId: String(businesses[0].id) }));
-  }, [open, businesses, form.businessId]);
+    if (!open || form.businessId || autoBrandId == null) return;
+    setForm(f => ({ ...f, businessId: String(autoBrandId) }));
+  }, [open, autoBrandId, form.businessId]);
 
   // Governorate and source both have a shared fallback for exactly the reason this dialog
   // was reported broken: the configuration table is empty in production. The remaining three
@@ -2281,7 +2281,7 @@ function CreateOrderDialog({
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>إضافة أوردر جديد</DialogTitle></DialogHeader>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div><Label>النشاط <span className="text-destructive">*</span></Label><Select value={form.businessId} onValueChange={businessId => setForm(f => ({ ...f, businessId, governorate: "", shippingProviderId: "", shippingType: "", paymentType: "" }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار النشاط" /></SelectTrigger><SelectContent>{businesses.map(business => <SelectItem key={business.id} value={String(business.id)}>{business.name}</SelectItem>)}</SelectContent></Select></div>
+          <div><Label>النشاط <span className="text-destructive">*</span></Label><Select value={form.businessId} onValueChange={businessId => setForm(f => ({ ...f, businessId, governorate: "", shippingProviderId: "", shippingType: "", paymentType: "" }))}><SelectTrigger className="mt-1"><SelectValue placeholder="اختار النشاط" /></SelectTrigger><SelectContent>{brands.map(business => <SelectItem key={business.id} value={String(business.id)}>{business.name}</SelectItem>)}</SelectContent></Select></div>
           <div>
             <Label>اسم العميل <span className="text-destructive">*</span></Label>
             <Input value={form.customerName} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} placeholder="الاسم الكامل" className="mt-1" />

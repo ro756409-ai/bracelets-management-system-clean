@@ -1247,7 +1247,9 @@ export const appRouter = router({
           supplierName: z.string().min(1).max(160),
           reference: z.string().max(100).optional(),
           receiptDate: z.date(),
-          evidenceUrl: z.string().min(1),
+          // اختياري على المسودة — الحاجز اتنقل لـapprovePurchaseReceipt، لأن المسودة
+          // مابتحركش مخزون ولا فلوس.
+          evidenceUrl: z.string().max(500).optional(),
           reason: z.string().optional(),
           items: z
             .array(

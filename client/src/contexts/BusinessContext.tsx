@@ -79,9 +79,22 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   }, [currentGroupId, currentGroup]);
 
   // All businesses flat list
-  const businesses = useMemo(() => {
-    return groupsData.flatMap(g => g.businesses) as Business[];
-  }, [groupsData]);
+  /**
+   * Every brand the user may act on, whether or not it sits in a group.
+   *
+   * This used to be `groupsData.flatMap(g => g.businesses)`, which looks equivalent and is
+   * not: getBusinessGroupsWithBusinesses attaches a brand to a group with
+   * `b.groupId === g.id`, so a brand whose groupId is null appears in no group and vanished
+   * from this list too. Screens that ask "which brands can I use" then saw none and locked
+   * themselves — the goods receipt form kept its warehouse select disabled behind "choose
+   * the brand first", with no brand to choose.
+   *
+   * `businesses.activeList` is scoped by tenant on the server and does not care about
+   * groups, so it answers that question directly. Grouping stays with currentGroup, which is
+   * what the header switcher is actually for.
+   */
+  const { data: allBusinesses = [] } = trpc.businesses.activeList.useQuery();
+  const businesses = useMemo(() => allBusinesses as Business[], [allBusinesses]);
 
   // Legacy backward compat: currentBusinessId is undefined (we use businessIds array now)
   const currentBusinessId = undefined;

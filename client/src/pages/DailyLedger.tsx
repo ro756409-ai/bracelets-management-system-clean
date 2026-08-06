@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -58,7 +59,9 @@ const MOVEMENT_LABELS: Record<string, string> = {
 };
 
 export default function DailyLedger() {
-  const { currentBusinessIds, currentGroup } = useBusinessContext();
+  const { currentBusinessIds } = useBusinessContext();
+  const { brands, selected: businessId, setSelected: setBusinessId,
+          selectedId: chosenBusinessId, isEmpty: noBrands } = useBrandOptions();
   const utils = trpc.useUtils();
 
   const [dateKey, setDateKey] = useState(cairoToday);
@@ -68,7 +71,6 @@ export default function DailyLedger() {
   // The brand is a field of the movement, so it belongs in the form. It used to be read
   // from the page header, which selects a GROUP — and a group holds several brands, so the
   // form asked the user to "pick one brand above" when there was no such control above.
-  const [businessId, setBusinessId] = useState<string>("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [notes, setNotes] = useState("");
@@ -91,12 +93,6 @@ export default function DailyLedger() {
     { ...(scope ?? {}), collectionStatus: "pending", search: orderSearch || undefined, limit: 25 },
     { enabled: action === "collection", retry: false }
   );
-
-  /** Brands in the selected group — what the form offers. */
-  const brands = currentGroup?.businesses ?? [];
-  /** Chosen brand, or the only one when the group holds a single brand. */
-  const chosenBusinessId =
-    businessId ? Number(businessId) : brands.length === 1 ? brands[0].id : undefined;
 
   /** `keepBrand` on the "save and add another" path — the next movement is usually the
    *  same brand, and re-picking it every time is the kind of friction that stops a screen
@@ -157,7 +153,8 @@ export default function DailyLedger() {
     else if (value <= 0) errors.amount = "المبلغ لازم يكون أكبر من صفر";
     if (!description.trim()) errors.description = "البيان مطلوب";
     // Required by every one of the three backends, and now answerable inside the form.
-    if (chosenBusinessId == null) errors.businessId = "اختر البراند";
+    if (chosenBusinessId == null)
+      errors.businessId = noBrands ? "مفيش أنشطة متاحة" : "اختر البراند";
     return errors;
   }
 

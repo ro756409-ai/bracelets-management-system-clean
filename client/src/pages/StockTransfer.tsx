@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowLeftRight, Plus, Trash2, Send, AlertCircle,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,15 +31,12 @@ const newLine = (): Line => ({
 });
 
 export default function StockTransfer() {
-  const { businesses, currentBusinessIds } = useBusinessContext();
+  const { currentBusinessIds } = useBusinessContext();
 
-  const [businessId, setBusinessId] = useState("");
-  const bid = Number(businessId) || undefined;
-
-  useEffect(() => {
-    if (businessId || businesses.length !== 1) return;
-    setBusinessId(String(businesses[0].id));
-  }, [businesses, businessId]);
+  const {
+    brands, selected: businessId, setSelected: setBusinessId,
+    selectedId: bid, isEmpty: noBrands,
+  } = useBrandOptions();
 
   const [fromWarehouseId, setFromWarehouseId] = useState("");
   const [toWarehouseId, setToWarehouseId] = useState("");
@@ -79,7 +77,7 @@ export default function StockTransfer() {
 
   const validate = () => {
     const next: Record<string, string> = {};
-    if (!bid) next.businessId = "اختار النشاط";
+    if (!bid) next.businessId = noBrands ? "مفيش أنشطة متاحة" : "اختار النشاط";
     if (!fromWarehouseId) next.from = "اختار مكان الإرسال";
     if (!toWarehouseId) next.to = "اختار مكان الاستلام";
     if (fromWarehouseId && fromWarehouseId === toWarehouseId)
@@ -137,8 +135,14 @@ export default function StockTransfer() {
           </span>
         </p>
 
+        {noBrands && (
+          <p className="mb-3 flex items-start gap-1.5 rounded-md bg-destructive/10 p-2 text-xs">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+            <span>مفيش أنشطة متاحة لحسابك، فمفيش مخازن تتحوّل بينها.</span>
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {businesses.length > 1 && (
+          {brands.length > 1 && (
             <div>
               <Label>النشاط <span className="text-destructive">*</span></Label>
               <Select value={businessId} onValueChange={v => {
@@ -146,7 +150,7 @@ export default function StockTransfer() {
               }}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="اختار النشاط" /></SelectTrigger>
                 <SelectContent>
-                  {businesses.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
+                  {brands.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
                 </SelectContent>
               </Select>
               {showError("businessId")}

@@ -32,9 +32,12 @@ const dialog = code.slice(
 );
 
 describe("النشاط هو البوابة", () => {
-  it("🔑 نشاط واحد → بيتختار لوحده", () => {
-    expect(dialog).toContain("businesses.length !== 1");
-    expect(dialog).toContain("setForm(f => ({ ...f, businessId: String(businesses[0].id) }))");
+  it("🔑 نشاط واحد → بيتختار لوحده، من المصدر المشترك", () => {
+    // كان مكتوب هنا بإيده (`businesses.length !== 1`) وده الشكل اللي وقع على الإنتاج
+    // لما القايمة رجعت فاضية. بقى من useBrandOptions اللي بيعالج الصفر كمان.
+    expect(dialog).toContain("useBrandOptions()");
+    expect(dialog).toContain("autoBrandId == null");
+    expect(dialog).toContain("setForm(f => ({ ...f, businessId: String(autoBrandId) }))");
   });
 
   it("🔑 القوايم المعتمدة عليه بتتقفل لحد ما يتختار، مش بتترسم فاضية", () => {
