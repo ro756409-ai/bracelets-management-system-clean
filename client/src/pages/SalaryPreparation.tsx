@@ -4,7 +4,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { useBusinessContext } from "@/contexts/BusinessContext";
+import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,21 +55,18 @@ type Draft = {
 };
 
 export default function SalaryPreparation() {
-  const { currentGroup } = useBusinessContext();
+  const { brands, selected: businessId, setSelected: setBusinessId,
+          selectedId: chosenBusinessId, isEmpty: noBrands } = useBrandOptions();
   const utils = trpc.useUtils();
 
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [businessId, setBusinessId] = useState<string>("");
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>({
     baseSalary: "", bonuses: "", commissions: "", deductions: "", notes: "",
   });
 
-  const brands = currentGroup?.businesses ?? [];
-  const chosenBusinessId =
-    businessId ? Number(businessId) : brands.length === 1 ? brands[0].id : undefined;
 
   const periods = trpc.payroll.periodList.useQuery(
     { businessIds: chosenBusinessId != null ? [chosenBusinessId] : [], year },
@@ -248,7 +245,11 @@ export default function SalaryPreparation() {
       {/* الحالات اللي مافيهاش تجهيز */}
       {chosenBusinessId == null ? (
         <SectionCard>
-          <p className="py-6 text-center text-sm text-muted-foreground">اختر البراند الأول.</p>
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            {noBrands
+              ? "مفيش أنشطة متاحة لحسابك — مش هينفع تجهّز مرتبات من غير نشاط."
+              : "اختر البراند الأول."}
+          </p>
         </SectionCard>
       ) : !period ? (
         <SectionCard>

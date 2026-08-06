@@ -11,6 +11,7 @@ import Dashboard from "./pages/Dashboard";
 import Orders from "./pages/Orders";
 import DailyLedger from "./pages/DailyLedger";
 import GoodsReceipt from "./pages/GoodsReceipt";
+import StockTransfer from "./pages/StockTransfer";
 import SalaryPreparation from "./pages/SalaryPreparation";
 import AgentWorkspace from "./pages/AgentWorkspace";
 import Employees from "./pages/Employees";
@@ -145,6 +146,9 @@ function Router() {
       </Route>
       <Route path="/goods-receipt">
         <ProtectedLayout><GoodsReceipt /></ProtectedLayout>
+      </Route>
+      <Route path="/stock-transfer">
+        <ProtectedLayout><StockTransfer /></ProtectedLayout>
       </Route>
       <Route path="/accounting-settings">
         <ProtectedLayout><Accounting /></ProtectedLayout>

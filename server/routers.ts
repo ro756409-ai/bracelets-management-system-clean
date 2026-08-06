@@ -102,6 +102,7 @@ import {
   reserveOrderInventory,
   submitPurchaseReceipt,
   submitReturnInspection,
+  transferStock,
   voidPurchaseReceipt,
 } from "./inventoryV2.service";
 import {
@@ -1185,6 +1186,39 @@ export const appRouter = router({
         })
       ),
 
+    // تحويل مخزون بين مخزنين — مسار الورشة. صلاحية manage مش approve: ده نقل عهدة
+    // داخلي مابيغيّرش إجمالي المخزون ولا قيمته، مش قرار مالي.
+    stockTransfer: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          fromWarehouseId: z.number(),
+          toWarehouseId: z.number(),
+          reference: z.string().min(1).max(100),
+          reason: z.string().min(1).max(500),
+          occurredAt: z.date(),
+          lines: z
+            .array(
+              z.object({
+                productId: z.number(),
+                variantId: z.number().nullish(),
+                quantity: z.number().int().positive(),
+              })
+            )
+            .min(1),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        transferStock({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
     purchaseReceiptVoid: permissionProcedure("inventory_costing.approve")
       .input(
         z.object({
@@ -1213,7 +1247,9 @@ export const appRouter = router({
           supplierName: z.string().min(1).max(160),
           reference: z.string().max(100).optional(),
           receiptDate: z.date(),
-          evidenceUrl: z.string().min(1),
+          // اختياري على المسودة — الحاجز اتنقل لـapprovePurchaseReceipt، لأن المسودة
+          // مابتحركش مخزون ولا فلوس.
+          evidenceUrl: z.string().max(500).optional(),
           reason: z.string().optional(),
           items: z
             .array(

@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   PackagePlus, Plus, Trash2, Save, CheckCircle2, XCircle, RefreshCw, AlertCircle,
 } from "lucide-react";
+import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,18 +50,14 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default function GoodsReceipt() {
-  const { businesses, currentBusinessIds } = useBusinessContext();
+  const [, navigate] = useLocation();
+  const { currentBusinessIds } = useBusinessContext();
   const utils = trpc.useUtils();
 
-  const [businessId, setBusinessId] = useState("");
-  const bid = Number(businessId) || undefined;
-
-  // لازم effect مش قيمة ابتدائية: قائمة الأنشطة بتيجي من استعلام، فأول رندر بتكون فاضية
-  // والقيمة الابتدائية بتتقفل على "" وماتتحدّثش أبدًا — وساعتها كل اللي تحت بيفضل مقفول.
-  useEffect(() => {
-    if (businessId || businesses.length !== 1) return;
-    setBusinessId(String(businesses[0].id));
-  }, [businesses, businessId]);
+  const {
+    brands, selected: businessId, setSelected: setBusinessId,
+    selectedId: bid, isEmpty: noBrands,
+  } = useBrandOptions();
 
   const [warehouseId, setWarehouseId] = useState("");
   const [supplierName, setSupplierName] = useState("");
@@ -132,11 +130,10 @@ export default function GoodsReceipt() {
 
   const validate = () => {
     const next: Record<string, string> = {};
-    if (!bid) next.businessId = "اختار النشاط";
+    if (!bid) next.businessId = noBrands ? "مفيش أنشطة متاحة" : "اختار النشاط";
     if (!warehouseId) next.warehouseId = "اختار مكان الاستلام";
     if (!supplierName.trim()) next.supplierName = "اسم المورد مطلوب";
     if (!receiptDate) next.receiptDate = "تاريخ الاستلام مطلوب";
-    if (!evidenceUrl.trim()) next.evidenceUrl = "المستند مطلوب — إذن الاستلام لازم يبقى وراه ورقة";
     lines.forEach((l, i) => {
       if (!l.productId) next[`line-${i}-product`] = "اختار المنتج";
       const vs = variantsFor(l.productId);
@@ -163,7 +160,7 @@ export default function GoodsReceipt() {
       supplierName: supplierName.trim(),
       reference: reference.trim() || undefined,
       receiptDate: new Date(receiptDate),
-      evidenceUrl: evidenceUrl.trim(),
+      evidenceUrl: evidenceUrl.trim() || undefined,
       reason: [notes.trim(), invoiceDate ? `تاريخ الفاتورة: ${invoiceDate}` : ""]
         .filter(Boolean).join(" · ") || undefined,
       items: lines.map(l => ({
@@ -186,14 +183,27 @@ export default function GoodsReceipt() {
       />
 
       <SectionCard>
+        {/* مفيش براند خالص — نقول كده بدل ما نقفل الشاشة ونطلب اختيار مستحيل. */}
+        {noBrands && (
+          <p className="mb-3 flex items-start gap-1.5 rounded-md bg-destructive/10 p-2 text-xs">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+            <span>
+              مفيش أنشطة متاحة لحسابك، فمش هينفع تسجّل استلام.{" "}
+              <button type="button" onClick={() => navigate("/businesses")}
+                className="text-primary underline underline-offset-2">
+                افتح إدارة الأنشطة
+              </button>
+            </span>
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {businesses.length > 1 && (
+          {brands.length > 1 && (
             <div>
               <Label>النشاط <span className="text-destructive">*</span></Label>
               <Select value={businessId} onValueChange={v => { setBusinessId(v); setWarehouseId(""); }}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="اختار النشاط" /></SelectTrigger>
                 <SelectContent>
-                  {businesses.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
+                  {brands.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
                 </SelectContent>
               </Select>
               {showError("businessId")}
@@ -239,10 +249,12 @@ export default function GoodsReceipt() {
             {showError("receiptDate")}
           </div>
           <div className="sm:col-span-2">
-            <Label>رابط المستند <span className="text-destructive">*</span></Label>
+            <Label>رابط المستند</Label>
             <Input className="mt-1" value={evidenceUrl} placeholder="https://..." dir="ltr"
               onChange={e => setEvidenceUrl(e.target.value)} />
-            {showError("evidenceUrl")}
+            <p className="mt-1 text-xs text-muted-foreground">
+              مش مطلوب للمسودة — بس الاعتماد مش هيعدّي من غيره.
+            </p>
           </div>
           <div className="sm:col-span-2 lg:col-span-3">
             <Label>ملاحظات</Label>

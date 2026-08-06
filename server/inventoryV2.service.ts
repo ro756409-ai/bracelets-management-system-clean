@@ -107,7 +107,14 @@ export async function createPurchaseReceiptDraft(input: {
   supplierName: string;
   reference?: string;
   receiptDate: Date;
-  evidenceUrl: string;
+  /**
+   * اختياري على المسودة، إجباري عند الاعتماد (شوف approvePurchaseReceipt).
+   *
+   * كان إجباري من أول لحظة، فالمحاسب اللي البضاعة قدامه والفاتورة لسه مع السواق مكانش
+   * يقدر يحفظ ولا حتى مسودة. المسودة مابتحركش مخزون ولا فلوس، فمفيش حاجة تستاهل ورقة
+   * لسه ماوصلتش.
+   */
+  evidenceUrl?: string;
   reason?: string;
   actor: Actor;
   items: Array<{ productId: number; variantId?: number; quantity: number; unitCost: string }>;
@@ -137,7 +144,7 @@ export async function createPurchaseReceiptDraft(input: {
       receiptDate: input.receiptDate,
       totalAmount: fromMinorUnits(total),
       status: "draft",
-      evidenceUrl: input.evidenceUrl,
+      evidenceUrl: input.evidenceUrl?.trim() || null,
       reason: input.reason ?? null,
       createdBy: input.actor.id,
     });
@@ -403,6 +410,10 @@ export async function approvePurchaseReceipt(input: { businessId: number; receip
     if (!receipt) throw new Error("Purchase Receipt is outside this business");
     if (receipt.status !== "pending_approval") throw new Error("Only a pending Purchase Receipt can be approved");
     if (receipt.createdBy === input.actor.id) throw new Error("Maker cannot approve their own Purchase Receipt");
+    // الورقة شرط هنا مش عند المسودة: دي اللحظة اللي المخزون بيتحرك فيها فعلًا، وهي
+    // اللي محتاجة يكون وراها مستند.
+    if (!receipt.evidenceUrl?.trim())
+      throw new Error("الاعتماد يتطلب مستند — ضيف رابط الفاتورة على الإذن الأول");
     const lines = await tx.select().from(purchaseReceiptItems).where(eq(purchaseReceiptItems.receiptId, receipt.id));
     if (lines.length === 0) throw new Error("Purchase Receipt has no items");
     const keys = lines.map(line => makeInventoryKey(line.productId, line.variantId));
@@ -619,6 +630,199 @@ export async function voidPurchaseReceipt(input: {
     await tx.update(purchaseReceipts).set({ status: "voided", reason: input.reason })
       .where(eq(purchaseReceipts.id, receipt.id));
     return { reversed: true, eventId, duplicate: false };
+  });
+}
+
+/**
+ * تحويل مخزون بين مخزنين — وده هو مسار الورشة.
+ *
+ * الورشة مخزن، مش مورد. إرسال خامات لها = تحويل خارج من مخزن المكتب وداخل للورشة،
+ * واستلام المشغول = العكس. الكمية والقيمة بيتنقلوا مع بعض فالإجمالي على مستوى النشاط
+ * مابيتغيّرش: **مفيش مخزون بيتخلق من العدم ولا بيتمسح**.
+ *
+ * الوارد بيدخل بنفس تكلفة الصادر (unitCostSnapshot) مش بتكلفة جديدة، عشان التحويل
+ * مايبقاش بابًا خلفيًا لإعادة تسعير المخزون. لو الورشة ضافت شغل على الخامة، ده مصروف
+ * أو إذن استلام منفصل — مش رقم بيتحط هنا.
+ *
+ * الرصيد في المخزن المستقبِل ممكن ما يكونش موجود، فبيتعمل بصفر الأول. إنشاء صف رصيد
+ * فاضي مش إنشاء مخزون.
+ *
+ * العدّاد التشغيلي (`products/product_variants.currentStock`) رقم واحد مالوش بُعد مخزن،
+ * فالتحويل بيطلع صافيه صفر — وده صحيح. برضه بنكتب الحركتين في `inventory_movements`
+ * عشان تاريخ العهدة يفضل كامل: مين خرج منه، ومين دخل عنده، وإمتى.
+ */
+export async function transferStock(input: {
+  businessId: number;
+  fromWarehouseId: number;
+  toWarehouseId: number;
+  /** رقم إذن التحويل/العهدة — بيمنع الترحيل المكرر لنفس الورقة. */
+  reference: string;
+  reason: string;
+  occurredAt: Date;
+  actor: Actor;
+  lines: Array<{ productId: number; variantId?: number | null; quantity: number }>;
+}) {
+  if (input.fromWarehouseId === input.toWarehouseId)
+    throw new Error("مكان الإرسال ومكان الاستلام لازم يكونوا مختلفين");
+  if (!input.reference.trim()) throw new Error("التحويل يتطلب رقم إذن");
+  if (input.lines.length === 0) throw new Error("التحويل يتطلب بند واحد على الأقل");
+  if (input.lines.some(line => !Number.isInteger(line.quantity) || line.quantity <= 0))
+    throw new Error("كمية كل بند لازم تكون رقم صحيح أكبر من صفر");
+
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const keys = input.lines.map(line => makeInventoryKey(line.productId, line.variantId));
+
+    const sourceBalances = await tx.select().from(inventoryBalances).where(and(
+      eq(inventoryBalances.businessId, input.businessId),
+      eq(inventoryBalances.warehouseId, input.fromWarehouseId),
+      inArray(inventoryBalances.inventoryKey, keys),
+    )).orderBy(asc(inventoryBalances.id)).for("update");
+    const sourceByKey = new Map(
+      sourceBalances.map((b: typeof inventoryBalances.$inferSelect) => [b.inventoryKey, b])
+    );
+
+    // صف رصيد فاضي في المخزن المستقبِل لو مش موجود — مش مخزون، صف بصفر.
+    for (const line of input.lines) {
+      const key = makeInventoryKey(line.productId, line.variantId);
+      const [existing] = await tx.select().from(inventoryBalances).where(and(
+        eq(inventoryBalances.businessId, input.businessId),
+        eq(inventoryBalances.warehouseId, input.toWarehouseId),
+        eq(inventoryBalances.inventoryKey, key),
+      )).limit(1);
+      if (!existing) await tx.insert(inventoryBalances).values({
+        businessId: input.businessId,
+        warehouseId: input.toWarehouseId,
+        productId: line.productId,
+        variantId: line.variantId ?? null,
+        inventoryKey: key,
+      });
+    }
+    const targetBalances = await tx.select().from(inventoryBalances).where(and(
+      eq(inventoryBalances.businessId, input.businessId),
+      eq(inventoryBalances.warehouseId, input.toWarehouseId),
+      inArray(inventoryBalances.inventoryKey, keys),
+    )).orderBy(asc(inventoryBalances.id)).for("update");
+    const targetByKey = new Map(
+      targetBalances.map((b: typeof inventoryBalances.$inferSelect) => [b.inventoryKey, b])
+    );
+
+    const eventResult = await createBusinessEventInTransaction(tx, {
+      businessId: input.businessId,
+      eventType: "inventory.stock_transfer",
+      sourceType: "stock_transfer",
+      sourceReference: input.reference,
+      idempotencyKey: `stock-transfer:${input.businessId}:${input.reference}`,
+      occurredAt: input.occurredAt,
+      payload: {
+        fromWarehouseId: input.fromWarehouseId,
+        toWarehouseId: input.toWarehouseId,
+        reason: input.reason,
+        lines: input.lines,
+      },
+      actor: input.actor,
+    });
+    if (eventResult.duplicate) return { eventId: eventResult.event.id, duplicate: true };
+    const eventId = eventResult.event.id;
+
+    for (const line of input.lines) {
+      const key = makeInventoryKey(line.productId, line.variantId);
+      const source: any = sourceByKey.get(key);
+      const target: any = targetByKey.get(key);
+      if (!source)
+        throw new Error(`مفيش رصيد للصنف ده في مكان الإرسال — البند رقم ${line.productId}`);
+      if (line.quantity > source.onHandQuantity)
+        throw new Error(
+          `الكمية المطلوب تحويلها (${line.quantity}) أكبر من المتاح في مكان الإرسال (${source.onHandQuantity})`
+        );
+
+      const out = applyStockOut({
+        quantity: source.onHandQuantity,
+        inventoryValue: source.inventoryValue,
+        movingAverageCost: source.movingAverageCost,
+      }, line.quantity);
+      // الوارد بنفس تكلفة الصادر — القيمة بتتنقل، مابتتخلقش.
+      const inn = applyStockIn({
+        quantity: target.onHandQuantity,
+        inventoryValue: target.inventoryValue,
+        movingAverageCost: target.movingAverageCost,
+      }, line.quantity, out.unitCostSnapshot);
+
+      await tx.update(inventoryBalances).set({
+        onHandQuantity: out.quantity,
+        inventoryValue: out.inventoryValue,
+        movingAverageCost: out.movingAverageCost,
+        version: source.version + 1,
+      }).where(eq(inventoryBalances.id, source.id));
+      await tx.update(inventoryBalances).set({
+        onHandQuantity: inn.quantity,
+        inventoryValue: inn.inventoryValue,
+        movingAverageCost: inn.movingAverageCost,
+        version: target.version + 1,
+      }).where(eq(inventoryBalances.id, target.id));
+
+      await tx.insert(inventoryTransactions).values({
+        businessId: input.businessId,
+        businessEventId: eventId,
+        inventoryBalanceId: source.id,
+        transactionType: "transfer_out",
+        quantityDelta: -line.quantity,
+        unitCost: out.unitCostSnapshot,
+        valueDelta: `-${out.valueOut}`,
+        quantityAfter: out.quantity,
+        valueAfter: out.inventoryValue,
+        averageCostAfter: out.movingAverageCost,
+        sourceType: "stock_transfer",
+        sourceId: null,
+        occurredAt: input.occurredAt,
+        createdBy: input.actor.id,
+        createdByName: input.actor.name,
+      });
+      await tx.insert(inventoryTransactions).values({
+        businessId: input.businessId,
+        businessEventId: eventId,
+        inventoryBalanceId: target.id,
+        transactionType: "transfer_in",
+        quantityDelta: line.quantity,
+        unitCost: out.unitCostSnapshot,
+        valueDelta: out.valueOut,
+        quantityAfter: inn.quantity,
+        valueAfter: inn.inventoryValue,
+        averageCostAfter: inn.movingAverageCost,
+        sourceType: "stock_transfer",
+        sourceId: null,
+        occurredAt: input.occurredAt,
+        createdBy: input.actor.id,
+        createdByName: input.actor.name,
+      });
+
+      // الحركتين في الدفتر التشغيلي: صافيهم صفر على العدّاد، وتاريخ العهدة بيفضل كامل.
+      await mirrorLegacyStock(tx, {
+        businessId: input.businessId,
+        warehouseId: input.fromWarehouseId,
+        productId: line.productId,
+        variantId: line.variantId ?? null,
+        quantityDelta: -line.quantity,
+        reason: `stock_transfer_out:${input.reference}`,
+        notes: input.reason,
+        performedBy: input.actor.id,
+      });
+      await mirrorLegacyStock(tx, {
+        businessId: input.businessId,
+        warehouseId: input.toWarehouseId,
+        productId: line.productId,
+        variantId: line.variantId ?? null,
+        quantityDelta: line.quantity,
+        reason: `stock_transfer_in:${input.reference}`,
+        notes: input.reason,
+        performedBy: input.actor.id,
+      });
+
+      sourceByKey.set(key, { ...source, onHandQuantity: out.quantity, inventoryValue: out.inventoryValue, movingAverageCost: out.movingAverageCost, version: source.version + 1 });
+      targetByKey.set(key, { ...target, onHandQuantity: inn.quantity, inventoryValue: inn.inventoryValue, movingAverageCost: inn.movingAverageCost, version: target.version + 1 });
+    }
+    return { eventId, duplicate: false };
   });
 }
 
