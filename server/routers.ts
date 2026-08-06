@@ -102,6 +102,7 @@ import {
   reserveOrderInventory,
   submitPurchaseReceipt,
   submitReturnInspection,
+  listWorkshopReturns,
   transferStock,
   voidPurchaseReceipt,
 } from "./inventoryV2.service";
@@ -1202,6 +1203,10 @@ export const appRouter = router({
           reference: z.string().min(1).max(100),
           reason: z.string().min(1).max(500),
           occurredAt: z.date(),
+          // بيتحط على تحويل الرجوع عشان يقفل دفعة المرتجع اللي راحت الورشة
+          linkedReference: z.string().max(100).optional(),
+          // للعلم بس — مابيعملش مصروف ولا بيلمس خزنة
+          repairCostPerPiece: moneyString.optional(),
           lines: z
             .array(
               z.object({
@@ -1221,6 +1226,25 @@ export const appRouter = router({
             input.businessId
           ),
           actor: await requireActor(ctx),
+        })
+      ),
+
+    /** دفعات المرتجع للورشة وحالتها — مشتقّة من التحويلات، مفيش جدول حالة. */
+    workshopReturns: permissionProcedure("inventory_costing.view")
+      .input(
+        z.object({
+          businessId: z.number(),
+          workshopWarehouseId: z.number(),
+          limit: z.number().min(1).max(500).optional(),
+        })
+      )
+      .query(async ({ ctx, input }) =>
+        listWorkshopReturns({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
         })
       ),
 

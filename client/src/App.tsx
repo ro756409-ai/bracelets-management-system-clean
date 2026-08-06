@@ -12,6 +12,7 @@ import Orders from "./pages/Orders";
 import DailyLedger from "./pages/DailyLedger";
 import GoodsReceipt from "./pages/GoodsReceipt";
 import StockTransfer from "./pages/StockTransfer";
+import WorkshopReturns from "./pages/WorkshopReturns";
 import SalaryPreparation from "./pages/SalaryPreparation";
 import AgentWorkspace from "./pages/AgentWorkspace";
 import Employees from "./pages/Employees";
@@ -149,6 +150,9 @@ function Router() {
       </Route>
       <Route path="/stock-transfer">
         <ProtectedLayout><StockTransfer /></ProtectedLayout>
+      </Route>
+      <Route path="/workshop-returns">
+        <ProtectedLayout><WorkshopReturns /></ProtectedLayout>
       </Route>
       <Route path="/accounting-settings">
         <ProtectedLayout><Accounting /></ProtectedLayout>

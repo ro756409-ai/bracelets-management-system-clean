@@ -26,7 +26,7 @@ import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
-  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus, ArrowLeftRight,
+  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus, ArrowLeftRight, RotateCcw as ReturnIcon,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -114,6 +114,7 @@ const MENU_GROUPS: MenuGroup[] = [
       { icon: Users, label: "تجهيز المرتبات", path: "/salary-preparation", adminOnly: true },
       { icon: PackagePlus, label: "إذن استلام بضاعة", path: "/goods-receipt", adminOnly: true },
       { icon: ArrowLeftRight, label: "تحويل مخزون", path: "/stock-transfer", adminOnly: true },
+      { icon: ReturnIcon, label: "مرتجعات الورشة", path: "/workshop-returns", adminOnly: true },
       { icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true },
     ],
   },
