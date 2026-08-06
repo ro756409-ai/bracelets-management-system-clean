@@ -317,17 +317,43 @@ describe("سجل الخزنة بيعرض التمن أعمدة", () => {
 });
 
 describe("التابات", () => {
-  it("🔑 الستة المطلوبين في الشريط", () => {
-    for (const label of ["اللوحة", "التحصيلات", "المخزون", "المصروفات", "المرتبات", "سجل الخزنة"]) {
-      expect(page, label).toContain(`label: "${label}"`);
+  /**
+   * الاختبار الأول كان بيدوّر على الاسم في **الملف** كله — وده كان بيعدّي حتى لو التاب
+   * اتنقل للمخفي، لأن الاسم بيفضل مكتوب في الحالتين. فبقى بيقرا كل قايمة لوحدها.
+   */
+  const listOf = (name: string) => {
+    const start = page.indexOf(`const ${name} = [`);
+    expect(start, name).toBeGreaterThan(-1);
+    return page.slice(start, page.indexOf("] as const;", start));
+  };
+  const bar = listOf("TABS");
+  const hidden = listOf("HIDDEN_TABS");
+
+  it("🔑 الشريط فيه اللي التاجر بيفتحه كل يوم وبس", () => {
+    for (const label of ["اللوحة", "المخزون", "الإعلانات", "سجل الخزنة"]) {
+      expect(bar, label).toContain(`label: "${label}"`);
+    }
+  });
+
+  it("🔑 والقديم اتشال من الشريط فعلًا — مش مكتوب وسايب", () => {
+    for (const label of ["التحصيلات", "المصروفات", "المرتبات"]) {
+      expect(bar, label).not.toContain(`label: "${label}"`);
+      expect(hidden, label).toContain(`label: "${label}"`);
     }
   });
 
   it("🔑 المخفية متعرّفة صراحة مش متمسوحة", () => {
     expect(page).toContain("const HIDDEN_TABS");
     for (const label of ["التقفيلات", "الشحن والتسويات", "الإعدادات"]) {
-      expect(page, label).toContain(`label: "${label}"`);
+      expect(hidden, label).toContain(`label: "${label}"`);
     }
+  });
+
+  it("🔑 ومحدش اتشال من غير بديل", () => {
+    // كل تاب اتخفي لازم يكون ليه شاشة تانية بتعمل نفس الشغل، وإلا يبقى التاجر خسر ميزة.
+    const sidebar = fs.readFileSync("client/src/components/DashboardLayout.tsx", "utf-8");
+    expect(sidebar).toContain('path: "/daily-collections"'); // بديل التحصيلات والمصروفات
+    expect(sidebar).toContain('path: "/salary-preparation"'); // بديل المرتبات
   });
 
   it("🔑 ومساراتها لسه بتفتح", () => {

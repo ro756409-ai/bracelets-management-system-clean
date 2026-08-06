@@ -56,21 +56,31 @@ import TreasuryHistory from "./accounting/TreasuryHistory";
  */
 const TABS = [
   { key: "overview", label: "اللوحة", path: "/accounting", icon: TrendingUp },
-  { key: "collections", label: "التحصيلات", path: "/collections", icon: Banknote },
   { key: "inventory", label: "المخزون", path: "/goods-receipt", icon: PackageCheck },
-  { key: "expenses", label: "المصروفات", path: "/expenses", icon: Receipt },
   { key: "advertising", label: "الإعلانات", path: "/advertising", icon: TrendingUp },
-  { key: "payroll", label: "المرتبات", path: "/payroll", icon: Users },
   { key: "treasury", label: "سجل الخزنة", path: "/treasury", icon: Wallet },
 ] as const;
 
 /**
  * شاشات شغّالة ومخفية من الشريط — مش محذوفة.
  *
- * كل واحدة فيهم لسه ليها مسار وجداول وخدمات. التقفيلات بالذات فيها لقطات معتمدة
- * والأرباح التاريخية مبنية عليها، فحذفها بيقطع السلسلة.
+ * كل واحدة فيهم لسه ليها مسار وجداول وخدمات، ولسه بتفتح لو حد عنده رابط قديم أو
+ * bookmark. المخفي هو **الطريق ليها من الشريط**، مش الشاشة نفسها.
+ *
+ * التقفيلات بالذات فيها لقطات معتمدة والأرباح التاريخية مبنية عليها، فحذفها بيقطع
+ * السلسلة.
+ *
+ * التلاتة اللي اتنقلوا هنا في المرحلة الرابعة بقى ليهم بديل أبسط بيعمل نفس الحاجة:
+ *   التحصيلات  ← «تحصيل اليوم»: تسوية يومية واحدة بدل تحصيل لكل أوردر لوحده.
+ *   المصروفات  ← كارت «خرج من الخزنة»: خطوة واحدة بدل مسودة ← إرسال ← اعتماد ← دفع.
+ *   المرتبات   ← «تجهيز المرتبات» من القايمة الجنبية — كانت مكررة في المكانين.
+ * الشاشة القديمة لسه هي اللي بتعمل الحالات المعقّدة (مصروف موزّع على شهر، تحصيل
+ * أوردر بعينه)، فمحدش خسر حاجة.
  */
 const HIDDEN_TABS = [
+  { key: "collections", label: "التحصيلات", path: "/collections", icon: Banknote },
+  { key: "expenses", label: "المصروفات", path: "/expenses", icon: Receipt },
+  { key: "payroll", label: "المرتبات", path: "/payroll", icon: Users },
   { key: "closings", label: "التقفيلات", path: "/closings", icon: LockKeyhole },
   { key: "shipping-finance", label: "الشحن والتسويات", path: "/shipping-finance", icon: PackageCheck },
   { key: "settings", label: "الإعدادات", path: "/accounting-settings", icon: Settings2 },
