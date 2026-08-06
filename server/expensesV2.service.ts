@@ -103,7 +103,20 @@ export async function submitExpense(input: { businessId: number; expenseId: numb
   return { success: Number((result as any)?.[0]?.affectedRows ?? (result as any)?.affectedRows ?? 0) === 1 };
 }
 
-export async function approveExpense(input: { businessId: number; expenseId: number; actor: Actor }) {
+/**
+ * اعتماد المصروف.
+ *
+ * الحاجز الأصلي: اللي سجّل المصروف مايقدرش يعتمده. ده صح في نشاط فيه محاسب ومدير —
+ * بس التاجر اللي شغّال لوحده كان بيتقفل عليه المسار بالكامل. `allowSelfApproval` بيتبعت
+ * من الراوتر للمالك بس (نفس نمط `voidPurchaseReceipt` في المخزون): الحاجز يفضل قايم
+ * لكل الموظفين، والمالك — اللي هو الطرفين أصلاً — بيعدّي.
+ */
+export async function approveExpense(input: {
+  businessId: number;
+  expenseId: number;
+  allowSelfApproval?: boolean;
+  actor: Actor;
+}) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async tx => {
@@ -112,7 +125,8 @@ export async function approveExpense(input: { businessId: number; expenseId: num
     )).limit(1).for("update");
     if (!expense) throw new Error("Expense is outside this business");
     if (expense.status !== "pending_approval") throw new Error("Only a pending Expense can be approved");
-    if (expense.createdBy === input.actor.id) throw new Error("Maker cannot approve their own Expense");
+    if (expense.createdBy === input.actor.id && !input.allowSelfApproval)
+      throw new Error("اللي سجّل المصروف مايقدرش يعتمده — لازم حساب تاني");
     if (!expense.serviceFrom || !expense.serviceTo) throw new Error("Expense Service Period is required");
     const [business] = await tx.select().from(businesses).where(eq(businesses.id, input.businessId)).limit(1);
     if (!business) throw new Error("Business not found");
@@ -313,4 +327,85 @@ export async function createAdSpendDraft(input: ExpenseDraftInput & {
     });
     return { expenseId, adSpendId: Number(adResult?.insertId ?? adResult?.[0]?.insertId) };
   });
+}
+
+// ==================== SIMPLE EXPENSE ====================
+//
+// دورة حياة المصروف الكاملة أربع خطوات: مسودة ← إرسال ← اعتماد ← دفع. الأربعة موجودين
+// لسبب — الاستحقاق اليومي، وفصل مين سجّل عن مين اعتمد، وسجل مراجعة كامل. بس التاجر
+// اللي دفع ٢٠٠ جنيه بنزين مش هيمشي في أربع شاشات عشان يسجّلها، وأول ما المسار يبقى تقيل
+// كده بيتساب خالص — والمصروف مايتسجّلش أصلاً، وده أسوأ من إنه يتسجّل ببساطة.
+//
+// `recordSimpleExpense` بيمشي الأربع خطوات في نداء واحد. **مش مسار موازي** — نفس
+// الدوال بالظبط بنفس الترتيب، فالمصروف اللي بيطلع منه مايتفرقش عن أي مصروف تاني: نفس
+// الجدول، نفس الاستحقاق، نفس الأحداث، ونفس الجسر للخزنة.
+
+/**
+ * تسجيل مصروف بسيط — بخطوة واحدة.
+ *
+ * `payNow` بيحدد النهاية: مستحق (لسه مادفعش) ولا مدفوع دلوقتي من الخزنة الرئيسية.
+ *
+ * فترة الخدمة يوم واحد — يوم المصروف نفسه. المصروفات اللي بتتوزّع على شهر (إيجار،
+ * اشتراك) لسه ليها المسار الكامل بفترة من/إلى.
+ *
+ * كل خطوة ترانزاكشن لوحدها لأن الدوال الأصلية كده، وده مقصود: لو الاعتماد وقع، المصروف
+ * بيفضل مسجّل في انتظار الاعتماد بدل ما يختفي. ولو الدفع وقع، بيفضل **مستحق** — وهي
+ * بالظبط النتيجة اللي التاجر كان هيختارها لو ضغط «سجّل بس».
+ */
+export async function recordSimpleExpense(input: {
+  businessId: number;
+  categoryId?: number;
+  amount: string;
+  /** يوم المصروف — فترة الخدمة يوم واحد. */
+  expenseDate: string;
+  description: string;
+  attachmentUrl?: string;
+  payNow: boolean;
+  actor: Actor;
+}) {
+  const draft = await createExpenseDraft({
+    businessId: input.businessId,
+    categoryId: input.categoryId,
+    amount: input.amount,
+    description: input.description,
+    serviceFrom: input.expenseDate,
+    serviceTo: input.expenseDate,
+    evidenceUrl: input.attachmentUrl,
+    actor: input.actor,
+  });
+
+  const submitted = await submitExpense({
+    businessId: input.businessId,
+    expenseId: draft.expenseId,
+    actor: input.actor,
+  });
+  if (!submitted.success)
+    throw new Error("تعذر إرسال المصروف للاعتماد — راجعه من شاشة المصروفات");
+
+  await approveExpense({
+    businessId: input.businessId,
+    expenseId: draft.expenseId,
+    allowSelfApproval: true,
+    actor: input.actor,
+  });
+
+  if (!input.payNow)
+    return { expenseId: draft.expenseId, status: "accrued" as const, paid: false };
+
+  const payment = await payExpense({
+    businessId: input.businessId,
+    expenseId: draft.expenseId,
+    amount: input.amount,
+    paidAt: new Date(),
+    // المرفق اختياري، والقيد المالي بيطلب دليل مش فاضي — فبنقول الحقيقة: اتسجّل يدوي.
+    evidenceUrl: input.attachmentUrl ?? "manual-simple-expense",
+    actor: input.actor,
+  });
+
+  return {
+    expenseId: draft.expenseId,
+    status: "paid" as const,
+    paid: true,
+    treasuryTransactionId: payment.treasuryTransactionId,
+  };
 }

@@ -114,6 +114,8 @@ import {
   approveCarrierSettlement,
   getShippingFinanceData,
   importCarrierSettlement,
+  listDailySettlements,
+  recordDailySettlement,
 } from "./settlementsV2.service";
 import {
   configureBusinessShippingProvider,
@@ -134,6 +136,7 @@ import {
   createAdSpendDraft,
   createExpenseDraft,
   payExpense,
+  recordSimpleExpense,
   submitExpense,
 } from "./expensesV2.service";
 import {
@@ -1023,6 +1026,8 @@ export const appRouter = router({
             ctx.tenantId,
             input.businessId
           ),
+          // الحاجز يفضل قايم لكل الموظفين. المالك هو الطرفين أصلاً.
+          allowSelfApproval: isOwnerRole(ctx.employee?.role),
           actor: await requireActor(ctx),
         })
       ),
@@ -1567,6 +1572,70 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) =>
         approveCarrierSettlement({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    // تحصيل اليوم — الإدخال اليدوي البسيط. `carrierSettlementImport` فوق لسه موجود
+    // لمن عنده ملف تسويات؛ ده للتاجر اللي عنده رسالة من شركة الشحن وبس.
+    dailySettlementList: permissionProcedure("shipping_finance.view")
+      .input(z.object({ businessId: z.number(), limit: z.number().max(200).optional() }))
+      .query(async ({ ctx, input }) =>
+        listDailySettlements({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
+    dailySettlementRecord: permissionProcedure("shipping_finance.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          businessShippingProviderId: z.number(),
+          statementDate: z.date(),
+          reference: z.string().max(120).optional(),
+          ordersCount: z.number().int().min(1),
+          grossCollected: positiveMoneyString,
+          totalCharges: moneyString.default("0"),
+          notes: z.string().max(500).optional(),
+          evidenceUrl: z.string().max(500).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordDailySettlement({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    // مصروف بخطوة واحدة: تاريخ ومبلغ وتصنيف ووصف. المسار الكامل (فترة خدمة، مركز
+    // تكلفة، اعتماد منفصل) لسه موجود لمن يحتاجه.
+    expenseRecordSimple: permissionProcedure("accounting.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          categoryId: z.number().optional(),
+          amount: positiveMoneyString,
+          expenseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          description: z.string().min(1).max(500),
+          attachmentUrl: z.string().max(500).optional(),
+          payNow: z.boolean(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordSimpleExpense({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx.tenantId,
