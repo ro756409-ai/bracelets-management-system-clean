@@ -805,9 +805,6 @@ function ShippingSettings({ businessId }: { businessId: number }) {
     displayName: "",
     codSettlementAccountId: "",
   });
-  const [statusMappings, setStatusMappings] = useState([
-    { providerStatusCode: "", normalizedEvent: "" },
-  ]);
   const [rate, setRate] = useState({
     businessShippingProviderId: "",
     governorate: "",
@@ -817,9 +814,20 @@ function ShippingSettings({ businessId }: { businessId: number }) {
     effectiveFrom: "",
   });
   const [charges, setCharges] = useState<ChargeDraft[]>([emptyCharge()]);
+  const activeProviders = (configuration.data?.providers ?? []).filter(
+    row => row.isActive
+  );
   const providerSave = trpc.accountingV2.shippingProviderSave.useMutation({
     onSuccess: async () => {
-      toast.success("تم حفظ شركة الشحن وربط الحالات");
+      toast.success("اتضافت شركة الشحن");
+      setProvider({ ...provider, displayName: "" });
+      await utils.accountingV2.shippingConfiguration.invalidate();
+    },
+    onError: error => toast.error(error.message),
+  });
+  const providerRemove = trpc.accountingV2.shippingProviderDeactivate.useMutation({
+    onSuccess: async () => {
+      toast.success("اتشالت من القايمة");
       await utils.accountingV2.shippingConfiguration.invalidate();
     },
     onError: error => toast.error(error.message),
@@ -847,168 +855,85 @@ function ShippingSettings({ businessId }: { businessId: number }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <Field label="Provider Code">
-            <Input
-              dir="ltr"
-              value={provider.providerCode}
-              onChange={event =>
-                setProvider({ ...provider, providerCode: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="الاسم الرسمي">
-            <Input
-              value={provider.providerName}
-              onChange={event =>
-                setProvider({ ...provider, providerName: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="الاسم الظاهر">
-            <Input
-              value={provider.displayName}
-              onChange={event =>
-                setProvider({ ...provider, displayName: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="حساب COD Settlement">
-            <select
-              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-              value={provider.codSettlementAccountId}
-              onChange={event =>
-                setProvider({
-                  ...provider,
-                  codSettlementAccountId: event.target.value,
-                })
-              }
-            >
-              <option value="">بدون حساب</option>
-              {accounts.data?.map(account => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <div className="space-y-2 md:col-span-2 xl:col-span-4">
-            <Label>ربط حالات شركة الشحن</Label>
-            {statusMappings.map((mapping, index) => (
-              <div
-                key={index}
-                className="grid gap-2 md:grid-cols-[1fr_1fr_auto]"
-              >
-                <Input
-                  dir="ltr"
-                  placeholder="Provider status code"
-                  value={mapping.providerStatusCode}
-                  onChange={event =>
-                    setStatusMappings(rows =>
-                      rows.map((row, rowIndex) =>
-                        rowIndex === index
-                          ? { ...row, providerStatusCode: event.target.value }
-                          : row
+        {/*
+          إضافة شركة الشحن — حقل واحد.
+          كان أربع حقول (كود، اسم رسمي، اسم ظاهر، حساب COD) وربط حالات إجباري. التاجر
+          مش عارف الفرق بين الاسم الرسمي والظاهر، فكان بيكتب نفس الكلمة تلات مرات —
+          وأول ما يغيّر حرف في الكود بيتعمل صف جديد بدل ما يعدّل القديم. فبقى اسم واحد
+          هو الكود والاسم الرسمي والظاهر، والقيد الفريد بيخلي نفس الاسم يعدّل مايكررش.
+        */}
+        <div className="space-y-3">
+          {activeProviders.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">شركات الشحن عندك</p>
+              {activeProviders.map(row => (
+                <div
+                  key={row.id}
+                  className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2 text-sm"
+                >
+                  <span className="flex items-center gap-2">
+                    <Truck className="h-4 w-4 shrink-0 text-orange-600" />
+                    {row.displayName}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive"
+                    disabled={providerRemove.isPending}
+                    onClick={() => {
+                      if (
+                        !confirm(
+                          `تشيل «${row.displayName}»؟ التحصيلات القديمة بتاعتها هتفضل زي ما هي.`
+                        )
                       )
-                    )
+                        return;
+                      providerRemove.mutate({
+                        businessId,
+                        businessShippingProviderId: row.id,
+                      });
+                    }}
+                  >
+                    شيل
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="flex-1">
+              <Field label="اسم شركة الشحن">
+                <Input
+                  placeholder="بوسطة"
+                  value={provider.displayName}
+                  onChange={event =>
+                    setProvider({ ...provider, displayName: event.target.value })
                   }
                 />
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm"
-                  value={mapping.normalizedEvent}
-                  onChange={event =>
-                    setStatusMappings(rows =>
-                      rows.map((row, rowIndex) =>
-                        rowIndex === index
-                          ? { ...row, normalizedEvent: event.target.value }
-                          : row
-                      )
-                    )
-                  }
-                >
-                  <option value="">اختار الحدث الرسمي</option>
-                  {configQueries.billingEvent.data?.map(row => (
-                    <option key={row.id} value={row.configKey}>
-                      {row.displayName}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={statusMappings.length === 1}
-                  onClick={() =>
-                    setStatusMappings(rows =>
-                      rows.filter((_, rowIndex) => rowIndex !== index)
-                    )
-                  }
-                >
-                  حذف
-                </Button>
-              </div>
-            ))}
+              </Field>
+            </div>
             <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                setStatusMappings(rows => [
-                  ...rows,
-                  { providerStatusCode: "", normalizedEvent: "" },
-                ])
-              }
+              disabled={providerSave.isPending}
+              onClick={() => {
+                const name = provider.displayName.trim();
+                if (!name) return toast.error("اكتب اسم شركة الشحن");
+                providerSave.mutate({
+                  businessId,
+                  providerCode: name,
+                  providerName: name,
+                  displayName: name,
+                  statusMapping: {},
+                });
+              }}
             >
-              <Plus className="ml-2 h-4 w-4" />
-              إضافة ربط حالة
+              <Save className="ml-2 h-4 w-4" />
+              إضافة
             </Button>
           </div>
-          <Button
-            className="md:col-span-2 xl:col-span-4 xl:justify-self-end"
-            disabled={providerSave.isPending}
-            onClick={() => {
-              // ربط الحالات بيخص الـwebhook بس: بيترجم كود الحالة اللي شركة الشحن
-              // بتبعته لحدث معروف عندنا. التاجر اللي بيسجّل تحصيله بإيده مش محتاجه —
-              // وكان مطلوب إجباري، فمكانش يقدر يضيف شركة الشحن أصلاً. الخريطة الفاضية
-              // آمنة: أي حالة مش متربطة بتترمي بـ`status_not_mapped` من غير ما تكسر حاجة.
-              //
-              // اللي لسه مرفوض هو السطر **نص فاضي** — كود من غير حدث أو العكس. ده مش
-              // «مش عايزه»، ده إدخال ناقص.
-              const filled = statusMappings.filter(
-                row => row.providerStatusCode.trim() || row.normalizedEvent
-              );
-              const complete = filled.filter(
-                row => row.providerStatusCode.trim() && row.normalizedEvent
-              );
-              if (
-                !provider.providerCode ||
-                !provider.providerName ||
-                !provider.displayName
-              )
-                return toast.error("كود الشركة والاسم الرسمي والاسم الظاهر مطلوبين");
-              if (complete.length !== filled.length)
-                return toast.error("في ربط حالة ناقص — كمّله أو سيبه فاضي بالكامل");
-              const validMappings = complete;
-              const statusMapping = Object.fromEntries(
-                validMappings.map(row => [
-                  row.providerStatusCode.trim(),
-                  row.normalizedEvent,
-                ])
-              );
-              providerSave.mutate({
-                businessId,
-                providerCode: provider.providerCode.trim(),
-                providerName: provider.providerName.trim(),
-                displayName: provider.displayName.trim(),
-                codSettlementAccountId: provider.codSettlementAccountId
-                  ? Number(provider.codSettlementAccountId)
-                  : undefined,
-                statusMapping,
-              });
-            }}
-          >
-            <Save className="ml-2 h-4 w-4" />
-            حفظ شركة الشحن
-          </Button>
+          <p className="text-xs text-muted-foreground">
+            الاسم ده اللي هتختاره من «تحصيل اليوم». لو ضفت نفس الاسم تاني، بيتعدّل
+            مابيتكررش.
+          </p>
         </div>
 
         <div className="border-t pt-5">

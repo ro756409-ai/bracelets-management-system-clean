@@ -119,6 +119,7 @@ import {
 } from "./settlementsV2.service";
 import {
   configureBusinessShippingProvider,
+  deactivateBusinessShippingProvider,
   createShippingRateVersion,
   listShippingConfiguration,
 } from "./shippingConfigV2.service";
@@ -1435,6 +1436,23 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) =>
         configureBusinessShippingProvider({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
+    shippingProviderDeactivate: permissionProcedure("shipping_finance.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          businessShippingProviderId: z.number(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        deactivateBusinessShippingProvider({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx.tenantId,

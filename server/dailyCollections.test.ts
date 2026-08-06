@@ -366,37 +366,55 @@ describe("🔑 المرحلة الرابعة مااحتاجتش migration", () =
 
 // ───────────────── إضافة شركة الشحن ─────────────────
 
-describe("🔑 التاجر يقدر يضيف شركة الشحن من غير ربط حالات", () => {
+describe("🔑 إضافة شركة الشحن بحقل واحد", () => {
   const settings = fs.readFileSync(
     "client/src/pages/AccountingSettings.tsx",
     "utf-8"
   );
-  const save = between(settings, "const filled = statusMappings.filter", "providerSave.mutate({");
+  const card = between(settings, "function ShippingSettings", "نسخة سعر جديدة");
 
-  it("🔑 الخريطة الفاضية مسموحة — ربط الحالات بيخص الـwebhook بس", () => {
-    // الشرط القديم كان `validMappings.length !== statusMappings.length`، والفورم بيبدأ
-    // بسطر فاضي — فالتاجر مكانش يقدر يضيف شركة الشحن أصلاً، والتحصيل كله كان مقفول.
-    expect(save).not.toContain("validMappings.length !== statusMappings.length");
-    expect(save).toContain("complete.length !== filled.length");
+  it("🔑 حقل واحد بس — الاسم", () => {
+    // كانت أربع حقول: كود، اسم رسمي، اسم ظاهر، حساب COD. التاجر مش عارف الفرق
+    // بينهم فكان بيكتب نفس الكلمة تلات مرات، وأول ما يغيّر حرف في الكود بيتعمل صف
+    // جديد بدل ما يعدّل — وده اللي خلّاه يلاقي شركتين مكررين.
+    expect(card).toContain('<Field label="اسم شركة الشحن">');
+    for (const gone of ['label="Provider Code"', 'label="الاسم الرسمي"', 'label="الاسم الظاهر"']) {
+      expect(card, gone).not.toContain(gone);
+    }
   });
 
-  it("🔑 والسطر النص فاضي لسه مرفوض — ده إدخال ناقص مش «مش عايزه»", () => {
-    expect(save).toContain("في ربط حالة ناقص");
-    expect(save).toContain(
-      "row => row.providerStatusCode.trim() || row.normalizedEvent"
-    );
-    expect(save).toContain(
-      "row => row.providerStatusCode.trim() && row.normalizedEvent"
-    );
+  it("🔑 والاسم الواحد بيروح للتلاتة — فالقيد الفريد بيمنع التكرار", () => {
+    const call = between(card, "providerSave.mutate({", "});");
+    expect(call).toContain("providerCode: name");
+    expect(call).toContain("providerName: name");
+    expect(call).toContain("displayName: name");
   });
 
-  it("بيانات الشركة نفسها لسه مطلوبة", () => {
-    expect(save).toContain("!provider.providerCode");
-    expect(save).toContain("!provider.displayName");
+  it("🔑 ربط الحالات اتشال خالص — بيتبعت فاضي", () => {
+    expect(card).toContain("statusMapping: {}");
+    expect(card).not.toContain("statusMappings");
+    expect(card).not.toContain("إضافة ربط حالة");
   });
 
   it("🔑 والسيرفر بيتجاهل الحالة غير المتربطة من غير ما يكسر", () => {
     const shipping = read("server/shippingV2.service.ts");
     expect(shipping).toContain('return { ignored: true as const, reason: "status_not_mapped" }');
+  });
+
+  it("🔑 فيه قايمة بالموجود وزرار يشيل — مكانش فيه", () => {
+    expect(card).toContain("activeProviders.map");
+    expect(card).toContain("providerRemove.mutate({");
+    expect(card).toContain("شركات الشحن عندك");
+  });
+
+  it("🔑 والشيل إيقاف مش حذف — التحصيلات القديمة بتفضل", () => {
+    const svc = read("server/shippingConfigV2.service.ts");
+    const fn = svc.slice(svc.indexOf("export async function deactivateBusinessShippingProvider"));
+    expect(fn).toContain("set({ isActive: false })");
+    expect(fn).not.toContain(".delete(");
+  });
+
+  it("والتأكيد بيقول للتاجر إن التاريخ مش هيروح", () => {
+    expect(card).toContain("التحصيلات القديمة بتاعتها هتفضل زي ما هي");
   });
 });
