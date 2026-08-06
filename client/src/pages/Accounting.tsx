@@ -31,59 +31,54 @@ import {
   EmptyState,
 } from "@/components/shared";
 import { formatMoney, formatMoneyCompact } from "@/lib/money";
-import { TreasurySection } from "./Treasury";
 import { ExpensesSection } from "./Expenses";
 import { CollectionsSection } from "./Collections";
 import { PayrollSection } from "./Payroll";
 import { ClosingsSection } from "./Closings";
 import { AccountingSettingsSection } from "./AccountingSettings";
 import { ShippingFinanceSection } from "./ShippingFinance";
+import ControlCenter from "./accounting/ControlCenter";
+import TreasuryHistory from "./accounting/TreasuryHistory";
 
 /**
- * الحسابات — صفحة واحدة بأربع تابات.
+ * مركز الحسابات.
  *
- * كانت أربع صفحات وأربعة بنود في السايدبار تحت بعض، وهو الشكل اللي بيخلي التاجر يفتح
- * صفحة، يبص، يرجع للسايدبار، يفتح التانية. الأربعة بيجاوبوا سؤال واحد ("فلوسي فين؟")
- * فبقوا تابات في مكان واحد وبند واحد في القائمة.
+ * التابات بقت الأقسام اللي التاجر بيشتغل فيها كل يوم، مش الأقسام اللي المحاسبة بتتقسم
+ * بيها. الشاشات القديمة **ما اتحذفتش** — التقفيلات والشحن والتسويات والإعدادات لسه
+ * جداولها وخدماتها ومساراتها شغّالة، بس اتشالت من الشريط عشان مين بيفتح الصفحة كل صبح
+ * مايبصّش على تمن تابات تمانيتهم مش اللي محتاجه.
+ *
+ * `HIDDEN_TABS` مكتوبة صراحة بدل ما تتمسح: أي حد بيقرا الملف بعد كده يعرف إن الشاشة
+ * موجودة ومخفية عن قصد، ويعرف رابطها.
  *
  * التاب في الـURL مش في الـstate: الرفريش بيفضل على نفس التاب، والرابط ينفع يتبعت،
- * والمسارات القديمة (/treasury, /expenses, /collections) لسه شغّالة وبتفتح التاب بتاعها
- * بدل ما تبوظ.
+ * والمسارات القديمة لسه شغّالة وبتفتح التاب بتاعها بدل ما تبوظ.
  */
 const TABS = [
-  {
-    key: "overview",
-    label: "نظرة عامة",
-    path: "/accounting",
-    icon: TrendingUp,
-  },
-  { key: "treasury", label: "الخزنة", path: "/treasury", icon: Wallet },
+  { key: "overview", label: "اللوحة", path: "/accounting", icon: TrendingUp },
+  { key: "collections", label: "التحصيلات", path: "/collections", icon: Banknote },
+  { key: "inventory", label: "المخزون", path: "/goods-receipt", icon: PackageCheck },
   { key: "expenses", label: "المصروفات", path: "/expenses", icon: Receipt },
-  {
-    key: "collections",
-    label: "التحصيلات",
-    path: "/collections",
-    icon: Banknote,
-  },
   { key: "payroll", label: "المرتبات", path: "/payroll", icon: Users },
+  { key: "treasury", label: "سجل الخزنة", path: "/treasury", icon: Wallet },
+] as const;
+
+/**
+ * شاشات شغّالة ومخفية من الشريط — مش محذوفة.
+ *
+ * كل واحدة فيهم لسه ليها مسار وجداول وخدمات. التقفيلات بالذات فيها لقطات معتمدة
+ * والأرباح التاريخية مبنية عليها، فحذفها بيقطع السلسلة.
+ */
+const HIDDEN_TABS = [
   { key: "closings", label: "التقفيلات", path: "/closings", icon: LockKeyhole },
-  {
-    key: "shipping-finance",
-    label: "الشحن والتسويات",
-    path: "/shipping-finance",
-    icon: PackageCheck,
-  },
-  {
-    key: "settings",
-    label: "الإعدادات",
-    path: "/accounting-settings",
-    icon: Settings2,
-  },
+  { key: "shipping-finance", label: "الشحن والتسويات", path: "/shipping-finance", icon: PackageCheck },
+  { key: "settings", label: "الإعدادات", path: "/accounting-settings", icon: Settings2 },
 ] as const;
 
 export default function Accounting() {
   const [location, navigate] = useLocation();
-  const active = TABS.find(t => t.path === location)?.key ?? "overview";
+  const all = [...TABS, ...HIDDEN_TABS];
+  const active = all.find(t => t.path === location)?.key ?? "overview";
 
   return (
     <div className="space-y-4">
@@ -119,14 +114,42 @@ export default function Accounting() {
         </div>
       </div>
 
-      {active === "overview" && <OverviewSection />}
-      {active === "treasury" && <TreasurySection />}
+      {active === "overview" && <ControlCenter />}
+      {active === "treasury" && <TreasuryHistory />}
       {active === "expenses" && <ExpensesSection />}
       {active === "collections" && <CollectionsSection />}
       {active === "payroll" && <PayrollSection />}
       {active === "closings" && <ClosingsSection />}
       {active === "shipping-finance" && <ShippingFinanceSection />}
       {active === "settings" && <AccountingSettingsSection />}
+
+      {/* الأقسام المتقدمة — مخفية من الشريط ومتاحة للمالك من هنا */}
+      {active === "overview" && (
+        <details className="rounded-lg border bg-card p-3">
+          <summary className="cursor-pointer text-sm font-semibold text-muted-foreground">
+            أقسام متقدمة
+          </summary>
+          <div className="mt-3">
+            <p className="mb-2 text-xs text-muted-foreground">
+              لوحة الأرباح التفصيلية — المحقق مقابل المتوقع من أحداث النشاط.
+            </p>
+            <OverviewSection />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {HIDDEN_TABS.map(t => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => navigate(t.path)}
+                className="flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm hover:bg-muted/60"
+              >
+                <t.icon className="h-4 w-4" />
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

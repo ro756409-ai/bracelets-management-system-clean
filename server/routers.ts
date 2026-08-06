@@ -401,6 +401,8 @@ import {
   addTreasuryTransaction,
   getTreasurySummary,
   getDailyLedgerSummary,
+  getAccountingControlCenter,
+  getTreasuryHistoryWithBalances,
   getExpenseCategories,
   createExpenseCategory,
   updateExpenseCategory,
@@ -5901,6 +5903,42 @@ export const appRouter = router({
      * حركات إمبارح الصبح، فلو الأرقام دايمًا «النهاردة» كان فتح يوم قديم هيوريه أرقام
      * النهاردة تحت تاريخ إمبارح.
      */
+    /**
+     * كل أرقام مركز الحسابات في نداء واحد.
+     *
+     * نداء واحد مش عشرة: الأرقام دي بتتعرض مع بعض على شاشة واحدة، ولو كل كارت نادى
+     * لوحده كانوا هيرجعوا من لحظات مختلفة والمجموع مايطلعش مظبوط.
+     *
+     * صلاحية reports.view_profit مش accounting.view — لأن فيه صافي ربح، وده رقم
+     * الملّاك بس بيشوفوه (نفس بوابة accounting.dashboard).
+     */
+    controlCenter: permissionProcedure("reports.view_profit")
+      .input(
+        z.object({
+          businessIds: z.array(z.number()).optional(),
+          dateKey: z.string().optional(),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        return getAccountingControlCenter({ ...input, businessIds });
+      }),
+
+    /** سجل الخزنة ومعاه الرصيد قبل كل حركة — محسوب مش مخزّن. */
+    treasuryHistory: permissionProcedure("accounting.view")
+      .input(
+        z.object({
+          businessIds: z.array(z.number()).optional(),
+          dateFrom: z.date().optional(),
+          dateTo: z.date().optional(),
+          limit: z.number().min(1).max(500).default(100),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        return getTreasuryHistoryWithBalances({ ...input, businessIds });
+      }),
+
     dailySummary: permissionProcedure("accounting.view")
       .input(
         z
