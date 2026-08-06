@@ -475,3 +475,67 @@ describe("🔑 مفيش ميزة ضاعت مع إخفاء مركز التسجي�
     expect(page).toContain("دي مش مصروف ولا تحصيل");
   });
 });
+
+// ───────────────── تبسيط صفحة الإعدادات ─────────────────
+
+describe("🔑 صفحة الإعدادات اتبسّطت من غير ما حاجة تضيع", () => {
+  const settings = fs.readFileSync(
+    "client/src/pages/AccountingSettings.tsx",
+    "utf-8"
+  );
+  const listOf = (name: string) => {
+    const at = settings.indexOf(`const ${name} = [`);
+    expect(at, name).toBeGreaterThan(-1);
+    return settings.slice(at, settings.indexOf("] as const;", at));
+  };
+  const everyday = listOf("CONFIG_NAMESPACES");
+  const advanced = listOf("ADVANCED_CONFIG_NAMESPACES");
+
+  it("🔑 القوايم اللي بتغذّي شاشات يومية فضلت فوق", () => {
+    // دي بالظبط اللي بتملا قوايم فورم الأوردر وتصنيف المصروف ومنصات الإعلانات.
+    // لو اتشالت، الفورم بيرجع فاضي — وده الغلط اللي اتصلّح قبل كده.
+    for (const ns of [
+      "governorate", "shipping_type", "payment_type",
+      "expense_type", "order_source", "ad_platform",
+    ]) {
+      expect(everyday, ns).toContain(`"${ns}"`);
+    }
+  });
+
+  it("🔑 والباقي اتنقل للمتقدم — مش اتمسح", () => {
+    for (const ns of [
+      "shipping_charge_type", "closing_adjustment_type",
+      "inventory_in_reason", "return_reason",
+    ]) {
+      expect(everyday, ns).not.toContain(`"${ns}"`);
+      expect(advanced, ns).toContain(`"${ns}"`);
+    }
+  });
+
+  it("🔑 ومفيش قايمة ضاعت — الاتنين بيتعرضوا", () => {
+    // المتقدمة كانت هتبقى كود ميت لو المكوّن مااتنداش بيها.
+    expect(settings).toContain("namespaces={ADVANCED_CONFIG_NAMESPACES}");
+    expect(settings).toContain("namespaces = CONFIG_NAMESPACES");
+  });
+
+  it("🔑 الأقسام التقيلة مقفولة مش محذوفة", () => {
+    const block = settings.slice(settings.indexOf("<details"));
+    for (const section of [
+      "<CostCenterSettings",
+      "<ShippingRouteSettings",
+      "<PermissionSettings",
+    ]) {
+      expect(block, section).toContain(section);
+    }
+    expect(settings).toContain("إعدادات متقدمة");
+  });
+
+  it("واللي التاجر بيحتاجه فاضل مفتوح", () => {
+    const top = settings.slice(
+      settings.indexOf("<BusinessSettings"),
+      settings.indexOf("<details")
+    );
+    expect(top).toContain("<ShippingSettings");
+    expect(top).toContain("<FinancialAccountSettings");
+  });
+});

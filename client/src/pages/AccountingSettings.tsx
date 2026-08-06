@@ -19,20 +19,36 @@ import { Switch } from "@/components/ui/switch";
 import { LoadingSkeleton, SectionHeader } from "@/components/shared";
 import { EvidenceUpload } from "@/components/EvidenceUpload";
 
+/**
+ * القوايم اللي التاجر بيلمسها فعلًا — دي اللي بتغذّي شاشات بيفتحها كل يوم.
+ *
+ * المحافظات وأنواع الشحن والدفع ومصادر الأوردر بتظهر في **فورم الأوردر**، وأنواع
+ * المصروفات في «تحصيل اليوم»، ومنصات الإعلانات في شاشة الإعلانات. لو اتشالوا، القوايم
+ * دي بترجع فاضية والفورم يقف.
+ */
 const CONFIG_NAMESPACES = [
   ["governorate", "المحافظات"],
   ["shipping_type", "أنواع الشحن"],
   ["payment_type", "أنواع الدفع"],
+  ["expense_type", "أنواع المصروفات"],
+  ["order_source", "مصادر الأوردر"],
+  ["ad_platform", "منصات الإعلانات"],
+] as const;
+
+/**
+ * قوايم بتخص شاشات المحاسب المخفية (التقفيلات، الشحن والتسويات، المخزون التفصيلي).
+ *
+ * موجودة ومحفوظة — بتظهر جوه «إعدادات متقدمة» بس، عشان اللي بيفتح الصفحة مايبصّش على
+ * ستاشر تاب تلتاشر منهم مالوش لازمة عنده.
+ */
+const ADVANCED_CONFIG_NAMESPACES = [
   ["shipping_charge_type", "أنواع رسوم الشحن"],
   ["shipping_billing_event", "أحداث استحقاق الشحن"],
   ["financial_account_type", "أنواع الحسابات المالية"],
   ["closing_adjustment_type", "أنواع تسويات التقفيل"],
-  ["expense_type", "أنواع المصروفات"],
   ["inventory_receipt_type", "أنواع استلام المخزون"],
   ["inventory_in_reason", "أسباب إدخال المخزون"],
   ["inventory_out_reason", "أسباب إخراج المخزون"],
-  ["ad_platform", "منصات الإعلانات"],
-  ["order_source", "مصادر الأوردر"],
   ["order_status", "حالات الأوردر"],
   ["return_reason", "أسباب المرتجع"],
   ["cancellation_reason", "أسباب الإلغاء"],
@@ -104,11 +120,30 @@ export function AccountingSettingsSection() {
         <>
           <BusinessSettings businessId={businessId} />
           <ConfigurationSettings businessId={businessId} />
-          <CostCenterSettings businessId={businessId} />
           <FinancialAccountSettings businessId={businessId} />
           <ShippingSettings businessId={businessId} />
-          <ShippingRouteSettings businessId={businessId} />
-          <PermissionSettings />
+
+          {/*
+            مقفولة افتراضيًا مش محذوفة. مراكز التكلفة وجدول مسارات الشحن وشاشة
+            الصلاحيات كلهم شغّالين ومحتاجينهم مين عنده محاسب — بس التاجر اللي بيفتح
+            الصفحة عشان يضيف شركة شحن مالوش دعوة بيهم، وكانوا بيخلوا الصفحة تبان
+            أعقد مما هي.
+          */}
+          <details className="rounded-lg border bg-card">
+            <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium">
+              إعدادات متقدمة
+            </summary>
+            <div className="space-y-4 border-t p-4">
+              <ConfigurationSettings
+                businessId={businessId}
+                namespaces={ADVANCED_CONFIG_NAMESPACES}
+                title="قوايم متقدمة"
+              />
+              <CostCenterSettings businessId={businessId} />
+              <ShippingRouteSettings businessId={businessId} />
+              <PermissionSettings />
+            </div>
+          </details>
         </>
       ) : (
         <LoadingSkeleton />
@@ -439,10 +474,22 @@ function BusinessSettings({ businessId }: { businessId: number }) {
   );
 }
 
-function ConfigurationSettings({ businessId }: { businessId: number }) {
-  const [namespace, setNamespace] = useState<
-    (typeof CONFIG_NAMESPACES)[number][0]
-  >(CONFIG_NAMESPACES[0][0]);
+type NamespaceList = readonly (readonly [string, string])[];
+
+/**
+ * نفس المكوّن بيتنادى مرتين: مرة بالقوايم اليومية فوق، ومرة بالمتقدمة جوه «إعدادات
+ * متقدمة». كده مفيش قايمة بقت مش قابلة للإدارة — بس اللي مش بتتلمس كل يوم مقفولة.
+ */
+function ConfigurationSettings({
+  businessId,
+  namespaces = CONFIG_NAMESPACES,
+  title = "القيم التشغيلية القابلة للتهيئة",
+}: {
+  businessId: number;
+  namespaces?: NamespaceList;
+  title?: string;
+}) {
+  const [namespace, setNamespace] = useState<string>(namespaces[0][0]);
   const [draft, setDraft] = useState({
     configKey: "",
     displayName: "",
@@ -480,12 +527,12 @@ function ConfigurationSettings({ businessId }: { businessId: number }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <Settings2 className="h-5 w-5 text-amber-600" />
-          القيم التشغيلية القابلة للتهيئة
+          {title}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {CONFIG_NAMESPACES.map(([key, label]) => (
+          {namespaces.map(([key, label]) => (
             <Button
               key={key}
               variant={namespace === key ? "default" : "outline"}
