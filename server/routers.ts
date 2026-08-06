@@ -102,6 +102,7 @@ import {
   reserveOrderInventory,
   submitPurchaseReceipt,
   submitReturnInspection,
+  listWorkshopReturns,
   transferStock,
   voidPurchaseReceipt,
 } from "./inventoryV2.service";
@@ -113,6 +114,8 @@ import {
   approveCarrierSettlement,
   getShippingFinanceData,
   importCarrierSettlement,
+  listDailySettlements,
+  recordDailySettlement,
 } from "./settlementsV2.service";
 import {
   configureBusinessShippingProvider,
@@ -133,6 +136,7 @@ import {
   createAdSpendDraft,
   createExpenseDraft,
   payExpense,
+  recordSimpleExpense,
   submitExpense,
 } from "./expensesV2.service";
 import {
@@ -401,6 +405,9 @@ import {
   addTreasuryTransaction,
   getTreasurySummary,
   getDailyLedgerSummary,
+  getAccountingControlCenter,
+  getTreasuryHistoryWithBalances,
+  listAdCampaigns,
   getExpenseCategories,
   createExpenseCategory,
   updateExpenseCategory,
@@ -1019,6 +1026,8 @@ export const appRouter = router({
             ctx.tenantId,
             input.businessId
           ),
+          // الحاجز يفضل قايم لكل الموظفين. المالك هو الطرفين أصلاً.
+          allowSelfApproval: isOwnerRole(ctx.employee?.role),
           actor: await requireActor(ctx),
         })
       ),
@@ -1028,7 +1037,9 @@ export const appRouter = router({
         z.object({
           businessId: z.number(),
           expenseId: z.number(),
-          sourceAccountId: z.number(),
+          // اختياري: التاجر اللي عنده خزنة واحدة مابيختارش منها. الخدمة بتحلّها
+          // لـ«الخزنة الرئيسية» وبتعملها لو لسه مش موجودة.
+          sourceAccountId: z.number().optional(),
           amount: positiveMoneyString,
           paidAt: z.date(),
           evidenceUrl: z.string().url(),
@@ -1057,7 +1068,7 @@ export const appRouter = router({
           serviceFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
           serviceTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
           reference: z.string().max(100).optional(),
-          evidenceUrl: z.string().min(1),
+          evidenceUrl: z.string().max(500).optional(),
           platformId: z.string().min(1),
           platformName: z.string().min(1),
           accountId: z.string().min(1),
@@ -1067,6 +1078,7 @@ export const appRouter = router({
           adSetId: z.string().optional(),
           adId: z.string().optional(),
           manualMetrics: z.record(z.string(), z.number()).optional(),
+          // المرفق اختياري — createAdSpendDraft بيعمل مسودة، والمسودة مابتحركش فلوس
           overrideReason: z.string().optional(),
           notes: z.string().optional(),
         })
@@ -1183,6 +1195,9 @@ export const appRouter = router({
             input.businessId
           ),
           actor: await requireActor(ctx),
+          // المالك بس. الموظف اللي سجّل الإذن لسه مايقدرش يعتمده — شوف الشرح على
+          // approvePurchaseReceipt.
+          allowSelfApproval: isOwnerRole(ctx.employee?.role),
         })
       ),
 
@@ -1197,6 +1212,10 @@ export const appRouter = router({
           reference: z.string().min(1).max(100),
           reason: z.string().min(1).max(500),
           occurredAt: z.date(),
+          // بيتحط على تحويل الرجوع عشان يقفل دفعة المرتجع اللي راحت الورشة
+          linkedReference: z.string().max(100).optional(),
+          // للعلم بس — مابيعملش مصروف ولا بيلمس خزنة
+          repairCostPerPiece: moneyString.optional(),
           lines: z
             .array(
               z.object({
@@ -1216,6 +1235,25 @@ export const appRouter = router({
             input.businessId
           ),
           actor: await requireActor(ctx),
+        })
+      ),
+
+    /** دفعات المرتجع للورشة وحالتها — مشتقّة من التحويلات، مفيش جدول حالة. */
+    workshopReturns: permissionProcedure("inventory_costing.view")
+      .input(
+        z.object({
+          businessId: z.number(),
+          workshopWarehouseId: z.number(),
+          limit: z.number().min(1).max(500).optional(),
+        })
+      )
+      .query(async ({ ctx, input }) =>
+        listWorkshopReturns({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
         })
       ),
 
@@ -1534,6 +1572,70 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) =>
         approveCarrierSettlement({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    // تحصيل اليوم — الإدخال اليدوي البسيط. `carrierSettlementImport` فوق لسه موجود
+    // لمن عنده ملف تسويات؛ ده للتاجر اللي عنده رسالة من شركة الشحن وبس.
+    dailySettlementList: permissionProcedure("shipping_finance.view")
+      .input(z.object({ businessId: z.number(), limit: z.number().max(200).optional() }))
+      .query(async ({ ctx, input }) =>
+        listDailySettlements({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
+    dailySettlementRecord: permissionProcedure("shipping_finance.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          businessShippingProviderId: z.number(),
+          statementDate: z.date(),
+          reference: z.string().max(120).optional(),
+          ordersCount: z.number().int().min(1),
+          grossCollected: positiveMoneyString,
+          totalCharges: moneyString.default("0"),
+          notes: z.string().max(500).optional(),
+          evidenceUrl: z.string().max(500).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordDailySettlement({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    // مصروف بخطوة واحدة: تاريخ ومبلغ وتصنيف ووصف. المسار الكامل (فترة خدمة، مركز
+    // تكلفة، اعتماد منفصل) لسه موجود لمن يحتاجه.
+    expenseRecordSimple: permissionProcedure("accounting.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          categoryId: z.number().optional(),
+          amount: positiveMoneyString,
+          expenseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          description: z.string().min(1).max(500),
+          attachmentUrl: z.string().max(500).optional(),
+          payNow: z.boolean(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordSimpleExpense({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx.tenantId,
@@ -5901,6 +6003,56 @@ export const appRouter = router({
      * حركات إمبارح الصبح، فلو الأرقام دايمًا «النهاردة» كان فتح يوم قديم هيوريه أرقام
      * النهاردة تحت تاريخ إمبارح.
      */
+    /**
+     * كل أرقام مركز الحسابات في نداء واحد.
+     *
+     * نداء واحد مش عشرة: الأرقام دي بتتعرض مع بعض على شاشة واحدة، ولو كل كارت نادى
+     * لوحده كانوا هيرجعوا من لحظات مختلفة والمجموع مايطلعش مظبوط.
+     *
+     * صلاحية reports.view_profit مش accounting.view — لأن فيه صافي ربح، وده رقم
+     * الملّاك بس بيشوفوه (نفس بوابة accounting.dashboard).
+     */
+    controlCenter: permissionProcedure("reports.view_profit")
+      .input(
+        z.object({
+          businessIds: z.array(z.number()).optional(),
+          dateKey: z.string().optional(),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        return getAccountingControlCenter({ ...input, businessIds });
+      }),
+
+    /** سجل الخزنة ومعاه الرصيد قبل كل حركة — محسوب مش مخزّن. */
+    treasuryHistory: permissionProcedure("accounting.view")
+      .input(
+        z.object({
+          businessIds: z.array(z.number()).optional(),
+          dateFrom: z.date().optional(),
+          dateTo: z.date().optional(),
+          limit: z.number().min(1).max(500).default(100),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        return getTreasuryHistoryWithBalances({ ...input, businessIds });
+      }),
+
+    /** حملات الإعلانات في فترة — صفوف خام، والحساب في shared/adMetrics. */
+    adCampaigns: permissionProcedure("accounting.view")
+      .input(
+        z.object({
+          businessIds: z.array(z.number()).optional(),
+          dateFrom: z.date(),
+          dateTo: z.date(),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        return listAdCampaigns({ ...input, businessIds });
+      }),
+
     dailySummary: permissionProcedure("accounting.view")
       .input(
         z
@@ -6658,7 +6810,8 @@ export const appRouter = router({
       .input(
         z.object({
           id: z.number(),
-          sourceAccountId: z.number(),
+          // زي expensePay — اختياري، وبيرجع لـ«الخزنة الرئيسية».
+          sourceAccountId: z.number().optional(),
           evidenceUrl: z.string().min(1),
           paidAt: z.date().optional(),
         })

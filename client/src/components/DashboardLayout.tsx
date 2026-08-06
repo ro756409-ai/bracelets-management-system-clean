@@ -26,7 +26,7 @@ import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
-  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus, ArrowLeftRight,
+  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus, ArrowLeftRight, RotateCcw as ReturnIcon, Megaphone,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -111,9 +111,14 @@ const MENU_GROUPS: MenuGroup[] = [
       // First in the group on purpose: this is where the accountant starts the day, and
       // the older screen is where they go to look things up afterwards.
       { icon: CalendarDays, label: "مركز التسجيل اليومي", path: "/daily-ledger", adminOnly: true },
+      // The one screen a merchant opens every evening: money in from the carrier, money
+      // out of the drawer. Sits second so it is reachable without scrolling.
+      { icon: Banknote, label: "تحصيل اليوم", path: "/daily-collections", adminOnly: true },
       { icon: Users, label: "تجهيز المرتبات", path: "/salary-preparation", adminOnly: true },
       { icon: PackagePlus, label: "إذن استلام بضاعة", path: "/goods-receipt", adminOnly: true },
       { icon: ArrowLeftRight, label: "تحويل مخزون", path: "/stock-transfer", adminOnly: true },
+      { icon: ReturnIcon, label: "مرتجعات الورشة", path: "/workshop-returns", adminOnly: true },
+      { icon: Megaphone, label: "الإعلانات", path: "/advertising", adminOnly: true },
       { icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true },
     ],
   },

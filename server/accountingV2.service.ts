@@ -197,6 +197,87 @@ export async function createFinancialAccount(input: {
   return { id: Number(result?.insertId ?? result?.[0]?.insertId) };
 }
 
+/**
+ * كود «الخزنة الرئيسية» — ثابت عن قصد.
+ *
+ * فيه `uniqueIndex` على (businessId, code)، فالكود الثابت هو اللي بيضمن إن النشاط
+ * مايعملش خزنتين رئيسيتين مهما اتنادت الدالة كام مرة أو من كام تبويب في نفس اللحظة.
+ */
+export const DEFAULT_TREASURY_ACCOUNT_CODE = "CASH-MAIN";
+export const DEFAULT_TREASURY_ACCOUNT_NAME = "الخزنة الرئيسية";
+
+/**
+ * الخزنة الرئيسية للنشاط — بتلاقيها أو بتعملها.
+ *
+ * التاجر مش محاسب. الدفع كان بيطلب منه «حساب مالي مصدر» من قايمة فاضية — ولو مالاقاش
+ * حاجة يختارها، `postFinancialTransaction` بيرمي «Financial account is outside this
+ * business» وهو مش فاهم يعني إيه. فالمسار ده بيديله خزنة واحدة اسمها «الخزنة الرئيسية»
+ * من غير ما يشوف كود ولا نوع حساب ولا مدين ودائن.
+ *
+ * **بتسمح بالرصيد السالب عن قصد.** الحساب بيتعمل برصيد افتتاحي صفر — لأن التاجر مش
+ * هيقعد يجرد الدُرج عشان يسجّل مصروف — وبعدين `postFinancialTransaction` بيرفض أي
+ * حركة بتنزّل الرصيد تحت الصفر. يعني أول مصروف كان هيترفض برسالة محاسبية بحتة. الرقم
+ * اللي التاجر بيصدّقه هو رصيد الخزنة في `treasury_transactions`، والحساب ده مراية ليه.
+ *
+ * جوه ترانزاكشن الدفع عن قصد: لو الدفعة رجعت، الخزنة اللي اتعملت معاها ترجع كمان.
+ */
+export async function resolveDefaultTreasuryAccountInTransaction(
+  tx: any,
+  businessId: number
+): Promise<FinancialAccount> {
+  const find = async (): Promise<FinancialAccount | undefined> => {
+    const [row] = await tx
+      .select()
+      .from(financialAccounts)
+      .where(
+        and(
+          eq(financialAccounts.businessId, businessId),
+          eq(financialAccounts.code, DEFAULT_TREASURY_ACCOUNT_CODE)
+        )
+      )
+      .limit(1);
+    return row;
+  };
+
+  const existing = await find();
+  if (existing) {
+    if (!existing.isActive)
+      throw new Error("الخزنة الرئيسية موقوفة — فعّلها من إعدادات الحسابات");
+    return existing;
+  }
+
+  const [business] = await tx
+    .select({ baseCurrency: businesses.baseCurrency })
+    .from(businesses)
+    .where(eq(businesses.id, businessId))
+    .limit(1);
+  if (!business) throw new Error("Business not found");
+
+  try {
+    await tx.insert(financialAccounts).values({
+      businessId,
+      code: DEFAULT_TREASURY_ACCOUNT_CODE,
+      name: DEFAULT_TREASURY_ACCOUNT_NAME,
+      accountType: "cash",
+      isCashEquivalent: true,
+      allowNegativeBalance: true,
+      currencyCode: business.baseCurrency,
+      openingBalance: "0",
+      currentBalance: "0",
+    });
+  } catch (error) {
+    // نداءين متوازيين: التاني بيقع على الـunique index. ده النتيجة الصح مش خطأ —
+    // الخزنة اتعملت خلاص، فنقراها ونكمّل.
+    const raced = await find();
+    if (!raced) throw error;
+    return raced;
+  }
+
+  const created = await find();
+  if (!created) throw new Error("تعذر إنشاء الخزنة الرئيسية");
+  return created;
+}
+
 export async function getFinancialAccounts(businessId: number) {
   const db = await getDb();
   if (!db) return [];

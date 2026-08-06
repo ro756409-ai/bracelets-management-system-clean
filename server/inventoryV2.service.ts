@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   businessEvents,
   inventoryBalances,
@@ -400,7 +400,23 @@ export async function dispatchOrderInventory(input: {
   });
 }
 
-export async function approvePurchaseReceipt(input: { businessId: number; receiptId: number; actor: Actor }) {
+export async function approvePurchaseReceipt(input: {
+  businessId: number;
+  receiptId: number;
+  actor: Actor;
+  /**
+   * يسمح لصاحب الإذن إنه يعتمده بنفسه. للمالك بس، والراوتر هو اللي بيحسبها من الدور.
+   *
+   * فصل الصلاحيات موجود عشان مايبقاش شخص واحد هو اللي بيسجّل حركة فلوس وهو اللي
+   * بيباركها. بس إذن الاستلام **مابيحركش خزنة** — بيزوّد مخزون وبيعمل التزام على
+   * الورشة. فالخطر الحقيقي اللي الحاجز بيمنعه هو موظف بينفخ قيمة المخزون، وده حاجز
+   * له معنى. أما المالك فبيسرق من نفسه، والحاجز مابيمنعش ده أصلاً — بيمنع بس إنه
+   * يشتغل لوحده، وده كل يومه.
+   *
+   * فبيفضل شغّال على كل حد ما عدا المالك، والاستثناء صريح هنا مش مدسوس في الراوتر.
+   */
+  allowSelfApproval?: boolean;
+}) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async tx => {
@@ -409,7 +425,8 @@ export async function approvePurchaseReceipt(input: { businessId: number; receip
     )).limit(1).for("update");
     if (!receipt) throw new Error("Purchase Receipt is outside this business");
     if (receipt.status !== "pending_approval") throw new Error("Only a pending Purchase Receipt can be approved");
-    if (receipt.createdBy === input.actor.id) throw new Error("Maker cannot approve their own Purchase Receipt");
+    if (receipt.createdBy === input.actor.id && !input.allowSelfApproval)
+      throw new Error("اللي سجّل الإذن مايقدرش يعتمده — لازم حساب تاني");
     // الورقة شرط هنا مش عند المسودة: دي اللحظة اللي المخزون بيتحرك فيها فعلًا، وهي
     // اللي محتاجة يكون وراها مستند.
     if (!receipt.evidenceUrl?.trim())
@@ -661,6 +678,20 @@ export async function transferStock(input: {
   occurredAt: Date;
   actor: Actor;
   lines: Array<{ productId: number; variantId?: number | null; quantity: number }>;
+  /**
+   * رقم الإذن اللي التحويل ده بيقفله — بيتحط على تحويل الرجوع فبيربطه بإذن الإرسال.
+   *
+   * ده اللي بيخلّي حالة المرتجع (عند الورشة / رجع) **مشتقّة** بدل ما تبقى عمود حالة
+   * محتاج يفضل متزامن مع الحركات. الحركة هي الحقيقة، والحالة قراءة ليها.
+   */
+  linkedReference?: string;
+  /**
+   * تكلفة إصلاح القطعة، لو متعرفة وقت الإرسال.
+   *
+   * **مابتعملش مصروف ولا بتلمس خزنة.** رقم للعلم بيتخزّن مع الحدث، والمصروف بيتسجّل
+   * لوحده لما الورشة تتحاسب فعلًا — عشان مانسجّلش مصروف لحاجة لسه ماتدفعتش.
+   */
+  repairCostPerPiece?: string;
 }) {
   if (input.fromWarehouseId === input.toWarehouseId)
     throw new Error("مكان الإرسال ومكان الاستلام لازم يكونوا مختلفين");
@@ -720,6 +751,8 @@ export async function transferStock(input: {
         toWarehouseId: input.toWarehouseId,
         reason: input.reason,
         lines: input.lines,
+        linkedReference: input.linkedReference ?? null,
+        repairCostPerPiece: input.repairCostPerPiece ?? null,
       },
       actor: input.actor,
     });
@@ -824,6 +857,86 @@ export async function transferStock(input: {
     }
     return { eventId, duplicate: false };
   });
+}
+
+/**
+ * دفعات المرتجع للورشة وحالتها.
+ *
+ * مفيش جدول مرتجعات ومفيش عمود حالة. الدفعة هي تحويل **للورشة**، وبترجع لما يتعمل تحويل
+ * **من** الورشة بيحمل رقمها في `linkedReference`. فالحالة **مشتقّة من الحركات**، وده
+ * أهم من إنها تبقى محفوظة: عمود حالة ينفع يبقى غلط ويقول «رجعت» والمخزون بيقول غير كده،
+ * أما الاشتقاق فمستحيل يختلف عن الحركة اللي هو مبني عليها.
+ *
+ * التاريخ كامل بحكم التصميم — الحدثين الاتنين بيفضلوا في `business_events` ومعاهم حركات
+ * المخزون بتاعتهم، ومفيش حاجة بتتمسح ولا بتتعدّل.
+ */
+export async function listWorkshopReturns(input: {
+  businessId: number;
+  /** مخزن الورشة — اللي بيتحوّل ليه ومنه. */
+  workshopWarehouseId: number;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const events = await db
+    .select()
+    .from(businessEvents)
+    .where(and(
+      eq(businessEvents.businessId, input.businessId),
+      eq(businessEvents.eventType, "inventory.stock_transfer"),
+      eq(businessEvents.status, "active" as any),
+    ))
+    .orderBy(desc(businessEvents.occurredAt), desc(businessEvents.id))
+    .limit(input.limit ?? 200);
+
+  type Payload = {
+    fromWarehouseId: number;
+    toWarehouseId: number;
+    reason?: string;
+    lines?: Array<{ productId: number; variantId?: number | null; quantity: number }>;
+    linkedReference?: string | null;
+    repairCostPerPiece?: string | null;
+  };
+
+  const parsed = events.map(e => {
+    let payload: Payload | null = null;
+    // بيانات حدث قديم أو مشوّهة ماتوقعش الصفحة — الصف بيتتجاهل وبس.
+    try { payload = JSON.parse(e.payloadJson) as Payload; } catch { payload = null; }
+    return { event: e, payload };
+  }).filter((r): r is { event: typeof events[number]; payload: Payload } => r.payload != null);
+
+  // اللي رجع: أي تحويل طالع من الورشة وبيشاور على إذن إرسال
+  const closedBy = new Map<string, { at: Date; reference: string }>();
+  for (const { event, payload } of parsed) {
+    if (payload.fromWarehouseId !== input.workshopWarehouseId) continue;
+    if (!payload.linkedReference) continue;
+    closedBy.set(payload.linkedReference, {
+      at: event.occurredAt,
+      reference: event.sourceReference,
+    });
+  }
+
+  // الدفعات: أي تحويل داخل للورشة
+  return parsed
+    .filter(({ payload }) => payload.toWarehouseId === input.workshopWarehouseId)
+    .map(({ event, payload }) => {
+      const closed = closedBy.get(event.sourceReference);
+      const quantity = (payload.lines ?? []).reduce((s, l) => s + (l.quantity || 0), 0);
+      const perPiece = Number(payload.repairCostPerPiece ?? 0) || 0;
+      return {
+        reference: event.sourceReference,
+        sentAt: event.occurredAt,
+        reason: payload.reason ?? "",
+        lines: payload.lines ?? [],
+        quantity,
+        repairCostPerPiece: perPiece,
+        repairCostTotal: Number((perPiece * quantity).toFixed(2)),
+        status: closed ? ("received" as const) : ("at_workshop" as const),
+        receivedAt: closed?.at ?? null,
+        receivedReference: closed?.reference ?? null,
+      };
+    });
 }
 
 export async function submitReturnInspection(input: {

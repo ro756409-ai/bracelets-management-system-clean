@@ -23,6 +23,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { EvidenceUpload } from "@/components/EvidenceUpload";
 import {
+  PaymentSource,
+  paymentSourceId,
+  paymentSourceMissing,
+} from "@/components/accounting/PaymentSource";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -629,23 +634,11 @@ export function PayrollSection() {
               />
             )}
             {pendingAction?.kind === "pay" && (
-              <div className="space-y-1">
-                <Label>الحساب المصدر *</Label>
-                <Select value={payAccountId} onValueChange={setPayAccountId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="اختار الحساب" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {financialAccounts
-                      .filter((account: any) => account.isActive)
-                      .map((account: any) => (
-                        <SelectItem key={account.id} value={String(account.id)}>
-                          {account.name}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              <PaymentSource
+                accounts={financialAccounts}
+                value={payAccountId}
+                onChange={setPayAccountId}
+              />
             )}
           </div>
         }
@@ -678,13 +671,13 @@ export function PayrollSection() {
               evidenceUrl: actionEvidence.trim(),
             });
           else if (pendingAction.kind === "pay") {
-            if (!payAccountId) {
-              toast.error("اختار الحساب المصدر");
+            if (paymentSourceMissing(financialAccounts, payAccountId)) {
+              toast.error("اختار الخزنة اللي هتخرج منها الفلوس");
               return;
             }
             payMutation.mutate({
               id: pendingAction.id,
-              sourceAccountId: Number(payAccountId),
+              sourceAccountId: paymentSourceId(financialAccounts, payAccountId),
               evidenceUrl: actionEvidence.trim(),
             });
           } else deleteMutation.mutate({ id: pendingAction.id });

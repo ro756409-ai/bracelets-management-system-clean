@@ -22,6 +22,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { EvidenceUpload } from "@/components/EvidenceUpload";
 import {
+  PaymentSource,
+  paymentSourceId,
+  paymentSourceMissing,
+} from "@/components/accounting/PaymentSource";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -960,23 +965,11 @@ function ExpensePaymentDialog({
           <p className="text-sm text-muted-foreground">
             المتبقي: {formatMoney(remaining)}
           </p>
-          <div>
-            <Label>الحساب المصدر *</Label>
-            <Select value={accountId} onValueChange={setAccountId}>
-              <SelectTrigger className="mt-1">
-                <SelectValue placeholder="اختار الحساب" />
-              </SelectTrigger>
-              <SelectContent>
-                {accounts
-                  .filter(account => account.isActive)
-                  .map(account => (
-                    <SelectItem key={account.id} value={String(account.id)}>
-                      {account.name}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <PaymentSource
+            accounts={accounts}
+            value={accountId}
+            onChange={setAccountId}
+          />
           <div>
             <Label>المبلغ *</Label>
             <Input
@@ -1005,18 +998,14 @@ function ExpensePaymentDialog({
           <Button
             disabled={mutation.isPending}
             onClick={() => {
-              if (
-                !businessId ||
-                !expense ||
-                !accountId ||
-                !amount ||
-                !evidenceUrl.trim()
-              )
+              if (!businessId || !expense || !amount || !evidenceUrl.trim())
                 return toast.error("كل بيانات الدفع والدليل مطلوبة");
+              if (paymentSourceMissing(accounts, accountId))
+                return toast.error("اختار الخزنة اللي هتخرج منها الفلوس");
               mutation.mutate({
                 businessId,
                 expenseId: expense.id,
-                sourceAccountId: Number(accountId),
+                sourceAccountId: paymentSourceId(accounts, accountId),
                 amount,
                 paidAt: new Date(`${paidAt}T12:00:00`),
                 evidenceUrl: evidenceUrl.trim(),

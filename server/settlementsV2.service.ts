@@ -13,10 +13,11 @@ import {
   createBusinessEventInTransaction,
   payloadHash,
   postFinancialTransactionInTransaction,
+  resolveDefaultTreasuryAccountInTransaction,
   stableJson,
   type Actor,
 } from "./accountingV2.service";
-import { getDb } from "./db";
+import { addTreasuryTransactionInTransaction, getDb } from "./db";
 
 type SettlementLineInput = {
   externalReference: string;
@@ -261,4 +262,309 @@ export async function approveCarrierSettlement(input: {
     }).where(eq(carrierSettlements.id, settlement.id));
     return { eventId: eventResult.event.id, transferTransactionId: transfer?.id, chargesTransactionId: charges?.id, duplicate: false };
   });
+}
+
+// ==================== DAILY SETTLEMENT (manual) ====================
+//
+// `importCarrierSettlement` + `approveCarrierSettlement` فوق بيحلّوا المشكلة الكاملة:
+// ملف من شركة الشحن، سطر لكل شحنة، مطابقة بالـtracking، حساب COD وسيط، وحاجز maker
+// -checker. ده صح لما يكون فيه محاسب وملف تسويات.
+//
+// التاجر عنده حالة تانية خالص: بوسطة حوّلتله ٤٣٠٠ جنيه النهاردة عن ٢٢ أوردر، ورسوم
+// الشحن كانت ٧٠٠. هو عارف الأرقام دي من الرسالة اللي جاتله، ومش هيستنى ملف ولا هيلاقي
+// حد تاني يعتمدله. المسار ده بيسجّلها في **نفس الجداول** — عشان لو جه يستورد الملف بعدين
+// يلاقي التاريخ في مكانه — بس بسطر ملخّص واحد بدل سطر لكل شحنة.
+//
+// **حركة خزنة واحدة، بالصافي.** الرسوم مابتنزلش حركة تانية لأنها **مادخلتش الدُرج
+// أصلاً** — شركة الشحن خصمتها قبل ما تحوّل. تسجيلها كمصروف منفصل كان هيخلي الصرف يتعدّ
+// مرتين: مرة كرسوم ومرة كفرق بين الإجمالي والصافي. الإجمالي والرسوم محفوظين على الصف
+// للتقارير، واللي بيحرّك الفلوس هو الصافي وبس.
+
+/**
+ * بصمة التسوية اليدوية.
+ *
+ * فيه `uniqueIndex` على (businessId, importHash) — فالبصمة هي اللي بتمنع نفس التحصيل
+ * يتسجّل مرتين. بتضم المبالغ عن قصد: تاجر ممكن يستلم تحويلين من نفس الشركة في نفس اليوم
+ * بمبالغ مختلفة (وده مشروع)، لكن تحويلين بنفس اليوم ونفس المبالغ ونفس المرجع = دوسة
+ * زرار مرتين.
+ */
+export function manualSettlementHash(input: {
+  businessShippingProviderId: number;
+  statementDate: Date;
+  reference: string;
+  grossCollected: string;
+  totalCharges: string;
+}): string {
+  const dayKey = input.statementDate.toISOString().slice(0, 10);
+  return payloadHash({
+    kind: "manual-daily-settlement",
+    providerId: input.businessShippingProviderId,
+    dayKey,
+    reference: input.reference.trim(),
+    gross: fromMinorUnits(toMinorUnits(input.grossCollected)),
+    charges: fromMinorUnits(toMinorUnits(input.totalCharges)),
+  });
+}
+
+/**
+ * تسجيل تحصيل اليوم من شركة شحن — إدخال يدوي.
+ *
+ * بيعمل كل حاجة في ترانزاكشن واحدة: صف التسوية، سطر الملخّص، الحدث، القيد المالي،
+ * وحركة الخزنة. يا كلهم يا ولا واحد.
+ */
+export async function recordDailySettlement(input: {
+  businessId: number;
+  businessShippingProviderId: number;
+  statementDate: Date;
+  reference?: string;
+  ordersCount: number;
+  grossCollected: string;
+  totalCharges: string;
+  notes?: string;
+  evidenceUrl?: string;
+  actor: Actor;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const grossMinor = toMinorUnits(input.grossCollected);
+  const chargesMinor = toMinorUnits(input.totalCharges);
+  const netMinor = grossMinor - chargesMinor;
+  if (grossMinor <= 0n) throw new Error("إجمالي التحصيل لازم يكون أكبر من صفر");
+  if (chargesMinor < 0n) throw new Error("رسوم الشحن ما تكونش بالسالب");
+  if (netMinor < 0n) throw new Error("رسوم الشحن أكبر من إجمالي التحصيل");
+  if (!Number.isInteger(input.ordersCount) || input.ordersCount < 1)
+    throw new Error("عدد الأوردرات لازم يكون واحد على الأقل");
+
+  const reference = (input.reference ?? "").trim();
+  const importHash = manualSettlementHash({
+    businessShippingProviderId: input.businessShippingProviderId,
+    statementDate: input.statementDate,
+    reference,
+    grossCollected: input.grossCollected,
+    totalCharges: input.totalCharges,
+  });
+
+  return db.transaction(async tx => {
+    const [provider] = await tx
+      .select()
+      .from(businessShippingProviders)
+      .where(
+        and(
+          eq(businessShippingProviders.id, input.businessShippingProviderId),
+          eq(businessShippingProviders.businessId, input.businessId)
+        )
+      )
+      .limit(1);
+    if (!provider) throw new Error("شركة الشحن مش تابعة للنشاط ده");
+
+    const [business] = await tx
+      .select()
+      .from(businesses)
+      .where(eq(businesses.id, input.businessId))
+      .limit(1);
+    if (!business) throw new Error("Business not found");
+
+    const [duplicate] = await tx
+      .select({ id: carrierSettlements.id })
+      .from(carrierSettlements)
+      .where(
+        and(
+          eq(carrierSettlements.businessId, input.businessId),
+          eq(carrierSettlements.importHash, importHash)
+        )
+      )
+      .limit(1);
+    if (duplicate)
+      throw new Error(
+        `التحصيل ده متسجّل خلاص (#${duplicate.id}) — نفس اليوم ونفس الشركة ونفس المبالغ`
+      );
+
+    const netTransferred = fromMinorUnits(netMinor);
+    const result: any = await tx.insert(carrierSettlements).values({
+      businessId: input.businessId,
+      businessShippingProviderId: input.businessShippingProviderId,
+      reference: reference || `تحصيل ${input.statementDate.toISOString().slice(0, 10)}`,
+      statementDate: input.statementDate,
+      importHash,
+      grossCollected: fromMinorUnits(grossMinor),
+      totalCharges: fromMinorUnits(chargesMinor),
+      netTransferred,
+      status: "approved",
+      evidenceUrl: input.evidenceUrl ?? null,
+      createdBy: input.actor.id,
+      approvedBy: input.actor.id,
+      approvedAt: new Date(),
+    });
+    const settlementId = Number(result?.insertId ?? result?.[0]?.insertId);
+    if (!settlementId) throw new Error("تعذر تسجيل التحصيل");
+
+    // سطر ملخّص واحد. `ignored` مش «متجاهَل» بالمعنى السلبي — هي بتقول إن السطر ده
+    // مااتطابقش مع شحنة بعينها، وده الحقيقة في الإدخال اليدوي. عدد الأوردرات وملاحظة
+    // التاجر بيتخزنوا هنا لأن الترويسة مالهاش أعمدة ليهم — ومش هنضيف أعمدة لده.
+    await tx.insert(carrierSettlementLines).values({
+      settlementId,
+      businessId: input.businessId,
+      shipmentId: null,
+      externalReference: reference || `manual-${settlementId}`,
+      grossCollected: fromMinorUnits(grossMinor),
+      actualCharges: fromMinorUnits(chargesMinor),
+      netAmount: netTransferred,
+      matchStatus: "ignored",
+      differenceAmount: "0",
+      rawLineJson: stableJson({
+        entryMode: "manual-daily",
+        ordersCount: input.ordersCount,
+      }),
+      notes: input.notes?.trim() || null,
+    });
+
+    const eventResult = await createBusinessEventInTransaction(tx, {
+      businessId: input.businessId,
+      eventType: "shipping.settlement_approved",
+      sourceType: "carrier_settlement",
+      sourceReference: String(settlementId),
+      idempotencyKey: `carrier-settlement:${settlementId}:approved`,
+      occurredAt: input.statementDate,
+      payload: {
+        settlementId,
+        grossCollected: fromMinorUnits(grossMinor),
+        actualCharges: fromMinorUnits(chargesMinor),
+        netTransferred,
+      },
+      actor: input.actor,
+    });
+
+    // الفلوس داخلة الخزنة الرئيسية: `targetAccountId` من غير مصدر — لأن المصدر بره
+    // النظام (شركة الشحن)، وده مسموح في postFinancialTransaction.
+    const treasuryAccount = await resolveDefaultTreasuryAccountInTransaction(
+      tx,
+      input.businessId
+    );
+    const transfer = await postFinancialTransactionInTransaction(tx, {
+      businessId: input.businessId,
+      transactionType: "carrier_settlement_transfer",
+      targetAccountId: treasuryAccount.id,
+      amount: netTransferred,
+      currencyCode: business.baseCurrency,
+      description: `تحصيل ${provider.displayName} — ${input.ordersCount} أوردر`,
+      evidenceUrl: input.evidenceUrl ?? "manual-daily-settlement",
+      externalCounterparty: provider.displayName,
+      occurredAt: input.statementDate,
+      businessEventId: eventResult.event.id,
+      actor: input.actor,
+    });
+
+    // حركة الخزنة الوحيدة — بالصافي. `manual` لأن مصدرها مش أوردر واحد؛ الـreferenceId
+    // بيوصّلها بصف التسوية.
+    const treasury = await addTreasuryTransactionInTransaction(tx, {
+      businessId: input.businessId,
+      type: "collection",
+      direction: "in",
+      amount: netTransferred,
+      description: `تحصيل ${provider.displayName} — ${input.ordersCount} أوردر`,
+      notes: input.notes?.trim() || null,
+      referenceType: "manual",
+      referenceId: settlementId,
+      performedBy: input.actor.id,
+      performedByName: input.actor.name,
+      transactionDate: input.statementDate,
+    });
+    if (!treasury) throw new Error("تعذر تسجيل حركة الخزنة — التحصيل اترجع");
+
+    await tx
+      .update(carrierSettlements)
+      .set({
+        targetAccountId: treasuryAccount.id,
+        transferTransactionId: transfer.id,
+      })
+      .where(eq(carrierSettlements.id, settlementId));
+
+    return {
+      settlementId,
+      netTransferred,
+      treasuryTransactionId: treasury.id,
+      transferTransactionId: transfer.id,
+    };
+  });
+}
+
+/**
+ * تحصيلات النشاط — أحدث أولًا، بعدد الأوردرات المقروء من سطر الملخّص.
+ *
+ * قراءة بحتة. عدد الأوردرات مش عمود، فبيتقرا من `rawLineJson` وبيرجع `null` لو السطر
+ * جاي من استيراد ملف (وقتها العدد هو عدد السطور نفسها).
+ */
+export async function listDailySettlements(input: {
+  businessId: number;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      id: carrierSettlements.id,
+      statementDate: carrierSettlements.statementDate,
+      reference: carrierSettlements.reference,
+      carrierName: businessShippingProviders.displayName,
+      grossCollected: carrierSettlements.grossCollected,
+      totalCharges: carrierSettlements.totalCharges,
+      netTransferred: carrierSettlements.netTransferred,
+      status: carrierSettlements.status,
+      createdAt: carrierSettlements.createdAt,
+    })
+    .from(carrierSettlements)
+    .leftJoin(
+      businessShippingProviders,
+      eq(
+        carrierSettlements.businessShippingProviderId,
+        businessShippingProviders.id
+      )
+    )
+    .where(eq(carrierSettlements.businessId, input.businessId))
+    .orderBy(desc(carrierSettlements.statementDate), desc(carrierSettlements.id))
+    .limit(input.limit ?? 60);
+  if (rows.length === 0) return [];
+
+  const lines = await db
+    .select({
+      settlementId: carrierSettlementLines.settlementId,
+      rawLineJson: carrierSettlementLines.rawLineJson,
+      notes: carrierSettlementLines.notes,
+    })
+    .from(carrierSettlementLines)
+    .where(
+      inArray(
+        carrierSettlementLines.settlementId,
+        rows.map(row => row.id)
+      )
+    );
+
+  const perSettlement = new Map<number, { ordersCount: number | null; notes: string | null }>();
+  for (const line of lines) {
+    const current = perSettlement.get(line.settlementId) ?? {
+      ordersCount: null,
+      notes: null,
+    };
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(line.rawLineJson);
+    } catch {
+      parsed = null;
+    }
+    if (parsed?.entryMode === "manual-daily") {
+      current.ordersCount = Number(parsed.ordersCount) || null;
+      current.notes = line.notes;
+    } else {
+      // استيراد ملف: كل سطر شحنة، فالعدد هو عدد السطور.
+      current.ordersCount = (current.ordersCount ?? 0) + 1;
+    }
+    perSettlement.set(line.settlementId, current);
+  }
+
+  return rows.map(row => ({
+    ...row,
+    ordersCount: perSettlement.get(row.id)?.ordersCount ?? null,
+    notes: perSettlement.get(row.id)?.notes ?? null,
+  }));
 }

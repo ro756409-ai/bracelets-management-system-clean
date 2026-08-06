@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import {
-  PackagePlus, Plus, Trash2, Save, CheckCircle2, XCircle, RefreshCw, AlertCircle,
-} from "lucide-react";
 import { useLocation } from "wouter";
+import {
+  PackagePlus, Plus, Trash2, Save, CheckCircle2, XCircle, RefreshCw, AlertCircle, Send,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
@@ -17,36 +17,45 @@ import { PageHeader, SectionCard } from "@/components/shared";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
 import { toast } from "sonner";
 import {
-  lineFinalUnitCost, lineTotal, documentTotal, type ReceiptLineInput,
+  workshopLineTotal, workshopReceiptTotal, workshopReceiptPieces,
+  type WorkshopLineInput,
 } from "@shared/purchaseTotals";
 
 /**
- * إذن استلام بضاعة.
+ * استلام بضاعة من الورشة.
  *
- * الشاشة دي واجهة على `inventoryV2.service` اللي موجود من الأصل — createPurchaseReceiptDraft
- * ثم submit ثم approve. مفيش محرك مخزون ولا طريقة تكلفة جديدة هنا: الاعتماد بيمشي على
- * applyStockIn (متوسط مرجّح) وبيكتب inventory_transactions، والشاشة مابتلمسش رصيد بشكل مباشر.
+ * الورشة بتسلّم كل يوم، والصنف الواحد بيجي على حالتين بتكلفتين: سادة، وعليه حفر. الصف في
+ * الشاشة واحد بالحالتين لأن ده اللي التاجر بيعدّه، وبيتحوّل لسطرين في
+ * `purchase_receipt_items` لأن ده اللي المخزون بيتحسب عليه — السادة رصيد المنتج نفسه،
+ * والمحفور رصيد النوع.
  *
- * الخصم والتكلفة الإضافية بيتحسبوا هنا وبيتحوّلوا لتكلفة وحدة نهائية، لأن
- * purchase_receipt_items لسه مافيهاش أعمدة تخزّن التفصيلة. الإجمالي وقيمة المخزون بيطلعوا
- * مضبوطين، واللي بيضيع هو التفصيلة نفسها لحد ما تتعمل الـmigration — والشاشة بتقول كده صراحة.
+ * المحرك تحت هو نفسه اللي كان: مسودة ← إرسال ← اعتماد، وبنفس الجسر اللي بيزوّد الدفترين.
+ * اللي اتغيّر هو اللغة والحقول: مفيش «إذن شراء» ولا «فاتورة مورد» ولا مستند إجباري.
+ * التعقيد الداخلي مخفي، بس الحالة نفسها ظاهرة — لأن «اتسجّل» و«دخل المخزون» فرق بيهم
+ * التاجر لازم يشوفه.
  */
 
 const money = (n: number) =>
   n.toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-type Line = ReceiptLineInput & { key: string; productId: string; variantId: string };
+type Line = WorkshopLineInput & {
+  key: string;
+  productId: string;
+  variantId: string;
+};
 
 const newLine = (): Line => ({
   key: Math.random().toString(36).slice(2),
-  productId: "", variantId: "", quantity: "1", unitCost: "", discount: "", extraCost: "",
+  productId: "", variantId: "",
+  plainQuantity: "", plainUnitCost: "",
+  engravedQuantity: "", engravedUnitCost: "",
 });
 
-const STATUS_LABEL: Record<string, string> = {
-  draft: "مسودة",
-  pending_approval: "بانتظار الاعتماد",
-  approved: "معتمد",
-  voided: "ملغي",
+const STATUS: Record<string, { label: string; tone: string }> = {
+  draft: { label: "متسجّل — لسه مادخلش المخزون", tone: "var(--muted-foreground)" },
+  pending_approval: { label: "مستني الاعتماد", tone: "var(--warning)" },
+  approved: { label: "دخل المخزون", tone: "var(--success)" },
+  voided: { label: "ملغي", tone: "var(--destructive)" },
 };
 
 export default function GoodsReceipt() {
@@ -60,14 +69,10 @@ export default function GoodsReceipt() {
   } = useBrandOptions();
 
   const [warehouseId, setWarehouseId] = useState("");
-  const [supplierName, setSupplierName] = useState("");
-  const [reference, setReference] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState("");
+  const [workshopName, setWorkshopName] = useState("");
   const [receiptDate, setReceiptDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [evidenceUrl, setEvidenceUrl] = useState("");
+  const [attachmentUrl, setAttachmentUrl] = useState("");
   const [notes, setNotes] = useState("");
-  const [headerDiscount, setHeaderDiscount] = useState("");
-  const [headerShipping, setHeaderShipping] = useState("");
   const [lines, setLines] = useState<Line[]>([newLine()]);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -75,10 +80,10 @@ export default function GoodsReceipt() {
     { businessId: bid! }, { enabled: Boolean(bid) }
   );
   const { data: products } = trpc.products.list.useQuery(
-    currentBusinessIds && currentBusinessIds.length ? { businessIds: currentBusinessIds } : undefined
+    currentBusinessIds?.length ? { businessIds: currentBusinessIds } : undefined
   );
   const { data: variants } = trpc.variants.all.useQuery(
-    currentBusinessIds && currentBusinessIds.length ? { businessIds: currentBusinessIds } : undefined
+    currentBusinessIds?.length ? { businessIds: currentBusinessIds } : undefined
   );
   const control = trpc.accountingV2.inventoryControlData.useQuery(
     { businessId: bid! }, { enabled: Boolean(bid) }
@@ -90,9 +95,10 @@ export default function GoodsReceipt() {
   );
 
   const refresh = () => { control.refetch(); };
+  const afterStockChange = () => { refresh(); utils.products.list.invalidate(); };
 
   const createMutation = trpc.accountingV2.purchaseReceiptCreate.useMutation({
-    onSuccess: () => { toast.success("تم حفظ المسودة — مفيش مخزون اتغيّر"); resetForm(); refresh(); },
+    onSuccess: () => { toast.success("اتسجّل — لسه مادخلش المخزون"); resetForm(); refresh(); },
     onError: e => toast.error(e.message),
   });
   const submitMutation = trpc.accountingV2.purchaseReceiptSubmit.useMutation({
@@ -100,75 +106,88 @@ export default function GoodsReceipt() {
     onError: e => toast.error(e.message),
   });
   const approveMutation = trpc.accountingV2.purchaseReceiptApprove.useMutation({
-    onSuccess: () => { toast.success("تم الاعتماد — المخزون اتزوّد"); refresh(); utils.products.list.invalidate(); },
+    onSuccess: () => { toast.success("دخل المخزون"); afterStockChange(); },
     onError: e => toast.error(e.message),
   });
   const voidMutation = trpc.accountingV2.purchaseReceiptVoid.useMutation({
     onSuccess: r => {
-      toast.success(r.reversed ? "تم الإلغاء بحركة عكسية" : "تم إلغاء المسودة");
-      refresh(); utils.products.list.invalidate();
+      toast.success(r.reversed ? "اتلغى وطلع من المخزون" : "اتلغى");
+      afterStockChange();
     },
     onError: e => toast.error(e.message),
   });
 
   const resetForm = () => {
-    setSupplierName(""); setReference(""); setInvoiceDate(""); setEvidenceUrl("");
-    setNotes(""); setHeaderDiscount(""); setHeaderShipping("");
+    setWorkshopName(""); setAttachmentUrl(""); setNotes("");
     setLines([newLine()]); setErrors({});
   };
 
-  const patchLine = (key: string, changes: Partial<Line>) =>
+  const patch = (key: string, changes: Partial<Line>) =>
     setLines(ls => ls.map(l => (l.key === key ? { ...l, ...changes } : l)));
-
-  const totals = useMemo(
-    () => documentTotal(lines, headerShipping, headerDiscount),
-    [lines, headerShipping, headerDiscount]
-  );
 
   const variantsFor = (productId: string) =>
     ((variants ?? []) as CatalogVariant[]).filter(v => v.productId === Number(productId));
+
+  const total = useMemo(() => workshopReceiptTotal(lines), [lines]);
+  const pieces = useMemo(() => workshopReceiptPieces(lines), [lines]);
+
+  const num = (v: string | number) => Number(v) || 0;
 
   const validate = () => {
     const next: Record<string, string> = {};
     if (!bid) next.businessId = noBrands ? "مفيش أنشطة متاحة" : "اختار النشاط";
     if (!warehouseId) next.warehouseId = "اختار مكان الاستلام";
-    if (!supplierName.trim()) next.supplierName = "اسم المورد مطلوب";
-    if (!receiptDate) next.receiptDate = "تاريخ الاستلام مطلوب";
+    if (!workshopName.trim()) next.workshopName = "اسم الورشة مطلوب";
+    if (!receiptDate) next.receiptDate = "التاريخ مطلوب";
+
     lines.forEach((l, i) => {
-      if (!l.productId) next[`line-${i}-product`] = "اختار المنتج";
-      const vs = variantsFor(l.productId);
-      if (vs.length > 0 && !l.variantId) next[`line-${i}-variant`] = "اختار النوع";
-      if (l.variantId && !vs.some(v => v.id === Number(l.variantId)))
-        next[`line-${i}-variant`] = "النوع ده مش تابع للمنتج المختار";
-      if (!(Number(l.quantity) > 0)) next[`line-${i}-qty`] = "الكمية لازم تكون أكبر من صفر";
-      if (!Number.isInteger(Number(l.quantity))) next[`line-${i}-qty`] = "الكمية لازم تكون رقم صحيح";
-      if (l.unitCost === "" || Number(l.unitCost) < 0) next[`line-${i}-cost`] = "التكلفة لازم تكون صفر أو أكتر";
-      if (lineFinalUnitCost(l) < 0) next[`line-${i}-cost`] = "الخصم أكبر من قيمة البند";
+      const plain = num(l.plainQuantity);
+      const engraved = num(l.engravedQuantity);
+      if (!l.productId) next[`l${i}-product`] = "اختار الصنف";
+      if (plain === 0 && engraved === 0) next[`l${i}-qty`] = "اكتب كمية سادة أو محفور";
+      if (plain < 0 || engraved < 0) next[`l${i}-qty`] = "الكمية ماتكونش بالسالب";
+      if (!Number.isInteger(plain) || !Number.isInteger(engraved))
+        next[`l${i}-qty`] = "الكمية لازم تكون رقم صحيح";
+      if (plain > 0 && num(l.plainUnitCost) < 0) next[`l${i}-plainCost`] = "التكلفة ماتكونش بالسالب";
+      if (engraved > 0 && num(l.engravedUnitCost) < 0) next[`l${i}-engCost`] = "التكلفة ماتكونش بالسالب";
+      // النوع مطلوب للمحفور بس — السادة هو المنتج نفسه من غير حفر
+      if (engraved > 0 && !l.variantId) next[`l${i}-variant`] = "اختار نوع الحفر";
+      if (l.variantId && !variantsFor(l.productId).some(v => v.id === Number(l.variantId)))
+        next[`l${i}-variant`] = "النوع ده مش تابع للصنف المختار";
     });
+
     setErrors(next);
     return Object.keys(next).length === 0;
   };
 
-  const saveDraft = () => {
+  /** الصف الواحد بيتحوّل لسطر أو سطرين — الكمية صفر مابتتبعتش أصلاً. */
+  const toItems = () =>
+    lines.flatMap(l => {
+      const out: Array<{ productId: number; variantId?: number; quantity: number; unitCost: string }> = [];
+      const plain = num(l.plainQuantity);
+      const engraved = num(l.engravedQuantity);
+      if (plain > 0)
+        out.push({ productId: Number(l.productId), quantity: plain, unitCost: num(l.plainUnitCost).toFixed(4) });
+      if (engraved > 0)
+        out.push({
+          productId: Number(l.productId), variantId: Number(l.variantId),
+          quantity: engraved, unitCost: num(l.engravedUnitCost).toFixed(4),
+        });
+      return out;
+    });
+
+  const save = () => {
     if (!validate()) { toast.error("فيه حقول ناقصة — بُصّ على الرسايل الحمرا"); return; }
     createMutation.mutate({
       businessId: bid!,
       warehouseId: Number(warehouseId),
-      // الشاشة دي لإذن استلام مشتريات تحديدًا، فالنوع ثابت. الجرد الافتتاحي والتسويات
-      // ليهم شاشة المخزون المحاسبي بقائمة أنواعها.
       receiptType: "purchase",
-      supplierName: supplierName.trim(),
-      reference: reference.trim() || undefined,
+      // الورشة بتتخزّن في نفس خانة المورد — هي فعلًا الجهة اللي وردّت البضاعة.
+      supplierName: workshopName.trim(),
       receiptDate: new Date(receiptDate),
-      evidenceUrl: evidenceUrl.trim() || undefined,
-      reason: [notes.trim(), invoiceDate ? `تاريخ الفاتورة: ${invoiceDate}` : ""]
-        .filter(Boolean).join(" · ") || undefined,
-      items: lines.map(l => ({
-        productId: Number(l.productId),
-        variantId: l.variantId ? Number(l.variantId) : undefined,
-        quantity: Number(l.quantity),
-        unitCost: lineFinalUnitCost(l).toFixed(4),
-      })),
+      evidenceUrl: attachmentUrl.trim() || undefined,
+      reason: notes.trim() || undefined,
+      items: toItems(),
     });
   };
 
@@ -178,25 +197,23 @@ export default function GoodsReceipt() {
   return (
     <div className="space-y-4" dir="rtl">
       <PageHeader
-        title="إذن استلام بضاعة"
-        description="تسجيل بضاعة داخلة بكمياتها وتكلفتها. المسودة مابتحركش مخزون — الاعتماد بس هو اللي بيزوّد."
+        title="استلام بضاعة من الورشة"
+        description="تسجيل اللي الورشة سلّمته بكمياته وتكلفته. الحفظ لوحده مايزوّدش المخزون — الاعتماد هو اللي بيزوّد."
       />
 
       <SectionCard>
-        {/* مفيش براند خالص — نقول كده بدل ما نقفل الشاشة ونطلب اختيار مستحيل. */}
         {noBrands && (
           <p className="mb-3 flex items-start gap-1.5 rounded-md bg-destructive/10 p-2 text-xs">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
             <span>
-              مفيش أنشطة متاحة لحسابك، فمش هينفع تسجّل استلام.{" "}
+              مفيش أنشطة متاحة لحسابك.{" "}
               <button type="button" onClick={() => navigate("/businesses")}
-                className="text-primary underline underline-offset-2">
-                افتح إدارة الأنشطة
-              </button>
+                className="text-primary underline underline-offset-2">افتح إدارة الأنشطة</button>
             </span>
           </p>
         )}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {brands.length > 1 && (
             <div>
               <Label>النشاط <span className="text-destructive">*</span></Label>
@@ -210,6 +227,18 @@ export default function GoodsReceipt() {
             </div>
           )}
           <div>
+            <Label>التاريخ <span className="text-destructive">*</span></Label>
+            <Input className="mt-1" type="date" value={receiptDate}
+              onChange={e => setReceiptDate(e.target.value)} />
+            {showError("receiptDate")}
+          </div>
+          <div>
+            <Label>الورشة <span className="text-destructive">*</span></Label>
+            <Input className="mt-1" value={workshopName} placeholder="اسم الورشة"
+              onChange={e => setWorkshopName(e.target.value)} />
+            {showError("workshopName")}
+          </div>
+          <div>
             <Label>مكان الاستلام <span className="text-destructive">*</span></Label>
             <Select value={warehouseId} onValueChange={setWarehouseId} disabled={!bid}>
               <SelectTrigger className="mt-1">
@@ -219,47 +248,7 @@ export default function GoodsReceipt() {
                 {warehouses.data?.map(w => <SelectItem key={w.id} value={String(w.id)}>{w.name}</SelectItem>)}
               </SelectContent>
             </Select>
-            {bid && !warehouses.isLoading && (warehouses.data?.length ?? 0) === 0 && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                مفيش مخازن مسجّلة للنشاط ده. الورشة بتتسجّل هنا كمخزن.
-              </p>
-            )}
             {showError("warehouseId")}
-          </div>
-          <div>
-            <Label>المورد <span className="text-destructive">*</span></Label>
-            <Input className="mt-1" value={supplierName} placeholder="اسم المورد"
-              onChange={e => setSupplierName(e.target.value)} />
-            {showError("supplierName")}
-          </div>
-          <div>
-            <Label>رقم الفاتورة</Label>
-            <Input className="mt-1" value={reference} placeholder="مثال: INV-2026-114"
-              onChange={e => setReference(e.target.value)} dir="ltr" />
-          </div>
-          <div>
-            <Label>تاريخ الفاتورة</Label>
-            <Input className="mt-1" type="date" value={invoiceDate}
-              onChange={e => setInvoiceDate(e.target.value)} />
-          </div>
-          <div>
-            <Label>تاريخ الاستلام <span className="text-destructive">*</span></Label>
-            <Input className="mt-1" type="date" value={receiptDate}
-              onChange={e => setReceiptDate(e.target.value)} />
-            {showError("receiptDate")}
-          </div>
-          <div className="sm:col-span-2">
-            <Label>رابط المستند</Label>
-            <Input className="mt-1" value={evidenceUrl} placeholder="https://..." dir="ltr"
-              onChange={e => setEvidenceUrl(e.target.value)} />
-            <p className="mt-1 text-xs text-muted-foreground">
-              مش مطلوب للمسودة — بس الاعتماد مش هيعدّي من غيره.
-            </p>
-          </div>
-          <div className="sm:col-span-2 lg:col-span-3">
-            <Label>ملاحظات</Label>
-            <Textarea className="mt-1" rows={2} value={notes}
-              onChange={e => setNotes(e.target.value)} placeholder="أي تفاصيل إضافية..." />
           </div>
         </div>
       </SectionCard>
@@ -267,22 +256,21 @@ export default function GoodsReceipt() {
       <SectionCard>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-sm font-bold">
-            <PackagePlus className="h-4 w-4" /> بنود الاستلام
+            <PackagePlus className="h-4 w-4" /> اللي الورشة سلّمته
           </h3>
           <Button size="sm" variant="outline" className="gap-1.5"
             onClick={() => setLines(ls => [...ls, newLine()])}>
-            <Plus className="h-4 w-4" /> بند جديد
+            <Plus className="h-4 w-4" /> صنف جديد
           </Button>
         </div>
 
         <div className="space-y-3">
           {lines.map((l, i) => {
             const vs = variantsFor(l.productId);
-            const finalCost = lineFinalUnitCost(l);
             return (
               <div key={l.key} className="rounded-lg border bg-muted/30 p-3">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs font-bold text-muted-foreground">بند {i + 1}</span>
+                  <span className="text-xs font-bold text-muted-foreground">صنف {i + 1}</span>
                   {lines.length > 1 && (
                     <Button size="sm" variant="ghost" className="h-7 gap-1 text-destructive"
                       onClick={() => setLines(ls => ls.filter(x => x.key !== l.key))}>
@@ -290,13 +278,12 @@ export default function GoodsReceipt() {
                     </Button>
                   )}
                 </div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                  <div className="col-span-2 sm:col-span-1">
-                    <Label className="text-xs">المنتج <span className="text-destructive">*</span></Label>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div>
+                    <Label className="text-xs">الصنف <span className="text-destructive">*</span></Label>
                     <Select value={l.productId}
-                      onValueChange={v => patchLine(l.key, { productId: v, variantId: "" })}>
-                      {/* اسم المنتج أطول من عرض العمود، فمن غير قص بيطلع بره الخانة ويركب
-                          على اللي جنبه. */}
+                      onValueChange={v => patch(l.key, { productId: v, variantId: "" })}>
                       <SelectTrigger className="mt-1 w-full min-w-0 [&>span]:truncate">
                         <SelectValue placeholder="اختار" />
                       </SelectTrigger>
@@ -305,134 +292,111 @@ export default function GoodsReceipt() {
                           <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
-                    {showError(`line-${i}-product`)}
+                    {showError(`l${i}-product`)}
                   </div>
-                  <div className="col-span-2 sm:col-span-1">
-                    <Label className="text-xs">نوع الحفر / المقاس</Label>
-                    <Select value={l.variantId} onValueChange={v => patchLine(l.key, { variantId: v })}
+                  <div>
+                    <Label className="text-xs">نوع الحفر</Label>
+                    <Select value={l.variantId} onValueChange={v => patch(l.key, { variantId: v })}
                       disabled={vs.length === 0}>
                       <SelectTrigger className="mt-1 w-full min-w-0 [&>span]:truncate">
-                        <SelectValue placeholder={vs.length ? "اختار" : "مفيش أنواع"} />
+                        <SelectValue placeholder={vs.length ? "للمحفور بس" : "مفيش أنواع"} />
                       </SelectTrigger>
                       <SelectContent>
                         {vs.map(v => <SelectItem key={v.id} value={String(v.id)}>{variantLabel(v)}</SelectItem>)}
                       </SelectContent>
                     </Select>
-                    {showError(`line-${i}-variant`)}
-                  </div>
-                  <div>
-                    <Label className="text-xs">الكمية <span className="text-destructive">*</span></Label>
-                    <Input className="mt-1" type="number" min="1" dir="ltr" value={l.quantity}
-                      onChange={e => patchLine(l.key, { quantity: e.target.value })} />
-                    {showError(`line-${i}-qty`)}
-                  </div>
-                  <div>
-                    <Label className="text-xs">تكلفة الوحدة <span className="text-destructive">*</span></Label>
-                    <Input className="mt-1" type="number" min="0" step="0.01" dir="ltr" value={l.unitCost}
-                      placeholder="0.00" onChange={e => patchLine(l.key, { unitCost: e.target.value })} />
-                    {showError(`line-${i}-cost`)}
-                  </div>
-                  <div>
-                    <Label className="text-xs">خصم البند</Label>
-                    <Input className="mt-1" type="number" min="0" step="0.01" dir="ltr" value={l.discount}
-                      placeholder="0.00" onChange={e => patchLine(l.key, { discount: e.target.value })} />
-                  </div>
-                  <div>
-                    <Label className="text-xs">تكلفة إضافية</Label>
-                    <Input className="mt-1" type="number" min="0" step="0.01" dir="ltr" value={l.extraCost}
-                      placeholder="0.00" onChange={e => patchLine(l.key, { extraCost: e.target.value })} />
+                    {showError(`l${i}-variant`)}
                   </div>
                 </div>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t pt-2 text-xs">
+
+                <div className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                  <div>
+                    <Label className="text-xs">كمية سادة</Label>
+                    <Input className="mt-1" type="number" min="0" dir="ltr" placeholder="0"
+                      value={String(l.plainQuantity)}
+                      onChange={e => patch(l.key, { plainQuantity: e.target.value })} />
+                  </div>
+                  <div>
+                    <Label className="text-xs">تكلفة السادة</Label>
+                    <Input className="mt-1" type="number" min="0" step="0.01" dir="ltr" placeholder="0.00"
+                      value={String(l.plainUnitCost)}
+                      onChange={e => patch(l.key, { plainUnitCost: e.target.value })} />
+                    {showError(`l${i}-plainCost`)}
+                  </div>
+                  <div>
+                    <Label className="text-xs">كمية محفور</Label>
+                    <Input className="mt-1" type="number" min="0" dir="ltr" placeholder="0"
+                      value={String(l.engravedQuantity)}
+                      onChange={e => patch(l.key, { engravedQuantity: e.target.value })} />
+                  </div>
+                  <div>
+                    <Label className="text-xs">تكلفة المحفور</Label>
+                    <Input className="mt-1" type="number" min="0" step="0.01" dir="ltr" placeholder="0.00"
+                      value={String(l.engravedUnitCost)}
+                      onChange={e => patch(l.key, { engravedUnitCost: e.target.value })} />
+                    {showError(`l${i}-engCost`)}
+                  </div>
+                </div>
+                {showError(`l${i}-qty`)}
+
+                <div className="mt-2 flex items-center justify-between border-t pt-2 text-xs">
                   <span className="text-muted-foreground">
-                    تكلفة الوحدة النهائية{" "}
-                    <strong className="tabular-nums text-foreground">{money(finalCost)}</strong> ج.م
+                    {num(l.plainQuantity) + num(l.engravedQuantity)} قطعة
                   </span>
                   <span className="font-bold tabular-nums">
-                    إجمالي البند {money(lineTotal(l))} ج.م
+                    إجمالي الصنف {money(workshopLineTotal(l))} ج.م
                   </span>
                 </div>
               </div>
             );
           })}
         </div>
-      </SectionCard>
 
-      <SectionCard>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <Label className="text-xs">مصاريف شحن / نقل</Label>
-                <Input className="mt-1" type="number" min="0" step="0.01" dir="ltr"
-                  value={headerShipping} placeholder="0.00"
-                  onChange={e => setHeaderShipping(e.target.value)} />
-              </div>
-              <div>
-                <Label className="text-xs">خصم على الفاتورة</Label>
-                <Input className="mt-1" type="number" min="0" step="0.01" dir="ltr"
-                  value={headerDiscount} placeholder="0.00"
-                  onChange={e => setHeaderDiscount(e.target.value)} />
-              </div>
-            </div>
-            <p className="flex items-start gap-1.5 rounded-md bg-warning/10 p-2 text-xs text-muted-foreground">
-              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-              <span>
-                الخصم والتكلفة الإضافية بيتحوّلوا لتكلفة وحدة نهائية عشان قيمة المخزون تطلع
-                مضبوطة. تفصيلتهم لسه مابتتخزّنش لحد ما يتضاف عمود ليها.
-              </span>
-            </p>
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <Label className="text-xs">ملاحظات</Label>
+            <Textarea className="mt-1" rows={2} value={notes} placeholder="أي تفاصيل..."
+              onChange={e => setNotes(e.target.value)} />
           </div>
-          <div className="rounded-lg border p-3">
-            <div className="space-y-1.5 text-sm">
-              <Row label="إجمالي البنود" value={totals.linesTotal} />
-              <Row label="مصاريف شحن" value={totals.shipping} />
-              <Row label="خصم الفاتورة" value={-totals.discount} />
-              <div className="flex items-center justify-between border-t pt-1.5 text-base font-black">
-                <span>إجمالي المستند</span>
-                <span className="tabular-nums">{money(totals.total)} ج.م</span>
-              </div>
-              <Row label="المدفوع" value={0} muted />
-              <div className="flex items-center justify-between font-bold text-warning">
-                <span>المتبقي للمورد</span>
-                <span className="tabular-nums">{money(totals.total)} ج.م</span>
-              </div>
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              الدفع إجراء منفصل ولسه مش متاح — مفيش مسار دفع موردين في النظام. الفاتورة
-              بتتسجّل كمستحق كامل على المورد.
-            </p>
+          <div>
+            <Label className="text-xs">مرفق</Label>
+            <Input className="mt-1" value={attachmentUrl} placeholder="https://... (اختياري)" dir="ltr"
+              onChange={e => setAttachmentUrl(e.target.value)} />
+            <p className="mt-1 text-xs text-muted-foreground">اختياري دايمًا.</p>
           </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button className="gap-1.5" onClick={saveDraft} disabled={createMutation.isPending}>
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t pt-3">
+          <Button className="gap-1.5" onClick={save} disabled={createMutation.isPending}>
             <Save className="h-4 w-4" />
-            {createMutation.isPending ? "جاري الحفظ..." : "حفظ كمسودة"}
+            {createMutation.isPending ? "جاري الحفظ..." : "حفظ"}
           </Button>
           <Button variant="outline" className="gap-1.5" onClick={resetForm}>
-            <XCircle className="h-4 w-4" /> تفريغ النموذج
+            <XCircle className="h-4 w-4" /> تفريغ
           </Button>
+          <span className="ms-auto text-sm">
+            <span className="text-muted-foreground">{pieces} قطعة · </span>
+            <strong className="tabular-nums">{money(total)} ج.م</strong>
+          </span>
         </div>
       </SectionCard>
 
       <SectionCard>
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-bold">أذون الاستلام</h3>
+          <h3 className="text-sm font-bold">استلامات الورشة</h3>
           <Button size="sm" variant="outline" className="gap-1.5" onClick={refresh}>
             <RefreshCw className="h-4 w-4" /> تحديث
           </Button>
         </div>
         {receipts.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">مفيش أذون استلام لسه.</p>
+          <p className="py-6 text-center text-sm text-muted-foreground">مفيش استلامات لسه.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[42rem] text-sm">
+            <table className="w-full min-w-[40rem] text-sm">
               <thead>
                 <tr className="border-b text-right text-xs text-muted-foreground">
-                  <th className="p-2">#</th>
-                  <th className="p-2">المورد</th>
                   <th className="p-2">التاريخ</th>
+                  <th className="p-2">الورشة</th>
                   <th className="p-2">الإجمالي</th>
                   <th className="p-2">الحالة</th>
                   <th className="p-2">إجراء</th>
@@ -441,25 +405,27 @@ export default function GoodsReceipt() {
               <tbody>
                 {receipts.map((r: any) => (
                   <tr key={r.id} className="border-b last:border-0">
-                    <td className="p-2 tabular-nums">{r.id}</td>
-                    <td className="p-2">{r.supplierName}</td>
-                    <td className="p-2 tabular-nums">
+                    <td className="p-2 whitespace-nowrap tabular-nums">
                       {new Date(r.receiptDate).toLocaleDateString("ar-EG")}
                     </td>
+                    <td className="p-2">{r.supplierName}</td>
                     <td className="p-2 tabular-nums">{money(Number(r.totalAmount))}</td>
-                    <td className="p-2">{STATUS_LABEL[r.status] ?? r.status}</td>
+                    <td className="p-2 whitespace-nowrap text-xs font-bold"
+                      style={{ color: STATUS[r.status]?.tone }}>
+                      {STATUS[r.status]?.label ?? r.status}
+                    </td>
                     <td className="p-2">
                       <div className="flex flex-wrap gap-1">
                         {r.status === "draft" && (
-                          <Button size="sm" variant="outline" className="h-7 text-xs"
+                          <Button size="sm" variant="outline" className="h-7 gap-1 text-xs"
                             onClick={() => submitMutation.mutate({ businessId: bid!, receiptId: r.id })}>
-                            إرسال للاعتماد
+                            <Send className="h-3.5 w-3.5" /> إرسال للاعتماد
                           </Button>
                         )}
                         {r.status === "pending_approval" && (
                           <Button size="sm" className="h-7 gap-1 text-xs"
                             onClick={() => approveMutation.mutate({ businessId: bid!, receiptId: r.id })}>
-                            <CheckCircle2 className="h-3.5 w-3.5" /> اعتماد
+                            <CheckCircle2 className="h-3.5 w-3.5" /> اعتماد وإضافة للمخزون
                           </Button>
                         )}
                         {r.status !== "voided" && (
@@ -480,16 +446,14 @@ export default function GoodsReceipt() {
             </table>
           </div>
         )}
+        <p className="mt-3 flex items-start gap-1.5 text-xs text-muted-foreground">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            المالك يقدر يعتمد استلامه بنفسه. الموظف اللي سجّل الاستلام لازم حساب تاني
+            يعتمده — عشان مايبقاش نفس الشخص هو اللي بيسجّل وهو اللي بيراجع.
+          </span>
+        </p>
       </SectionCard>
-    </div>
-  );
-}
-
-function Row({ label, value, muted }: { label: string; value: number; muted?: boolean }) {
-  return (
-    <div className={`flex items-center justify-between ${muted ? "text-muted-foreground" : ""}`}>
-      <span>{label}</span>
-      <span className="tabular-nums">{money(value)} ج.م</span>
     </div>
   );
 }

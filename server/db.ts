@@ -91,6 +91,7 @@ import {
   businessConfigurationValues,
   businessShippingProviders,
   purchaseReceipts,
+  adSpendEntries,
 } from "../drizzle/schema";
 import {
   calcPayrollLine,
@@ -3782,44 +3783,60 @@ export async function getTreasuryBalance(
 }
 
 /**
- * إضافة حركة للخزنة مع حساب الرصيد بعدها.
+ * إضافة حركة للخزنة جوه transaction قايمة بالفعل.
  *
- * جوه transaction عن قصد: قراءة آخر رصيد ثم الكتابة عمليتان، ولو حركتين اتنفذوا في نفس
- * اللحظة الاتنين هيقروا نفس الرصيد القديم ويكتبوا نفس `balanceAfter` — ووقتها الـledger
- * بيكدب. الـtransaction بتخلي الاتنين يتسلسلوا.
+ * الدالة دي هي **المكان الوحيد** اللي بيكتب في `treasury_transactions` في المشروع كله.
+ * أي مسار عايز يحرّك الخزنة بينادي عليها — سواء بترانزاكشن بتاعته (عن طريق
+ * `addTreasuryTransaction` تحت) أو جوه ترانزاكشن أكبر بيكتب حاجات تانية معاها.
+ *
+ * الصيغة دي بالذات (اللي بتاخد `tx`) موجودة عشان الدفع بتاع المصروف أو المرتب يكتب
+ * قيده المالي وحركة خزنته **في نفس الترانزاكشن**: يا الاتنين ينجحوا يا الاتنين يترجعوا.
+ * لو كانت حركة الخزنة في ترانزاكشن منفصلة، كان ممكن القيد المالي ينجح والخزنة تفشل —
+ * وساعتها الدفترين يفضلوا مختلفين للأبد من غير ما حد ياخد باله.
+ *
+ * القفل: قراءة آخر رصيد ثم الكتابة عمليتان. من غير `FOR UPDATE` ممكن حركتين متوازيتين
+ * يقروا نفس الرصيد القديم ويكتبوا نفس `balanceAfter` — والسلسلة تكدب. القفل بيخلي
+ * التانية تستنى الأولى وتقرا رصيدها الجديد.
  *
  * ملحوظة: كل الحركات في نفس الـbusiness بتشترك في سلسلة رصيد واحدة، فالرصيد بيتقرا
  * لنفس الـbusinessId بس مش لكل الأنشطة.
  */
+export async function addTreasuryTransactionInTransaction(
+  tx: any,
+  data: Omit<InsertTreasuryTransaction, "balanceAfter">
+): Promise<TreasuryTransaction | null> {
+  const signed =
+    data.direction === "in" ? Number(data.amount) : -Number(data.amount);
+
+  const [last] = await tx
+    .select({ balanceAfter: treasuryTransactions.balanceAfter })
+    .from(treasuryTransactions)
+    .where(eq(treasuryTransactions.businessId, data.businessId))
+    .orderBy(desc(treasuryTransactions.id))
+    .limit(1)
+    .for("update");
+  const balanceAfter = (last ? Number(last.balanceAfter) : 0) + signed;
+  const result: any = await tx.insert(treasuryTransactions).values({
+    ...data,
+    balanceAfter: balanceAfter.toFixed(2),
+  });
+  const insertId = result?.insertId ?? result?.[0]?.insertId;
+  if (!insertId) return null;
+  const [row] = await tx
+    .select()
+    .from(treasuryTransactions)
+    .where(eq(treasuryTransactions.id, Number(insertId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** نفس الحركة لكن بترانزاكشن خاصة بيها — للمسارات اللي مالهاش ترانزاكشن أصلاً. */
 export async function addTreasuryTransaction(
   data: Omit<InsertTreasuryTransaction, "balanceAfter">
 ): Promise<TreasuryTransaction | null> {
   const db = await getDb();
   if (!db) return null;
-  const signed =
-    data.direction === "in" ? Number(data.amount) : -Number(data.amount);
-
-  return db.transaction(async tx => {
-    const [last] = await tx
-      .select({ balanceAfter: treasuryTransactions.balanceAfter })
-      .from(treasuryTransactions)
-      .where(eq(treasuryTransactions.businessId, data.businessId))
-      .orderBy(desc(treasuryTransactions.id))
-      .limit(1);
-    const balanceAfter = (last ? Number(last.balanceAfter) : 0) + signed;
-    const result: any = await tx.insert(treasuryTransactions).values({
-      ...data,
-      balanceAfter: balanceAfter.toFixed(2),
-    });
-    const insertId = result?.insertId ?? result?.[0]?.insertId;
-    if (!insertId) return null;
-    const [row] = await tx
-      .select()
-      .from(treasuryTransactions)
-      .where(eq(treasuryTransactions.id, Number(insertId)))
-      .limit(1);
-    return row ?? null;
-  });
+  return db.transaction(async tx => addTreasuryTransactionInTransaction(tx, data));
 }
 
 export type TreasuryFilters = {
@@ -4985,6 +5002,269 @@ export async function getDailyLedgerSummary(input: {
     supplierPaid: null as number | null,
     movements,
   };
+}
+
+/**
+ * كل أرقام مركز الحسابات في استعلام واحد.
+ *
+ * قراءة بحتة. مابتكتبش ولا صف، ومابتنادي ولا خدمة بتحرّك فلوس — فمستحيل تنتج حركة خزنة
+ * مكررة، لأنها مابتنتجش حركة خزنة أصلاً. كل رقم بيتقرا من نفس المصدر اللي بيكتبه المسار
+ * الحقيقي بتاعه، عشان اللوحة ماتبقاش رأي تاني في الأرقام.
+ *
+ * أهم قرار هنا: **المصروف والإعلان والمرتب مجموعات منفصلة تمامًا.**
+ *
+ * الإعلان بيتسجّل كمصروف (`ad_spend_entries.expenseId` فريد)، والمرتب بيتسجّل كمصروف
+ * بتصنيف «رواتب وأجور». يعني لو عرضنا التلاتة كأرقام مستقلة من غير فصل، اللي يجمعهم
+ * هيعدّ نفس الجنيه تلاتة مرات. الـCASE تحت بتحطّ كل دفعة في سلّة **واحدة** بالظبط:
+ * لو مربوطة بإعلان → إعلانات، وإلا لو تصنيفها رواتب → مرتبات، وإلا → مصروفات أخرى.
+ * فمجموع التلاتة = إجمالي المدفوع بالظبط، والفرق بينهم صفر تداخل.
+ *
+ * والتلاتة على محور واحد: `paidAt` — لحظة خروج الفلوس. مش تاريخ الفاتورة ولا تاريخ
+ * تشغيل الإعلان. ده بيخلّي اللوحة متطابقة مع الخزنة سطر بسطر.
+ */
+export async function getAccountingControlCenter(input: {
+  businessIds?: number[] | null;
+  /** يوم القاهرة، `YYYY-MM-DD`. الافتراضي النهاردة. */
+  dateKey?: string;
+}) {
+  const db = await getDb();
+  const dayKey = input.dateKey || businessDateKey(new Date(), CAIRO_TIMEZONE);
+  const { from, toExclusive } = businessDayRange(dayKey, CAIRO_TIMEZONE);
+  const monthFrom = new Date(from.getFullYear(), from.getMonth(), 1);
+
+  const empty = {
+    dateKey: dayKey,
+    treasuryBalance: 0,
+    collectionsToday: 0,
+    expensesToday: 0,
+    advertisingToday: 0,
+    salariesToday: 0,
+    expensesTotalPaidToday: 0,
+    inventoryCostToday: 0,
+    netProfitToday: 0,
+    netProfitMonth: 0,
+    supplierDue: 0,
+    inventoryValue: 0,
+  };
+  if (!db) return empty;
+
+  const ids = input.businessIds && input.businessIds.length > 0 ? input.businessIds : null;
+
+  // ── التكلفة ──
+  //
+  // getAccountingDashboard بتعمل ٨ استعلامات ورا بعض جوّاها، وإحنا محتاجينها مرتين
+  // (يوم وشهر) لأن مدياتها مختلفة. نداءها مرة واحدة مش ممكن من غير ما نفتح جوّاها،
+  // وده المحرك اللي متفق إننا مانلمسوش.
+  //
+  // فبدل ما نقلّل عدد الاستعلامات، بنقلّل **الوقت**: كل حاجة تحت بتتنفّذ بالتوازي في
+  // Promise.all واحدة. الإجمالي ٢٢ استعلام، بس أطول سلسلة متتابعة فيهم ٨ — يعني الزمن
+  // زمن ٨ ذهاب وعودة مش ٢٢.
+  //
+  // مفيش أي cache. الأرقام دي بتتقري لحظة السؤال، فمستحيل تعرض رقم قديم.
+  const one = <T>(rows: T[]): T | undefined => rows[0];
+
+  // تحصيلات اليوم — من الخزنة نفسها، مش من الأوردرات. اللي دخل الخزنة هو التحصيل.
+  const collectionsQuery = db
+    .select({
+      amount: sql<string>`COALESCE(SUM(${treasuryTransactions.amount}), 0)`,
+    })
+    .from(treasuryTransactions)
+    .where(
+      and(
+        eq(treasuryTransactions.type, "collection" as any),
+        eq(treasuryTransactions.direction, "in" as any),
+        gte(treasuryTransactions.transactionDate, from),
+        lt(treasuryTransactions.transactionDate, toExclusive),
+        ...(ids ? [inArray(treasuryTransactions.businessId, ids)] : [])
+      )
+    );
+
+  // التلات سلال المنفصلة. كل دفعة بتقع في واحدة بس — شوف الشرح فوق.
+  const bucketsQuery = db
+    .select({
+      advertising: sql<string>`COALESCE(SUM(CASE WHEN ${adSpendEntries.id} IS NOT NULL THEN ${expensePayments.amount} ELSE 0 END), 0)`,
+      salaries: sql<string>`COALESCE(SUM(CASE WHEN ${adSpendEntries.id} IS NULL AND ${expenseCategories.name} = ${PAYROLL_EXPENSE_CATEGORY} THEN ${expensePayments.amount} ELSE 0 END), 0)`,
+      other: sql<string>`COALESCE(SUM(CASE WHEN ${adSpendEntries.id} IS NULL AND (${expenseCategories.name} IS NULL OR ${expenseCategories.name} <> ${PAYROLL_EXPENSE_CATEGORY}) THEN ${expensePayments.amount} ELSE 0 END), 0)`,
+      total: sql<string>`COALESCE(SUM(${expensePayments.amount}), 0)`,
+    })
+    .from(expensePayments)
+    .innerJoin(expenses, eq(expenses.id, expensePayments.expenseId))
+    .leftJoin(adSpendEntries, eq(adSpendEntries.expenseId, expenses.id))
+    .leftJoin(expenseCategories, eq(expenseCategories.id, expenses.categoryId))
+    .where(
+      and(
+        gte(expensePayments.paidAt, from),
+        lt(expensePayments.paidAt, toExclusive),
+        ...(ids ? [inArray(expensePayments.businessId, ids)] : [])
+      )
+    );
+
+  // تكلفة البضاعة الداخلة النهاردة — لحظة الاعتماد، وهي لحظة دخول المخزون.
+  const receivedQuery = db
+    .select({ amount: sql<string>`COALESCE(SUM(${purchaseReceipts.totalAmount}), 0)` })
+    .from(purchaseReceipts)
+    .where(
+      and(
+        eq(purchaseReceipts.status, "approved" as any),
+        gte(purchaseReceipts.approvedAt, from),
+        lt(purchaseReceipts.approvedAt, toExclusive),
+        ...(ids ? [inArray(purchaseReceipts.businessId, ids)] : [])
+      )
+    );
+
+  // المستحق للورشة/المورد — مش محدود باليوم، زي أي التزام.
+  const dueQuery = db
+    .select({ amount: sql<string>`COALESCE(SUM(${purchaseReceipts.totalAmount}), 0)` })
+    .from(purchaseReceipts)
+    .where(
+      and(
+        eq(purchaseReceipts.status, "approved" as any),
+        inArray(purchaseReceipts.paymentStatus, ["unpaid", "partially_paid"] as any),
+        ...(ids ? [inArray(purchaseReceipts.businessId, ids)] : [])
+      )
+    );
+
+  // قيمة المخزون — من الرصيد المحاسبي المقيّم، مش من عدّ القطع × سعر البيع.
+  const stockQuery = db
+    .select({ amount: sql<string>`COALESCE(SUM(${inventoryBalances.inventoryValue}), 0)` })
+    .from(inventoryBalances)
+    .where(ids ? inArray(inventoryBalances.businessId, ids) : undefined);
+
+  const [
+    collections, buckets, received, due, stockValue, treasuryBalance, dayProfit, monthProfit,
+  ] = await Promise.all([
+    collectionsQuery.then(one),
+    bucketsQuery.then(one),
+    receivedQuery.then(one),
+    dueQuery.then(one),
+    stockQuery.then(one),
+    getTreasuryBalance(input.businessIds),
+    // الربح من نفس المحرك، مرتين بنطاقين. مفيش معادلة ربح تانية هنا ولا في الواجهة.
+    getAccountingDashboard({ businessIds: ids, dateFrom: from, dateTo: toExclusive }),
+    getAccountingDashboard({ businessIds: ids, dateFrom: monthFrom, dateTo: toExclusive }),
+  ]);
+
+  return {
+    dateKey: dayKey,
+    treasuryBalance,
+    collectionsToday: Number(collections?.amount ?? 0),
+    expensesToday: Number(buckets?.other ?? 0),
+    advertisingToday: Number(buckets?.advertising ?? 0),
+    salariesToday: Number(buckets?.salaries ?? 0),
+    // الإجمالي المدفوع كما هو، من غير تقسيم. موجود عشان اللي يقرا الأرقام يقدر يتأكد
+    // بنفسه إن التلاتة فوق بتجمع عليه بالظبط — الفصل مايتصدّقش، يتحسب.
+    expensesTotalPaidToday: Number(buckets?.total ?? 0),
+    inventoryCostToday: Number(received?.amount ?? 0),
+    netProfitToday: dayProfit.netProfit,
+    netProfitMonth: monthProfit.netProfit,
+    supplierDue: Number(due?.amount ?? 0),
+    inventoryValue: Number(stockValue?.amount ?? 0),
+  };
+}
+
+/**
+ * حملات الإعلانات في فترة — الصفوف الخام، والحساب فوقها في الواجهة والاختبار.
+ *
+ * قراءة بحتة من `ad_spend_entries` ومعاها مبلغ المصروف المرتبط بيها. المقاييس (أوردرات،
+ * رسايل، إيراد) متخزّنة في `manualMetricsJson` وهو عمود JSON حر موجود من الأصل، فمفيش
+ * عمود جديد ولا جدول.
+ *
+ * الحساب نفسه في `shared/adMetrics` عشان الشاشة والاختبار يقيسوا نفس المعادلة.
+ */
+export async function listAdCampaigns(input: {
+  businessIds?: number[] | null;
+  dateFrom: Date;
+  dateTo: Date;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const ids = input.businessIds && input.businessIds.length > 0 ? input.businessIds : null;
+
+  const rows = await db
+    .select({
+      id: adSpendEntries.id,
+      spendDate: adSpendEntries.spendDate,
+      platformName: adSpendEntries.platformNameSnapshot,
+      accountName: adSpendEntries.accountNameSnapshot,
+      campaignName: adSpendEntries.campaignNameSnapshot,
+      amount: adSpendEntries.amount,
+      metricsJson: adSpendEntries.manualMetricsJson,
+      notes: adSpendEntries.notes,
+      expenseStatus: expenses.status,
+      paidAmount: expenses.paidAmount,
+    })
+    .from(adSpendEntries)
+    .innerJoin(expenses, eq(expenses.id, adSpendEntries.expenseId))
+    .where(
+      and(
+        gte(adSpendEntries.spendDate, input.dateFrom),
+        lt(adSpendEntries.spendDate, input.dateTo),
+        ...(ids ? [inArray(adSpendEntries.businessId, ids)] : [])
+      )
+    )
+    .orderBy(desc(adSpendEntries.spendDate), desc(adSpendEntries.id));
+
+  return rows.map(r => {
+    // بيانات قديمة أو مكتوبة بره الشاشة ماتوقعش الصفحة.
+    let metrics: Record<string, number> = {};
+    try { metrics = r.metricsJson ? JSON.parse(r.metricsJson) : {}; } catch { metrics = {}; }
+    const kind = metrics.messages > 0 ? ("messages" as const) : ("sales" as const);
+    return {
+      id: r.id,
+      spendDate: r.spendDate,
+      platformName: r.platformName,
+      accountName: r.accountName,
+      campaignName: r.campaignName,
+      spend: Number(r.amount),
+      kind,
+      orders: Number(metrics.orders ?? 0),
+      messages: Number(metrics.messages ?? 0),
+      revenue: metrics.revenue != null ? Number(metrics.revenue) : null,
+      notes: r.notes,
+      // الحالة معروضة عشان المعلن يعرف إن المصروف اتسجّل بس لسه ماخرجش من الخزنة.
+      expenseStatus: r.expenseStatus,
+      paidAmount: Number(r.paidAmount ?? 0),
+    };
+  });
+}
+
+/**
+ * حركات الخزنة ومعاها الرصيد قبل كل واحدة.
+ *
+ * `balanceBefore` مش عمود في الجدول ومش محتاج يبقى: الرصيد بعد الحركة محفوظ، والاتجاه
+ * معروف، فاللي قبلها هو `balanceAfter ∓ amount`. حسابه هنا مرة واحدة بدل ما كل شاشة
+ * تحسبه بطريقتها.
+ */
+export async function getTreasuryHistoryWithBalances(input: {
+  businessIds?: number[] | null;
+  dateFrom?: Date;
+  dateTo?: Date;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const ids = input.businessIds && input.businessIds.length > 0 ? input.businessIds : null;
+  const rows = await db
+    .select()
+    .from(treasuryTransactions)
+    .where(
+      and(
+        ...(input.dateFrom ? [gte(treasuryTransactions.transactionDate, input.dateFrom)] : []),
+        ...(input.dateTo ? [lt(treasuryTransactions.transactionDate, input.dateTo)] : []),
+        ...(ids ? [inArray(treasuryTransactions.businessId, ids)] : [])
+      )
+    )
+    .orderBy(desc(treasuryTransactions.transactionDate), desc(treasuryTransactions.id))
+    .limit(input.limit ?? 100);
+
+  return rows.map(row => {
+    const after = Number(row.balanceAfter);
+    const amount = Number(row.amount);
+    return {
+      ...row,
+      balanceBefore: Number((row.direction === "in" ? after - amount : after + amount).toFixed(2)),
+    };
+  });
 }
 
 // ==================== PAYROLL ====================

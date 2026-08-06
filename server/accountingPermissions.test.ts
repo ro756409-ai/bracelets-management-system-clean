@@ -110,13 +110,53 @@ describe("تسريب الأرباح اتقفل", () => {
   });
 });
 
-describe("لسه مافيش كتابة جديدة في الدفتر القديم", () => {
-  it("عدد كتّاب treasury_transactions ما زادش عن الاتنين المعروفين", () => {
-    // إيداع/سحب يدوي، وتحصيل أوردر. Sprint 1 هيحوّلهم للدفتر الموحّد؛ الاختبار ده
-    // بيمنع إضافة كاتب تالت من غير ما حد ياخد باله.
-    const callers = (routersCode.match(/addTreasuryTransaction\(/g) ?? []).length;
-    const db = codeOnly(fs.readFileSync("server/db.ts", "utf-8"));
-    const dbCallers = (db.match(/await addTreasuryTransaction\(/g) ?? []).length;
-    expect(callers + dbCallers).toBeLessThanOrEqual(3); // ١ في routers + ١ في db + التعريف
+describe("كتّاب الخزنة معروفين بالاسم", () => {
+  /**
+   * الخزنة هي الرقم اللي التاجر بيصدّقه. أي مسار جديد بيحرّكها لازم يبقى قرار واعي مش
+   * سطر بيعدّي في مراجعة. الاختبار ده بيقفل حاجتين: إن فيه **مكان واحد** بيعمل insert
+   * في الجدول، وإن قايمة اللي بينادوا عليه مقفولة بالاسم.
+   *
+   * لو ضفت مسار جديد بيحرّك الخزنة، الاختبار ده هيقع — وده المطلوب. ضيف الملف للقايمة
+   * تحت بعد ما تتأكد إن الحركة بتتكتب مرة واحدة بالظبط.
+   */
+  const serverFiles = fs
+    .readdirSync("server")
+    .filter(f => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+    .map(f => ({ name: f, code: codeOnly(fs.readFileSync(`server/${f}`, "utf-8")) }));
+
+  it("🔑 مكان واحد بس بيعمل insert في treasury_transactions", () => {
+    const inserters = serverFiles.filter(f =>
+      f.code.includes("insert(treasuryTransactions)")
+    );
+    expect(inserters.map(f => f.name)).toEqual(["db.ts"]);
+    expect(
+      (inserters[0].code.match(/insert\(treasuryTransactions\)/g) ?? []).length
+    ).toBe(1);
+  });
+
+  it("🔑 والمسارات اللي بتحرّك الخزنة هي دي وبس", () => {
+    const callers = serverFiles
+      .filter(f => /addTreasuryTransaction(InTransaction)?\(/.test(f.code))
+      .map(f => f.name)
+      .sort();
+    expect(callers).toEqual(
+      [
+        "db.ts", // التعريف + تحصيل الأوردر
+        "expensesV2.service.ts", // دفع مصروف (والإعلانات معاه)
+        "payrollV2.service.ts", // صرف المرتبات
+        "routers.ts", // إيداع/سحب يدوي
+        "settlementsV2.service.ts", // تحصيل اليوم من شركة الشحن
+      ].sort()
+    );
+  });
+
+  it("🔑 الجسر جوه الترانزاكشن مش في واحدة لوحده", () => {
+    // لو الدفع نادى الصيغة اللي بتفتح ترانزاكشن بتاعتها، كان ممكن القيد المالي ينجح
+    // والخزنة تفشل — والدفترين يفضلوا مختلفين من غير ما حد ياخد باله.
+    for (const file of ["expensesV2.service.ts", "payrollV2.service.ts"]) {
+      const code = codeOnly(fs.readFileSync(`server/${file}`, "utf-8"));
+      expect(code, file).toContain("addTreasuryTransactionInTransaction(tx, {");
+      expect(code, file).not.toMatch(/await addTreasuryTransaction\(/);
+    }
   });
 });

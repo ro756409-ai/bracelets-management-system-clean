@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import {
   lineSubtotal, lineTotal, lineFinalUnitCost, documentTotal, outstandingAmount,
+  workshopLineTotal, workshopReceiptTotal, workshopReceiptPieces,
 } from "@shared/purchaseTotals";
 import { applyStockIn, applyStockOut } from "@shared/inventoryCosting";
 
@@ -94,6 +95,39 @@ describe("حسابات البنود والمستند", () => {
     expect(outstandingAmount(1000, 300)).toBe(700);
     expect(outstandingAmount(1000, 0)).toBe(1000);
     expect(outstandingAmount(1000, 1200)).toBe(0);
+  });
+});
+
+describe("سادة ومحفور في صف واحد", () => {
+  const line = {
+    plainQuantity: 40, plainUnitCost: 25,
+    engravedQuantity: 10, engravedUnitCost: 32,
+  };
+
+  it("🔑 إجمالي الصنف = (سادة × تكلفتها) + (محفور × تكلفته)", () => {
+    // 40×25 = 1000، 10×32 = 320
+    expect(workshopLineTotal(line)).toBe(1320);
+  });
+
+  it("الحالة الواحدة لوحدها بتتحسب صح", () => {
+    expect(workshopLineTotal({ ...line, engravedQuantity: 0, engravedUnitCost: "" })).toBe(1000);
+    expect(workshopLineTotal({ ...line, plainQuantity: 0, plainUnitCost: "" })).toBe(320);
+  });
+
+  it("الصف الفاضي بيرجّع صفر مش NaN — النموذج بيحسب وإنت بتكتب", () => {
+    expect(workshopLineTotal({
+      plainQuantity: "", plainUnitCost: "", engravedQuantity: "", engravedUnitCost: "",
+    })).toBe(0);
+  });
+
+  it("🔑 إجمالي الإذن = مجموع الصفوف، من غير خصم ولا شحن", () => {
+    expect(workshopReceiptTotal([line, { ...line, plainQuantity: 5, engravedQuantity: 0 }]))
+      .toBe(1320 + 125);
+  });
+
+  it("🔑 عدد القطع بيجمع الحالتين — ده اللي أمين المخزن بيعدّه", () => {
+    expect(workshopReceiptPieces([line])).toBe(50);
+    expect(workshopReceiptPieces([line, line])).toBe(100);
   });
 });
 
@@ -272,28 +306,42 @@ describe("الصلاحيات", () => {
     expect(input).toContain("reason: z.string().min(1).max(500)");
   });
 
-  it("صانع الإذن مايعتمدش إذنه", () => {
-    expect(approveFn).toContain("Maker cannot approve their own Purchase Receipt");
+  it("🔑 الموظف اللي سجّل الإذن مايعتمدش إذنه", () => {
+    expect(approveFn).toContain("receipt.createdBy === input.actor.id && !input.allowSelfApproval");
+    expect(approveFn).toContain("اللي سجّل الإذن مايقدرش يعتمده");
+  });
+
+  it("🔑 والاستثناء للمالك بس، والراوتر هو اللي بيحسبه من الدور", () => {
+    const i = routers.indexOf("    purchaseReceiptApprove:");
+    const block = routers.slice(i, routers.indexOf("    stockTransfer:", i));
+    expect(block).toContain("allowSelfApproval: isOwnerRole(ctx.employee?.role)");
   });
 });
 
 describe("الشاشة", () => {
   it("🔑 عربي RTL", () => {
     expect(page).toContain('dir="rtl"');
-    expect(page).toContain("إذن استلام بضاعة");
+    expect(page).toContain("استلام بضاعة من الورشة");
   });
 
-  it("🔑 بنود متعددة", () => {
-    expect(page).toContain("بند جديد");
+  it("🔑 مفيش لغة محاسبية — لا إذن شراء ولا فاتورة مورد", () => {
+    const code = codeOnly(page);
+    for (const term of ["إذن شراء", "فاتورة مورد", "المورد <"]) {
+      expect(code, term).not.toContain(term);
+    }
+  });
+
+  it("🔑 أصناف متعددة", () => {
+    expect(page).toContain("صنف جديد");
     expect(page).toContain("setLines(ls => [...ls, newLine()])");
     expect(page).toContain("lines.map((l, i)");
   });
 
   it("كل الحقول المطلوبة موجودة", () => {
     for (const label of [
-      "مكان الاستلام", "المورد", "رقم الفاتورة", "تاريخ الفاتورة", "تاريخ الاستلام",
-      "الكمية", "تكلفة الوحدة", "خصم البند", "تكلفة إضافية",
-      "إجمالي المستند", "المدفوع", "المتبقي للمورد",
+      "التاريخ", "الورشة", "مكان الاستلام", "الصنف", "نوع الحفر",
+      "كمية سادة", "تكلفة السادة", "كمية محفور", "تكلفة المحفور",
+      "ملاحظات", "مرفق",
     ]) {
       expect(page, label).toContain(label);
     }
@@ -301,8 +349,23 @@ describe("الشاشة", () => {
 
   it("🔑 الشاشة مابتحسبش بنفسها — بتنادي المعادلة المشتركة", () => {
     expect(page).toContain("from \"@shared/purchaseTotals\"");
-    expect(page).toContain("documentTotal(lines, headerShipping, headerDiscount)");
-    expect(page).toContain("lineFinalUnitCost(l)");
+    expect(page).toContain("workshopReceiptTotal(lines)");
+    expect(page).toContain("workshopLineTotal(l)");
+  });
+
+  it("🔑 الصف الواحد بيتحوّل لسطرين: سادة برصيد المنتج ومحفور برصيد النوع", () => {
+    const fn = page.slice(page.indexOf("const toItems ="));
+    const body = fn.slice(0, fn.indexOf("\n  const save"));
+    expect(body).toContain("if (plain > 0)");
+    expect(body).toContain("if (engraved > 0)");
+    // السادة من غير variantId — هو المنتج نفسه من غير حفر
+    expect(body).toContain("out.push({ productId: Number(l.productId), quantity: plain");
+    expect(body).toContain("variantId: Number(l.variantId)");
+  });
+
+  it("🔑 كمية صفر مابتتبعتش سطر أصلاً", () => {
+    const fn = page.slice(page.indexOf("const toItems ="));
+    expect(fn.slice(0, fn.indexOf("\n  const save"))).toContain("> 0");
   });
 
   it("🔑 الشاشة مابتلمسش رصيد — بتنادي نقاط الخدمة الموجودة وبس", () => {
@@ -321,9 +384,10 @@ describe("الشاشة", () => {
   it("🔑 التحقق: كمية موجبة، تكلفة غير سالبة، نوع تابع لمنتجه", () => {
     const validate = page.slice(page.indexOf("const validate = ()"));
     const body = validate.slice(0, validate.indexOf("\n  };"));
-    expect(body).toContain("الكمية لازم تكون أكبر من صفر");
-    expect(body).toContain("التكلفة لازم تكون صفر أو أكتر");
-    expect(body).toContain("النوع ده مش تابع للمنتج المختار");
+    expect(body).toContain("اكتب كمية سادة أو محفور");
+    expect(body).toContain("الكمية ماتكونش بالسالب");
+    expect(body).toContain("التكلفة ماتكونش بالسالب");
+    expect(body).toContain("النوع ده مش تابع للصنف المختار");
     expect(body).toContain("اختار مكان الاستلام");
   });
 
@@ -334,8 +398,8 @@ describe("الشاشة", () => {
   });
 
   it("موبايل: الشبكة بتنزل عمود واحد والجدول بيسكرول لوحده", () => {
-    expect(page).toContain("grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3");
-    expect(page).toContain("grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6");
+    expect(page).toContain("grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4");
+    expect(page).toContain("grid-cols-2 gap-2 lg:grid-cols-4");
     expect(page).toContain("overflow-x-auto");
   });
 });
