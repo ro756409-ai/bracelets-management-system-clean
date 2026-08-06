@@ -16,7 +16,7 @@ import {
   postFinancialTransactionInTransaction,
   type Actor,
 } from "./accountingV2.service";
-import { getDb } from "./db";
+import { addTreasuryTransactionInTransaction, getDb } from "./db";
 
 type ExpenseDraftInput = {
   businessId: number;
@@ -156,6 +156,23 @@ export async function approveExpense(input: { businessId: number; expenseId: num
   });
 }
 
+/**
+ * دفع مصروف — والجسر بين دفترَي الفلوس.
+ *
+ * المشروع فيه دفترين للفلوس اتبنوا في وقتين مختلفين: `treasury_transactions` (الخزنة
+ * اللي التاجر بيشوف رصيدها) و`financial_transactions` (القيد المحاسبي). الدفع كان
+ * بيكتب في التاني وبس، فالتاجر يدفع إعلان بألف جنيه ويلاقي «مصروفات مدفوعة» زادت
+ * والخزنة زي ما هي. الرقمين الاتنين صح كل واحد في دفتره، والتاجر شايف تناقض.
+ *
+ * فالدفع دلوقتي بيكتب في الاتنين **جوه نفس الترانزاكشن**. مش دفتر تالت ولا محرّك جديد —
+ * نفس فكرة `mirrorLegacyStock` في المخزون: مكان واحد مسؤول عن إن الدفترين يتحركوا مع
+ * بعض، فمستحيل واحد يسبق التاني.
+ *
+ * «مرة واحدة بالظبط»: قفل الصف على `expenses` فوق بيسلسل أي دفعتين على نفس المصروف،
+ * وشرط الحالة بيرفض المدفوع بالكامل، وشرط `remaining` بيرفض الزيادة. فكل صف في
+ * `expense_payments` بيقابله حركة خزنة واحدة — وكلهم في ترانزاكشن واحدة، يا ينجحوا
+ * كلهم يا يترجعوا كلهم.
+ */
 export async function payExpense(input: {
   businessId: number;
   expenseId: number;
@@ -210,7 +227,25 @@ export async function payExpense(input: {
       paidAmount: fromMinorUnits(paid),
       status: paid === toMinorUnits(expense.amount) ? "paid" : "partially_paid",
     }).where(eq(expenses.id, expense.id));
-    return { transactionId: financial.id, remainingAmount: fromMinorUnits(toMinorUnits(expense.amount) - paid) };
+    const treasury = await addTreasuryTransactionInTransaction(tx, {
+      businessId: input.businessId,
+      type: "expense",
+      direction: "out",
+      amount: fromMinorUnits(paymentMinor),
+      description: `دفع مصروف #${expense.id}: ${expense.description}`,
+      referenceType: "expense",
+      referenceId: expense.id,
+      performedBy: input.actor.id,
+      performedByName: input.actor.name,
+      transactionDate: input.paidAt,
+    });
+    // لو الخزنة مااتكتبتش، الدفعة كلها ترجع. الفشل الصريح أرحم من دفترين مختلفين.
+    if (!treasury) throw new Error("تعذر تسجيل حركة الخزنة — الدفعة اترجعت");
+    return {
+      transactionId: financial.id,
+      treasuryTransactionId: treasury.id,
+      remainingAmount: fromMinorUnits(toMinorUnits(expense.amount) - paid),
+    };
   });
 }
 

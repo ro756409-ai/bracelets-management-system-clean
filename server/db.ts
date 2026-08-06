@@ -3783,44 +3783,60 @@ export async function getTreasuryBalance(
 }
 
 /**
- * إضافة حركة للخزنة مع حساب الرصيد بعدها.
+ * إضافة حركة للخزنة جوه transaction قايمة بالفعل.
  *
- * جوه transaction عن قصد: قراءة آخر رصيد ثم الكتابة عمليتان، ولو حركتين اتنفذوا في نفس
- * اللحظة الاتنين هيقروا نفس الرصيد القديم ويكتبوا نفس `balanceAfter` — ووقتها الـledger
- * بيكدب. الـtransaction بتخلي الاتنين يتسلسلوا.
+ * الدالة دي هي **المكان الوحيد** اللي بيكتب في `treasury_transactions` في المشروع كله.
+ * أي مسار عايز يحرّك الخزنة بينادي عليها — سواء بترانزاكشن بتاعته (عن طريق
+ * `addTreasuryTransaction` تحت) أو جوه ترانزاكشن أكبر بيكتب حاجات تانية معاها.
+ *
+ * الصيغة دي بالذات (اللي بتاخد `tx`) موجودة عشان الدفع بتاع المصروف أو المرتب يكتب
+ * قيده المالي وحركة خزنته **في نفس الترانزاكشن**: يا الاتنين ينجحوا يا الاتنين يترجعوا.
+ * لو كانت حركة الخزنة في ترانزاكشن منفصلة، كان ممكن القيد المالي ينجح والخزنة تفشل —
+ * وساعتها الدفترين يفضلوا مختلفين للأبد من غير ما حد ياخد باله.
+ *
+ * القفل: قراءة آخر رصيد ثم الكتابة عمليتان. من غير `FOR UPDATE` ممكن حركتين متوازيتين
+ * يقروا نفس الرصيد القديم ويكتبوا نفس `balanceAfter` — والسلسلة تكدب. القفل بيخلي
+ * التانية تستنى الأولى وتقرا رصيدها الجديد.
  *
  * ملحوظة: كل الحركات في نفس الـbusiness بتشترك في سلسلة رصيد واحدة، فالرصيد بيتقرا
  * لنفس الـbusinessId بس مش لكل الأنشطة.
  */
+export async function addTreasuryTransactionInTransaction(
+  tx: any,
+  data: Omit<InsertTreasuryTransaction, "balanceAfter">
+): Promise<TreasuryTransaction | null> {
+  const signed =
+    data.direction === "in" ? Number(data.amount) : -Number(data.amount);
+
+  const [last] = await tx
+    .select({ balanceAfter: treasuryTransactions.balanceAfter })
+    .from(treasuryTransactions)
+    .where(eq(treasuryTransactions.businessId, data.businessId))
+    .orderBy(desc(treasuryTransactions.id))
+    .limit(1)
+    .for("update");
+  const balanceAfter = (last ? Number(last.balanceAfter) : 0) + signed;
+  const result: any = await tx.insert(treasuryTransactions).values({
+    ...data,
+    balanceAfter: balanceAfter.toFixed(2),
+  });
+  const insertId = result?.insertId ?? result?.[0]?.insertId;
+  if (!insertId) return null;
+  const [row] = await tx
+    .select()
+    .from(treasuryTransactions)
+    .where(eq(treasuryTransactions.id, Number(insertId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** نفس الحركة لكن بترانزاكشن خاصة بيها — للمسارات اللي مالهاش ترانزاكشن أصلاً. */
 export async function addTreasuryTransaction(
   data: Omit<InsertTreasuryTransaction, "balanceAfter">
 ): Promise<TreasuryTransaction | null> {
   const db = await getDb();
   if (!db) return null;
-  const signed =
-    data.direction === "in" ? Number(data.amount) : -Number(data.amount);
-
-  return db.transaction(async tx => {
-    const [last] = await tx
-      .select({ balanceAfter: treasuryTransactions.balanceAfter })
-      .from(treasuryTransactions)
-      .where(eq(treasuryTransactions.businessId, data.businessId))
-      .orderBy(desc(treasuryTransactions.id))
-      .limit(1);
-    const balanceAfter = (last ? Number(last.balanceAfter) : 0) + signed;
-    const result: any = await tx.insert(treasuryTransactions).values({
-      ...data,
-      balanceAfter: balanceAfter.toFixed(2),
-    });
-    const insertId = result?.insertId ?? result?.[0]?.insertId;
-    if (!insertId) return null;
-    const [row] = await tx
-      .select()
-      .from(treasuryTransactions)
-      .where(eq(treasuryTransactions.id, Number(insertId)))
-      .limit(1);
-    return row ?? null;
-  });
+  return db.transaction(async tx => addTreasuryTransactionInTransaction(tx, data));
 }
 
 export type TreasuryFilters = {

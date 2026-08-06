@@ -8,7 +8,11 @@ import {
   postFinancialTransactionInTransaction,
   type Actor,
 } from "./accountingV2.service";
-import { approvePayrollPeriodInTransaction, getDb } from "./db";
+import {
+  addTreasuryTransactionInTransaction,
+  approvePayrollPeriodInTransaction,
+  getDb,
+} from "./db";
 
 function monthKeys(year: number, month: number) {
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -156,9 +160,12 @@ export async function payPayrollPeriodV2(input: {
       },
       actor: input.actor,
     });
+    // الحارس ضد الصرف مرتين: المفتاح ثابت (`payroll-period:{id}:paid`)، فالنداء التاني
+    // بيرجع من هنا من غير قيد مالي ومن غير حركة خزنة.
     if (event.duplicate)
       return {
         transactionId: null,
+        treasuryTransactionId: null,
         amount: Number(period.totalNet),
         duplicate: true,
       };
@@ -188,8 +195,25 @@ export async function payPayrollPeriodV2(input: {
           eq(payrollPeriods.businessId, period.businessId)
         )
       );
+    // نفس جسر `payExpense`: المرتبات كانت بتنزل القيد المالي وبس، فرصيد الخزنة كان
+    // بيفضل زي ما هو بعد صرف الشهر. الصافي (مش الإجمالي) هو اللي خرج من الدُرج —
+    // السُلف والخصومات اتسوّت قبل كده ومااتدفعتش نقدًا هنا.
+    const treasury = await addTreasuryTransactionInTransaction(tx, {
+      businessId: period.businessId,
+      type: "expense",
+      direction: "out",
+      amount: period.totalNet,
+      description: `صرف مرتبات ${period.month}/${period.year}`,
+      referenceType: "expense",
+      referenceId: period.id,
+      performedBy: input.actor.id,
+      performedByName: input.actor.name,
+      transactionDate: input.paidAt,
+    });
+    if (!treasury) throw new Error("تعذر تسجيل حركة الخزنة — الصرف اترجع");
     return {
       transactionId: transaction.id,
+      treasuryTransactionId: treasury.id,
       amount: Number(period.totalNet),
       duplicate: false,
     };
