@@ -1032,7 +1032,9 @@ export const appRouter = router({
         z.object({
           businessId: z.number(),
           expenseId: z.number(),
-          sourceAccountId: z.number(),
+          // اختياري: التاجر اللي عنده خزنة واحدة مابيختارش منها. الخدمة بتحلّها
+          // لـ«الخزنة الرئيسية» وبتعملها لو لسه مش موجودة.
+          sourceAccountId: z.number().optional(),
           amount: positiveMoneyString,
           paidAt: z.date(),
           evidenceUrl: z.string().url(),
@@ -6739,7 +6741,8 @@ export const appRouter = router({
       .input(
         z.object({
           id: z.number(),
-          sourceAccountId: z.number(),
+          // زي expensePay — اختياري، وبيرجع لـ«الخزنة الرئيسية».
+          sourceAccountId: z.number().optional(),
           evidenceUrl: z.string().min(1),
           paidAt: z.date().optional(),
         })

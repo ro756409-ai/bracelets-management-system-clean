@@ -6,6 +6,7 @@ import {
   createBusinessEvent,
   createBusinessEventInTransaction,
   postFinancialTransactionInTransaction,
+  resolveDefaultTreasuryAccountInTransaction,
   type Actor,
 } from "./accountingV2.service";
 import {
@@ -120,7 +121,8 @@ export async function approveAndAccruePayrollPeriod(input: {
 
 export async function payPayrollPeriodV2(input: {
   periodId: number;
-  sourceAccountId: number;
+  /** اختياري — لو مااتبعتش، بيتصرف من «الخزنة الرئيسية». */
+  sourceAccountId?: number;
   evidenceUrl: string;
   paidAt: Date;
   actor: Actor;
@@ -169,10 +171,15 @@ export async function payPayrollPeriodV2(input: {
         amount: Number(period.totalNet),
         duplicate: true,
       };
+    // زي دفع المصروف: التاجر اللي مانشأش حسابات بيصرف من «الخزنة الرئيسية».
+    const sourceAccountId =
+      input.sourceAccountId ??
+      (await resolveDefaultTreasuryAccountInTransaction(tx, period.businessId))
+        .id;
     const transaction = await postFinancialTransactionInTransaction(tx, {
       businessId: period.businessId,
       transactionType: "payroll_payment",
-      sourceAccountId: input.sourceAccountId,
+      sourceAccountId,
       amount: period.totalNet,
       currencyCode: business.baseCurrency,
       description: `Payroll ${period.month}/${period.year}`,

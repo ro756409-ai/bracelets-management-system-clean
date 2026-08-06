@@ -14,6 +14,7 @@ import { businessDayRange } from "../shared/businessTime";
 import {
   createBusinessEventInTransaction,
   postFinancialTransactionInTransaction,
+  resolveDefaultTreasuryAccountInTransaction,
   type Actor,
 } from "./accountingV2.service";
 import { addTreasuryTransactionInTransaction, getDb } from "./db";
@@ -176,7 +177,8 @@ export async function approveExpense(input: { businessId: number; expenseId: num
 export async function payExpense(input: {
   businessId: number;
   expenseId: number;
-  sourceAccountId: number;
+  /** اختياري — لو مااتبعتش، بيتصرف من «الخزنة الرئيسية». */
+  sourceAccountId?: number;
   amount: string;
   paidAt: Date;
   evidenceUrl: string;
@@ -193,6 +195,11 @@ export async function payExpense(input: {
     const paymentMinor = toMinorUnits(input.amount);
     const remaining = toMinorUnits(expense.amount) - toMinorUnits(expense.paidAmount);
     if (paymentMinor <= 0n || paymentMinor > remaining) throw new Error("Expense payment exceeds the remaining amount");
+    // التاجر اللي مانشأش حسابات بيصرف من الخزنة الرئيسية، وبتتعمل هنا لو لسه مش موجودة.
+    // قبل الحدث عن قصد: الحدث بيسجّل الحساب اللي اتصرف منه فعلًا مش اللي اتطلب.
+    const sourceAccountId =
+      input.sourceAccountId ??
+      (await resolveDefaultTreasuryAccountInTransaction(tx, input.businessId)).id;
     const eventResult = await createBusinessEventInTransaction(tx, {
       businessId: input.businessId,
       eventType: "expense.paid",
@@ -200,13 +207,13 @@ export async function payExpense(input: {
       sourceReference: String(expense.id),
       idempotencyKey: `expense:${expense.id}:payment:${expense.paidAmount}:${input.amount}`,
       occurredAt: input.paidAt,
-      payload: { expenseId: expense.id, amount: fromMinorUnits(paymentMinor), sourceAccountId: input.sourceAccountId },
+      payload: { expenseId: expense.id, amount: fromMinorUnits(paymentMinor), sourceAccountId },
       actor: input.actor,
     });
     const financial = await postFinancialTransactionInTransaction(tx, {
       businessId: input.businessId,
       transactionType: "expense_payment",
-      sourceAccountId: input.sourceAccountId,
+      sourceAccountId,
       amount: fromMinorUnits(paymentMinor),
       currencyCode: expense.currencyCode,
       description: `Expense #${expense.id}: ${expense.description}`,
