@@ -130,11 +130,11 @@ describe("المستند مايوقفش المسودة", () => {
     expect(body).not.toContain("evidenceUrl");
   });
 
-  it("والشاشة بتقول إمتى هيبقى مطلوب", () => {
-    expect(page).toContain("مش مطلوب للمسودة");
+  it("🔑 والشاشة بتقول إنه اختياري دايمًا", () => {
+    expect(page).toContain("اختياري دايمًا");
   });
 
   it("الفاضي بيتبعت undefined مش نص فاضي", () => {
-    expect(page).toContain("evidenceUrl: evidenceUrl.trim() || undefined");
+    expect(page).toContain("evidenceUrl: attachmentUrl.trim() || undefined");
   });
 });

@@ -1185,6 +1185,9 @@ export const appRouter = router({
             input.businessId
           ),
           actor: await requireActor(ctx),
+          // المالك بس. الموظف اللي سجّل الإذن لسه مايقدرش يعتمده — شوف الشرح على
+          // approvePurchaseReceipt.
+          allowSelfApproval: isOwnerRole(ctx.employee?.role),
         })
       ),
 

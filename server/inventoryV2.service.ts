@@ -400,7 +400,23 @@ export async function dispatchOrderInventory(input: {
   });
 }
 
-export async function approvePurchaseReceipt(input: { businessId: number; receiptId: number; actor: Actor }) {
+export async function approvePurchaseReceipt(input: {
+  businessId: number;
+  receiptId: number;
+  actor: Actor;
+  /**
+   * يسمح لصاحب الإذن إنه يعتمده بنفسه. للمالك بس، والراوتر هو اللي بيحسبها من الدور.
+   *
+   * فصل الصلاحيات موجود عشان مايبقاش شخص واحد هو اللي بيسجّل حركة فلوس وهو اللي
+   * بيباركها. بس إذن الاستلام **مابيحركش خزنة** — بيزوّد مخزون وبيعمل التزام على
+   * الورشة. فالخطر الحقيقي اللي الحاجز بيمنعه هو موظف بينفخ قيمة المخزون، وده حاجز
+   * له معنى. أما المالك فبيسرق من نفسه، والحاجز مابيمنعش ده أصلاً — بيمنع بس إنه
+   * يشتغل لوحده، وده كل يومه.
+   *
+   * فبيفضل شغّال على كل حد ما عدا المالك، والاستثناء صريح هنا مش مدسوس في الراوتر.
+   */
+  allowSelfApproval?: boolean;
+}) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async tx => {
@@ -409,7 +425,8 @@ export async function approvePurchaseReceipt(input: { businessId: number; receip
     )).limit(1).for("update");
     if (!receipt) throw new Error("Purchase Receipt is outside this business");
     if (receipt.status !== "pending_approval") throw new Error("Only a pending Purchase Receipt can be approved");
-    if (receipt.createdBy === input.actor.id) throw new Error("Maker cannot approve their own Purchase Receipt");
+    if (receipt.createdBy === input.actor.id && !input.allowSelfApproval)
+      throw new Error("اللي سجّل الإذن مايقدرش يعتمده — لازم حساب تاني");
     // الورقة شرط هنا مش عند المسودة: دي اللحظة اللي المخزون بيتحرك فيها فعلًا، وهي
     // اللي محتاجة يكون وراها مستند.
     if (!receipt.evidenceUrl?.trim())

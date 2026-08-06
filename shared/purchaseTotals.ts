@@ -68,3 +68,39 @@ export function documentTotal(
 export function outstandingAmount(total: number, paid: number): number {
   return Math.max(0, total - num(paid));
 }
+
+/**
+ * سطر استلام من الورشة: سادة ومحفور في صف واحد.
+ *
+ * الورشة بتسلّم الصنف الواحد على حالتين بتكلفتين مختلفتين — قطعة سادة وقطعة عليها حفر —
+ * والتاجر بيعدّهم مع بعض. فالصف في الشاشة واحد، وبيتحوّل لسطرين في `purchase_receipt_items`
+ * لأن ده اللي المخزون بيتحسب عليه: السادة رصيد المنتج نفسه، والمحفور رصيد النوع.
+ *
+ * الصفر معناه «مفيش من ده النهاردة» — سطر بكمية صفر مابيتبعتش أصلاً.
+ */
+export type WorkshopLineInput = {
+  plainQuantity: string | number;
+  plainUnitCost: string | number;
+  engravedQuantity: string | number;
+  engravedUnitCost: string | number;
+};
+
+export function workshopLineTotal(line: WorkshopLineInput): number {
+  return (
+    num(line.plainQuantity) * num(line.plainUnitCost) +
+    num(line.engravedQuantity) * num(line.engravedUnitCost)
+  );
+}
+
+/** إجمالي الإذن = مجموع صفوفه. مفيش خصومات ولا مصاريف شحن — الورشة بتسلّم وخلاص. */
+export function workshopReceiptTotal(lines: WorkshopLineInput[]): number {
+  return lines.reduce((sum, line) => sum + workshopLineTotal(line), 0);
+}
+
+/** إجمالي القطع الداخلة — العدد اللي أمين المخزن بيعدّه. */
+export function workshopReceiptPieces(lines: WorkshopLineInput[]): number {
+  return lines.reduce(
+    (sum, l) => sum + num(l.plainQuantity) + num(l.engravedQuantity),
+    0
+  );
+}
