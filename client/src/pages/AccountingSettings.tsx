@@ -966,16 +966,28 @@ function ShippingSettings({ businessId }: { businessId: number }) {
             className="md:col-span-2 xl:col-span-4 xl:justify-self-end"
             disabled={providerSave.isPending}
             onClick={() => {
-              const validMappings = statusMappings.filter(
+              // ربط الحالات بيخص الـwebhook بس: بيترجم كود الحالة اللي شركة الشحن
+              // بتبعته لحدث معروف عندنا. التاجر اللي بيسجّل تحصيله بإيده مش محتاجه —
+              // وكان مطلوب إجباري، فمكانش يقدر يضيف شركة الشحن أصلاً. الخريطة الفاضية
+              // آمنة: أي حالة مش متربطة بتترمي بـ`status_not_mapped` من غير ما تكسر حاجة.
+              //
+              // اللي لسه مرفوض هو السطر **نص فاضي** — كود من غير حدث أو العكس. ده مش
+              // «مش عايزه»، ده إدخال ناقص.
+              const filled = statusMappings.filter(
+                row => row.providerStatusCode.trim() || row.normalizedEvent
+              );
+              const complete = filled.filter(
                 row => row.providerStatusCode.trim() && row.normalizedEvent
               );
               if (
                 !provider.providerCode ||
                 !provider.providerName ||
-                !provider.displayName ||
-                validMappings.length !== statusMappings.length
+                !provider.displayName
               )
-                return toast.error("بيانات الشركة وكل روابط الحالات مطلوبة");
+                return toast.error("كود الشركة والاسم الرسمي والاسم الظاهر مطلوبين");
+              if (complete.length !== filled.length)
+                return toast.error("في ربط حالة ناقص — كمّله أو سيبه فاضي بالكامل");
+              const validMappings = complete;
               const statusMapping = Object.fromEntries(
                 validMappings.map(row => [
                   row.providerStatusCode.trim(),
