@@ -363,3 +363,40 @@ describe("🔑 المرحلة الرابعة مااحتاجتش migration", () =
     expect(table).not.toContain('notes: text');
   });
 });
+
+// ───────────────── إضافة شركة الشحن ─────────────────
+
+describe("🔑 التاجر يقدر يضيف شركة الشحن من غير ربط حالات", () => {
+  const settings = fs.readFileSync(
+    "client/src/pages/AccountingSettings.tsx",
+    "utf-8"
+  );
+  const save = between(settings, "const filled = statusMappings.filter", "providerSave.mutate({");
+
+  it("🔑 الخريطة الفاضية مسموحة — ربط الحالات بيخص الـwebhook بس", () => {
+    // الشرط القديم كان `validMappings.length !== statusMappings.length`، والفورم بيبدأ
+    // بسطر فاضي — فالتاجر مكانش يقدر يضيف شركة الشحن أصلاً، والتحصيل كله كان مقفول.
+    expect(save).not.toContain("validMappings.length !== statusMappings.length");
+    expect(save).toContain("complete.length !== filled.length");
+  });
+
+  it("🔑 والسطر النص فاضي لسه مرفوض — ده إدخال ناقص مش «مش عايزه»", () => {
+    expect(save).toContain("في ربط حالة ناقص");
+    expect(save).toContain(
+      "row => row.providerStatusCode.trim() || row.normalizedEvent"
+    );
+    expect(save).toContain(
+      "row => row.providerStatusCode.trim() && row.normalizedEvent"
+    );
+  });
+
+  it("بيانات الشركة نفسها لسه مطلوبة", () => {
+    expect(save).toContain("!provider.providerCode");
+    expect(save).toContain("!provider.displayName");
+  });
+
+  it("🔑 والسيرفر بيتجاهل الحالة غير المتربطة من غير ما يكسر", () => {
+    const shipping = read("server/shippingV2.service.ts");
+    expect(shipping).toContain('return { ignored: true as const, reason: "status_not_mapped" }');
+  });
+});
