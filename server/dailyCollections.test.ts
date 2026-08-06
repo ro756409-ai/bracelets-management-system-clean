@@ -313,13 +313,16 @@ describe("الشاشة", () => {
     expect(page).toContain("حركة واحدة");
   });
 
-  it("🔑 اللوحة بتتحدّث فورًا بعد كل تسجيل", () => {
-    expect(
-      (page.match(/utils\.accounting\.controlCenter\.invalidate\(\)/g) ?? []).length
-    ).toBe(2);
-    expect(
-      (page.match(/utils\.accounting\.dashboard\.invalidate\(\)/g) ?? []).length
-    ).toBe(2);
+  it("🔑 كل مسار بيسجّل فلوس بيحدّث اللوحة — مفيش واحد بيسيبها قديمة", () => {
+    // العدد مقفول على عدد الـmutations نفسه بدل رقم ثابت: أي كارت جديد يتضاف من غير
+    // invalidate بيوقّع الاختبار، وده المطلوب.
+    const mutations = (page.match(/\.useMutation\(/g) ?? []).length;
+    for (const key of ["controlCenter", "dashboard"]) {
+      const invalidations = (
+        page.match(new RegExp(`utils\\.accounting\\.${key}\\.invalidate\\(\\)`, "g")) ?? []
+      ).length;
+      expect(invalidations, key).toBe(mutations);
+    }
   });
 
   it("🔑 الشاشة مابتحسبش الصافي وبتبعته — بتبعت الإجمالي والرسوم", () => {
@@ -416,5 +419,59 @@ describe("🔑 إضافة شركة الشحن بحقل واحد", () => {
 
   it("والتأكيد بيقول للتاجر إن التاريخ مش هيروح", () => {
     expect(card).toContain("التحصيلات القديمة بتاعتها هتفضل زي ما هي");
+  });
+});
+
+// ───────────────── اللي اتنقل من مركز التسجيل اليومي ─────────────────
+
+describe("🔑 مفيش ميزة ضاعت مع إخفاء مركز التسجيل اليومي", () => {
+  const ledger = fs.readFileSync("client/src/pages/DailyLedger.tsx", "utf-8");
+  const sidebar = fs.readFileSync(
+    "client/src/components/DashboardLayout.tsx",
+    "utf-8"
+  );
+  const calls = (src: string) =>
+    new Set(
+      [...src.matchAll(/trpc\.([\w.]+)\.use(?:Query|Mutation)/g)].map(m => m[1])
+    );
+  const ledgerWrites = [...calls(ledger)].filter(name =>
+    /Create|Record/.test(name)
+  );
+
+  it("🔑 كل مسار بيكتب كان في الصفحة القديمة بقى في «تحصيل اليوم»", () => {
+    // الصفحة القديمة كانت بتكتب في تلات مسارات: مصروف، تحصيل أوردر، إيداع/سحب.
+    // لو اتخفيت من غير ما تتنقل، التاجر بيخسر الميزة من غير ما حد ياخد باله.
+    expect(ledgerWrites.length).toBeGreaterThan(0);
+    const now = calls(page);
+    for (const name of ledgerWrites) {
+      const moved =
+        now.has(name) ||
+        // المصروف اتنقل لمسار أبسط بيعمل نفس الحاجة في خطوة واحدة
+        (name === "accounting.expenseCreate" &&
+          now.has("accountingV2.expenseRecordSimple"));
+      expect(moved, `${name} مالهاش بديل في تحصيل اليوم`).toBe(true);
+    }
+  });
+
+  it("🔑 الإيداع/السحب اليدوي موجود — المسار الوحيد ليه في النظام", () => {
+    expect(page).toContain("trpc.accounting.treasuryCreate.useMutation");
+    expect(page).toContain("حطيت فلوس");
+    expect(page).toContain("سحبت فلوس");
+  });
+
+  it("🔑 وتحصيل أوردر بعينه كمان", () => {
+    expect(page).toContain("trpc.accounting.collectionRecord.useMutation");
+    expect(page).toContain("الزبون دفع لك على طول");
+  });
+
+  it("🔑 الصفحة القديمة اتشالت من القايمة بس — المسار لسه شغّال", () => {
+    expect(sidebar).not.toContain('path: "/daily-ledger"');
+    const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+    expect(app).toContain('<Route path="/daily-ledger">');
+  });
+
+  it("الإيداع/السحب بيقول إنه مش مصروف ولا تحصيل", () => {
+    // لو التاجر فهمها مصروف، هيفتكر صافي الربح غلط.
+    expect(page).toContain("دي مش مصروف ولا تحصيل");
   });
 });
