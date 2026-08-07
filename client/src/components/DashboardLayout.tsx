@@ -27,6 +27,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
   Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus, ArrowLeftRight, RotateCcw as ReturnIcon, Megaphone,
+  ChevronDown,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -59,7 +60,13 @@ import {
  * sidebar"; this is the corrected finding after tracing the two cookies.)
  */
 type MenuItem = { icon: typeof LayoutDashboard; label: string; path: string; adminOnly?: boolean };
-type MenuGroup = { label: string; icon: typeof LayoutDashboard; items: MenuItem[] };
+type MenuGroup = {
+  label: string;
+  icon: typeof LayoutDashboard;
+  items: MenuItem[];
+  /** المجموعة بتتطوي تحت اسمها بدل ما بنودها تتعرض كلها. */
+  collapsible?: boolean;
+};
 
 const MENU_GROUPS: MenuGroup[] = [
   {
@@ -107,6 +114,10 @@ const MENU_GROUPS: MenuGroup[] = [
     // أربعة بنود تحت بعض كانت بتخلي القائمة تبان أطول من غير ما تضيف وجهة حقيقية.
     label: "الحسابات",
     icon: Wallet,
+    // سبع شاشات تحت بعض كانت بتاخد نص القائمة وتخلي اللي فوقها وتحتها صعب يتلقى.
+    // كلهم تبع الحسابات أصلاً، فبقوا مطويين تحت اسم واحد: دوس على «الحسابات» يفتحهم.
+    // بيتفتحوا لوحدهم لو إنت واقف على واحدة منهم — عشان ماتضيعش مكانك بعد الرفريش.
+    collapsible: true,
     items: [
       // «تحصيل اليوم» بقت أول حاجة في المجموعة لأنها اللي بتتفتح كل يوم: دخل من شركة
       // الشحن، خرج من الخزنة، تحصيل أوردر بعينه، وإيداع/سحب — الأربعة في شاشة واحدة.
@@ -219,6 +230,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar } = useSidebar();
   const isCollapsed = state === "collapsed";
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
@@ -307,16 +319,47 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                 </Select>
               </div>
             )}
-            {visibleGroups.map(group => (
+            {visibleGroups.map(group => {
+              const holdsCurrent = group.items.some(
+                item =>
+                  location === item.path || location.startsWith(item.path + "/")
+              );
+              const collapsed =
+                group.collapsible &&
+                !holdsCurrent &&
+                !openGroups.has(group.label);
+              return (
               <SidebarGroup key={group.label} className="px-2 py-0.5">
                 {/* عنوان المجموعة بيتخفي لما تكون بند واحد: "المخزون" فوق "المخزون"،
                     و"الموظفون" فوق "الموظفين" — كانت بتقرا كإنها صفحتين مختلفتين. */}
-                {group.items.length > 1 && (
-                  <SidebarGroupLabel className="gap-1.5">
-                    <group.icon className="h-3.5 w-3.5" />
-                    {group.label}
-                  </SidebarGroupLabel>
-                )}
+                {group.items.length > 1 &&
+                  (group.collapsible ? (
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent"
+                      onClick={() =>
+                        setOpenGroups(current => {
+                          const next = new Set(current);
+                          next.has(group.label)
+                            ? next.delete(group.label)
+                            : next.add(group.label);
+                          return next;
+                        })
+                      }
+                    >
+                      <group.icon className="h-3.5 w-3.5 shrink-0" />
+                      <span className="flex-1 text-right">{group.label}</span>
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 shrink-0 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+                      />
+                    </button>
+                  ) : (
+                    <SidebarGroupLabel className="gap-1.5">
+                      <group.icon className="h-3.5 w-3.5" />
+                      {group.label}
+                    </SidebarGroupLabel>
+                  ))}
+                {collapsed ? null : (
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {group.items.map(item => {
@@ -346,8 +389,10 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                     })}
                   </SidebarMenu>
                 </SidebarGroupContent>
+                )}
               </SidebarGroup>
-            ))}
+              );
+            })}
           </SidebarContent>
 
           <SidebarFooter className="p-3 border-t border-sidebar-border">

@@ -123,7 +123,7 @@ describe("🔑 رفع المرتب مابيعيدش كتابة الشهور ال
     const fn = between(
       db,
       "export async function listBusinessSalaryProfiles",
-      "export async function getSalaryProfiles"
+      "export async function deleteSalaryProfile"
     );
     expect(fn).toContain("if (row.effectiveFrom > now) continue");
     expect(fn).toContain("if (!current.has(row.employeeId))");
@@ -133,7 +133,7 @@ describe("🔑 رفع المرتب مابيعيدش كتابة الشهور ال
     const fn = between(
       db,
       "export async function listBusinessSalaryProfiles",
-      "export async function getSalaryProfiles"
+      "export async function deleteSalaryProfile"
     );
     expect(fn).not.toContain(".delete(");
     expect(fn).not.toContain(".update(");
@@ -150,23 +150,69 @@ describe("🔑 نطاق النشاط", () => {
     expect(endpoint).toContain("requireScopedBusinessId(ctx.tenantId, input.businessId)");
   });
 
-  it("🔑 وقايمة الموظفين مفلترة على نفس النشاط", () => {
-    expect(code).toContain(
-      "trpc.employees.list.useQuery({ businessId, isActive: true })"
-    );
+  it("🔑 وقايمة الموظفين **مش** مفلترة على النشاط — وده مقصود", () => {
+    // `employees.businessId` عمود nullable. الفلترة عليه كانت بتخفي كل موظف مااتربطش
+    // بنشاط صراحةً — التاجر شاف اسم واحد وهو عنده عشرة. النطاق محفوظ على السيرفر
+    // عن طريق `scopeBusinessId` بتاع الـtenant.
+    expect(code).toContain("trpc.employees.list.useQuery({ isActive: true })");
+    expect(code).not.toContain("employees.list.useQuery({ businessId");
   });
 });
 
 // ───────────────── اللي اتصلّح في الجولة دي ─────────────────
 
-describe("🔑 الموظف بييجي من صفحة الموظفين", () => {
-  it("🔑 والشاشة بتقول ده لما القايمة تبقى فاضية", () => {
-    // التاجر شاف قايمة فيها «Owner» بس وافتكر إن المفروض يكتب الاسم. الاسم مابيتكتبش
-    // هنا عن قصد — المرتب بيتربط بموظف موجود بـid عشان السُلف والعمولات وكشف الراتب
-    // كلهم يشاوروا على نفس الشخص.
-    expect(page).toContain("مفيش موظفين متسجّلين");
-    expect(page).toContain("ضيفه من صفحة الموظفين");
-    expect(page).toContain('href="/employees"');
+describe("🔑 الاسم بيتكتب هنا — من غير حساب دخول", () => {
+  it("🔑 فيه إضافة اسم جوه الشاشة", () => {
+    // كتير من اللي بياخدوا مرتب مالهمش حساب في النظام. `username` و`passwordHash`
+    // عمودين nullable و`employees.create` مش بيطلب غير الاسم — فمفيش سبب يخلي التاجر
+    // يسيب الشاشة ويعمل حساب دخول لواحد مش هيدخل أصلاً.
+    expect(code).toContain("trpc.employees.create.useMutation");
+    expect(page).toContain("أو اكتب اسم جديد...");
+    expect(page).toContain("مش لازم يبقى ليه حساب دخول");
+  });
+
+  it("🔑 وبيتعمل بدور مايشوفش حاجة", () => {
+    expect(code).toContain('role: "viewer"');
+  });
+
+  it("🔑 والاسم الجديد بيتختار لوحده بعد الإضافة", () => {
+    // من غيرها التاجر يضيف الاسم ويدوّر عليه في القايمة تاني.
+    expect(code).toContain("setDraft(d => ({ ...d, employeeId: String(created.id) }))");
+  });
+});
+
+describe("🔑 حذف سطر المرتب", () => {
+  it("🔑 فيه زرار حذف جنب التعديل", () => {
+    expect(code).toContain("trpc.payroll.profileDelete.useMutation");
+    expect(page).toContain("حذف");
+  });
+
+  it("🔑 والتأكيد بيقول إن الكشوف القديمة مش هتتغيّر", () => {
+    expect(page).toContain("كشوف الرواتب المتحسبة قبل كده مابتتغيّرش");
+  });
+
+  it("🔑 والحذف مقيّد بالنشاط", () => {
+    const fn = db.slice(db.indexOf("export async function deleteSalaryProfile"));
+    expect(fn).toContain("eq(employeeSalaryProfiles.businessId, input.businessId)");
+    expect(fn).toContain("مش تابع للنشاط ده");
+  });
+});
+
+describe("🔑 الحسابات بقت مجموعة واحدة مطوية", () => {
+  const sidebar = fs.readFileSync(
+    "client/src/components/DashboardLayout.tsx",
+    "utf-8"
+  );
+
+  it("🔑 سبع شاشات تحت اسم واحد بيتفتح بالضغط", () => {
+    expect(sidebar).toContain("collapsible: true");
+    expect(sidebar).toContain("setOpenGroups");
+  });
+
+  it("🔑 وبتتفتح لوحدها لو إنت واقف على واحدة منها", () => {
+    // من غير كده الرفريش بيقفل المجموعة وإنت جواها، فتحس إنك ضعت.
+    expect(sidebar).toContain("const holdsCurrent = group.items.some");
+    expect(sidebar).toContain("!holdsCurrent &&");
   });
 });
 
