@@ -151,9 +151,28 @@ describe("الإجماليات", () => {
 // ───────────────── مسار الصرف ─────────────────
 
 describe("🔑 الصرف بيمر من المسار الموجود", () => {
-  it("الشاشة بتنادي adSpendCreate وبس", () => {
+  it("الشاشة بتنادي مسار الإعلانات وبس — تسجيل وتعديل", () => {
+    // التعديل مش مسار مصروفات تاني: هو بيعدّل **نفس** صف المسودة اللي `adSpendCreate`
+    // عمله. اللي القايمة دي بتمنعه هو إن الشاشة تفتح طريق مصروف موازي.
     const mutations = [...page.matchAll(/trpc\.[\w.]+\.(\w+)\.useMutation/g)].map(m => m[1]);
-    expect(mutations).toEqual(["adSpendCreate"]);
+    expect(mutations.sort()).toEqual(["adSpendCreate", "adSpendUpdate"]);
+  });
+
+  it("🔑 والتعديل للمسودة بس — السيرفر بيرفض غير كده", () => {
+    // بعد الاعتماد فيه استحقاق يومي، وبعد الدفع فيه حركة خزنة. تعديل المبلغ بعد أي
+    // واحدة فيهم بيخلي الدفتر يكدب.
+    const svc = fs.readFileSync("server/expensesV2.service.ts", "utf-8");
+    const fn = svc.slice(svc.indexOf("export async function updateAdSpendDraft"));
+    expect(fn).toContain('if (expense.status !== "draft")');
+    expect(fn).toContain("الحملة اتعتمدت خلاص");
+    // والشاشة مابتوريش زرار مايشتغلش
+    expect(page).toContain('r.expenseStatus === "draft" ? (');
+  });
+
+  it("🔑 والمقاييس بتتبعت كاملة — عمود واحد، فالجزئي بيمسح الباقي", () => {
+    const dialog = page.slice(page.indexOf("function EditCampaignDialog"));
+    expect(dialog).toContain("const metrics: Record<string, number> = {}");
+    expect(dialog).toContain("manualMetrics: metrics");
   });
 
   it("🔑 ومفيش أي مسار مصروفات تاني في الشاشة", () => {

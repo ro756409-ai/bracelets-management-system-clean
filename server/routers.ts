@@ -135,6 +135,7 @@ import {
 import {
   approveExpense,
   createAdSpendDraft,
+  updateAdSpendDraft,
   createExpenseDraft,
   payExpense,
   recordSimpleExpense,
@@ -1096,6 +1097,31 @@ export const appRouter = router({
           actor: await requireActor(ctx),
         })
       ),
+
+    /** تعديل صرف إعلان لسه مسودة — التاجر بيغلط في رقم ويعرف بعد ساعة. */
+    adSpendUpdate: permissionProcedure("ad_spend.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          adSpendId: z.number(),
+          amount: positiveMoneyString.optional(),
+          campaignName: z.string().min(1).max(160).optional(),
+          platformName: z.string().min(1).max(120).optional(),
+          manualMetrics: z.record(z.string(), z.number()).optional(),
+          notes: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        updateAdSpendDraft({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
 
     inventoryReserve: permissionProcedure("inventory_costing.manage")
       .input(

@@ -120,7 +120,10 @@ const MENU_GROUPS: MenuGroup[] = [
       { icon: Users, label: "مرتبات الموظفين", path: "/salary-profiles", adminOnly: true },
       { icon: Users, label: "تجهيز المرتبات", path: "/salary-preparation", adminOnly: true },
       { icon: PackagePlus, label: "إذن استلام بضاعة", path: "/goods-receipt", adminOnly: true },
-      { icon: ArrowLeftRight, label: "تحويل مخزون", path: "/stock-transfer", adminOnly: true },
+      // «تحويل مخزون» اتشال من القايمة: هو بينادي نفس الـendpoint بتاع «مرتجعات
+      // الورشة» (`accountingV2.stockTransfer`)، ومرتجعات الورشة بتعمل نفس التحويل
+      // وكمان بتوريك القطع اللي راحت ولسه مرجعتش. شاشتين لنفس الحركة كانت بتخلي
+      // التاجر يختار من غير سبب. المسار /stock-transfer لسه شغّال.
       { icon: ReturnIcon, label: "مرتجعات الورشة", path: "/workshop-returns", adminOnly: true },
       { icon: Megaphone, label: "الإعلانات", path: "/advertising", adminOnly: true },
       { icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true },

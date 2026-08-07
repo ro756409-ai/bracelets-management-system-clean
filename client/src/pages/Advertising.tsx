@@ -90,6 +90,7 @@ export default function Advertising() {
   });
 
   const rows = campaigns.data ?? [];
+  const [editing, setEditing] = useState<any | null>(null);
 
   const asCampaignRows: CampaignRow[] = useMemo(
     () => rows.map(r => ({
@@ -429,6 +430,7 @@ export default function Advertising() {
                   <th className="p-2">تكلفة الوحدة</th>
                   <th className="p-2">العائد</th>
                   <th className="p-2">الحالة</th>
+                  <th className="p-2" />
                 </tr>
               </thead>
               <tbody>
@@ -457,6 +459,25 @@ export default function Advertising() {
                         style={{ color: r.paidAmount > 0 ? "var(--success)" : "var(--warning)" }}>
                         {r.paidAmount > 0 ? "مدفوع" : "مستحق"}
                       </td>
+                      <td className="p-2 text-left">
+                        {/*
+                          التعديل للمسودة بس. أول ما الصرف يتعتمد بيبقى ليه استحقاق
+                          يومي، وأول ما يتدفع بيبقى ليه حركة خزنة — وتعديل المبلغ بعد
+                          أي واحدة فيهم بيخلي الدفتر يكدب. السيرفر بيرفضها برضه؛ ده
+                          مجرد إننا مانوريش زرار مايشتغلش.
+                        */}
+                        {r.expenseStatus === "draft" ? (
+                          <button
+                            type="button"
+                            className="text-xs text-primary hover:underline"
+                            onClick={() => setEditing(r)}
+                          >
+                            تعديل
+                          </button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -465,6 +486,113 @@ export default function Advertising() {
           </div>
         )}
       </SectionCard>
+
+      {editing && (
+        <EditCampaignDialog
+          row={editing}
+          businessId={bid!}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null);
+            await campaigns.refetch();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * تعديل حملة لسه مسودة.
+ *
+ * المقاييس بتتبعت كاملة مش الحقل اللي اتغيّر بس: `manualMetricsJson` عمود واحد، فلو
+ * بعتنا الأوردرات لوحدها كانت الرسايل والإيراد هيتمسحوا معاها.
+ */
+function EditCampaignDialog({
+  row, businessId, onClose, onSaved,
+}: {
+  row: any;
+  businessId: number;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [campaignName, setCampaignName] = useState(row.campaignName ?? "");
+  const [amount, setAmount] = useState(String(row.spend ?? ""));
+  const [orders, setOrders] = useState(String(row.orders || ""));
+  const [messages, setMessages] = useState(String(row.messages || ""));
+  const [revenue, setRevenue] = useState(
+    row.revenue == null ? "" : String(row.revenue)
+  );
+
+  const save = trpc.accountingV2.adSpendUpdate.useMutation({
+    onSuccess: () => { toast.success("اتعدّلت الحملة"); onSaved(); },
+    onError: error => toast.error(error.message),
+  });
+
+  const num = (v: string) => (v.trim() === "" ? undefined : Number(v));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}>
+      <div dir="rtl" className="w-full max-w-md rounded-lg bg-card p-4 shadow-lg"
+        onClick={event => event.stopPropagation()}>
+        <h3 className="mb-3 font-bold">تعديل الحملة</h3>
+        <div className="space-y-3">
+          <div>
+            <Label>اسم الحملة</Label>
+            <Input className="mt-1" value={campaignName}
+              onChange={e => setCampaignName(e.target.value)} />
+          </div>
+          <div>
+            <Label>المصروف</Label>
+            <Input className="mt-1" dir="ltr" inputMode="decimal" value={amount}
+              onChange={e => setAmount(e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>عدد الأوردرات</Label>
+              <Input className="mt-1" dir="ltr" inputMode="numeric" value={orders}
+                onChange={e => setOrders(e.target.value)} />
+            </div>
+            <div>
+              <Label>عدد الرسايل</Label>
+              <Input className="mt-1" dir="ltr" inputMode="numeric" value={messages}
+                onChange={e => setMessages(e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <Label>الإيراد</Label>
+            <Input className="mt-1" dir="ltr" inputMode="decimal" placeholder="اختياري"
+              value={revenue} onChange={e => setRevenue(e.target.value)} />
+          </div>
+        </div>
+        <div className="mt-4 flex gap-2">
+          <Button className="flex-1" disabled={save.isPending}
+            onClick={() => {
+              const spend = Number(amount);
+              if (!(spend > 0)) return toast.error("المصروف لازم يكون أكبر من صفر");
+              const o = num(orders) ?? 0;
+              const m = num(messages) ?? 0;
+              if (m > 0 && o > m)
+                return toast.error("الأوردرات الناتجة ماتزيدش عن عدد الرسايل");
+              const metrics: Record<string, number> = {};
+              if (o > 0) metrics.orders = o;
+              if (m > 0) metrics.messages = m;
+              const rev = num(revenue);
+              if (rev != null) metrics.revenue = rev;
+              save.mutate({
+                businessId,
+                adSpendId: row.id,
+                amount: String(spend),
+                campaignName: campaignName.trim() || undefined,
+                manualMetrics: metrics,
+              });
+            }}>
+            {save.isPending ? "جاري الحفظ..." : "حفظ"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>إلغاء</Button>
+        </div>
+      </div>
     </div>
   );
 }

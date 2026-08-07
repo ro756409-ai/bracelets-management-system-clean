@@ -156,3 +156,63 @@ describe("🔑 نطاق النشاط", () => {
     );
   });
 });
+
+// ───────────────── اللي اتصلّح في الجولة دي ─────────────────
+
+describe("🔑 الموظف بييجي من صفحة الموظفين", () => {
+  it("🔑 والشاشة بتقول ده لما القايمة تبقى فاضية", () => {
+    // التاجر شاف قايمة فيها «Owner» بس وافتكر إن المفروض يكتب الاسم. الاسم مابيتكتبش
+    // هنا عن قصد — المرتب بيتربط بموظف موجود بـid عشان السُلف والعمولات وكشف الراتب
+    // كلهم يشاوروا على نفس الشخص.
+    expect(page).toContain("مفيش موظفين متسجّلين");
+    expect(page).toContain("ضيفه من صفحة الموظفين");
+    expect(page).toContain('href="/employees"');
+  });
+});
+
+describe("🔑 مفيش شاشتين لنفس الحركة", () => {
+  const sidebar = fs.readFileSync(
+    "client/src/components/DashboardLayout.tsx",
+    "utf-8"
+  );
+  const transfer = fs.readFileSync("client/src/pages/StockTransfer.tsx", "utf-8");
+  const returns = fs.readFileSync("client/src/pages/WorkshopReturns.tsx", "utf-8");
+
+  it("🔑 «تحويل مخزون» و«مرتجعات الورشة» بينادوا نفس الـendpoint", () => {
+    for (const src of [transfer, returns]) {
+      expect(src).toContain("trpc.accountingV2.stockTransfer.useMutation");
+    }
+  });
+
+  it("🔑 فاتشال من القايمة — ومرتجعات الورشة بتعمل نفس الحاجة وزيادة", () => {
+    expect(sidebar).not.toContain('path: "/stock-transfer"');
+    expect(sidebar).toContain('path: "/workshop-returns"');
+    // الزيادة: بتوريك القطع اللي راحت ولسه مرجعتش
+    expect(returns).toContain("trpc.accountingV2.workshopReturns.useQuery");
+  });
+
+  it("والمسار لسه شغّال لأي رابط قديم", () => {
+    const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+    expect(app).toContain('<Route path="/stock-transfer">');
+  });
+});
+
+describe("🔑 سجل الخزنة بيقول الرصيد الحقيقي", () => {
+  const history = fs.readFileSync(
+    "client/src/pages/accounting/TreasuryHistory.tsx",
+    "utf-8"
+  );
+
+  it("🔑 الرصيد الحالي فوق — مش آخر صف في الفلتر", () => {
+    // `balanceAfter` بيتجمّد وقت الإدخال، فحركة بتاريخ قديم بتتضاف آخر السلسلة.
+    // يعني آخر صف في فترة مفلترة ممكن مايكونش الرصيد الحقيقي.
+    expect(history).toContain("رصيد الخزنة الحالي");
+    expect(history).toContain("trpc.accounting.controlCenter.useQuery");
+  });
+
+  it("🔑 وبيحذّر لما يبقى فيه حركات بره الفترة", () => {
+    expect(history).toContain("مش نفس الرصيد الحالي");
+    expect(history).toContain("وسّع التاريخ من فوق");
+    expect(history).toContain("Number(rows[0]?.balanceAfter ?? 0)");
+  });
+});

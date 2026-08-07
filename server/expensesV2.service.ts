@@ -329,6 +329,69 @@ export async function createAdSpendDraft(input: ExpenseDraftInput & {
   });
 }
 
+/**
+ * تعديل صرف إعلان — طالما لسه مسودة.
+ *
+ * التاجر بيغلط في رقم ويعرف بعد ساعة. من غير تعديل كان لازم يسيب الرقم الغلط أو يسجّل
+ * حملة تانية تصحّحها — والاتنين بيخربوا تكلفة الأوردر اللي بيقرر على أساسها.
+ *
+ * **المسودة بس.** أول ما المصروف يتعتمد بيبقى ليه استحقاق يومي وأحداث مترحّلة، وأول ما
+ * يتدفع بيبقى ليه حركة خزنة. تعديل المبلغ بعد أي واحدة فيهم بيخلي الدفتر يكدب. القاعدة
+ * دي مش جديدة — هي نفس شرط `updateExpense`، بس متطبّقة على الصفين مع بعض هنا: صف
+ * المصروف وصف الإعلان، في ترانزاكشن واحدة، عشان مايحصلش إن واحد يتعدّل والتاني لأ.
+ */
+export async function updateAdSpendDraft(input: {
+  businessId: number;
+  adSpendId: number;
+  amount?: string;
+  campaignName?: string;
+  platformName?: string;
+  manualMetrics?: Record<string, number>;
+  notes?: string;
+  actor: Actor;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const [entry] = await tx.select().from(adSpendEntries).where(and(
+      eq(adSpendEntries.id, input.adSpendId),
+      eq(adSpendEntries.businessId, input.businessId),
+    )).limit(1).for("update");
+    if (!entry) throw new Error("الحملة مش تابعة للنشاط ده");
+
+    const [expense] = await tx.select().from(expenses).where(and(
+      eq(expenses.id, entry.expenseId), eq(expenses.businessId, input.businessId),
+    )).limit(1).for("update");
+    if (!expense) throw new Error("مصروف الحملة مش موجود");
+    if (expense.status !== "draft")
+      throw new Error("الحملة اتعتمدت خلاص — ماينفعش تتعدّل. سجّل تصحيح بدلها.");
+
+    const amount =
+      input.amount != null
+        ? fromMinorUnits(toMinorUnits(input.amount))
+        : undefined;
+    if (amount != null && toMinorUnits(amount) <= 0n)
+      throw new Error("المصروف لازم يكون أكبر من صفر");
+
+    await tx.update(expenses).set({
+      ...(amount != null ? { amount } : {}),
+      ...(input.campaignName ? { description: input.campaignName } : {}),
+    }).where(eq(expenses.id, expense.id));
+
+    await tx.update(adSpendEntries).set({
+      ...(amount != null ? { amount } : {}),
+      ...(input.campaignName ? { campaignNameSnapshot: input.campaignName } : {}),
+      ...(input.platformName ? { platformNameSnapshot: input.platformName } : {}),
+      ...(input.manualMetrics
+        ? { manualMetricsJson: JSON.stringify(input.manualMetrics) }
+        : {}),
+      ...(input.notes !== undefined ? { notes: input.notes || null } : {}),
+    }).where(eq(adSpendEntries.id, entry.id));
+
+    return { adSpendId: entry.id, expenseId: expense.id };
+  });
+}
+
 // ==================== SIMPLE EXPENSE ====================
 //
 // دورة حياة المصروف الكاملة أربع خطوات: مسودة ← إرسال ← اعتماد ← دفع. الأربعة موجودين

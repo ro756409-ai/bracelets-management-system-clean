@@ -294,6 +294,22 @@ function ProfilesSection({ businessId }: { businessId: number }) {
                     ))}
                   </SelectContent>
                 </Select>
+                {/*
+                  الاسم مابيتكتبش هنا عن قصد: المرتب بيتربط بموظف موجود بـid، عشان
+                  السُلف والعمولات وكشف الراتب كلهم يشاوروا على نفس الشخص. لو الاسم
+                  اتكتب حر، كل شاشة كانت هتبقى عندها نسخة من «أحمد».
+                */}
+                {active.length === 0 && (
+                  <p className="mt-1 text-xs text-warning">
+                    مفيش موظفين متسجّلين. ضيفهم من صفحة «الموظفين» الأول.
+                  </p>
+                )}
+                <a
+                  href="/employees"
+                  className="mt-1 inline-block text-xs text-primary hover:underline"
+                >
+                  الموظف مش في القايمة؟ ضيفه من صفحة الموظفين ←
+                </a>
               </div>
 
               <div>
