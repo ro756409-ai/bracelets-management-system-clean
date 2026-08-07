@@ -108,12 +108,16 @@ const MENU_GROUPS: MenuGroup[] = [
     label: "الحسابات",
     icon: Wallet,
     items: [
-      // First in the group on purpose: this is where the accountant starts the day, and
-      // the older screen is where they go to look things up afterwards.
-      { icon: CalendarDays, label: "مركز التسجيل اليومي", path: "/daily-ledger", adminOnly: true },
-      // The one screen a merchant opens every evening: money in from the carrier, money
-      // out of the drawer. Sits second so it is reachable without scrolling.
+      // «تحصيل اليوم» بقت أول حاجة في المجموعة لأنها اللي بتتفتح كل يوم: دخل من شركة
+      // الشحن، خرج من الخزنة، تحصيل أوردر بعينه، وإيداع/سحب — الأربعة في شاشة واحدة.
+      //
+      // «مركز التسجيل اليومي» (/daily-ledger) اتشال من هنا مش من النظام: الرابط لسه
+      // بيفتح، والشاشة لسه شغّالة. الأربع حاجات اللي كانت فيه بقت كلها في «تحصيل
+      // اليوم»، فمابقاش فيه سبب يخلي التاجر يختار بين شاشتين بيعملوا نفس الشغل.
       { icon: Banknote, label: "تحصيل اليوم", path: "/daily-collections", adminOnly: true },
+      // مرتبات الموظفين قبل تجهيزها عن قصد: التجهيز بيحسب على الأرقام دي، فلو التاجر
+      // فتح التجهيز الأول هيلاقيه فاضي ومايعرفش ليه.
+      { icon: Users, label: "مرتبات الموظفين", path: "/salary-profiles", adminOnly: true },
       { icon: Users, label: "تجهيز المرتبات", path: "/salary-preparation", adminOnly: true },
       { icon: PackagePlus, label: "إذن استلام بضاعة", path: "/goods-receipt", adminOnly: true },
       { icon: ArrowLeftRight, label: "تحويل مخزون", path: "/stock-transfer", adminOnly: true },

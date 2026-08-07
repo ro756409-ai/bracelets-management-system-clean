@@ -82,6 +82,8 @@ export default function DailyCollections() {
         <div className="grid gap-4 lg:grid-cols-2">
           <CollectionCard businessId={selectedId} />
           <ExpenseCard businessId={selectedId} />
+          <OrderCollectionCard businessId={selectedId} />
+          <ManualCashCard businessId={selectedId} />
         </div>
       )}
 
@@ -405,6 +407,244 @@ function ExpenseCard({ businessId }: { businessId: number }) {
         <p className="text-center text-xs text-muted-foreground">
           «سجّل وادفع» بيخصم من «{DEFAULT_TREASURY_LABEL}» مرة واحدة. «سجّل بس» بيسيبه
           مستحق تدفعه بعدين.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ───────────────────────── تحصيل أوردر بعينه ─────────────────────────
+
+/**
+ * الزبون دفع لك على طول — مش عن طريق شركة الشحن.
+ *
+ * انتقلت من «مركز التسجيل اليومي». مختلفة عن تسوية اليوم فوق: دي أوردر واحد بعينه،
+ * فبتحدّث حالة تحصيله كمان مش بس بتحرّك الخزنة.
+ */
+function OrderCollectionCard({ businessId }: { businessId: number }) {
+  const utils = trpc.useUtils();
+  const [search, setSearch] = useState("");
+  const [orderId, setOrderId] = useState("");
+  const [amount, setAmount] = useState("");
+
+  const pending = trpc.accounting.collectionList.useQuery({
+    businessIds: [businessId],
+    collectionStatus: "pending",
+    search: search.trim() || undefined,
+    page: 1,
+    limit: 20,
+  });
+  const rows: any[] = (pending.data as any)?.orders ?? [];
+  const picked = rows.find(row => String(row.id) === orderId);
+
+  const record = trpc.accounting.collectionRecord.useMutation({
+    onSuccess: async () => {
+      toast.success("اتسجّل التحصيل");
+      setOrderId("");
+      setAmount("");
+      await Promise.all([
+        utils.accounting.collectionList.invalidate(),
+        utils.accounting.controlCenter.invalidate(),
+        utils.accounting.dashboard.invalidate(),
+      ]);
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Banknote className="h-5 w-5 text-sky-700" />
+          الزبون دفع لك على طول
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div>
+          <Label>دوّر على الأوردر</Label>
+          <Input
+            className="mt-1"
+            placeholder="رقم الأوردر أو اسم الزبون أو التليفون"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+          />
+        </div>
+
+        {rows.length === 0 ? (
+          <p className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
+            {search.trim()
+              ? "مفيش أوردر مطابق لسه محتاج تحصيل."
+              : "مفيش أوردرات مستنية تحصيل."}
+          </p>
+        ) : (
+          <div>
+            <Label>الأوردر *</Label>
+            <Select
+              value={orderId}
+              onValueChange={value => {
+                setOrderId(value);
+                const row = rows.find(item => String(item.id) === value);
+                // المبلغ المتوقع مقترح مش مفروض — التحصيل الجزئي بيحصل.
+                if (row) setAmount(String(row.totalAmount ?? ""));
+              }}
+            >
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder="اختار الأوردر" />
+              </SelectTrigger>
+              <SelectContent>
+                {rows.map(row => (
+                  <SelectItem key={row.id} value={String(row.id)}>
+                    {row.orderNumber} — {row.customerName} ·{" "}
+                    {formatMoney(Number(row.totalAmount ?? 0))}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        <div>
+          <Label>المبلغ اللي اتحصّل *</Label>
+          <Input
+            className="mt-1"
+            dir="ltr"
+            inputMode="decimal"
+            value={amount}
+            onChange={event => setAmount(event.target.value)}
+          />
+          {picked && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              المتوقع {formatMoney(Number(picked.totalAmount ?? 0))} — لو حصّلت أقل
+              اكتب اللي اتحصّل فعلًا والأوردر هيفضل جزئي.
+            </p>
+          )}
+        </div>
+
+        <Button
+          className="w-full"
+          disabled={record.isPending}
+          onClick={() => {
+            if (!orderId) return toast.error("اختار الأوردر");
+            const value = Number(amount);
+            if (!Number.isFinite(value) || value < 0)
+              return toast.error("اكتب مبلغ صحيح");
+            record.mutate({
+              orderId: Number(orderId),
+              collectedAmount: value,
+              collectedAt: new Date(),
+            });
+          }}
+        >
+          {record.isPending ? "جاري التسجيل..." : "سجّل تحصيل الأوردر"}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ───────────────────────── إيداع وسحب ─────────────────────────
+
+/**
+ * فلوس داخلة أو خارجة من غير أوردر ومن غير مصروف.
+ *
+ * انتقلت من «مركز التسجيل اليومي»، وهي المسار **الوحيد** في النظام لده: «حطيت ٥٠٠٠
+ * من جيبي» أو «سحبت ٢٠٠٠ لنفسي». من غيرها رصيد الخزنة بيبعد عن الدُرج الحقيقي ومفيش
+ * طريقة توفّقهم.
+ */
+function ManualCashCard({ businessId }: { businessId: number }) {
+  const utils = trpc.useUtils();
+  const [kind, setKind] = useState<"deposit" | "withdrawal">("deposit");
+  const [amount, setAmount] = useState("");
+  const [description, setDescription] = useState("");
+
+  const record = trpc.accounting.treasuryCreate.useMutation({
+    onSuccess: async () => {
+      toast.success(kind === "deposit" ? "اتسجّل الإيداع" : "اتسجّل السحب");
+      setAmount("");
+      setDescription("");
+      await Promise.all([
+        utils.accounting.controlCenter.invalidate(),
+        utils.accounting.treasuryHistory.invalidate(),
+        utils.accounting.dashboard.invalidate(),
+      ]);
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Wallet className="h-5 w-5 text-violet-700" />
+          إيداع أو سحب
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-2 gap-2">
+          <Button
+            type="button"
+            variant={kind === "deposit" ? "default" : "outline"}
+            onClick={() => setKind("deposit")}
+          >
+            حطيت فلوس
+          </Button>
+          <Button
+            type="button"
+            variant={kind === "withdrawal" ? "default" : "outline"}
+            onClick={() => setKind("withdrawal")}
+          >
+            سحبت فلوس
+          </Button>
+        </div>
+
+        <div>
+          <Label>المبلغ *</Label>
+          <Input
+            className="mt-1"
+            dir="ltr"
+            inputMode="decimal"
+            value={amount}
+            onChange={event => setAmount(event.target.value)}
+          />
+        </div>
+
+        <div>
+          <Label>السبب *</Label>
+          <Input
+            className="mt-1"
+            placeholder={
+              kind === "deposit" ? "رأس مال من جيبي" : "سحب شخصي"
+            }
+            value={description}
+            onChange={event => setDescription(event.target.value)}
+          />
+        </div>
+
+        <Button
+          className="w-full"
+          disabled={record.isPending}
+          onClick={() => {
+            const value = Number(amount);
+            if (!(value > 0)) return toast.error("المبلغ لازم يكون أكبر من صفر");
+            if (!description.trim()) return toast.error("اكتب السبب");
+            record.mutate({
+              businessId,
+              type: kind,
+              amount: value,
+              description: description.trim(),
+              transactionDate: new Date(),
+            });
+          }}
+        >
+          {record.isPending
+            ? "جاري التسجيل..."
+            : kind === "deposit"
+              ? "سجّل الإيداع"
+              : "سجّل السحب"}
+        </Button>
+        <p className="text-center text-xs text-muted-foreground">
+          دي مش مصروف ولا تحصيل — فلوس بتتحرك من الخزنة أو ليها من غير أوردر. مابتأثرش
+          على صافي الربح.
         </p>
       </CardContent>
     </Card>

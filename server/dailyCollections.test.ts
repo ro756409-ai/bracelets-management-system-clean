@@ -313,13 +313,16 @@ describe("الشاشة", () => {
     expect(page).toContain("حركة واحدة");
   });
 
-  it("🔑 اللوحة بتتحدّث فورًا بعد كل تسجيل", () => {
-    expect(
-      (page.match(/utils\.accounting\.controlCenter\.invalidate\(\)/g) ?? []).length
-    ).toBe(2);
-    expect(
-      (page.match(/utils\.accounting\.dashboard\.invalidate\(\)/g) ?? []).length
-    ).toBe(2);
+  it("🔑 كل مسار بيسجّل فلوس بيحدّث اللوحة — مفيش واحد بيسيبها قديمة", () => {
+    // العدد مقفول على عدد الـmutations نفسه بدل رقم ثابت: أي كارت جديد يتضاف من غير
+    // invalidate بيوقّع الاختبار، وده المطلوب.
+    const mutations = (page.match(/\.useMutation\(/g) ?? []).length;
+    for (const key of ["controlCenter", "dashboard"]) {
+      const invalidations = (
+        page.match(new RegExp(`utils\\.accounting\\.${key}\\.invalidate\\(\\)`, "g")) ?? []
+      ).length;
+      expect(invalidations, key).toBe(mutations);
+    }
   });
 
   it("🔑 الشاشة مابتحسبش الصافي وبتبعته — بتبعت الإجمالي والرسوم", () => {
@@ -366,37 +369,173 @@ describe("🔑 المرحلة الرابعة مااحتاجتش migration", () =
 
 // ───────────────── إضافة شركة الشحن ─────────────────
 
-describe("🔑 التاجر يقدر يضيف شركة الشحن من غير ربط حالات", () => {
+describe("🔑 إضافة شركة الشحن بحقل واحد", () => {
   const settings = fs.readFileSync(
     "client/src/pages/AccountingSettings.tsx",
     "utf-8"
   );
-  const save = between(settings, "const filled = statusMappings.filter", "providerSave.mutate({");
+  const card = between(settings, "function ShippingSettings", "نسخة سعر جديدة");
 
-  it("🔑 الخريطة الفاضية مسموحة — ربط الحالات بيخص الـwebhook بس", () => {
-    // الشرط القديم كان `validMappings.length !== statusMappings.length`، والفورم بيبدأ
-    // بسطر فاضي — فالتاجر مكانش يقدر يضيف شركة الشحن أصلاً، والتحصيل كله كان مقفول.
-    expect(save).not.toContain("validMappings.length !== statusMappings.length");
-    expect(save).toContain("complete.length !== filled.length");
+  it("🔑 حقل واحد بس — الاسم", () => {
+    // كانت أربع حقول: كود، اسم رسمي، اسم ظاهر، حساب COD. التاجر مش عارف الفرق
+    // بينهم فكان بيكتب نفس الكلمة تلات مرات، وأول ما يغيّر حرف في الكود بيتعمل صف
+    // جديد بدل ما يعدّل — وده اللي خلّاه يلاقي شركتين مكررين.
+    expect(card).toContain('<Field label="اسم شركة الشحن">');
+    for (const gone of ['label="Provider Code"', 'label="الاسم الرسمي"', 'label="الاسم الظاهر"']) {
+      expect(card, gone).not.toContain(gone);
+    }
   });
 
-  it("🔑 والسطر النص فاضي لسه مرفوض — ده إدخال ناقص مش «مش عايزه»", () => {
-    expect(save).toContain("في ربط حالة ناقص");
-    expect(save).toContain(
-      "row => row.providerStatusCode.trim() || row.normalizedEvent"
-    );
-    expect(save).toContain(
-      "row => row.providerStatusCode.trim() && row.normalizedEvent"
-    );
+  it("🔑 والاسم الواحد بيروح للتلاتة — فالقيد الفريد بيمنع التكرار", () => {
+    const call = between(card, "providerSave.mutate({", "});");
+    expect(call).toContain("providerCode: name");
+    expect(call).toContain("providerName: name");
+    expect(call).toContain("displayName: name");
   });
 
-  it("بيانات الشركة نفسها لسه مطلوبة", () => {
-    expect(save).toContain("!provider.providerCode");
-    expect(save).toContain("!provider.displayName");
+  it("🔑 ربط الحالات اتشال خالص — بيتبعت فاضي", () => {
+    expect(card).toContain("statusMapping: {}");
+    expect(card).not.toContain("statusMappings");
+    expect(card).not.toContain("إضافة ربط حالة");
   });
 
   it("🔑 والسيرفر بيتجاهل الحالة غير المتربطة من غير ما يكسر", () => {
     const shipping = read("server/shippingV2.service.ts");
     expect(shipping).toContain('return { ignored: true as const, reason: "status_not_mapped" }');
+  });
+
+  it("🔑 فيه قايمة بالموجود وزرار يشيل — مكانش فيه", () => {
+    expect(card).toContain("activeProviders.map");
+    expect(card).toContain("providerRemove.mutate({");
+    expect(card).toContain("شركات الشحن عندك");
+  });
+
+  it("🔑 والشيل إيقاف مش حذف — التحصيلات القديمة بتفضل", () => {
+    const svc = read("server/shippingConfigV2.service.ts");
+    const fn = svc.slice(svc.indexOf("export async function deactivateBusinessShippingProvider"));
+    expect(fn).toContain("set({ isActive: false })");
+    expect(fn).not.toContain(".delete(");
+  });
+
+  it("والتأكيد بيقول للتاجر إن التاريخ مش هيروح", () => {
+    expect(card).toContain("التحصيلات القديمة بتاعتها هتفضل زي ما هي");
+  });
+});
+
+// ───────────────── اللي اتنقل من مركز التسجيل اليومي ─────────────────
+
+describe("🔑 مفيش ميزة ضاعت مع إخفاء مركز التسجيل اليومي", () => {
+  const ledger = fs.readFileSync("client/src/pages/DailyLedger.tsx", "utf-8");
+  const sidebar = fs.readFileSync(
+    "client/src/components/DashboardLayout.tsx",
+    "utf-8"
+  );
+  const calls = (src: string) =>
+    new Set(
+      [...src.matchAll(/trpc\.([\w.]+)\.use(?:Query|Mutation)/g)].map(m => m[1])
+    );
+  const ledgerWrites = [...calls(ledger)].filter(name =>
+    /Create|Record/.test(name)
+  );
+
+  it("🔑 كل مسار بيكتب كان في الصفحة القديمة بقى في «تحصيل اليوم»", () => {
+    // الصفحة القديمة كانت بتكتب في تلات مسارات: مصروف، تحصيل أوردر، إيداع/سحب.
+    // لو اتخفيت من غير ما تتنقل، التاجر بيخسر الميزة من غير ما حد ياخد باله.
+    expect(ledgerWrites.length).toBeGreaterThan(0);
+    const now = calls(page);
+    for (const name of ledgerWrites) {
+      const moved =
+        now.has(name) ||
+        // المصروف اتنقل لمسار أبسط بيعمل نفس الحاجة في خطوة واحدة
+        (name === "accounting.expenseCreate" &&
+          now.has("accountingV2.expenseRecordSimple"));
+      expect(moved, `${name} مالهاش بديل في تحصيل اليوم`).toBe(true);
+    }
+  });
+
+  it("🔑 الإيداع/السحب اليدوي موجود — المسار الوحيد ليه في النظام", () => {
+    expect(page).toContain("trpc.accounting.treasuryCreate.useMutation");
+    expect(page).toContain("حطيت فلوس");
+    expect(page).toContain("سحبت فلوس");
+  });
+
+  it("🔑 وتحصيل أوردر بعينه كمان", () => {
+    expect(page).toContain("trpc.accounting.collectionRecord.useMutation");
+    expect(page).toContain("الزبون دفع لك على طول");
+  });
+
+  it("🔑 الصفحة القديمة اتشالت من القايمة بس — المسار لسه شغّال", () => {
+    expect(sidebar).not.toContain('path: "/daily-ledger"');
+    const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+    expect(app).toContain('<Route path="/daily-ledger">');
+  });
+
+  it("الإيداع/السحب بيقول إنه مش مصروف ولا تحصيل", () => {
+    // لو التاجر فهمها مصروف، هيفتكر صافي الربح غلط.
+    expect(page).toContain("دي مش مصروف ولا تحصيل");
+  });
+});
+
+// ───────────────── تبسيط صفحة الإعدادات ─────────────────
+
+describe("🔑 صفحة الإعدادات اتبسّطت من غير ما حاجة تضيع", () => {
+  const settings = fs.readFileSync(
+    "client/src/pages/AccountingSettings.tsx",
+    "utf-8"
+  );
+  const listOf = (name: string) => {
+    const at = settings.indexOf(`const ${name} = [`);
+    expect(at, name).toBeGreaterThan(-1);
+    return settings.slice(at, settings.indexOf("] as const;", at));
+  };
+  const everyday = listOf("CONFIG_NAMESPACES");
+  const advanced = listOf("ADVANCED_CONFIG_NAMESPACES");
+
+  it("🔑 القوايم اللي بتغذّي شاشات يومية فضلت فوق", () => {
+    // دي بالظبط اللي بتملا قوايم فورم الأوردر وتصنيف المصروف ومنصات الإعلانات.
+    // لو اتشالت، الفورم بيرجع فاضي — وده الغلط اللي اتصلّح قبل كده.
+    for (const ns of [
+      "governorate", "shipping_type", "payment_type",
+      "expense_type", "order_source", "ad_platform",
+    ]) {
+      expect(everyday, ns).toContain(`"${ns}"`);
+    }
+  });
+
+  it("🔑 والباقي اتنقل للمتقدم — مش اتمسح", () => {
+    for (const ns of [
+      "shipping_charge_type", "closing_adjustment_type",
+      "inventory_in_reason", "return_reason",
+    ]) {
+      expect(everyday, ns).not.toContain(`"${ns}"`);
+      expect(advanced, ns).toContain(`"${ns}"`);
+    }
+  });
+
+  it("🔑 ومفيش قايمة ضاعت — الاتنين بيتعرضوا", () => {
+    // المتقدمة كانت هتبقى كود ميت لو المكوّن مااتنداش بيها.
+    expect(settings).toContain("namespaces={ADVANCED_CONFIG_NAMESPACES}");
+    expect(settings).toContain("namespaces = CONFIG_NAMESPACES");
+  });
+
+  it("🔑 الأقسام التقيلة مقفولة مش محذوفة", () => {
+    const block = settings.slice(settings.indexOf("<details"));
+    for (const section of [
+      "<CostCenterSettings",
+      "<ShippingRouteSettings",
+      "<PermissionSettings",
+    ]) {
+      expect(block, section).toContain(section);
+    }
+    expect(settings).toContain("إعدادات متقدمة");
+  });
+
+  it("واللي التاجر بيحتاجه فاضل مفتوح", () => {
+    const top = settings.slice(
+      settings.indexOf("<BusinessSettings"),
+      settings.indexOf("<details")
+    );
+    expect(top).toContain("<ShippingSettings");
+    expect(top).toContain("<FinancialAccountSettings");
   });
 });

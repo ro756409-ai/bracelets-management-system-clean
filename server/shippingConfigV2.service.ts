@@ -166,3 +166,34 @@ export async function listShippingConfiguration(businessId: number) {
     .where(and(eq(shippingRateCharges.businessId, businessId), inArray(shippingRateCharges.rateVersionId, rates.map(rate => rate.id)))) : [];
   return { providers, rates, charges };
 }
+
+/**
+ * إيقاف شركة شحن — مش حذف.
+ *
+ * التسويات القديمة بتشاور على الصف ده (`carrier_settlements.businessShippingProviderId`)،
+ * فحذفه بيخلي تحصيلات الشهور اللي فاتت تعرض شركة مفقودة. الإيقاف بيشيلها من قوايم
+ * الاختيار وبيسيب التاريخ سليم — نفس منطق أرشفة تصنيف المصروف.
+ */
+export async function deactivateBusinessShippingProvider(input: {
+  businessId: number;
+  businessShippingProviderId: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db
+    .select()
+    .from(businessShippingProviders)
+    .where(
+      and(
+        eq(businessShippingProviders.id, input.businessShippingProviderId),
+        eq(businessShippingProviders.businessId, input.businessId)
+      )
+    )
+    .limit(1);
+  if (!row) throw new Error("شركة الشحن مش تابعة للنشاط ده");
+  await db
+    .update(businessShippingProviders)
+    .set({ isActive: false })
+    .where(eq(businessShippingProviders.id, row.id));
+  return { id: row.id };
+}

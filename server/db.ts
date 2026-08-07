@@ -5333,6 +5333,50 @@ export async function upsertPayrollSettings(
 
 // ---------- ملفات الرواتب ----------
 
+/**
+ * ملفات المرتبات في نشاط، ومعاها اسم الموظف.
+ *
+ * `getSalaryProfiles` بتاخد موظف واحد — كويسة لشاشة الموظف، مش كويسة للشاشة اللي
+ * المالك بيفتحها عشان يشوف مين بياخد كام. النداء لكل موظف لوحده كان هيبقى استعلام
+ * لكل صف.
+ *
+ * بترجّع **الساري بس** لكل موظف: أحدث `effectiveFrom` مش في المستقبل. الإصدارات
+ * القديمة بتفضل في الجدول عشان دورة فبراير تفضل بتحسب بمرتب فبراير حتى لو المرتب اتزوّد
+ * في مارس — بس المالك مايهموش يشوفهم في القايمة.
+ */
+export async function listBusinessSalaryProfiles(businessId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db
+    .select({
+      id: employeeSalaryProfiles.id,
+      employeeId: employeeSalaryProfiles.employeeId,
+      employeeName: employees.name,
+      salaryType: employeeSalaryProfiles.salaryType,
+      baseSalary: employeeSalaryProfiles.baseSalary,
+      dailyRate: employeeSalaryProfiles.dailyRate,
+      commissionType: employeeSalaryProfiles.commissionType,
+      commissionValue: employeeSalaryProfiles.commissionValue,
+      commissionBasis: employeeSalaryProfiles.commissionBasis,
+      effectiveFrom: employeeSalaryProfiles.effectiveFrom,
+      notes: employeeSalaryProfiles.notes,
+    })
+    .from(employeeSalaryProfiles)
+    .innerJoin(employees, eq(employees.id, employeeSalaryProfiles.employeeId))
+    .where(eq(employeeSalaryProfiles.businessId, businessId))
+    .orderBy(desc(employeeSalaryProfiles.effectiveFrom));
+
+  const now = new Date();
+  const current = new Map<number, (typeof rows)[number]>();
+  for (const row of rows) {
+    if (row.effectiveFrom > now) continue;
+    if (!current.has(row.employeeId)) current.set(row.employeeId, row);
+  }
+  return [...current.values()].sort((a, b) =>
+    a.employeeName.localeCompare(b.employeeName, "ar")
+  );
+}
+
 export async function getSalaryProfiles(employeeId: number) {
   const db = await getDb();
   if (!db) return [];
