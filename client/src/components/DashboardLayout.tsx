@@ -115,6 +115,9 @@ const MENU_GROUPS: MenuGroup[] = [
       // بيفتح، والشاشة لسه شغّالة. الأربع حاجات اللي كانت فيه بقت كلها في «تحصيل
       // اليوم»، فمابقاش فيه سبب يخلي التاجر يختار بين شاشتين بيعملوا نفس الشغل.
       { icon: Banknote, label: "تحصيل اليوم", path: "/daily-collections", adminOnly: true },
+      // مرتبات الموظفين قبل تجهيزها عن قصد: التجهيز بيحسب على الأرقام دي، فلو التاجر
+      // فتح التجهيز الأول هيلاقيه فاضي ومايعرفش ليه.
+      { icon: Users, label: "مرتبات الموظفين", path: "/salary-profiles", adminOnly: true },
       { icon: Users, label: "تجهيز المرتبات", path: "/salary-preparation", adminOnly: true },
       { icon: PackagePlus, label: "إذن استلام بضاعة", path: "/goods-receipt", adminOnly: true },
       { icon: ArrowLeftRight, label: "تحويل مخزون", path: "/stock-transfer", adminOnly: true },

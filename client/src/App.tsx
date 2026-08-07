@@ -16,6 +16,7 @@ import WorkshopReturns from "./pages/WorkshopReturns";
 import Advertising from "./pages/Advertising";
 import DailyCollections from "./pages/DailyCollections";
 import SalaryPreparation from "./pages/SalaryPreparation";
+import SalaryProfiles from "./pages/SalaryProfiles";
 import AgentWorkspace from "./pages/AgentWorkspace";
 import Employees from "./pages/Employees";
 import Inventory from "./pages/Inventory";
@@ -134,6 +135,9 @@ function Router() {
       </Route>
       <Route path="/collections">
         <ProtectedLayout><Accounting /></ProtectedLayout>
+      </Route>
+      <Route path="/salary-profiles">
+        <ProtectedLayout><SalaryProfiles /></ProtectedLayout>
       </Route>
       <Route path="/salary-preparation">
         <ProtectedLayout><SalaryPreparation /></ProtectedLayout>

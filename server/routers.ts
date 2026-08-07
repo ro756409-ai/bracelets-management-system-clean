@@ -423,6 +423,7 @@ import {
   getPayrollSettings,
   upsertPayrollSettings,
   getSalaryProfiles,
+  listBusinessSalaryProfiles,
   createSalaryProfile,
   updateSalaryProfile,
   getAdvances,
@@ -6517,6 +6518,15 @@ export const appRouter = router({
     profileList: adminProcedure
       .input(z.object({ employeeId: z.number() }))
       .query(async ({ input }) => getSalaryProfiles(input.employeeId)),
+
+    /** الساري لكل موظف في النشاط — للشاشة اللي المالك بيدير منها المرتبات. */
+    profileListByBusiness: adminProcedure
+      .input(z.object({ businessId: z.number() }))
+      .query(async ({ ctx, input }) =>
+        listBusinessSalaryProfiles(
+          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+        )
+      ),
 
     profileCreate: adminProcedure
       .input(
