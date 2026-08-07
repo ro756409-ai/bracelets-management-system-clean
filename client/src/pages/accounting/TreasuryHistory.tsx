@@ -68,6 +68,10 @@ export default function TreasuryHistory() {
   );
 
   const rows = q.data ?? [];
+  // الرصيد الحقيقي بييجي من مركز التحكم — مش من آخر صف في الفلتر.
+  const balance = trpc.accounting.controlCenter.useQuery(
+    currentBusinessIds?.length ? { businessIds: currentBusinessIds } : {}
+  );
 
   return (
     <div className="space-y-4" dir="rtl">
@@ -103,6 +107,33 @@ export default function TreasuryHistory() {
           </div>
         </div>
       )}
+
+      {/*
+        الرصيد الحالي فوق السجل عن قصد.
+
+        `balanceAfter` بيتجمّد وقت الإدخال مش وقت العرض — عشان كشف قديم يفضل مطابق
+        لنفسه. النتيجة إن حركة بتاريخ قديم بتتضاف **آخر** السلسلة، فلو التاجر فلتر على
+        أسبوع، آخر «رصيد بعد» في الجدول ممكن يبقى مش الرصيد الحقيقي، واللوحة تقول رقم
+        تاني. الرقمين صح — والفرق مكانش مشروح في أي مكان.
+      */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-4 py-3">
+        <span className="text-sm text-muted-foreground">رصيد الخزنة الحالي</span>
+        <span className="text-lg font-bold tabular-nums">
+          {balance.isLoading ? "…" : egp(balance.data?.treasuryBalance ?? 0)}
+        </span>
+      </div>
+
+      {!q.isLoading && rows.length > 0 &&
+        Math.abs(
+          Number(rows[0]?.balanceAfter ?? 0) -
+            Number(balance.data?.treasuryBalance ?? 0)
+        ) > 0.01 && (
+          <div className="mb-3 rounded-lg border p-3 text-xs"
+            style={{ borderColor: "var(--warning)", color: "var(--warning)" }}>
+            آخر «رصيد بعد» في الجدول تحت مش نفس الرصيد الحالي — يعني فيه حركات بره
+            الفترة اللي مختارها. وسّع التاريخ من فوق عشان تشوف السلسلة كاملة.
+          </div>
+        )}
 
       <SectionCard>
         {q.isLoading ? (
