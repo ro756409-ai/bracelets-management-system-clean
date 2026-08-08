@@ -520,14 +520,34 @@ describe("🔑 صفحة الإعدادات اتبسّطت من غير ما حا�
 
   it("🔑 الأقسام التقيلة مقفولة مش محذوفة", () => {
     const block = settings.slice(settings.indexOf("<details"));
-    for (const section of [
-      "<CostCenterSettings",
-      "<ShippingRouteSettings",
-      "<PermissionSettings",
-    ]) {
+    for (const section of ["<CostCenterSettings", "<PermissionSettings"]) {
       expect(block, section).toContain(section);
     }
     expect(settings).toContain("إعدادات متقدمة");
+  });
+
+  it("🔑 وأسعار الشحن المتوقعة اتشالت من الشاشة — مش من النظام", () => {
+    // «نسخة سعر جديدة» و«جدول المسارات» بيسجّلوا التكلفة **المتوقعة** لكل محافظة
+    // عشان تتقارن بالفعلية. التاجر بيسجّل الفعلية في «تحصيل اليوم» على طول، فالمتوقع
+    // مالوش مقارنة يعملها وكان بياخد نص الصفحة.
+    // بدون التعليقات: التعليق اللي بيشرح إن القسم اتشال بيحتوي اسمه بالضرورة.
+    const code = codeOnly(settings);
+    expect(code).not.toContain("نسخة سعر جديدة");
+    expect(code).not.toContain("<ShippingRouteSettings");
+    // الجداول والخدمات مكانهم
+    const schema = codeOnly(fs.readFileSync("drizzle/schema.ts", "utf-8"));
+    expect(schema).toContain("shippingRateVersions = mysqlTable(");
+    expect(schema).toContain("shippingRateCharges = mysqlTable(");
+    expect(fs.readFileSync("server/shippingConfigV2.service.ts", "utf-8")).toContain(
+      "shippingRateVersions"
+    );
+  });
+
+  it("🔑 وشريط المخفيات فاضل فيه الإعدادات بس", () => {
+    // كان بيعرض الستة كأزرار — «مخفي» من الشريط الرئيسي و«ظاهر» هنا: نفس الزحمة
+    // في مكان تاني. الإعدادات الوحيدة اللي مالهاش بديل.
+    const accounting = fs.readFileSync("client/src/pages/Accounting.tsx", "utf-8");
+    expect(accounting).toContain('HIDDEN_TABS.filter(t => t.key === "settings")');
   });
 
   it("واللي التاجر بيحتاجه فاضل مفتوح", () => {

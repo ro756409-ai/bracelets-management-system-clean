@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatMoney } from "@/lib/money";
-import { Users, Pencil } from "lucide-react";
+import { Users, Pencil, Trash2 } from "lucide-react";
 
 /**
  * مرتبات الموظفين — مين بياخد كام.
@@ -130,10 +130,32 @@ export default function SalaryProfiles() {
 
 function ProfilesSection({ businessId }: { businessId: number }) {
   const utils = trpc.useUtils();
-  const employees = trpc.employees.list.useQuery({ businessId, isActive: true });
+  // **من غير فلتر نشاط عن قصد.** `employees.businessId` عمود nullable — الموظفين
+  // اللي مااتربطوش بنشاط صراحةً بيبقى NULL، والفلترة عليه كانت بتخفيهم كلهم وتسيب
+  // اللي متربط بس. التاجر شاف موظف واحد في القايمة وهو عنده عشرة.
+  const employees = trpc.employees.list.useQuery({ isActive: true });
   const profiles = trpc.payroll.profileListByBusiness.useQuery({ businessId });
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [open, setOpen] = useState(false);
+
+  const [newName, setNewName] = useState("");
+  const addPerson = trpc.employees.create.useMutation({
+    onSuccess: async (created: any) => {
+      toast.success("اتضاف");
+      setNewName("");
+      await utils.employees.list.invalidate();
+      if (created?.id) setDraft(d => ({ ...d, employeeId: String(created.id) }));
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  const remove = trpc.payroll.profileDelete.useMutation({
+    onSuccess: async () => {
+      toast.success("اتشال");
+      await utils.payroll.profileListByBusiness.invalidate();
+    },
+    onError: error => toast.error(error.message),
+  });
 
   const create = trpc.payroll.profileCreate.useMutation({
     onSuccess: async () => {
@@ -260,6 +282,24 @@ function ProfilesSection({ businessId }: { businessId: number }) {
                           <Pencil className="ml-1 h-3.5 w-3.5" />
                           تعديل
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive"
+                          disabled={remove.isPending}
+                          onClick={() => {
+                            if (
+                              !confirm(
+                                `تشيل مرتب «${row.employeeName}»؟ كشوف الرواتب المتحسبة قبل كده مابتتغيّرش.`
+                              )
+                            )
+                              return;
+                            remove.mutate({ businessId, profileId: row.id });
+                          }}
+                        >
+                          <Trash2 className="ml-1 h-3.5 w-3.5" />
+                          حذف
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -299,17 +339,37 @@ function ProfilesSection({ businessId }: { businessId: number }) {
                   السُلف والعمولات وكشف الراتب كلهم يشاوروا على نفس الشخص. لو الاسم
                   اتكتب حر، كل شاشة كانت هتبقى عندها نسخة من «أحمد».
                 */}
-                {active.length === 0 && (
-                  <p className="mt-1 text-xs text-warning">
-                    مفيش موظفين متسجّلين. ضيفهم من صفحة «الموظفين» الأول.
-                  </p>
-                )}
-                <a
-                  href="/employees"
-                  className="mt-1 inline-block text-xs text-primary hover:underline"
-                >
-                  الموظف مش في القايمة؟ ضيفه من صفحة الموظفين ←
-                </a>
+                {/*
+                  الإضافة هنا عن قصد. الموظف اللي بياخد مرتب مش لازم يكون عنده حساب
+                  دخول — `username` و`passwordHash` عمودين nullable، و`employees.create`
+                  مش بيطلب غير الاسم. فبدل ما التاجر يسيب الشاشة ويروح لصفحة الموظفين
+                  عشان يعمل حساب لواحد مش هيدخل النظام أصلاً، بيكتب الاسم هنا.
+                */}
+                <div className="mt-2 flex gap-2">
+                  <Input
+                    placeholder="أو اكتب اسم جديد..."
+                    value={newName}
+                    onChange={e => setNewName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key !== "Enter") return;
+                      e.preventDefault();
+                      if (newName.trim().length < 2) return;
+                      addPerson.mutate({ name: newName.trim(), role: "viewer" });
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    disabled={addPerson.isPending || newName.trim().length < 2}
+                    onClick={() =>
+                      addPerson.mutate({ name: newName.trim(), role: "viewer" })
+                    }
+                  >
+                    إضافة
+                  </Button>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  مش لازم يبقى ليه حساب دخول — الاسم كفاية عشان تحسبله مرتب.
+                </p>
               </div>
 
               <div>

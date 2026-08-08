@@ -425,6 +425,7 @@ import {
   upsertPayrollSettings,
   getSalaryProfiles,
   listBusinessSalaryProfiles,
+  deleteSalaryProfile,
   createSalaryProfile,
   updateSalaryProfile,
   getAdvances,
@@ -6552,6 +6553,18 @@ export const appRouter = router({
         listBusinessSalaryProfiles(
           await requireScopedBusinessId(ctx.tenantId, input.businessId)
         )
+      ),
+
+    profileDelete: adminProcedure
+      .input(z.object({ businessId: z.number(), profileId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        deleteSalaryProfile({
+          profileId: input.profileId,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
       ),
 
     profileCreate: adminProcedure

@@ -5377,6 +5377,30 @@ export async function listBusinessSalaryProfiles(businessId: number) {
   );
 }
 
+/** حذف إصدار مرتب — للسطر الغلط. الإصدارات التانية للموظف مابتتأثرش. */
+export async function deleteSalaryProfile(input: {
+  businessId: number;
+  profileId: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db
+    .select()
+    .from(employeeSalaryProfiles)
+    .where(
+      and(
+        eq(employeeSalaryProfiles.id, input.profileId),
+        eq(employeeSalaryProfiles.businessId, input.businessId)
+      )
+    )
+    .limit(1);
+  if (!row) throw new Error("المرتب ده مش تابع للنشاط ده");
+  await db
+    .delete(employeeSalaryProfiles)
+    .where(eq(employeeSalaryProfiles.id, row.id));
+  return { id: row.id };
+}
+
 export async function getSalaryProfiles(employeeId: number) {
   const db = await getDb();
   if (!db) return [];
