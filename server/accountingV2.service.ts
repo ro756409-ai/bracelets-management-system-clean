@@ -221,9 +221,27 @@ export const DEFAULT_TREASURY_ACCOUNT_NAME = "الخزنة الرئيسية";
  *
  * جوه ترانزاكشن الدفع عن قصد: لو الدفعة رجعت، الخزنة اللي اتعملت معاها ترجع كمان.
  */
-export async function resolveDefaultTreasuryAccountInTransaction(
+export const EMPLOYEE_ADVANCES_ACCOUNT_CODE = "EMP-ADVANCES";
+export const EMPLOYEE_ADVANCES_ACCOUNT_NAME = "سُلف الموظفين";
+
+/**
+ * حساب افتراضي بيتلاقى أو يتعمل — الشكل العام للي «الخزنة الرئيسية» بتستخدمه.
+ *
+ * اتعمّم لما السُلفة احتاجت حسابين: الخزنة اللي الفلوس خرجت منها، وحساب بيمسك إن
+ * الموظف مدين بيها. الاتنين نفس المشكلة — التاجر مالوش دعوة يعرف إن فيه حاجة اسمها
+ * حساب مدينين — ونفس الحل: كود ثابت، والقيد الفريد بيمنع التكرار حتى مع نداءين
+ * متوازيين.
+ */
+async function resolveDefaultAccountInTransaction(
   tx: any,
-  businessId: number
+  businessId: number,
+  spec: {
+    code: string;
+    name: string;
+    accountType: string;
+    isCashEquivalent: boolean;
+    inactiveMessage: string;
+  }
 ): Promise<FinancialAccount> {
   const find = async (): Promise<FinancialAccount | undefined> => {
     const [row] = await tx
@@ -232,7 +250,7 @@ export async function resolveDefaultTreasuryAccountInTransaction(
       .where(
         and(
           eq(financialAccounts.businessId, businessId),
-          eq(financialAccounts.code, DEFAULT_TREASURY_ACCOUNT_CODE)
+          eq(financialAccounts.code, spec.code)
         )
       )
       .limit(1);
@@ -241,8 +259,7 @@ export async function resolveDefaultTreasuryAccountInTransaction(
 
   const existing = await find();
   if (existing) {
-    if (!existing.isActive)
-      throw new Error("الخزنة الرئيسية موقوفة — فعّلها من إعدادات الحسابات");
+    if (!existing.isActive) throw new Error(spec.inactiveMessage);
     return existing;
   }
 
@@ -256,10 +273,10 @@ export async function resolveDefaultTreasuryAccountInTransaction(
   try {
     await tx.insert(financialAccounts).values({
       businessId,
-      code: DEFAULT_TREASURY_ACCOUNT_CODE,
-      name: DEFAULT_TREASURY_ACCOUNT_NAME,
-      accountType: "cash",
-      isCashEquivalent: true,
+      code: spec.code,
+      name: spec.name,
+      accountType: spec.accountType,
+      isCashEquivalent: spec.isCashEquivalent,
       allowNegativeBalance: true,
       currencyCode: business.baseCurrency,
       openingBalance: "0",
@@ -274,8 +291,41 @@ export async function resolveDefaultTreasuryAccountInTransaction(
   }
 
   const created = await find();
-  if (!created) throw new Error("تعذر إنشاء الخزنة الرئيسية");
+  if (!created) throw new Error(`تعذر إنشاء ${spec.name}`);
   return created;
+}
+
+/** الخزنة الرئيسية — الفلوس النقدية بتخرج وتدخل منها. */
+export async function resolveDefaultTreasuryAccountInTransaction(
+  tx: any,
+  businessId: number
+): Promise<FinancialAccount> {
+  return resolveDefaultAccountInTransaction(tx, businessId, {
+    code: DEFAULT_TREASURY_ACCOUNT_CODE,
+    name: DEFAULT_TREASURY_ACCOUNT_NAME,
+    accountType: "cash",
+    isCashEquivalent: true,
+    inactiveMessage: "الخزنة الرئيسية موقوفة — فعّلها من إعدادات الحسابات",
+  });
+}
+
+/**
+ * سُلف الموظفين — اللي الموظفين مدينين بيه.
+ *
+ * مش «cash equivalent» عن قصد: الفلوس دي مش في الدُرج، هي دَيْن على موظف. لو اتحسبت
+ * نقدية كان رصيد الخزنة هيعدّ نفس الجنيه مرتين.
+ */
+export async function resolveEmployeeAdvancesAccountInTransaction(
+  tx: any,
+  businessId: number
+): Promise<FinancialAccount> {
+  return resolveDefaultAccountInTransaction(tx, businessId, {
+    code: EMPLOYEE_ADVANCES_ACCOUNT_CODE,
+    name: EMPLOYEE_ADVANCES_ACCOUNT_NAME,
+    accountType: "receivable",
+    isCashEquivalent: false,
+    inactiveMessage: "حساب سُلف الموظفين موقوف — فعّله من إعدادات الحسابات",
+  });
 }
 
 export async function getFinancialAccounts(businessId: number) {

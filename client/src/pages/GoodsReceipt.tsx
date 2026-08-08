@@ -79,6 +79,18 @@ export default function GoodsReceipt() {
   const warehouses = trpc.businesses.warehouses.useQuery(
     { businessId: bid! }, { enabled: Boolean(bid) }
   );
+  const [newWarehouse, setNewWarehouse] = useState("");
+  const addWarehouse = trpc.businesses.createWarehouse.useMutation({
+    onSuccess: async () => {
+      toast.success("اتضاف المخزن");
+      setNewWarehouse("");
+      // اللي اتعمل لسه بيتختار لوحده: من غير كده التاجر يضيفه ويدوّر عليه تاني.
+      const fresh = await warehouses.refetch();
+      const added = fresh.data?.find(w => w.name === newWarehouse.trim());
+      if (added) setWarehouseId(String(added.id));
+    },
+    onError: error => toast.error(error.message),
+  });
   const { data: products } = trpc.products.list.useQuery(
     currentBusinessIds?.length ? { businessIds: currentBusinessIds } : undefined
   );
@@ -249,6 +261,42 @@ export default function GoodsReceipt() {
               </SelectContent>
             </Select>
             {showError("warehouseId")}
+            {/*
+              إضافة مخزن من هنا.
+
+              `businesses.createWarehouse` كان في السيرفر من غير أي شاشة بتناديه — زي
+              `payroll.profileCreate` بالظبط. النتيجة إن القايمة دي بتطلع فاضية وإذن
+              الاستلام كله مقفول، والتاجر مش لاقي في أي مكان طريقة يعمل بيها مخزن.
+            */}
+            {bid != null && (warehouses.data?.length ?? 0) === 0 && (
+              <p className="mt-1 text-xs" style={{ color: "var(--warning)" }}>
+                مفيش مخازن لسه — اكتب اسم مكان الاستلام تحت.
+              </p>
+            )}
+            {bid != null && (
+              <div className="mt-2 flex gap-2">
+                <Input
+                  placeholder="أو اكتب مخزن جديد..."
+                  value={newWarehouse}
+                  onChange={e => setNewWarehouse(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    if (newWarehouse.trim().length < 2) return;
+                    addWarehouse.mutate({ businessId: bid, name: newWarehouse.trim() });
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  disabled={addWarehouse.isPending || newWarehouse.trim().length < 2}
+                  onClick={() =>
+                    addWarehouse.mutate({ businessId: bid, name: newWarehouse.trim() })
+                  }
+                >
+                  إضافة
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       </SectionCard>

@@ -136,6 +136,7 @@ import {
   approveExpense,
   createAdSpendDraft,
   updateAdSpendDraft,
+  deleteAdSpendDraft,
   createExpenseDraft,
   payExpense,
   recordSimpleExpense,
@@ -1100,6 +1101,18 @@ export const appRouter = router({
       ),
 
     /** تعديل صرف إعلان لسه مسودة — التاجر بيغلط في رقم ويعرف بعد ساعة. */
+    adSpendDelete: permissionProcedure("ad_spend.manage")
+      .input(z.object({ businessId: z.number(), adSpendId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        deleteAdSpendDraft({
+          adSpendId: input.adSpendId,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
     adSpendUpdate: permissionProcedure("ad_spend.manage")
       .input(
         z.object({
@@ -6663,9 +6676,9 @@ export const appRouter = router({
           amount: z.number().positive("المبلغ لازم يكون أكبر من صفر"),
           advanceDate: z.date(),
           reason: z.string().optional(),
-          sourceAccountId: z.number(),
-          receivableAccountId: z.number(),
-          evidenceUrl: z.string().min(1),
+          sourceAccountId: z.number().optional(),
+          receivableAccountId: z.number().optional(),
+          evidenceUrl: z.string().optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {

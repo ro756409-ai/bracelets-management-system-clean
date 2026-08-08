@@ -155,7 +155,11 @@ describe("🔑 الصرف بيمر من المسار الموجود", () => {
     // التعديل مش مسار مصروفات تاني: هو بيعدّل **نفس** صف المسودة اللي `adSpendCreate`
     // عمله. اللي القايمة دي بتمنعه هو إن الشاشة تفتح طريق مصروف موازي.
     const mutations = [...page.matchAll(/trpc\.[\w.]+\.(\w+)\.useMutation/g)].map(m => m[1]);
-    expect(mutations.sort()).toEqual(["adSpendCreate", "adSpendUpdate"]);
+    expect(mutations.sort()).toEqual([
+      "adSpendCreate",
+      "adSpendDelete",
+      "adSpendUpdate",
+    ]);
   });
 
   it("🔑 والتعديل للمسودة بس — السيرفر بيرفض غير كده", () => {

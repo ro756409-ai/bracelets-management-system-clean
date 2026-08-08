@@ -91,6 +91,13 @@ export default function Advertising() {
 
   const rows = campaigns.data ?? [];
   const [editing, setEditing] = useState<any | null>(null);
+  const removeCampaign = trpc.accountingV2.adSpendDelete.useMutation({
+    onSuccess: async () => {
+      toast.success("اتمسحت الحملة");
+      await campaigns.refetch();
+    },
+    onError: error => toast.error(error.message),
+  });
 
   const asCampaignRows: CampaignRow[] = useMemo(
     () => rows.map(r => ({
@@ -467,13 +474,35 @@ export default function Advertising() {
                           مجرد إننا مانوريش زرار مايشتغلش.
                         */}
                         {r.expenseStatus === "draft" ? (
-                          <button
-                            type="button"
-                            className="text-xs text-primary hover:underline"
-                            onClick={() => setEditing(r)}
-                          >
-                            تعديل
-                          </button>
+                          <span className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              className="text-xs text-primary hover:underline"
+                              onClick={() => setEditing(r)}
+                            >
+                              تعديل
+                            </button>
+                            <button
+                              type="button"
+                              className="text-xs hover:underline"
+                              style={{ color: "var(--destructive)" }}
+                              disabled={removeCampaign.isPending}
+                              onClick={() => {
+                                if (
+                                  !confirm(
+                                    `تمسح حملة «${r.campaignName}» ومصروفها؟ مفيش رجعة.`
+                                  )
+                                )
+                                  return;
+                                removeCampaign.mutate({
+                                  businessId: bid!,
+                                  adSpendId: r.id,
+                                });
+                              }}
+                            >
+                              حذف
+                            </button>
+                          </span>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}

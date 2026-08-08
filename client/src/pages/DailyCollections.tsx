@@ -659,6 +659,19 @@ function RecentSettlements({ businessId }: { businessId: number }) {
     limit: 30,
   });
   const rows = list.data ?? [];
+  const totals = useMemo(
+    () =>
+      rows.reduce(
+        (sum: any, row: any) => ({
+          orders: sum.orders + Number(row.ordersCount ?? 0),
+          gross: sum.gross + Number(row.grossCollected ?? 0),
+          charges: sum.charges + Number(row.totalCharges ?? 0),
+          net: sum.net + Number(row.netTransferred ?? 0),
+        }),
+        { orders: 0, gross: 0, charges: 0, net: 0 }
+      ),
+    [rows]
+  );
 
   return (
     <Card>
@@ -701,6 +714,28 @@ function RecentSettlements({ businessId }: { businessId: number }) {
                   </tr>
                 ))}
               </tbody>
+              {/*
+                سطر الإجماليات — التاجر بيسجّل تحصيل كل يومين ومحتاج يعرف الشهر جاب كام،
+                وكان لازم يجمع بإيده من الشاشة.
+
+                بيجمع اللي **معروض** بس، مش كل التاريخ: القايمة محدودة بآخر التسويات،
+                فمجموع كل حاجة كان هيبقى رقم مالوش علاقة بالسطور اللي تحته.
+              */}
+              <tfoot>
+                <tr className="border-t-2 font-bold">
+                  <td className="p-2" colSpan={2}>
+                    الإجمالي ({rows.length})
+                  </td>
+                  <td className="p-2">{totals.orders}</td>
+                  <td className="p-2">{formatMoney(totals.gross)}</td>
+                  <td className="p-2 text-muted-foreground">
+                    {formatMoney(totals.charges)}
+                  </td>
+                  <td className="p-2 text-emerald-700 dark:text-emerald-400">
+                    {formatMoney(totals.net)}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}

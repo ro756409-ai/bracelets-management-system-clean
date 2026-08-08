@@ -262,3 +262,133 @@ describe("🔑 سجل الخزنة بيقول الرصيد الحقيقي", () =
     expect(history).toContain("Number(rows[0]?.balanceAfter ?? 0)");
   });
 });
+
+// ───────────────── الفجوات اللي زي فجوة المرتبات ─────────────────
+
+describe("🔑 إضافة مخزن — نفس الفجوة", () => {
+  const receipt = fs.readFileSync("client/src/pages/GoodsReceipt.tsx", "utf-8");
+
+  it("🔑 createWarehouse كان في السيرفر من غير شاشة", () => {
+    // نفس قصة `profileCreate`: endpoint موجود، مفيش أي طريق ليه. النتيجة إن «مكان
+    // الاستلام» بيطلع فاضي وإذن الاستلام كله مقفول ومفيش مكان تعمل منه مخزن.
+    expect(routers).toContain("createWarehouse: adminProcedure");
+    expect(receipt).toContain("trpc.businesses.createWarehouse.useMutation");
+  });
+
+  it("🔑 وبيقول للتاجر لما مايكونش فيه مخازن", () => {
+    expect(receipt).toContain("مفيش مخازن لسه");
+    expect(receipt).toContain("أو اكتب مخزن جديد...");
+  });
+
+  it("🔑 والمخزن الجديد بيتختار لوحده", () => {
+    expect(codeOnly(receipt)).toContain("setWarehouseId(String(added.id))");
+  });
+});
+
+describe("🔑 حذف الحملة", () => {
+  const ads = fs.readFileSync("client/src/pages/Advertising.tsx", "utf-8");
+  const svc = read("server/expensesV2.service.ts");
+
+  it("🔑 فيه زرار حذف جنب التعديل", () => {
+    expect(ads).toContain("trpc.accountingV2.adSpendDelete.useMutation");
+    expect(ads).toContain("تمسح حملة");
+  });
+
+  it("🔑 والمسودة بس — زي التعديل بالظبط", () => {
+    const fn = svc.slice(svc.indexOf("export async function deleteAdSpendDraft"));
+    expect(fn).toContain('if (expense && expense.status !== "draft")');
+  });
+
+  it("🔑 وبيمسح الحملة ومصروفها مع بعض", () => {
+    // لو مسح الحملة وساب المصروف، كان هيفضل مصروف يتيم في التقارير مالوش حملة
+    // والتاجر مش لاقي طريقة يشيله.
+    const fn = svc.slice(svc.indexOf("export async function deleteAdSpendDraft"));
+    expect(fn).toContain("tx.delete(adSpendEntries)");
+    expect(fn).toContain("tx.delete(expenses)");
+  });
+});
+
+describe("🔑 إجماليات التحصيلات", () => {
+  const page = fs.readFileSync("client/src/pages/DailyCollections.tsx", "utf-8");
+
+  it("🔑 فيه سطر إجمالي للأوردرات والتحصيل والرسوم والصافي", () => {
+    const foot = page.slice(page.indexOf("<tfoot>"));
+    for (const key of ["totals.orders", "totals.gross", "totals.charges", "totals.net"]) {
+      expect(foot, key).toContain(key);
+    }
+  });
+
+  it("🔑 وبيجمع اللي معروض بس — مش كل التاريخ", () => {
+    // القايمة محدودة بآخر التسويات، فمجموع كل حاجة كان هيبقى رقم مالوش علاقة
+    // بالسطور اللي تحته.
+    expect(codeOnly(page)).toContain("rows.reduce(");
+    expect(page).toContain("الإجمالي ({rows.length})");
+  });
+});
+
+// ───────────────── السُلف ─────────────────
+
+describe("🔑 السُلفة فلوس خرجت من الدُرج", () => {
+  const svc = read("server/advancesV2.service.ts");
+  const fn = svc.slice(svc.indexOf("export async function issueEmployeeAdvance"));
+
+  it("🔑 بتنزّل حركة خزنة خارجة — مكانتش بتنزّل", () => {
+    // نفس فجوة دفع المصروف: كانت بتكتب القيد المالي وبس، فالتاجر يدي سُلفة ٥٠٠
+    // ويلاقي رصيد الخزنة زي ما هو ويفتكر الفلوس لسه عنده.
+    expect(fn).toContain("addTreasuryTransactionInTransaction(tx, {");
+    expect(fn).toContain('direction: "out"');
+    expect(fn).toContain("تعذر تسجيل حركة الخزنة — السُلفة اترجعت");
+  });
+
+  it("🔑 وفي نفس الترانزاكشن — يا الاتنين يا ولا واحد", () => {
+    const open = fn.indexOf("db.transaction(async tx =>");
+    expect(open).toBeGreaterThan(-1);
+    expect(fn.indexOf("addTreasuryTransactionInTransaction")).toBeGreaterThan(open);
+  });
+
+  it("🔑 والحسابين بيتحلّوا لوحدهم — التاجر مالوش دعوة بيهم", () => {
+    expect(fn).toContain("resolveDefaultTreasuryAccountInTransaction(tx, input.businessId)");
+    expect(fn).toContain("resolveEmployeeAdvancesAccountInTransaction(tx, input.businessId)");
+    const routerBlock = routers.slice(
+      routers.indexOf("advanceCreate: adminProcedure"),
+      routers.indexOf("advanceCreate: adminProcedure") + 700
+    );
+    expect(routerBlock).toContain("sourceAccountId: z.number().optional()");
+    expect(routerBlock).toContain("receivableAccountId: z.number().optional()");
+  });
+
+  it("🔑 وحساب السُلف مش نقدي — وإلا الجنيه بيتعدّ مرتين", () => {
+    const accounting = read("server/accountingV2.service.ts");
+    const resolver = accounting.slice(
+      accounting.indexOf("export async function resolveEmployeeAdvancesAccountInTransaction")
+    );
+    expect(resolver).toContain("isCashEquivalent: false");
+    expect(resolver).toContain('accountType: "receivable"');
+  });
+
+  it("🔑 والموظف اللي مالوش نشاط بياخد سُلفة برضه", () => {
+    // `employees.businessId` nullable، والشرط القديم كان بيرفض كل اللي NULL.
+    expect(fn).toContain("if (employee.businessId != null && employee.businessId !== input.businessId)");
+  });
+
+  it("والشاشة بتقول إن التكلفة مابتتحسبش مرتين", () => {
+    expect(page).toContain("مابتتحسبش تكلفة مرتين");
+    expect(page).toContain("اصرف من الخزنة");
+  });
+});
+
+describe("🔑 نموذج المرتب بيبان لما تدوس تعديل", () => {
+  it("🔑 نافذة فوق الشاشة مش كارت تحت جدول طوله ١٨ سطر", () => {
+    // كان بيترسم بعد الجدول، فالتاجر يدوس «تعديل» والنموذج يفتح خارج المنظر —
+    // وشكله إن الزرار مكسور.
+    const modal = page.slice(page.indexOf("{open && ("), page.indexOf("مرتب موظف"));
+    expect(modal).toContain("fixed inset-0");
+    expect(modal).toContain("z-50");
+  });
+
+  it("والضغط بره بيقفلها، وجوه لأ", () => {
+    const modal = page.slice(page.indexOf("{open && ("));
+    expect(modal).toContain("onClick={() => setOpen(false)}");
+    expect(modal).toContain("event.stopPropagation()");
+  });
+});
