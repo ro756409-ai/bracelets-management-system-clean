@@ -6676,9 +6676,9 @@ export const appRouter = router({
           amount: z.number().positive("المبلغ لازم يكون أكبر من صفر"),
           advanceDate: z.date(),
           reason: z.string().optional(),
-          sourceAccountId: z.number(),
-          receivableAccountId: z.number(),
-          evidenceUrl: z.string().min(1),
+          sourceAccountId: z.number().optional(),
+          receivableAccountId: z.number().optional(),
+          evidenceUrl: z.string().optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {

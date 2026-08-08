@@ -4,9 +4,11 @@ import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import {
   createBusinessEventInTransaction,
   postFinancialTransactionInTransaction,
+  resolveDefaultTreasuryAccountInTransaction,
+  resolveEmployeeAdvancesAccountInTransaction,
   type Actor,
 } from "./accountingV2.service";
-import { getDb } from "./db";
+import { addTreasuryTransactionInTransaction, getDb } from "./db";
 
 export async function issueEmployeeAdvance(input: {
   businessId: number;
@@ -14,21 +16,34 @@ export async function issueEmployeeAdvance(input: {
   amount: string;
   advanceDate: Date;
   reason?: string;
-  sourceAccountId: number;
-  receivableAccountId: number;
-  evidenceUrl: string;
+  /** اختياري — لو مااتبعتش، بيتصرف من «الخزنة الرئيسية». */
+  sourceAccountId?: number;
+  /** اختياري — لو مااتبعش، بيتسجّل على «سُلف الموظفين». */
+  receivableAccountId?: number;
+  evidenceUrl?: string;
   actor: Actor;
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async tx => {
-    const [employee] = await tx.select().from(employees).where(and(
-      eq(employees.id, input.employeeId), eq(employees.businessId, input.businessId),
-    )).limit(1);
-    if (!employee) throw new Error("Employee is outside this business");
+    // `employees.businessId` عمود nullable، والموظف اللي مااتربطش بنشاط بيبقى NULL.
+    // الشرط القديم كان بيرفض كل دول — يعني معظم الموظفين مكانش ينفع تديهم سُلفة.
+    const [employee] = await tx.select().from(employees)
+      .where(eq(employees.id, input.employeeId)).limit(1);
+    if (!employee) throw new Error("الموظف مش موجود");
+    if (employee.businessId != null && employee.businessId !== input.businessId)
+      throw new Error("الموظف تابع لنشاط تاني");
     const [business] = await tx.select().from(businesses).where(eq(businesses.id, input.businessId)).limit(1);
     if (!business) throw new Error("Business not found");
     const amount = fromMinorUnits(toMinorUnits(input.amount));
+    // نفس منطق دفع المصروف: التاجر مالوش دعوة بحسابات، والاتنين بيتعملوا لو مش موجودين.
+    const sourceAccountId =
+      input.sourceAccountId ??
+      (await resolveDefaultTreasuryAccountInTransaction(tx, input.businessId)).id;
+    const receivableAccountId =
+      input.receivableAccountId ??
+      (await resolveEmployeeAdvancesAccountInTransaction(tx, input.businessId)).id;
+    const evidenceUrl = input.evidenceUrl?.trim() || "سُلفة نقدية";
     const event = await createBusinessEventInTransaction(tx, {
       businessId: input.businessId,
       eventType: "employee_advance.issued",
@@ -36,18 +51,18 @@ export async function issueEmployeeAdvance(input: {
       sourceReference: String(employee.id),
       idempotencyKey: `employee:${employee.id}:advance:${input.advanceDate.toISOString()}:${amount}`,
       occurredAt: input.advanceDate,
-      payload: { employeeId: employee.id, amount, receivableAccountId: input.receivableAccountId },
+      payload: { employeeId: employee.id, amount, receivableAccountId },
       actor: input.actor,
     });
     const transaction = await postFinancialTransactionInTransaction(tx, {
       businessId: input.businessId,
       transactionType: "employee_advance",
-      sourceAccountId: input.sourceAccountId,
-      targetAccountId: input.receivableAccountId,
+      sourceAccountId,
+      targetAccountId: receivableAccountId,
       amount,
       currencyCode: business.baseCurrency,
       description: `Employee Advance - ${employee.name}`,
-      evidenceUrl: input.evidenceUrl,
+      evidenceUrl,
       occurredAt: input.advanceDate,
       businessEventId: event.event.id,
       actor: input.actor,
@@ -59,14 +74,35 @@ export async function issueEmployeeAdvance(input: {
       amount,
       advanceDate: input.advanceDate,
       reason: input.reason ?? null,
-      sourceAccountId: input.sourceAccountId,
-      receivableAccountId: input.receivableAccountId,
+      sourceAccountId,
+      receivableAccountId,
       financialTransactionId: transaction.id,
-      evidenceUrl: input.evidenceUrl,
+      evidenceUrl,
       createdBy: input.actor.id,
       createdByName: input.actor.name,
     });
-    return { id: Number(result?.insertId ?? result?.[0]?.insertId), transactionId: transaction.id };
+    // نفس جسر دفع المصروف: السُلفة فلوس **خرجت من الدُرج فعلًا**. من غير السطر ده
+    // رصيد الخزنة بيفضل زي ما هو والتاجر يفتكر إن الفلوس لسه عنده.
+    const treasury = await addTreasuryTransactionInTransaction(tx, {
+      businessId: input.businessId,
+      type: "withdrawal",
+      direction: "out",
+      amount,
+      description: `سُلفة ${employee.name}`,
+      notes: input.reason ?? null,
+      referenceType: "manual",
+      referenceId: employee.id,
+      performedBy: input.actor.id,
+      performedByName: input.actor.name,
+      transactionDate: input.advanceDate,
+    });
+    if (!treasury) throw new Error("تعذر تسجيل حركة الخزنة — السُلفة اترجعت");
+
+    return {
+      id: Number(result?.insertId ?? result?.[0]?.insertId),
+      transactionId: transaction.id,
+      treasuryTransactionId: treasury.id,
+    };
   });
 }
 

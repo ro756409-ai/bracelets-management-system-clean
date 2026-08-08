@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatMoney } from "@/lib/money";
-import { Users, Pencil, Trash2 } from "lucide-react";
+import { Users, Pencil, Trash2, Wallet } from "lucide-react";
 
 /**
  * مرتبات الموظفين — مين بياخد كام.
@@ -124,6 +124,7 @@ export default function SalaryProfiles() {
       )}
 
       {selectedId != null && <ProfilesSection businessId={selectedId} />}
+      {selectedId != null && <AdvancesSection businessId={selectedId} />}
     </div>
   );
 }
@@ -310,8 +311,22 @@ function ProfilesSection({ businessId }: { businessId: number }) {
         </CardContent>
       </Card>
 
+      {/*
+        نافذة فوق الشاشة مش كارت تحت الجدول.
+
+        كانت بتترسم بعد الجدول. مع تمنتاشر موظف الجدول بقى أطول من الشاشة، فالتاجر
+        بيدوس «تعديل» والنموذج بيفتح تحت خارج المنظر — وشكله إن الزرار مش شغّال.
+        النافذة بتظهر في نص الشاشة مهما كان مكان السكرول.
+      */}
       {open && (
-        <Card>
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4"
+          onClick={() => setOpen(false)}
+        >
+          <Card
+            className="my-8 w-full max-w-2xl"
+            onClick={event => event.stopPropagation()}
+          >
           <CardHeader className="pb-3">
             <CardTitle className="text-base">مرتب موظف</CardTitle>
           </CardHeader>
@@ -523,7 +538,8 @@ function ProfilesSection({ businessId }: { businessId: number }) {
               </Button>
             </div>
           </CardContent>
-        </Card>
+          </Card>
+        </div>
       )}
     </div>
   );
@@ -543,4 +559,188 @@ function SalaryValue({ row }: { row: any }) {
     );
   }
   return <span>{parts.length ? parts.join(" + ") : "—"}</span>;
+}
+
+// ───────────────────────── السُلف ─────────────────────────
+
+/**
+ * السُلف اللي الموظف أخدها ولسه ماتخصمتش.
+ *
+ * السُلفة **فلوس خرجت من الدُرج فعلًا** — فبتنزّل حركة خزنة خارجة وقت الصرف، وبتتسجّل
+ * دَيْن على الموظف في نفس الوقت. لما ييجي كشف الراتب، المبلغ ده بيتخصم من الإجمالي.
+ * عشان كده هي معروضة هنا جنب المرتبات مش في شاشة لوحدها: التاجر اللي بيقرّر يدّي سُلفة
+ * بيبص على مرتب الشهر الأول.
+ *
+ * التكلفة **مابتتحسبش مرتين**: السُلفة مصروف وقت صرفها، وسطر «السُلف» في كشف الراتب
+ * عرضي بحت بيفسّر ليه الصافي أقل من الإجمالي.
+ */
+function AdvancesSection({ businessId }: { businessId: number }) {
+  const utils = trpc.useUtils();
+  const employees = trpc.employees.list.useQuery({ isActive: true });
+  const advances = trpc.payroll.advanceList.useQuery({
+    status: "pending",
+    page: 1,
+    limit: 50,
+  });
+
+  const [employeeId, setEmployeeId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const give = trpc.payroll.advanceCreate.useMutation({
+    onSuccess: async () => {
+      toast.success("اتصرفت السُلفة — والخزنة نقصت");
+      setAmount("");
+      setReason("");
+      setEmployeeId("");
+      setOpen(false);
+      await Promise.all([
+        utils.payroll.advanceList.invalidate(),
+        utils.accounting.controlCenter.invalidate(),
+        utils.accounting.treasuryHistory.invalidate(),
+      ]);
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  const rows: any[] = (advances.data as any)?.advances ?? advances.data ?? [];
+  const staff: any[] = employees.data ?? [];
+  const total = rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Wallet className="h-5 w-5 text-amber-600" />
+            السُلف اللي لسه ماتخصمتش
+          </CardTitle>
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            + سُلفة
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rows.length === 0 ? (
+          <p className="rounded-md border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+            مفيش سُلف مستحقة.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-right text-xs text-muted-foreground">
+                  <th className="p-2">الموظف</th>
+                  <th className="p-2">المبلغ</th>
+                  <th className="p-2">التاريخ</th>
+                  <th className="p-2">السبب</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(row => (
+                  <tr key={row.id} className="border-b last:border-0">
+                    <td className="p-2 font-medium">{row.employeeName}</td>
+                    <td className="p-2">{formatMoney(Number(row.amount))}</td>
+                    <td className="p-2 text-muted-foreground">
+                      {new Date(row.advanceDate).toLocaleDateString("ar-EG")}
+                    </td>
+                    <td className="p-2 text-muted-foreground">{row.reason ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 font-bold">
+                  <td className="p-2">الإجمالي ({rows.length})</td>
+                  <td className="p-2">{formatMoney(total)}</td>
+                  <td className="p-2" colSpan={2} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+
+        <p className="text-xs text-muted-foreground">
+          السُلفة بتخرج من «الخزنة الرئيسية» وقت صرفها، وبتتخصم من الراتب في كشف الشهر.
+          مابتتحسبش تكلفة مرتين.
+        </p>
+
+        {open && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setOpen(false)}
+          >
+            <Card
+              className="w-full max-w-md"
+              onClick={event => event.stopPropagation()}
+            >
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">صرف سُلفة</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div>
+                  <Label>الموظف *</Label>
+                  <Select value={employeeId} onValueChange={setEmployeeId}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="اختار الموظف" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {staff.map(row => (
+                        <SelectItem key={row.id} value={String(row.id)}>
+                          {row.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>المبلغ *</Label>
+                  <Input
+                    className="mt-1"
+                    dir="ltr"
+                    inputMode="decimal"
+                    value={amount}
+                    onChange={e => setAmount(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label>السبب</Label>
+                  <Input
+                    className="mt-1"
+                    placeholder="اختياري"
+                    value={reason}
+                    onChange={e => setReason(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1"
+                    disabled={give.isPending}
+                    onClick={() => {
+                      if (!employeeId) return toast.error("اختار الموظف");
+                      const value = Number(amount);
+                      if (!(value > 0))
+                        return toast.error("المبلغ لازم يكون أكبر من صفر");
+                      give.mutate({
+                        businessId,
+                        employeeId: Number(employeeId),
+                        amount: value,
+                        advanceDate: new Date(),
+                        reason: reason.trim() || undefined,
+                      });
+                    }}
+                  >
+                    {give.isPending ? "جاري الصرف..." : "اصرف من الخزنة"}
+                  </Button>
+                  <Button variant="outline" onClick={() => setOpen(false)}>
+                    إلغاء
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
