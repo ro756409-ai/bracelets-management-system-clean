@@ -136,6 +136,7 @@ import {
   approveExpense,
   createAdSpendDraft,
   updateAdSpendDraft,
+  deleteAdSpendDraft,
   createExpenseDraft,
   payExpense,
   recordSimpleExpense,
@@ -1100,6 +1101,18 @@ export const appRouter = router({
       ),
 
     /** تعديل صرف إعلان لسه مسودة — التاجر بيغلط في رقم ويعرف بعد ساعة. */
+    adSpendDelete: permissionProcedure("ad_spend.manage")
+      .input(z.object({ businessId: z.number(), adSpendId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        deleteAdSpendDraft({
+          adSpendId: input.adSpendId,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
     adSpendUpdate: permissionProcedure("ad_spend.manage")
       .input(
         z.object({

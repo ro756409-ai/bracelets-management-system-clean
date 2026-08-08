@@ -262,3 +262,66 @@ describe("🔑 سجل الخزنة بيقول الرصيد الحقيقي", () =
     expect(history).toContain("Number(rows[0]?.balanceAfter ?? 0)");
   });
 });
+
+// ───────────────── الفجوات اللي زي فجوة المرتبات ─────────────────
+
+describe("🔑 إضافة مخزن — نفس الفجوة", () => {
+  const receipt = fs.readFileSync("client/src/pages/GoodsReceipt.tsx", "utf-8");
+
+  it("🔑 createWarehouse كان في السيرفر من غير شاشة", () => {
+    // نفس قصة `profileCreate`: endpoint موجود، مفيش أي طريق ليه. النتيجة إن «مكان
+    // الاستلام» بيطلع فاضي وإذن الاستلام كله مقفول ومفيش مكان تعمل منه مخزن.
+    expect(routers).toContain("createWarehouse: adminProcedure");
+    expect(receipt).toContain("trpc.businesses.createWarehouse.useMutation");
+  });
+
+  it("🔑 وبيقول للتاجر لما مايكونش فيه مخازن", () => {
+    expect(receipt).toContain("مفيش مخازن لسه");
+    expect(receipt).toContain("أو اكتب مخزن جديد...");
+  });
+
+  it("🔑 والمخزن الجديد بيتختار لوحده", () => {
+    expect(codeOnly(receipt)).toContain("setWarehouseId(String(added.id))");
+  });
+});
+
+describe("🔑 حذف الحملة", () => {
+  const ads = fs.readFileSync("client/src/pages/Advertising.tsx", "utf-8");
+  const svc = read("server/expensesV2.service.ts");
+
+  it("🔑 فيه زرار حذف جنب التعديل", () => {
+    expect(ads).toContain("trpc.accountingV2.adSpendDelete.useMutation");
+    expect(ads).toContain("تمسح حملة");
+  });
+
+  it("🔑 والمسودة بس — زي التعديل بالظبط", () => {
+    const fn = svc.slice(svc.indexOf("export async function deleteAdSpendDraft"));
+    expect(fn).toContain('if (expense && expense.status !== "draft")');
+  });
+
+  it("🔑 وبيمسح الحملة ومصروفها مع بعض", () => {
+    // لو مسح الحملة وساب المصروف، كان هيفضل مصروف يتيم في التقارير مالوش حملة
+    // والتاجر مش لاقي طريقة يشيله.
+    const fn = svc.slice(svc.indexOf("export async function deleteAdSpendDraft"));
+    expect(fn).toContain("tx.delete(adSpendEntries)");
+    expect(fn).toContain("tx.delete(expenses)");
+  });
+});
+
+describe("🔑 إجماليات التحصيلات", () => {
+  const page = fs.readFileSync("client/src/pages/DailyCollections.tsx", "utf-8");
+
+  it("🔑 فيه سطر إجمالي للأوردرات والتحصيل والرسوم والصافي", () => {
+    const foot = page.slice(page.indexOf("<tfoot>"));
+    for (const key of ["totals.orders", "totals.gross", "totals.charges", "totals.net"]) {
+      expect(foot, key).toContain(key);
+    }
+  });
+
+  it("🔑 وبيجمع اللي معروض بس — مش كل التاريخ", () => {
+    // القايمة محدودة بآخر التسويات، فمجموع كل حاجة كان هيبقى رقم مالوش علاقة
+    // بالسطور اللي تحته.
+    expect(codeOnly(page)).toContain("rows.reduce(");
+    expect(page).toContain("الإجمالي ({rows.length})");
+  });
+});

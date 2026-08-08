@@ -392,6 +392,37 @@ export async function updateAdSpendDraft(input: {
   });
 }
 
+/**
+ * حذف صرف إعلان — للمسودة بس، زي التعديل بالظبط.
+ *
+ * بيمسح صف الإعلان وصف المصروف مع بعض في ترانزاكشن واحدة. لو مسحنا الإعلان وسبنا
+ * المصروف، كان هيفضل مصروف يتيم في التقارير مالوش حملة، والتاجر مش هيلاقي طريقة يشيله.
+ */
+export async function deleteAdSpendDraft(input: {
+  businessId: number;
+  adSpendId: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const [entry] = await tx.select().from(adSpendEntries).where(and(
+      eq(adSpendEntries.id, input.adSpendId),
+      eq(adSpendEntries.businessId, input.businessId),
+    )).limit(1).for("update");
+    if (!entry) throw new Error("الحملة مش تابعة للنشاط ده");
+
+    const [expense] = await tx.select().from(expenses).where(and(
+      eq(expenses.id, entry.expenseId), eq(expenses.businessId, input.businessId),
+    )).limit(1).for("update");
+    if (expense && expense.status !== "draft")
+      throw new Error("الحملة اتعتمدت خلاص — ماينفعش تتحذف. سجّل تصحيح بدلها.");
+
+    await tx.delete(adSpendEntries).where(eq(adSpendEntries.id, entry.id));
+    if (expense) await tx.delete(expenses).where(eq(expenses.id, expense.id));
+    return { adSpendId: entry.id };
+  });
+}
+
 // ==================== SIMPLE EXPENSE ====================
 //
 // دورة حياة المصروف الكاملة أربع خطوات: مسودة ← إرسال ← اعتماد ← دفع. الأربعة موجودين
