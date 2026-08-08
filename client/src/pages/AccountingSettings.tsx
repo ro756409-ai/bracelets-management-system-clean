@@ -139,8 +139,12 @@ export function AccountingSettingsSection() {
                 namespaces={ADVANCED_CONFIG_NAMESPACES}
                 title="قوايم متقدمة"
               />
+              {/*
+                «جدول مسارات شركات الشحن» اتشال زي نسخة السعر: هو بيقول أنهي شركة
+                بتشحن لأنهي محافظة في أنهي يوم — بيانات لجدولة أوتوماتيك مش مستخدمة.
+                الشاشة والخدمة مكانهم.
+              */}
               <CostCenterSettings businessId={businessId} />
-              <ShippingRouteSettings businessId={businessId} />
               <PermissionSettings />
             </div>
           </details>
@@ -983,219 +987,18 @@ function ShippingSettings({ businessId }: { businessId: number }) {
           </p>
         </div>
 
-        <div className="border-t pt-5">
-          <h3 className="mb-3 font-bold">نسخة سعر جديدة</h3>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-            <SelectField
-              label="الشركة"
-              value={rate.businessShippingProviderId}
-              onChange={value =>
-                setRate({ ...rate, businessShippingProviderId: value })
-              }
-              options={
-                configuration.data?.providers.map(row => [
-                  String(row.id),
-                  row.displayName,
-                ]) ?? []
-              }
-            />
-            <SelectField
-              label="المحافظة"
-              value={rate.governorate}
-              onChange={value => setRate({ ...rate, governorate: value })}
-              options={configurationOptions(configQueries.governorate.data)}
-            />
-            <SelectField
-              label="نوع الشحن"
-              value={rate.shippingType}
-              onChange={value => setRate({ ...rate, shippingType: value })}
-              options={configurationOptions(configQueries.shippingType.data)}
-            />
-            <SelectField
-              label="نوع الدفع"
-              value={rate.paymentType}
-              onChange={value => setRate({ ...rate, paymentType: value })}
-              options={configurationOptions(configQueries.paymentType.data)}
-            />
-            <Field label="الأولوية">
-              <Input
-                type="number"
-                dir="ltr"
-                value={rate.priority}
-                onChange={event =>
-                  setRate({ ...rate, priority: event.target.value })
-                }
-              />
-            </Field>
-            <Field label="Effective From">
-              <Input
-                type="date"
-                value={rate.effectiveFrom}
-                onChange={event =>
-                  setRate({ ...rate, effectiveFrom: event.target.value })
-                }
-              />
-            </Field>
-          </div>
-          <div className="mt-4 space-y-3">
-            {charges.map((charge, index) => (
-              <div
-                key={index}
-                className="grid gap-3 rounded-xl border bg-muted/20 p-3 md:grid-cols-2 xl:grid-cols-7"
-              >
-                <SelectField
-                  label="Charge Type"
-                  value={charge.chargeType}
-                  onChange={value => updateCharge(index, { chargeType: value })}
-                  options={configurationOptions(configQueries.chargeType.data)}
-                />
-                <SelectField
-                  label="Calculation"
-                  value={charge.calculationType}
-                  onChange={value =>
-                    updateCharge(index, {
-                      calculationType: value as ChargeDraft["calculationType"],
-                      percentageBase:
-                        value === "fixed" ? undefined : "collected_amount",
-                    })
-                  }
-                  options={[
-                    ["fixed", "Fixed"],
-                    ["percentage", "Percentage"],
-                  ]}
-                />
-                <Field label="القيمة">
-                  <Input
-                    dir="ltr"
-                    inputMode="decimal"
-                    value={charge.value}
-                    onChange={event =>
-                      updateCharge(index, { value: event.target.value })
-                    }
-                  />
-                </Field>
-                {charge.calculationType === "percentage" ? (
-                  <SelectField
-                    label="Percentage Base"
-                    value={charge.percentageBase ?? "collected_amount"}
-                    onChange={value =>
-                      updateCharge(index, {
-                        percentageBase: value as ChargeDraft["percentageBase"],
-                      })
-                    }
-                    options={[
-                      ["collected_amount", "Collected Amount"],
-                      ["custom_fixed_base", "Custom Fixed Base"],
-                    ]}
-                  />
-                ) : (
-                  <div />
-                )}
-                {charge.percentageBase === "custom_fixed_base" ? (
-                  <Field label="Custom Base">
-                    <Input
-                      dir="ltr"
-                      inputMode="decimal"
-                      value={charge.customFixedBase ?? ""}
-                      onChange={event =>
-                        updateCharge(index, {
-                          customFixedBase: event.target.value,
-                        })
-                      }
-                    />
-                  </Field>
-                ) : (
-                  <div />
-                )}
-                <SelectField
-                  label="Billing Event"
-                  value={charge.billingEvent}
-                  onChange={value =>
-                    updateCharge(index, { billingEvent: value })
-                  }
-                  options={configurationOptions(
-                    configQueries.billingEvent.data
-                  )}
-                />
-                <Field label="Tolerance">
-                  <Input
-                    dir="ltr"
-                    inputMode="decimal"
-                    value={charge.tolerance}
-                    onChange={event =>
-                      updateCharge(index, { tolerance: event.target.value })
-                    }
-                  />
-                </Field>
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 flex flex-wrap justify-end gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setCharges(current => [...current, emptyCharge()])}
-            >
-              <Plus className="ml-2 h-4 w-4" />
-              إضافة رسم
-            </Button>
-            <Button
-              disabled={rateSave.isPending}
-              onClick={() => {
-                if (
-                  !rate.businessShippingProviderId ||
-                  !rate.governorate ||
-                  !rate.shippingType ||
-                  !rate.paymentType ||
-                  !rate.effectiveFrom ||
-                  charges.some(
-                    charge =>
-                      !charge.chargeType ||
-                      !charge.value ||
-                      !charge.billingEvent
-                  )
-                )
-                  return toast.error("بيانات السعر وكل الرسوم مطلوبة");
-                rateSave.mutate({
-                  businessId,
-                  businessShippingProviderId: Number(
-                    rate.businessShippingProviderId
-                  ),
-                  governorate: rate.governorate,
-                  shippingType: rate.shippingType,
-                  paymentType: rate.paymentType,
-                  priority: Number(rate.priority) || 0,
-                  effectiveFrom: new Date(`${rate.effectiveFrom}T00:00:00`),
-                  charges,
-                });
-              }}
-            >
-              <Save className="ml-2 h-4 w-4" />
-              حفظ نسخة السعر
-            </Button>
-          </div>
-        </div>
-        <div className="grid gap-2 lg:grid-cols-2">
-          {configuration.data?.rates.map(row => (
-            <div key={row.id} className="rounded-lg border p-3 text-sm">
-              <div className="flex justify-between">
-                <strong>
-                  {row.governorate} · {row.shippingType} · {row.paymentType}
-                </strong>
-                <span>Priority {row.priority}</span>
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                نسخة #{row.id} من{" "}
-                {new Date(row.effectiveFrom).toLocaleDateString("ar-EG")} ·{" "}
-                {
-                  configuration.data.charges.filter(
-                    charge => charge.rateVersionId === row.id
-                  ).length
-                }{" "}
-                رسوم
-              </p>
-            </div>
-          ))}
-        </div>
+        {/*
+          «نسخة سعر جديدة» اتشالت من هنا.
+
+          هي كانت بتسجّل تكلفة الشحن **المتوقعة** لكل محافظة/نوع شحن/نوع دفع، عشان
+          تتقارن بعدين بالرسوم الفعلية اللي شركة الشحن خصمتها. التاجر بيسجّل الرسوم
+          الفعلية في «تحصيل اليوم» على طول — فالمتوقع مالوش مقارنة يعملها، وكان بياخد
+          نص الصفحة عشان ملهوش استخدام.
+
+          الجداول (`shipping_rate_versions` و`shipping_rate_charges`) والخدمات
+          والـendpoints كلهم مكانهم. اللي اتشال هو الفورم من الشاشة دي.
+        */}
+
       </CardContent>
     </Card>
   );
