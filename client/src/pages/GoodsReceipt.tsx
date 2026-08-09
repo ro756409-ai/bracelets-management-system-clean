@@ -58,18 +58,40 @@ const STATUS: Record<string, { label: string; tone: string }> = {
   voided: { label: "ملغي", tone: "var(--destructive)" },
 };
 
-export default function GoodsReceipt() {
+/**
+ * إذن استلام البضاعة — صفحة كاملة، وكمان جزء جوه كشف حساب المصنع.
+ *
+ * نفس المكوّن بيتنادى من المكانين عن قصد. التاجر عايز يسجّل الاستلام وهو واقف على
+ * كشف المصنع ويشوف الحساب اتحرّك في نفس الشاشة — والحل التاني (فورم مبسّط هناك) كان
+ * هيبقى نسخة تانية من منطق المخزون: من غير سادة/محفور، ومن غير أصناف متعددة، وبمسار
+ * تاني ممكن يختلف عن ده بعد كام تعديل.
+ *
+ * `lockedSupplierName` بتقفل خانة الورشة على اسم المصنع اللي إنت واقف عليه — عشان
+ * الإذن يتربط بالحساب الصح من غير ما التاجر يكتب الاسم تاني (وأي حرف مختلف كان هيعمل
+ * مصنع تالت في الكشف).
+ */
+export default function GoodsReceipt({
+  embeddedBusinessId,
+  lockedSupplierName,
+  onSaved,
+}: {
+  embeddedBusinessId?: number;
+  lockedSupplierName?: string;
+  onSaved?: () => void;
+} = {}) {
+  const embedded = embeddedBusinessId != null;
   const [, navigate] = useLocation();
   const { currentBusinessIds } = useBusinessContext();
   const utils = trpc.useUtils();
 
   const {
     brands, selected: businessId, setSelected: setBusinessId,
-    selectedId: bid, isEmpty: noBrands,
+    selectedId: pickedBid, isEmpty: noBrands,
   } = useBrandOptions();
+  const bid = embeddedBusinessId ?? pickedBid;
 
   const [warehouseId, setWarehouseId] = useState("");
-  const [workshopName, setWorkshopName] = useState("");
+  const [workshopName, setWorkshopName] = useState(lockedSupplierName ?? "");
   const [receiptDate, setReceiptDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [attachmentUrl, setAttachmentUrl] = useState("");
   const [notes, setNotes] = useState("");
@@ -208,10 +230,12 @@ export default function GoodsReceipt() {
 
   return (
     <div className="space-y-4" dir="rtl">
-      <PageHeader
-        title="استلام بضاعة من الورشة"
-        description="تسجيل اللي الورشة سلّمته بكمياته وتكلفته. الحفظ لوحده مايزوّدش المخزون — الاعتماد هو اللي بيزوّد."
-      />
+      {!embedded && (
+        <PageHeader
+          title="استلام بضاعة من الورشة"
+          description="تسجيل اللي الورشة سلّمته بكمياته وتكلفته. الحفظ لوحده مايزوّدش المخزون — الاعتماد هو اللي بيزوّد."
+        />
+      )}
 
       <SectionCard>
         {noBrands && (
@@ -226,7 +250,7 @@ export default function GoodsReceipt() {
         )}
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {brands.length > 1 && (
+          {!embedded && brands.length > 1 && (
             <div>
               <Label>النشاط <span className="text-destructive">*</span></Label>
               <Select value={businessId} onValueChange={v => { setBusinessId(v); setWarehouseId(""); }}>
@@ -247,6 +271,7 @@ export default function GoodsReceipt() {
           <div>
             <Label>الورشة <span className="text-destructive">*</span></Label>
             <Input className="mt-1" value={workshopName} placeholder="اسم الورشة"
+              disabled={embedded}
               onChange={e => setWorkshopName(e.target.value)} />
             {showError("workshopName")}
           </div>

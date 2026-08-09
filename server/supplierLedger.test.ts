@@ -352,3 +352,35 @@ describe("🔑 لغة التاجر", () => {
     expect(block).toContain('payment: permissionProcedure("accounting.manage")');
   });
 });
+
+// ───────────────── الاستلام من نفس الصفحة ─────────────────
+
+describe("🔑 استلام البضاعة من كشف المصنع", () => {
+  const receipt = fs.readFileSync("client/src/pages/GoodsReceipt.tsx", "utf-8");
+
+  it("🔑 نفس المكوّن — مفيش فورم تاني للمخزون", () => {
+    // فورم مبسّط هنا كان هيسجّل الحساب من غير مخزون: يبقى عليك دَيْن لبضاعة النظام
+    // مايعرفهاش. وكان هيفقد السادة/المحفور والأصناف المتعددة كمان.
+    expect(page).toContain('import GoodsReceipt from "./GoodsReceipt"');
+    expect(page).toContain("<GoodsReceipt");
+    expect(page).not.toContain("purchaseReceiptCreate");
+  });
+
+  it("🔑 والمصنع مقفول — الاسم مابيتكتبش تاني", () => {
+    // أي حرف مختلف كان هيعمل مصنع تالت في الكشف.
+    expect(page).toContain("lockedSupplierName={data?.supplier?.name}");
+    expect(codeOnly(receipt)).toContain("disabled={embedded}");
+  });
+
+  it("🔑 والصفحة الأصلية لسه شغّالة بنفس المكوّن", () => {
+    const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+    expect(app).toContain("<GoodsReceipt />");
+    expect(codeOnly(receipt)).toContain("const embedded = embeddedBusinessId != null");
+  });
+
+  it("🔑 وبيقول إن الحفظ لوحده مايحرّكش الحساب", () => {
+    // الاعتماد هو اللي بيعمل الحدث اللي الكشف بيقرا منه.
+    expect(page).toContain("الحفظ لوحده مايحرّكش الحساب");
+    expect(page).toContain("<strong>الاعتماد</strong>");
+  });
+});

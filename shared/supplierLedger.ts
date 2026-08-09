@@ -88,7 +88,15 @@ export function signedAmount(movement: {
  */
 export function compareMovements(a: SupplierMovement, b: SupplierMovement): number {
   const byTime = a.occurredAt.getTime() - b.occurredAt.getTime();
-  return byTime !== 0 ? byTime : a.id - b.id;
+  if (byTime !== 0) return byTime;
+  // الرصيد الافتتاحي أول سطر دايمًا — ده تعريفه، هو اللي الحساب بدأ منه.
+  //
+  // من غير السطر ده، التاجر اللي سجّل دفعة الأول وبعدين فتح الافتتاحي كان بيشوف
+  // «دفعة» فوق و«رصيد افتتاحي» تحتها، والكشف بيقول إنه دفع قبل ما الحساب يبدأ.
+  // الرصيد النهائي كان صح، بس السطور كانت بتحكي قصة مالهاش معنى.
+  const opening = (m: SupplierMovement) => (m.type === "opening_balance" ? 0 : 1);
+  const byKind = opening(a) - opening(b);
+  return byKind !== 0 ? byKind : a.id - b.id;
 }
 
 /**

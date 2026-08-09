@@ -310,3 +310,44 @@ describe("الفلاتر السريعة", () => {
     expect(quickRange("all", now)).toEqual({ from: null, to: null });
   });
 });
+
+// ───────────────── ترتيب الافتتاحي ─────────────────
+
+describe("🔑 الرصيد الافتتاحي أول سطر دايمًا", () => {
+  const same = "2026-08-09T12:00:00Z";
+
+  it("🔑 حتى لو اتسجّل بعد حركات في نفس اللحظة", () => {
+    // الحالة الحقيقية: التاجر سجّل دفعة، وبعدين فتح الافتتاحي، وبعدين رسم تشطيب —
+    // كلهم بنفس التاريخ. الترتيب بالـid لوحده كان بيحط الافتتاحي في النص.
+    const rows = buildStatement([
+      move("payment", 2000, same, { id: 10 }),
+      move("opening_balance", 2000, same, { id: 11 }),
+      move("rework_fee", 232, same, { id: 12 }),
+    ]);
+    expect(rows.map(r => r.type)).toEqual([
+      "opening_balance",
+      "payment",
+      "rework_fee",
+    ]);
+  });
+
+  it("🔑 والسلسلة بتبقى مفهومة", () => {
+    const rows = buildStatement([
+      move("payment", 2000, same, { id: 10 }),
+      move("opening_balance", 2000, same, { id: 11 }),
+      move("rework_fee", 232, same, { id: 12 }),
+    ]);
+    // ٢٠٠٠ افتتاحي ← دفعت ٢٠٠٠ ← بقى صفر ← تشطيب ٢٣٢
+    expect(rows.map(r => r.balanceAfter)).toEqual([2000, 0, 232]);
+    expect(rows[0].balanceBefore).toBe(0);
+  });
+
+  it("والتاريخ الأقدم لسه بيسبق الافتتاحي الأحدث", () => {
+    // الترتيب بالوقت الأول — الافتتاحي بيسبق **جوه نفس اللحظة** بس.
+    const rows = buildStatement([
+      move("opening_balance", 500, "2026-08-09T12:00:00Z", { id: 2 }),
+      move("goods_received", 100, "2026-08-01T12:00:00Z", { id: 1 }),
+    ]);
+    expect(rows.map(r => r.type)).toEqual(["goods_received", "opening_balance"]);
+  });
+});
