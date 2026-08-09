@@ -20,7 +20,8 @@ import {
   quickRange,
   type SupplierMovementType,
 } from "@shared/supplierLedger";
-import { Factory, ArrowRight, Link2 } from "lucide-react";
+import { Factory, ArrowRight, Link2, PackagePlus } from "lucide-react";
+import GoodsReceipt from "./GoodsReceipt";
 
 /**
  * كشف حساب الموردين.
@@ -386,6 +387,7 @@ function SupplierStatement({
   const [range, setRange] = useState<Parameters<typeof quickRange>[0]>("all");
   const [movementType, setMovementType] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const [receiptOpen, setReceiptOpen] = useState(false);
 
   const dates = useMemo(() => quickRange(range, new Date()), [range]);
   const statement = trpc.suppliers.statement.useQuery({
@@ -436,6 +438,39 @@ function SupplierStatement({
       </div>
 
       <SupplierActions businessId={businessId} supplierKey={supplierKey} onDone={refresh} />
+
+      {/*
+        إذن الاستلام الحقيقي — نفس المكوّن اللي في صفحة «إذن استلام بضاعة»، مش نسخة
+        مصغّرة منه. الأصناف والكميات والسادة/المحفور كلهم زي ما هم، والمصنع مقفول على
+        اللي إنت واقف عليه.
+
+        الاستلام بيعمل حاجتين: بيزوّد المخزون **و**بيزوّد حساب المصنع. فورم مبسّط هنا
+        كان هيسجّل الحساب من غير مخزون — يعني يبقى عليك دَيْن لبضاعة النظام مايعرفهاش.
+      */}
+      <details className="rounded-lg border bg-card" open={receiptOpen}>
+        <summary
+          className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm font-medium"
+          onClick={event => {
+            event.preventDefault();
+            setReceiptOpen(open => !open);
+          }}
+        >
+          <PackagePlus className="h-4 w-4 text-emerald-700" />
+          استلام بضاعة من {data?.supplier?.name ?? "المصنع"}
+        </summary>
+        <div className="border-t p-4">
+          <GoodsReceipt
+            embeddedBusinessId={businessId}
+            lockedSupplierName={data?.supplier?.name}
+            onSaved={refresh}
+          />
+          <p className="mt-3 rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+            الحفظ لوحده مايحرّكش الحساب — <strong>الاعتماد</strong> هو اللي بيزوّد
+            المخزون ويسجّل القيمة على المصنع. تلاقي زرار الاعتماد في قايمة الاستلامات
+            تحت الفورم.
+          </p>
+        </div>
+      </details>
 
       <Card>
         <CardContent className="space-y-3 p-4">
