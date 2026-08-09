@@ -25,6 +25,7 @@ import {
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import {
+  Factory,
   LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
   Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus, ArrowLeftRight, RotateCcw as ReturnIcon, Megaphone,
   ChevronDown,
@@ -126,6 +127,9 @@ const MENU_GROUPS: MenuGroup[] = [
       // بيفتح، والشاشة لسه شغّالة. الأربع حاجات اللي كانت فيه بقت كلها في «تحصيل
       // اليوم»، فمابقاش فيه سبب يخلي التاجر يختار بين شاشتين بيعملوا نفس الشغل.
       { icon: Banknote, label: "تحصيل اليوم", path: "/daily-collections", adminOnly: true },
+      // كشف حساب المصانع جنب التحصيل: الاتنين «مين ليه عندي كام» — واحد لشركة الشحن
+      // وواحد للمصنع.
+      { icon: Factory, label: "كشف حساب الموردين", path: "/supplier-statements", adminOnly: true },
       // مرتبات الموظفين قبل تجهيزها عن قصد: التجهيز بيحسب على الأرقام دي، فلو التاجر
       // فتح التجهيز الأول هيلاقيه فاضي ومايعرفش ليه.
       { icon: Users, label: "مرتبات الموظفين", path: "/salary-profiles", adminOnly: true },

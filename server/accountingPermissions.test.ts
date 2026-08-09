@@ -145,6 +145,7 @@ describe("كتّاب الخزنة معروفين بالاسم", () => {
         "expensesV2.service.ts", // دفع مصروف (والإعلانات معاه)
         "payrollV2.service.ts", // صرف المرتبات
         "advancesV2.service.ts", // صرف سُلفة لموظف
+        "supplierLedger.service.ts", // دفعة للمصنع
         "routers.ts", // إيداع/سحب يدوي
         "settlementsV2.service.ts", // تحصيل اليوم من شركة الشحن
       ].sort()

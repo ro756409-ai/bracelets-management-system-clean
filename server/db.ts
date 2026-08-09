@@ -5045,6 +5045,9 @@ export async function getAccountingControlCenter(input: {
     netProfitMonth: 0,
     supplierDue: 0,
     inventoryValue: 0,
+    // أرقام المصانع جوه نفس النداء عن قصد: لو اتقروا من نداء تاني كانوا هيرجعوا من
+    // لحظة تانية، والتاجر يشوف رصيد خزنة من ثانية ورصيد مصانع من ثانية غيرها.
+    suppliers: { owedToFactories: 0, owedByFactories: 0, net: 0, suppliers: 0 },
   };
   if (!db) return empty;
 
@@ -5159,6 +5162,11 @@ export async function getAccountingControlCenter(input: {
     netProfitMonth: monthProfit.netProfit,
     supplierDue: Number(due?.amount ?? 0),
     inventoryValue: Number(stockValue?.amount ?? 0),
+    // استيراد كسول: `supplierLedger.service` بيستورد من الملف ده، والاستيراد العادي
+    // فوق كان هيعمل دورة.
+    suppliers: await (
+      await import("./supplierLedger.service")
+    ).getSupplierDashboardTotals(ids),
   };
 }
 

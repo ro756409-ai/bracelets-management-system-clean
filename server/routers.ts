@@ -446,6 +446,20 @@ import {
   getScanLogs,
   getBusinessIdsForTenant,
 } from "./db";
+import {
+  listSuppliers,
+  saveSupplier,
+  listHistoricalSupplierNames,
+  mapHistoricalSupplierName,
+  recordSupplierPayment,
+  recordSupplierReturnCredit,
+  recordReworkFee,
+  recordOpeningBalance,
+  recordSupplierAdjustment,
+  getSupplierStatement,
+  getSupplierSummaries,
+  getSupplierDashboardTotals,
+} from "./supplierLedger.service";
 
 // Helper: admin check
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -6468,6 +6482,227 @@ export const appRouter = router({
   // الوصول: adminProcedure زي router الحسابات — الـcontext بيبني ctx.user للأدوار
   // الإدارية بس. صلاحيات payroll.* اتعرّفت في permissions.ts استعدادًا لبورتال المحاسب،
   // والاعتماد مفصول عن الدفع عشان فصل المهام يفضل ممكن.
+  // ==================== SUPPLIERS ====================
+  //
+  // كشف حساب المصنع **مشتق** من نفس أحداث المخزون والخزنة — مفيش جدول أرصدة. شوف
+  // `server/supplierLedger.service.ts` للسبب كامل.
+  suppliers: router({
+    list: permissionProcedure("accounting.view")
+      .input(z.object({ businessId: z.number() }))
+      .query(async ({ ctx, input }) =>
+        listSuppliers(await requireScopedBusinessId(ctx.tenantId, input.businessId))
+      ),
+
+    summaries: permissionProcedure("accounting.view")
+      .input(z.object({ businessId: z.number() }))
+      .query(async ({ ctx, input }) =>
+        getSupplierSummaries(
+          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+        )
+      ),
+
+    dashboardTotals: permissionProcedure("accounting.view")
+      .input(z.object({ businessIds: z.array(z.number()).optional() }).optional())
+      .query(async ({ ctx, input }) =>
+        getSupplierDashboardTotals(
+          (await scopeBusinessIds(ctx.tenantId, input ?? {})) ?? null
+        )
+      ),
+
+    statement: permissionProcedure("accounting.view")
+      .input(
+        z.object({
+          businessId: z.number(),
+          supplierKey: z.string().min(1),
+          dateFrom: z.date().optional(),
+          dateTo: z.date().optional(),
+          movementType: z
+            .enum([
+              "goods_received",
+              "payment",
+              "return_credit",
+              "rework_fee",
+              "opening_balance",
+              "adjustment",
+              "receipt_reversed",
+            ])
+            .optional(),
+          search: z.string().optional(),
+        })
+      )
+      .query(async ({ ctx, input }) =>
+        getSupplierStatement({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
+    save: permissionProcedure("accounting.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          key: z.string().optional(),
+          name: z.string().min(1).max(160),
+          phone: z.string().max(40).optional(),
+          notes: z.string().max(1000).optional(),
+          returnMode: z.enum(["credit", "rework"]).optional(),
+          isActive: z.boolean().optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        saveSupplier({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    // ── ربط الأسماء القديمة — قرار المالك، مفيش مطابقة تلقائية ──
+    historicalNames: permissionProcedure("accounting.view")
+      .input(z.object({ businessId: z.number() }))
+      .query(async ({ ctx, input }) =>
+        listHistoricalSupplierNames(
+          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+        )
+      ),
+
+    mapHistoricalName: permissionProcedure("accounting.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          historicalName: z.string().min(1),
+          supplierKey: z.string().min(1),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        mapHistoricalSupplierName({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    // ── الحركات ──
+    payment: permissionProcedure("accounting.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          supplierKey: z.string().min(1),
+          amount: z.number().positive(),
+          paidAt: z.date(),
+          reference: z.string().max(120).optional(),
+          notes: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordSupplierPayment({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    returnCredit: permissionProcedure("accounting.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          supplierKey: z.string().min(1),
+          amount: z.number().positive(),
+          occurredAt: z.date(),
+          reference: z.string().max(120).optional(),
+          notes: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordSupplierReturnCredit({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    reworkFee: permissionProcedure("accounting.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          supplierKey: z.string().min(1),
+          amount: z.number().positive(),
+          occurredAt: z.date(),
+          reference: z.string().max(120).optional(),
+          notes: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordReworkFee({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    // الافتتاحي والتسوية للمالك بس — الاتنين بيغيّروا الرصيد من غير حركة حقيقية ورا.
+    openingBalance: ownerProcedure
+      .input(
+        z.object({
+          businessId: z.number(),
+          supplierKey: z.string().min(1),
+          amount: z.number(),
+          occurredAt: z.date(),
+          notes: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordOpeningBalance({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    adjustment: ownerProcedure
+      .input(
+        z.object({
+          businessId: z.number(),
+          supplierKey: z.string().min(1),
+          amount: z.number(),
+          occurredAt: z.date(),
+          reference: z.string().max(120).optional(),
+          notes: z.string().min(1).max(1000),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        recordSupplierAdjustment({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+  }),
+
   payroll: router({
     summary: adminProcedure
       .input(

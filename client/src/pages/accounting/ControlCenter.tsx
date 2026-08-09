@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   Wallet, HandCoins, Receipt, Megaphone, Users, PackagePlus,
   TrendingUp, CalendarRange, Clock, Boxes, AlertCircle, RefreshCw,
+  Factory,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
@@ -78,6 +79,12 @@ export default function ControlCenter() {
     { label: "مستحق للورشة", period: "مستحق", value: d?.supplierDue, icon: Clock, tone: "var(--warning)",
       hint: "مش محدود باليوم — اللي عليك لسه عليك" },
     { label: "قيمة المخزون", period: "الرصيد الحالي", value: d?.inventoryValue, icon: Boxes, tone: "var(--purple)" },
+    // أرقام المصانع مشتقّة من نفس محرّك كشف الحساب — مفيش رصيد تاني متخزّن للوحة.
+    { label: "إجمالي مستحق للمصانع", period: "الرصيد الحالي", value: d?.suppliers?.owedToFactories, icon: Factory, tone: "var(--destructive)",
+      hint: "مجموع اللي عليك لكل المصانع" },
+    { label: "إجمالي لينا عند المصانع", period: "الرصيد الحالي", value: d?.suppliers?.owedByFactories, icon: Factory, tone: "var(--success)",
+      hint: "مصانع دفعتلها زيادة أو رجّعتلها بضاعة" },
+    { label: "صافي حساب الموردين", period: "الرصيد الحالي", value: d?.suppliers?.net, icon: Factory, tone: "var(--warning)", signed: true },
   ];
 
   return (
