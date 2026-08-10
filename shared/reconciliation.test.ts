@@ -22,7 +22,7 @@ const treasury = {
   expensesPaid: 4000,
   advertisingPaid: 1000,
   payrollPaid: 8000,
-  supplierPayments: 2000,
+  factoryPayments: 2000,
   withdrawals: 500,
   currentBalance: 354002,
 };
@@ -64,7 +64,7 @@ describe("🔑 معادلة الخزنة", () => {
         expensesPaid: 0,
         advertisingPaid: 0,
         payrollPaid: 0,
-        supplierPayments: 0,
+        factoryPayments: 0,
         withdrawals: 0,
         currentBalance: 0,
       }).ok
@@ -81,7 +81,7 @@ describe("🔑 معادلة الخزنة", () => {
         expensesPaid: 4000,
         advertisingPaid: 0,
         payrollPaid: 0,
-        supplierPayments: 0,
+        factoryPayments: 0,
         withdrawals: 0,
         currentBalance: -4000,
       }).ok

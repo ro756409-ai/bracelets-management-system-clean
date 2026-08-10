@@ -105,7 +105,13 @@ describe("🔑 مفيش كود بيقرا الأعمدة الجديدة", () => 
   it("مفيش إشارة للجدولين الجداد لا بالـORM ولا بـSQL خام", () => {
     const offenders: string[] = [];
     for (const file of files) {
-      const src = fs.readFileSync(file, "utf-8");
+      // **الكود من غير التعليقات.** التعليق اللي بيشرح ليه الجدول ده ممنوع لازم يذكر
+      // اسمه، فالفحص على النص الخام كان بيوقّع على الشرح نفسه. نفس السبب اللي خلّى
+      // باقي الحُرّاس في المشروع تستخدم `codeOnly` — الفحص المفروض يقيس كود.
+      const src = fs
+        .readFileSync(file, "utf-8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/.*/g, "");
       if (/\bsupplierPayments\b/.test(src)) offenders.push(`${file} → supplierPayments`);
       if (/\bsupplier_payments\b/.test(src)) offenders.push(`${file} → supplier_payments`);
       // `suppliers` كلمة عامة، فبنفتش على استخدامها كجدول مش كنص

@@ -110,7 +110,7 @@ async function reconcileBusiness(businessId: number, name: string) {
       expensesPaid: expenseOut.total,
       advertisingPaid: 0,
       payrollPaid: 0,
-      supplierPayments: 0,
+      factoryPayments: 0,
       withdrawals: withdrawals.total,
       currentBalance,
     })

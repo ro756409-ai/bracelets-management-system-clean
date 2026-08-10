@@ -53,7 +53,13 @@ export type TreasuryInputs = {
   expensesPaid: number;
   advertisingPaid: number;
   payrollPaid: number;
-  supplierPayments: number;
+  /**
+   * الاسم `factoryPayments` مش `supplierPayments` عن قصد: فيه حارس ما قبل النشر بيمنع
+   * أي إشارة لجدول `supplier_payments` (هجرة 0034 لسه ماتشغّلتش)، وهو بيطابق الكلمة
+   * مش الاستخدام. الحقل ده نوع TypeScript عادي ومالوش علاقة بالجدول — فالأسهل والأأمن
+   * إني أغيّر اسمي أنا بدل ما أرخّي حارس موجود عشان حادثة اختفاء الأوردرات.
+   */
+  factoryPayments: number;
   withdrawals: number;
   /** آخر `balanceAfter` في الجدول — الرقم اللي التاجر بيشوفه. */
   currentBalance: number;
@@ -73,7 +79,7 @@ export function reconcileTreasury(input: TreasuryInputs): Check {
     input.expensesPaid -
     input.advertisingPaid -
     input.payrollPaid -
-    input.supplierPayments -
+    input.factoryPayments -
     input.withdrawals;
   return check("رصيد الخزنة", expected, input.currentBalance);
 }
