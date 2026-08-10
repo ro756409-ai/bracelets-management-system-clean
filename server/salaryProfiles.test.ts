@@ -35,17 +35,16 @@ describe("🔑 الطريق اللي مكانش موجود", () => {
     expect(code).toContain("trpc.payroll.profileCreate.useMutation");
   });
 
-  it("🔑 ومتوصلة بالقايمة والمسار", () => {
-    expect(sidebar).toContain('path: "/salary-profiles"');
-    expect(sidebar).toContain('label: "مرتبات الموظفين"');
+  it("🔑 ومتوصلة بتاب المرتبات في الحسابات", () => {
+    // بقت تاب جوه الحسابات مش بند في القايمة الجنبية — القايمة فيها «الحسابات» بس.
+    const accounting = fs.readFileSync("client/src/pages/Accounting.tsx", "utf-8");
+    expect(accounting).toContain('path: "/salary-profiles"');
+    expect(accounting).toContain('label: "المرتبات"');
     expect(app).toContain('<Route path="/salary-profiles">');
   });
 
-  it("🔑 وقبل «تجهيز المرتبات» في القايمة", () => {
-    // التجهيز بيحسب على الأرقام دي. لو التاجر فتحه الأول هيلاقيه فاضي ومايعرفش ليه.
-    expect(sidebar.indexOf('path: "/salary-profiles"')).toBeLessThan(
-      sidebar.indexOf('path: "/salary-preparation"')
-    );
+  it("🔑 والمسار لسه بيفتح — أي رابط قديم شغّال", () => {
+    expect(app).toContain('<Route path="/salary-preparation">');
   });
 });
 
@@ -198,21 +197,30 @@ describe("🔑 حذف سطر المرتب", () => {
   });
 });
 
-describe("🔑 الحسابات بقت مجموعة واحدة مطوية", () => {
+describe("🔑 الحسابات بند واحد في القايمة", () => {
   const sidebar = fs.readFileSync(
     "client/src/components/DashboardLayout.tsx",
     "utf-8"
   );
+  const group = sidebar.slice(
+    sidebar.indexOf('label: "الحسابات"'),
+    sidebar.indexOf('label: "التقارير"')
+  );
 
-  it("🔑 سبع شاشات تحت اسم واحد بيتفتح بالضغط", () => {
-    expect(sidebar).toContain("collapsible: true");
-    expect(sidebar).toContain("setOpenGroups");
+  it("🔑 وجهة واحدة — مش تمن بنود تحت بعض", () => {
+    // التاجر كان بيدوّر في القايمة بدل ما يدوّر جوه الحسابات.
+    const paths = [...group.matchAll(/path: "([^"]+)"/g)].map(m => m[1]);
+    expect(paths).toEqual(["/accounting"]);
   });
 
-  it("🔑 وبتتفتح لوحدها لو إنت واقف على واحدة منها", () => {
-    // من غير كده الرفريش بيقفل المجموعة وإنت جواها، فتحس إنك ضعت.
-    expect(sidebar).toContain("const holdsCurrent = group.items.some");
-    expect(sidebar).toContain("!holdsCurrent &&");
+  it("🔑 وشغل المخزون رجع للمخزون", () => {
+    // استلام البضاعة ومرتجعات الورشة شغل عدّ قطع، مش شغل فلوس.
+    const inventory = sidebar.slice(
+      sidebar.indexOf('label: "المخزون"'),
+      sidebar.indexOf('label: "الموظفون"')
+    );
+    expect(inventory).toContain('path: "/goods-receipt"');
+    expect(inventory).toContain('path: "/workshop-returns"');
   });
 });
 

@@ -329,16 +329,44 @@ describe("التابات", () => {
   const bar = listOf("TABS");
   const hidden = listOf("HIDDEN_TABS");
 
-  it("🔑 الشريط فيه اللي التاجر بيفتحه كل يوم وبس", () => {
-    for (const label of ["اللوحة", "المخزون", "الإعلانات", "سجل الخزنة"]) {
-      expect(bar, label).toContain(`label: "${label}"`);
+  it("🔑 السبعة اللي هما النموذج الذهني كله", () => {
+    // اللوحة · التحصيلات · المصروفات · المصانع · الإعلانات · المرتبات · الخزنة.
+    // مفيش تامن — أي زيادة معناها إن الحسابات رجعت تتفرّع.
+    const labels = [...bar.matchAll(/label: "([^"]+)"/g)].map(m => m[1]);
+    expect(labels).toEqual([
+      "اللوحة",
+      "التحصيلات",
+      "المصروفات",
+      "المصانع",
+      "الإعلانات",
+      "المرتبات",
+      "الخزنة",
+    ]);
+  });
+
+  it("🔑 وكلهم بيرندروا جوه الشريط — التاجر مايخرجش من الحسابات", () => {
+    // قبل كده «تحصيل اليوم» كانت صفحة مستقلة، فالتبديل بينها وبين الخزنة كان بيوديك
+    // بره الحسابات وتفقد الشريط.
+    for (const section of [
+      "<DailyCollections />",
+      "<SupplierStatements />",
+      "<Advertising />",
+      "<SalaryProfiles />",
+    ]) {
+      expect(page, section).toContain(section);
     }
   });
 
-  it("🔑 والقديم اتشال من الشريط فعلًا — مش مكتوب وسايب", () => {
-    for (const label of ["التحصيلات", "المصروفات", "المرتبات"]) {
-      expect(bar, label).not.toContain(`label: "${label}"`);
-      expect(hidden, label).toContain(`label: "${label}"`);
+  it("🔑 ومساراتهم كلها بتعدّي على الحسابات", () => {
+    const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+    for (const path of [
+      "/daily-collections",
+      "/supplier-statements",
+      "/advertising",
+      "/salary-profiles",
+    ]) {
+      const route = app.slice(app.indexOf(`<Route path="${path}">`));
+      expect(route.slice(0, 120), path).toContain("<Accounting />");
     }
   });
 
@@ -349,11 +377,18 @@ describe("التابات", () => {
     }
   });
 
-  it("🔑 ومحدش اتشال من غير بديل", () => {
-    // كل تاب اتخفي لازم يكون ليه شاشة تانية بتعمل نفس الشغل، وإلا يبقى التاجر خسر ميزة.
-    const sidebar = fs.readFileSync("client/src/components/DashboardLayout.tsx", "utf-8");
-    expect(sidebar).toContain('path: "/daily-collections"'); // بديل التحصيلات والمصروفات
-    expect(sidebar).toContain('path: "/salary-preparation"'); // بديل المرتبات
+  it("🔑 ومحدش اتشال من غير بديل — كل مخفي مساره لسه بيفتح", () => {
+    // المخفي مش محذوف: أي رابط قديم أو bookmark لازم يفضل شغّال.
+    const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+    for (const path of [
+      "/goods-receipt",
+      "/salary-preparation",
+      "/closings",
+      "/shipping-finance",
+      "/accounting-settings",
+    ]) {
+      expect(app, path).toContain(`<Route path="${path}">`);
+    }
   });
 
   it("🔑 ومساراتها لسه بتفتح", () => {

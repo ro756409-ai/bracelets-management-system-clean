@@ -138,10 +138,10 @@ function Router() {
         <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path="/supplier-statements">
-        <ProtectedLayout><SupplierStatements /></ProtectedLayout>
+        <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path="/salary-profiles">
-        <ProtectedLayout><SalaryProfiles /></ProtectedLayout>
+        <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path="/salary-preparation">
         <ProtectedLayout><SalaryPreparation /></ProtectedLayout>
@@ -165,10 +165,10 @@ function Router() {
         <ProtectedLayout><WorkshopReturns /></ProtectedLayout>
       </Route>
       <Route path="/daily-collections">
-        <ProtectedLayout><DailyCollections /></ProtectedLayout>
+        <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path="/advertising">
-        <ProtectedLayout><Advertising /></ProtectedLayout>
+        <ProtectedLayout><Accounting /></ProtectedLayout>
       </Route>
       <Route path="/accounting-settings">
         <ProtectedLayout><Accounting /></ProtectedLayout>

@@ -32,13 +32,17 @@ import {
 } from "@/components/shared";
 import { formatMoney, formatMoneyCompact } from "@/lib/money";
 import { ExpensesSection } from "./Expenses";
-import { CollectionsSection } from "./Collections";
 import { PayrollSection } from "./Payroll";
 import { ClosingsSection } from "./Closings";
 import { AccountingSettingsSection } from "./AccountingSettings";
 import { ShippingFinanceSection } from "./ShippingFinance";
 import ControlCenter from "./accounting/ControlCenter";
 import TreasuryHistory from "./accounting/TreasuryHistory";
+import DailyCollections from "./DailyCollections";
+import SupplierStatements from "./SupplierStatements";
+import Advertising from "./Advertising";
+import SalaryProfiles from "./SalaryProfiles";
+import { Factory, Megaphone } from "lucide-react";
 
 /**
  * مركز الحسابات.
@@ -56,9 +60,12 @@ import TreasuryHistory from "./accounting/TreasuryHistory";
  */
 const TABS = [
   { key: "overview", label: "اللوحة", path: "/accounting", icon: TrendingUp },
-  { key: "inventory", label: "المخزون", path: "/goods-receipt", icon: PackageCheck },
-  { key: "advertising", label: "الإعلانات", path: "/advertising", icon: TrendingUp },
-  { key: "treasury", label: "سجل الخزنة", path: "/treasury", icon: Wallet },
+  { key: "collections", label: "التحصيلات", path: "/daily-collections", icon: Banknote },
+  { key: "expenses", label: "المصروفات", path: "/expenses", icon: Receipt },
+  { key: "suppliers", label: "المصانع", path: "/supplier-statements", icon: Factory },
+  { key: "advertising", label: "الإعلانات", path: "/advertising", icon: Megaphone },
+  { key: "payroll", label: "المرتبات", path: "/salary-profiles", icon: Users },
+  { key: "treasury", label: "الخزنة", path: "/treasury", icon: Wallet },
 ] as const;
 
 /**
@@ -70,17 +77,13 @@ const TABS = [
  * التقفيلات بالذات فيها لقطات معتمدة والأرباح التاريخية مبنية عليها، فحذفها بيقطع
  * السلسلة.
  *
- * التلاتة اللي اتنقلوا هنا في المرحلة الرابعة بقى ليهم بديل أبسط بيعمل نفس الحاجة:
- *   التحصيلات  ← «تحصيل اليوم»: تسوية يومية واحدة بدل تحصيل لكل أوردر لوحده.
- *   المصروفات  ← كارت «خرج من الخزنة»: خطوة واحدة بدل مسودة ← إرسال ← اعتماد ← دفع.
- *   المرتبات   ← «تجهيز المرتبات» من القايمة الجنبية — كانت مكررة في المكانين.
- * الشاشة القديمة لسه هي اللي بتعمل الحالات المعقّدة (مصروف موزّع على شهر، تحصيل
- * أوردر بعينه)، فمحدش خسر حاجة.
+ * «المخزون» اتشال من الشريط لأن استلام البضاعة ومرتجعات الورشة بقوا في مجموعة
+ * المخزون في القايمة الجنبية — مكانهم الصح. أثرهم المالي بيوصل الحسابات لوحده.
+ * و«تجهيز المرتبات» جوه تاب المرتبات نفسه دلوقتي.
  */
 const HIDDEN_TABS = [
-  { key: "collections", label: "التحصيلات", path: "/collections", icon: Banknote },
-  { key: "expenses", label: "المصروفات", path: "/expenses", icon: Receipt },
-  { key: "payroll", label: "المرتبات", path: "/payroll", icon: Users },
+  { key: "inventory", label: "المخزون", path: "/goods-receipt", icon: PackageCheck },
+  { key: "salary-prep", label: "تجهيز المرتبات", path: "/salary-preparation", icon: Users },
   { key: "closings", label: "التقفيلات", path: "/closings", icon: LockKeyhole },
   { key: "shipping-finance", label: "الشحن والتسويات", path: "/shipping-finance", icon: PackageCheck },
   { key: "settings", label: "الإعدادات", path: "/accounting-settings", icon: Settings2 },
@@ -93,10 +96,17 @@ export default function Accounting() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="الحسابات"
-        description="المبيعات والتحصيلات والمصروفات ورصيد الخزنة"
-      />
+      {/*
+        العنوان مرة واحدة. الشاشات اللي جوه التابات ليها عناوينها الخاصة («تحصيل
+        اليوم»، «كشف حساب الموردين»…)، فعنوان «الحسابات» فوقهم كان بيبقى سطر مكرر
+        بيدفع المحتوى لتحت من غير ما يقول حاجة.
+      */}
+      {active === "overview" && (
+        <PageHeader
+          title="الحسابات"
+          description="المبيعات والتحصيلات والمصروفات ورصيد الخزنة"
+        />
+      )}
 
       {/* نفس شريط التابات المستخدم في صفحة الأوردرات — يتمرّر جوه نفسه على الموبايل */}
       <div className="overflow-x-auto border-b border-border px-1">
@@ -127,9 +137,17 @@ export default function Accounting() {
 
       {active === "overview" && <ControlCenter />}
       {active === "treasury" && <TreasuryHistory />}
+      {/*
+        التحصيلات والمصانع والإعلانات والمرتبات بترندر **جوه** الشريط مش كصفحات
+        منفصلة — عشان التاجر مايخرجش من الحسابات كل ما يبدّل قسم ويفقد الشريط.
+        مساراتها زي ما هي، فأي رابط قديم بيفتح التاب الصح.
+      */}
+      {active === "collections" && <DailyCollections />}
+      {active === "suppliers" && <SupplierStatements />}
+      {active === "advertising" && <Advertising />}
+      {active === "payroll" && <SalaryProfiles />}
       {active === "expenses" && <ExpensesSection />}
-      {active === "collections" && <CollectionsSection />}
-      {active === "payroll" && <PayrollSection />}
+      {active === "salary-prep" && <PayrollSection />}
       {active === "closings" && <ClosingsSection />}
       {active === "shipping-finance" && <ShippingFinanceSection />}
       {active === "settings" && <AccountingSettingsSection />}
@@ -193,17 +211,18 @@ function OverviewSection() {
     dateFrom: dateRange.from ?? undefined,
     dateTo: dateRange.to ?? undefined,
   });
-  const realizedCost = data
-    ? data.realized.cogs +
-      data.realized.shippingCost +
-      data.realized.expenses +
-      data.realized.scrapLoss
-    : 0;
+  // `data.realized` نفسها ممكن تغيب لو الرد رجع ناقص — والقراءة المباشرة كانت بتوقّع
+  // الصفحة كلها بشاشة بيضا بدل ما تعرض أصفار.
+  const realizedCost =
+    (data?.realized?.cogs ?? 0) +
+    (data?.realized?.shippingCost ?? 0) +
+    (data?.realized?.expenses ?? 0) +
+    (data?.realized?.scrapLoss ?? 0);
 
   return (
     <div className="space-y-4">
       <SectionHeader
-        description="Realized من Business Events فقط، وProjected من سنابشوتات الأوردرات المفتوحة"
+        description="الفعلي من الحركات اللي حصلت، والمتوقع من الأوردرات اللي لسه مفتوحة"
         actions={<DateRangePicker value={dateRange} onChange={setDateRange} />}
       />
       <div className="grid gap-3 lg:grid-cols-4">
@@ -211,40 +230,42 @@ function OverviewSection() {
           label="الإيراد المحقق"
           tone="success"
           loading={isLoading}
-          value={formatMoney(data?.realized.revenue)}
-          hint="Delivered ناقص عكس المرتجعات"
+          value={formatMoney(data?.realized?.revenue)}
+          hint="اللي اتسلّم ناقص المرتجعات"
           icon={<TrendingUp className="h-5 w-5" />}
         />
         <StatCard
           label="الربح المحاسبي المحقق"
-          tone={(data?.realized.netProfit ?? 0) < 0 ? "danger" : "success"}
+          tone={(data?.realized?.netProfit ?? 0) < 0 ? "danger" : "success"}
           loading={isLoading}
-          value={formatMoney(data?.realized.netProfit)}
-          hint="Business Events للفترة"
+          value={formatMoney(data?.realized?.netProfit)}
+          hint="عن الفترة المختارة"
           icon={<ArrowLeftRight className="h-5 w-5" />}
         />
         <StatCard
           label="هامش الربح المحقق"
-          tone={(data?.realized.profitMargin ?? 0) < 0 ? "danger" : "success"}
+          tone={(data?.realized?.profitMargin ?? 0) < 0 ? "danger" : "success"}
           loading={isLoading}
-          value={`${(data?.realized.profitMargin ?? 0).toLocaleString("ar-EG", { maximumFractionDigits: 2 })}%`}
+          value={`${(data?.realized?.profitMargin ?? 0).toLocaleString("ar-EG", { maximumFractionDigits: 2 })}%`}
           hint="الربح المحقق ÷ الإيراد المحقق"
           icon={<Percent className="h-5 w-5" />}
         />
         <StatCard
           label="رصيد الحسابات المالية"
-          tone={(data?.cash.balance ?? 0) < 0 ? "danger" : "primary"}
+          tone={(data?.cash?.balance ?? 0) < 0 ? "danger" : "primary"}
           loading={isLoading}
-          value={formatMoney(data?.cash.balance)}
+          value={formatMoney(data?.cash?.balance)}
           icon={<PiggyBank className="h-5 w-5" />}
         />
       </div>
       <Card className="border-sky-200 bg-sky-50/50 dark:border-sky-900 dark:bg-sky-950/20">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between text-base">
-            <span>Projected Profit التشغيلي</span>
+            <span>توقعات — من الأوردرات المفتوحة</span>
+            {/* التحذير بلغة التاجر مش بلغة محاسب: «غير محاسبي» مابتقولش إن الفلوس دي
+                مش في الدُرج. */}
             <span className="rounded-full bg-sky-100 px-2 py-1 text-xs text-sky-800 dark:bg-sky-900 dark:text-sky-100">
-              غير محاسبي
+              مش فلوس في الخزنة
             </span>
           </CardTitle>
         </CardHeader>
@@ -253,7 +274,7 @@ function OverviewSection() {
             label="إيراد متوقع"
             tone="primary"
             loading={isLoading}
-            value={formatMoney(data?.projected.revenue)}
+            value={formatMoney(data?.projected?.revenue)}
             hint={data ? `${data.projected.orderCount} أوردر مفتوح` : undefined}
             icon={<CalendarDays className="h-5 w-5" />}
           />
@@ -261,23 +282,23 @@ function OverviewSection() {
             label="تكلفة منتج متوقعة"
             tone="warning"
             loading={isLoading}
-            value={formatMoney(data?.projected.productCost)}
-            hint="Moving Average وقت إنشاء الأوردر"
+            value={formatMoney(data?.projected?.productCost)}
+            hint="متوسط تكلفة الشراء وقت الأوردر"
             icon={<Package className="h-5 w-5" />}
           />
           <StatCard
             label="شحن متوقع"
             tone="info"
             loading={isLoading}
-            value={formatMoney(data?.projected.shippingCost)}
-            hint="Expected Shipping Snapshot"
+            value={formatMoney(data?.projected?.shippingCost)}
+            hint="سعر الشحن المتوقع للأوردر"
             icon={<Truck className="h-5 w-5" />}
           />
           <StatCard
-            label="Projected Profit"
-            tone={(data?.projected.profit ?? 0) < 0 ? "danger" : "success"}
+            label="الربح المتوقع"
+            tone={(data?.projected?.profit ?? 0) < 0 ? "danger" : "success"}
             loading={isLoading}
-            value={formatMoney(data?.projected.profit)}
+            value={formatMoney(data?.projected?.profit)}
             hint="يختفي عند الإلغاء أو اكتمال الدورة"
             icon={<TrendingUp className="h-5 w-5" />}
           />
@@ -285,10 +306,10 @@ function OverviewSection() {
       </Card>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label="COGS المحقق"
+          label="تكلفة البضاعة المباعة"
           tone="warning"
           loading={isLoading}
-          value={formatMoneyCompact(data?.realized.cogs)}
+          value={formatMoneyCompact(data?.realized?.cogs)}
           hint={data ? formatMoney(data.realized.cogs) : undefined}
           icon={<Package className="h-5 w-5" />}
         />
@@ -296,7 +317,7 @@ function OverviewSection() {
           label="مصروف الشحن المستحق"
           tone="info"
           loading={isLoading}
-          value={formatMoneyCompact(data?.realized.shippingCost)}
+          value={formatMoneyCompact(data?.realized?.shippingCost)}
           hint={data ? formatMoney(data.realized.shippingCost) : undefined}
           icon={<Truck className="h-5 w-5" />}
         />
@@ -304,7 +325,7 @@ function OverviewSection() {
           label="المصروفات المستحقة"
           tone="warning"
           loading={isLoading}
-          value={formatMoneyCompact(data?.realized.expenses)}
+          value={formatMoneyCompact(data?.realized?.expenses)}
           hint={data ? formatMoney(data.realized.expenses) : undefined}
           icon={<Receipt className="h-5 w-5" />}
         />
@@ -312,7 +333,7 @@ function OverviewSection() {
           label="Scrap / Loss"
           tone="danger"
           loading={isLoading}
-          value={formatMoneyCompact(data?.realized.scrapLoss)}
+          value={formatMoneyCompact(data?.realized?.scrapLoss)}
           hint={data ? formatMoney(data.realized.scrapLoss) : undefined}
           icon={<RotateCcw className="h-5 w-5" />}
         />
@@ -331,12 +352,12 @@ function OverviewSection() {
               <>
                 <p className="text-[26px] font-bold leading-none tabular-nums text-[var(--warning)]">
                   {formatMoney(
-                    (data?.cash.inflow ?? 0) - (data?.cash.outflow ?? 0)
+                    (data?.cash?.inflow ?? 0) - (data?.cash?.outflow ?? 0)
                   )}
                 </p>
                 <p className="type-caption">
-                  داخل {formatMoney(data?.cash.inflow)} · خارج{" "}
-                  {formatMoney(data?.cash.outflow)}
+                  داخل {formatMoney(data?.cash?.inflow)} · خارج{" "}
+                  {formatMoney(data?.cash?.outflow)}
                 </p>
                 <Button
                   variant="outline"
@@ -366,7 +387,7 @@ function OverviewSection() {
               <div className="space-y-2.5">
                 {[
                   {
-                    label: "COGS",
+                    label: "تكلفة البضاعة",
                     value: data!.realized.cogs,
                     color: "var(--warning)",
                   },
