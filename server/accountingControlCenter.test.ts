@@ -241,10 +241,18 @@ describe("الأداء", () => {
     expect(dash).not.toContain("staleTime");
   });
 
-  it("نداء واحد للوحة كلها مش نداء لكل كارت", () => {
+  it("🔑 كروت الأرقام كلها من نداء واحد — مش نداء لكل كارت", () => {
+    // الأصل: لو كل كارت نادى لوحده، الأرقام بتيجي من لحظات مختلفة والمجموع مايطلعش
+    // صح. القاعدة دي على **الكروت**. الأقسام اللي تحتها (محتاج إجراء، آخر الحركات)
+    // بيانات مختلفة تمامًا ومش داخلة في المجموع، فكل واحد بنداء واحد.
     const queries = [...dash.matchAll(/trpc\.[a-zA-Z.]+\.useQuery/g)].map(m => m[0]);
-    expect(queries).toHaveLength(1);
     expect(queries[0]).toContain("accounting.controlCenter");
+    expect(queries).toHaveLength(4);
+    expect(queries.slice(1).sort()).toEqual([
+      "trpc.accounting.actionItems.useQuery",
+      "trpc.accounting.treasuryHistory.useQuery",
+      "trpc.suppliers.dashboardTotals.useQuery",
+    ]);
   });
 });
 
@@ -399,5 +407,67 @@ describe("التابات", () => {
   it("🔑 ولوحة الأرباح التفصيلية ما اتشالتش — اتنقلت للمتقدم", () => {
     expect(page).toContain("<OverviewSection />");
     expect(page).toContain("أقسام متقدمة");
+  });
+});
+
+// ───────────────── محتاج إجراء + آخر الحركات ─────────────────
+
+describe("🔑 «محتاج إجراء» بنود مش كروت", () => {
+  const fn = codeOnly(db).slice(
+    codeOnly(db).indexOf("export async function getAccountingActionItems"),
+    codeOnly(db).indexOf("export async function getAccountingControlCenter")
+  );
+
+  it("🔑 المصروف المستحق = المعتمد ناقص المدفوع", () => {
+    expect(fn).toContain('inArray(expenses.status, ["accrued", "partially_paid"]');
+    expect(fn).toContain("${expenses.amount} - ${expenses.paidAmount}");
+  });
+
+  it("🔑 ومش محدود باليوم — الالتزام قايم لحد ما يتدفع", () => {
+    expect(fn).not.toContain("toExclusive");
+    expect(fn).not.toContain("businessDayRange");
+  });
+
+  it("🔑 ودورة المرتبات المش مكتملة = أي حالة غير مدفوع أو ملغي", () => {
+    expect(fn).toContain("NOT IN ('paid', 'cancelled')");
+  });
+
+  it("🔑 قراءة بحتة", () => {
+    for (const write of [".insert(", ".update(", ".delete(", "transaction("]) {
+      expect(fn, write).not.toContain(write);
+    }
+  });
+
+  it("🔑 والقسم بيختفي لما مفيش حاجة مستنية", () => {
+    // قايمة فاضية خبر كويس — مش مساحة تتملي بأصفار.
+    expect(dash).toContain("if (q.isLoading || items.length === 0) return null");
+  });
+
+  it("🔑 والأصفار مابتتعرضش كبنود", () => {
+    // «مصروف مستحق: ٠» بند بيطلب منك تعمل ولا حاجة.
+    expect(dash).toContain("q.data?.unpaidExpenses.count");
+    expect(dash).toContain("].filter(Boolean)");
+  });
+
+  it("🔑 وكل بند بيوديك للشاشة اللي تتصرف فيها", () => {
+    for (const to of ['to: "/expenses"', 'to: "/supplier-statements"', 'to: "/salary-preparation"']) {
+      expect(dash, to).toContain(to);
+    }
+  });
+});
+
+describe("🔑 آخر الحركات", () => {
+  it("🔑 من نفس مصدر سجل الخزنة — مفيش تعريف تاني لـ«حركة»", () => {
+    expect(dash).toContain("trpc.accounting.treasuryHistory.useQuery");
+    expect(dash).toContain("limit: 10");
+  });
+
+  it("🔑 والألوان بقاعدة واحدة: أخضر داخل وأحمر خارج", () => {
+    expect(dash).toContain('isIn ? "var(--success)" : "var(--destructive)"');
+    expect(dash).toContain('{isIn ? "+" : "−"}');
+  });
+
+  it("🔑 وبيعرض الرصيد بعد الحركة", () => {
+    expect(dash).toContain("الرصيد {egp(Number(row.balanceAfter))}");
   });
 });

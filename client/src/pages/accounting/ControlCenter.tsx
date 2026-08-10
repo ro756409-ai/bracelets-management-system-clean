@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import {
   Wallet, HandCoins, Receipt, Megaphone, Users, PackagePlus,
   TrendingUp, CalendarRange, Clock, Boxes, AlertCircle, RefreshCw,
@@ -176,6 +177,145 @@ export default function ControlCenter() {
           {egp(d.salariesToday)}
         </p>
       )}
+
+      <ActionItems />
+      <RecentMovements />
     </div>
+  );
+}
+
+// ───────────────────────── محتاج إجراء ─────────────────────────
+
+/**
+ * البنود اللي مستنية منك تصرّف.
+ *
+ * **مش كروت إحصائية.** كل سطر هنا معناه «افتح ده واعمل حاجة»، ولو مفيش حاجة مستنية
+ * القسم بيختفي خالص — القايمة الفاضية خبر كويس مش مساحة فاضية تتملي.
+ *
+ * الأصفار مابتتعرضش عن قصد: «مصروف مستحق: ٠» بند بيطلب منك تعمل ولا حاجة.
+ */
+function ActionItems() {
+  const [, navigate] = useLocation();
+  const { currentBusinessIds } = useBusinessContext();
+  const q = trpc.accounting.actionItems.useQuery(
+    currentBusinessIds?.length ? { businessIds: currentBusinessIds } : {}
+  );
+  const suppliers = trpc.suppliers.dashboardTotals.useQuery(
+    currentBusinessIds?.length ? { businessIds: currentBusinessIds } : {}
+  );
+
+  const items = [
+    q.data?.unpaidExpenses.count
+      ? {
+          key: "expenses",
+          label: `${q.data.unpaidExpenses.count} مصروف مستحق`,
+          detail: `${egp(q.data.unpaidExpenses.amount)} ج.م لسه ماخرجتش من الخزنة`,
+          to: "/expenses",
+        }
+      : null,
+    suppliers.data?.owedToFactories
+      ? {
+          key: "factories",
+          label: "مصانع ليها مستحقات",
+          detail: `${egp(suppliers.data.owedToFactories)} ج.م عليك`,
+          to: "/supplier-statements",
+        }
+      : null,
+    q.data?.unfinishedPayroll.count
+      ? {
+          key: "payroll",
+          label: `${q.data.unfinishedPayroll.count} دورة مرتبات مش مكتملة`,
+          detail: `${egp(q.data.unfinishedPayroll.amount)} ج.م`,
+          to: "/salary-preparation",
+        }
+      : null,
+  ].filter(Boolean) as { key: string; label: string; detail: string; to: string }[];
+
+  if (q.isLoading || items.length === 0) return null;
+
+  return (
+    <section className="rounded-lg border bg-card">
+      <h2 className="border-b px-4 py-3 text-sm font-bold">محتاج إجراء</h2>
+      <ul className="divide-y">
+        {items.map(item => (
+          <li key={item.key}>
+            <button
+              type="button"
+              onClick={() => navigate(item.to)}
+              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-right hover:bg-muted/50"
+            >
+              <span>
+                <span className="block text-sm font-medium">{item.label}</span>
+                <span className="block text-xs text-muted-foreground">{item.detail}</span>
+              </span>
+              {/* كهرماني: مستحق ومحتاج إجراء — مش أحمر، دي مش كارثة. */}
+              <span
+                className="shrink-0 rounded-full px-2 py-1 text-[11px]"
+                style={{ background: "var(--warning-soft, #fef3c7)", color: "var(--warning, #92400e)" }}
+              >
+                افتح
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ───────────────────────── آخر الحركات ─────────────────────────
+
+/**
+ * تايم‌لاين بسيط لآخر حركات الفلوس.
+ *
+ * نفس مصدر «سجل الخزنة» — مفيش استعلام تاني ومفيش تعريف تاني لـ«حركة». الفرق إن ده
+ * آخر عشرة بس، عشان اللوحة تقول «إيه اللي حصل» من غير ما تبقى جدول تاني.
+ */
+function RecentMovements() {
+  const { currentBusinessIds } = useBusinessContext();
+  const q = trpc.accounting.treasuryHistory.useQuery({
+    ...(currentBusinessIds?.length ? { businessIds: currentBusinessIds } : {}),
+    limit: 10,
+  });
+  const rows = q.data ?? [];
+  if (q.isLoading || rows.length === 0) return null;
+
+  return (
+    <section className="rounded-lg border bg-card">
+      <h2 className="border-b px-4 py-3 text-sm font-bold">آخر الحركات</h2>
+      <ul className="divide-y">
+        {rows.map((row: any) => {
+          const isIn = row.direction === "in";
+          return (
+            <li key={row.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <span className="min-w-0">
+                <span className="block truncate text-sm">{row.description}</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  {new Date(row.transactionDate).toLocaleString("ar-EG", {
+                    day: "numeric",
+                    month: "short",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </span>
+              <span className="shrink-0 text-left">
+                {/* أخضر داخل، أحمر خارج — قاعدة واحدة في كل الشاشات. */}
+                <span
+                  className="block text-sm font-bold tabular-nums"
+                  style={{ color: isIn ? "var(--success)" : "var(--destructive)" }}
+                >
+                  {isIn ? "+" : "−"}
+                  {egp(Number(row.amount))}
+                </span>
+                <span className="block text-[11px] tabular-nums text-muted-foreground">
+                  الرصيد {egp(Number(row.balanceAfter))}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

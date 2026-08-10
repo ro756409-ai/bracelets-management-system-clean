@@ -5022,6 +5022,72 @@ export async function getDailyLedgerSummary(input: {
  * والتلاتة على محور واحد: `paidAt` — لحظة خروج الفلوس. مش تاريخ الفاتورة ولا تاريخ
  * تشغيل الإعلان. ده بيخلّي اللوحة متطابقة مع الخزنة سطر بسطر.
  */
+/**
+ * «محتاج إجراء» — الحاجات اللي مستنية منك تصرّف.
+ *
+ * **مش كروت إحصائية.** كل بند هنا معناه «افتح ده واعمل حاجة»، ولو مفيش حاجة مستنية
+ * القايمة بتبقى فاضية وده الوضع الصح. الأرقام اللي للعلم بس مكانها الكروت فوق.
+ *
+ * كل استعلام بيرجّع العدد والمبلغ: العدد بيقول «كام حاجة»، والمبلغ بيقول «تستاهل
+ * أفتحها دلوقتي ولا بكرة».
+ */
+export async function getAccountingActionItems(input: {
+  businessIds?: number[] | null;
+}) {
+  const db = await getDb();
+  const empty = {
+    unpaidExpenses: { count: 0, amount: 0 },
+    factoriesOwed: { count: 0, amount: 0 },
+    returnsAtFactory: { count: 0 },
+    unfinishedPayroll: { count: 0, amount: 0 },
+  };
+  if (!db) return empty;
+
+  const ids =
+    input.businessIds && input.businessIds.length > 0 ? input.businessIds : null;
+  const scope = (col: any) => (ids ? [inArray(col, ids)] : []);
+
+  // مصروف معتمد ولسه ماتدفعش — التزام قايم، مش محدود باليوم.
+  const [unpaid] = await db
+    .select({
+      count: sql<number>`COUNT(*)`,
+      amount: sql<string>`COALESCE(SUM(${expenses.amount} - ${expenses.paidAmount}), 0)`,
+    })
+    .from(expenses)
+    .where(
+      and(
+        inArray(expenses.status, ["accrued", "partially_paid"] as any),
+        ...scope(expenses.businessId)
+      )
+    );
+
+  // دورة مرتبات اتعملت وماتدفعتش.
+  const [payroll] = await db
+    .select({
+      count: sql<number>`COUNT(*)`,
+      amount: sql<string>`COALESCE(SUM(${payrollPeriods.totalNet}), 0)`,
+    })
+    .from(payrollPeriods)
+    .where(
+      and(
+        sql`${payrollPeriods.status} NOT IN ('paid', 'cancelled')`,
+        ...scope(payrollPeriods.businessId)
+      )
+    );
+
+  return {
+    ...empty,
+    unpaidExpenses: {
+      count: Number(unpaid?.count ?? 0),
+      amount: Number(unpaid?.amount ?? 0),
+    },
+    unfinishedPayroll: {
+      count: Number(payroll?.count ?? 0),
+      amount: Number(payroll?.amount ?? 0),
+    },
+  };
+}
+
 export async function getAccountingControlCenter(input: {
   businessIds?: number[] | null;
   /** يوم القاهرة، `YYYY-MM-DD`. الافتراضي النهاردة. */
