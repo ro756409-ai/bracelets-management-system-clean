@@ -148,3 +148,48 @@ describe("Bosta COD amount — shipping must never be double-charged", () => {
     expect(content).toContain("totalAmount: itemsTotal + shippingFee");
   });
 });
+
+// ───────────────── وصف الشحنة ─────────────────
+
+describe("🔑 نوع الحفر بيوصل بوسطة", () => {
+  const service = fs.readFileSync("server/bosta.service.ts", "utf-8");
+  const code = service.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*/g, "");
+  const block = code.slice(
+    code.indexOf("const bostaItems ="),
+    code.indexOf("const payload")
+  );
+
+  it("🔑 البنود بتتجاب بالجوين على أنواع الحفر — مش خام", () => {
+    // كان `db.select().from(orderItems)` على طول، و`variantId` عمود لوحده — يعني اسم
+    // النوع مكانش بيتجاب أصلاً. أوردر بتلات نقوش مختلفة كان بيوصل «أسورة نحاس ×3».
+    expect(block).toContain("await getOrderItems(orderId)");
+    expect(block).not.toContain("db.select().from(orderItems)");
+  });
+
+  it("🔑 والوصف بيحط نوع الحفر جنب اسم الصنف", () => {
+    expect(block).toContain("it.variantName");
+    expect(block).toContain("`${it.productName} - ${variant}`");
+  });
+
+  it("🔑 والبند اللي مالوش نوع مابيجيش بشرطة فاضية", () => {
+    expect(block).toContain("variant ? ");
+    expect(block).toContain(": it.productName");
+  });
+
+  it("🔑 عدد القطع لسه مجموع الكميات", () => {
+    expect(block).toContain("bostaItems.reduce((s, it) => s + (it.quantity || 0), 0)");
+  });
+
+  it("🔑 والوصف الطويل بيتقص بدل ما الشحنة تترفض", () => {
+    expect(block).toContain("DESCRIPTION_LIMIT");
+    expect(block).toContain("وغيرها");
+  });
+
+  it("🔑 نفس الدالة اللي الشاشة بتعرض بيها — فاللي التاجر شايفه هو اللي بيتبعت", () => {
+    const orders = fs.readFileSync("client/src/pages/Orders.tsx", "utf-8");
+    expect(orders).toContain("item.variantName");
+    const db = fs.readFileSync("server/db.ts", "utf-8");
+    expect(db).toContain("export async function getOrderItems");
+    expect(db).toContain("variantName: productVariants.name");
+  });
+});

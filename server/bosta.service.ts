@@ -5,8 +5,8 @@
  */
 
 import { Request, Response, Express } from "express";
-import { getDb, getBusinessIdsByGroupSlug } from "./db";
-import { orders, orderItems } from "../drizzle/schema";
+import { getDb, getBusinessIdsByGroupSlug, getOrderItems } from "./db";
+import { orders } from "../drizzle/schema";
 import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { requireAdminOrManager } from "./authMiddleware";
 
@@ -259,14 +259,34 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
   // EasyOrder/Facebook order (the only sources that populate shippingFees).
   const totalCOD = parseFloat(String(order.totalAmount));
 
-  // جلب بنود الأوردر لبناء وصف وعدد قطع دقيق من الأصناف المتعددة
-  const bostaItems = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+  // جلب بنود الأوردر لبناء وصف وعدد قطع دقيق من الأصناف المتعددة.
+  //
+  // **بالجوين على `product_variants`.** ده كان `db.select().from(orderItems)` على طول،
+  // والنتيجة إن نوع الحفر مكانش بيتجاب أصلاً — فأوردر فيه تلات قطع بتلات نقوش مختلفة
+  // كان بيوصل بوسطة كـ«أسورة نحاس ×3»، ومندوب التسليم مش عارف مين ياخد إيه، والعميل
+  // بيستلم قطعة مش بتاعته.
+  //
+  // `getOrderItems` هي نفس الدالة اللي الشاشة بتعرض بيها البنود، فاللي التاجر بيشوفه
+  // في «تفاصيل الحفر لكل قطعة» هو بالحرف اللي بيتبعت لبوسطة.
+  const bostaItems = await getOrderItems(orderId);
   let bostaDescription = order.productName || "أساور نحاسية";
   let bostaItemsCount = order.quantity ?? 1;
   if (bostaItems.length > 0) {
-    bostaDescription = bostaItems.map((it) => `${it.productName} ×${it.quantity}`).join("، ");
+    bostaDescription = bostaItems
+      .map(it => {
+        const variant = (it.variantName ?? "").trim();
+        const name = variant ? `${it.productName} - ${variant}` : it.productName;
+        return `${name} ×${it.quantity}`;
+      })
+      .join("، ");
     const sumQty = bostaItems.reduce((s, it) => s + (it.quantity || 0), 0);
     if (sumQty > 0) bostaItemsCount = sumQty;
+  }
+  // بوسطة بترفض الوصف الطويل. القص بيسيب أول البنود كاملة وبيقول إن فيه باقي، بدل ما
+  // الشحنة كلها تترفض — والعدد فوق لسه بيقول القطع كام.
+  const DESCRIPTION_LIMIT = 480;
+  if (bostaDescription.length > DESCRIPTION_LIMIT) {
+    bostaDescription = `${bostaDescription.slice(0, DESCRIPTION_LIMIT - 12).trimEnd()}… وغيرها`;
   }
 
   const payload: Record<string, unknown> = {
