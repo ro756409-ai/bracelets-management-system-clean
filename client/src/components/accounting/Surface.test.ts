@@ -83,3 +83,66 @@ describe("حد واحد بدل كارت جوه كارت", () => {
     expect(borders).toBeLessThanOrEqual(2);
   });
 });
+
+// ───────────────── تطبيق النغمات على الشاشات ─────────────────
+
+describe("🔑 السبع شاشات بتستخدم النغمات مش ألوان حرّة", () => {
+  const dashboard = fs.readFileSync(
+    "client/src/pages/accounting/ControlCenter.tsx",
+    "utf-8"
+  );
+
+  it("🔑 اللوحة مافيهاش لون مختار للشكل", () => {
+    // كانت: الإعلانات بنفسجي، المخزون بنفسجي، المرتبات كهرماني، تكلفة البضاعة أزرق
+    // — كلها اختيارات جمالية بتخلي الأحمر الحقيقي يضيع.
+    for (const decorative of ["var(--purple)", "var(--info)"]) {
+      expect(dashboard, decorative).not.toContain(`tone: "${decorative}"`);
+    }
+  });
+
+  it("🔑 وكل كارت نغمته من الأربعة", () => {
+    const tones = [...dashboard.matchAll(/tone: "([a-z]+)"/g)].map(m => m[1]);
+    expect(tones.length).toBeGreaterThan(8);
+    for (const tone of tones) {
+      expect(["in", "out", "due", "neutral"], tone).toContain(tone);
+    }
+  });
+
+  it("🔑 والأرقام اللي ليها اتجاه بتاخد لونها من إشارتها", () => {
+    // صافي الربح أخضر لما يكون موجب وأحمر لما يكون سالب — من غير ما حد يختار.
+    expect(dashboard).toContain("const tone = c.signed ? moneyTone(v) : c.tone");
+  });
+
+  it("🔑 والفلوس الداخلة خضرا والخارجة حمرا", () => {
+    expect(dashboard).toContain('value: d?.collectionsToday, icon: HandCoins, tone: "in"');
+    expect(dashboard).toContain('value: d?.expensesToday, icon: Receipt, tone: "out"');
+    expect(dashboard).toContain('value: d?.advertisingToday, icon: Megaphone, tone: "out"');
+    expect(dashboard).toContain('value: d?.salariesToday, icon: Users, tone: "out"');
+  });
+
+  it("🔑 و«عليك» حمرا و«ليك» خضرا", () => {
+    expect(dashboard).toContain('owedToFactories, icon: Factory, tone: "out"');
+    expect(dashboard).toContain('owedByFactories, icon: Factory, tone: "in"');
+  });
+
+  it("🔑 والمستحق كهرماني — محتاج إجراء مش خسارة", () => {
+    expect(dashboard).toContain('value: d?.supplierDue, icon: Clock, tone: "due"');
+  });
+});
+
+describe("🔑 الإعلانات كمان", () => {
+  const ads = fs.readFileSync("client/src/pages/Advertising.tsx", "utf-8");
+
+  it("🔑 مافيهاش لون للشكل", () => {
+    for (const decorative of ["var(--purple)", "var(--info)", "var(--warning)"]) {
+      expect(ads, decorative).not.toContain(`tone: "${decorative}"`);
+    }
+  });
+
+  it("🔑 والصرف خارج والعائد داخل والعدّادات معلومة", () => {
+    expect(ads).toContain('label: "صرف النهاردة", value: money(todaySpend), icon: Megaphone, tone: "out"');
+    expect(ads).toContain('tone: "in"');
+    // «رسايل» كانت كهرماني — وهي مش مستحق ولا محتاجة إجراء.
+    expect(ads).toContain('label: "رسايل", value: String(totals.messages), icon: MessageSquare, tone: "neutral"');
+  });
+});

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SectionCard } from "@/components/shared";
+import { moneyTone, toneColor, type Tone } from "@/components/accounting/Surface";
 
 /**
  * لوحة مركز الحسابات.
@@ -46,7 +47,11 @@ type Card = {
   period: Period;
   value: number | undefined;
   icon: typeof Wallet;
-  tone: string;
+  /**
+   * النغمة **معنى** مش لون. `signed` معناها إن الاتجاه بيتقرر من إشارة الرقم نفسه
+   * وقت العرض — زي صافي الربح: أخضر لما يكون موجب وأحمر لما يكون سالب.
+   */
+  tone: Tone;
   signed?: boolean;
   hint?: string;
 };
@@ -67,25 +72,25 @@ export default function ControlCenter() {
   const isToday = dateKey === cairoToday();
 
   const cards: Card[] = [
-    { label: "رصيد الخزنة", period: "الرصيد الحالي", value: d?.treasuryBalance, icon: Wallet, tone: "var(--info)" },
-    { label: "التحصيلات", period: "اليوم", value: d?.collectionsToday, icon: HandCoins, tone: "var(--success)" },
-    { label: "المصروفات", period: "اليوم", value: d?.expensesToday, icon: Receipt, tone: "var(--destructive)",
+    { label: "رصيد الخزنة", period: "الرصيد الحالي", value: d?.treasuryBalance, icon: Wallet, tone: "neutral" },
+    { label: "التحصيلات", period: "اليوم", value: d?.collectionsToday, icon: HandCoins, tone: "in" },
+    { label: "المصروفات", period: "اليوم", value: d?.expensesToday, icon: Receipt, tone: "out",
       hint: "من غير الإعلانات والمرتبات — كل واحد ليه كارت لوحده" },
-    { label: "الإعلانات", period: "اليوم", value: d?.advertisingToday, icon: Megaphone, tone: "var(--purple)" },
-    { label: "المرتبات", period: "اليوم", value: d?.salariesToday, icon: Users, tone: "var(--warning)" },
-    { label: "تكلفة البضاعة", period: "اليوم", value: d?.inventoryCostToday, icon: PackagePlus, tone: "var(--info)",
+    { label: "الإعلانات", period: "اليوم", value: d?.advertisingToday, icon: Megaphone, tone: "out" },
+    { label: "المرتبات", period: "اليوم", value: d?.salariesToday, icon: Users, tone: "out" },
+    { label: "تكلفة البضاعة", period: "اليوم", value: d?.inventoryCostToday, icon: PackagePlus, tone: "neutral",
       hint: "قيمة اللي دخل المخزن — مش فلوس خرجت من الخزنة" },
-    { label: "صافي الربح", period: "اليوم", value: d?.netProfitToday, icon: TrendingUp, tone: "var(--success)", signed: true },
-    { label: "صافي الربح", period: "الشهر", value: d?.netProfitMonth, icon: CalendarRange, tone: "var(--success)", signed: true },
-    { label: "مستحق للورشة", period: "مستحق", value: d?.supplierDue, icon: Clock, tone: "var(--warning)",
+    { label: "صافي الربح", period: "اليوم", value: d?.netProfitToday, icon: TrendingUp, tone: "neutral", signed: true },
+    { label: "صافي الربح", period: "الشهر", value: d?.netProfitMonth, icon: CalendarRange, tone: "neutral", signed: true },
+    { label: "مستحق للورشة", period: "مستحق", value: d?.supplierDue, icon: Clock, tone: "due",
       hint: "مش محدود باليوم — اللي عليك لسه عليك" },
-    { label: "قيمة المخزون", period: "الرصيد الحالي", value: d?.inventoryValue, icon: Boxes, tone: "var(--purple)" },
+    { label: "قيمة المخزون", period: "الرصيد الحالي", value: d?.inventoryValue, icon: Boxes, tone: "neutral" },
     // أرقام المصانع مشتقّة من نفس محرّك كشف الحساب — مفيش رصيد تاني متخزّن للوحة.
-    { label: "إجمالي مستحق للمصانع", period: "الرصيد الحالي", value: d?.suppliers?.owedToFactories, icon: Factory, tone: "var(--destructive)",
+    { label: "عليك للمصانع", period: "الرصيد الحالي", value: d?.suppliers?.owedToFactories, icon: Factory, tone: "out",
       hint: "مجموع اللي عليك لكل المصانع" },
-    { label: "إجمالي لينا عند المصانع", period: "الرصيد الحالي", value: d?.suppliers?.owedByFactories, icon: Factory, tone: "var(--success)",
+    { label: "ليك عند المصانع", period: "الرصيد الحالي", value: d?.suppliers?.owedByFactories, icon: Factory, tone: "in",
       hint: "مصانع دفعتلها زيادة أو رجّعتلها بضاعة" },
-    { label: "صافي حساب الموردين", period: "الرصيد الحالي", value: d?.suppliers?.net, icon: Factory, tone: "var(--warning)", signed: true },
+    { label: "صافي المصانع", period: "الرصيد الحالي", value: d?.suppliers?.net, icon: Factory, tone: "neutral", signed: true },
   ];
 
   return (
@@ -137,17 +142,22 @@ export default function ControlCenter() {
         {cards.map(c => {
           const Icon = c.icon;
           const v = Number(c.value ?? 0);
+          // الرقم اللي ليه اتجاه بياخد لونه من إشارته؛ الباقي بياخد نغمته المعلنة.
+          const tone = c.signed ? moneyTone(v) : c.tone;
           return (
             <div key={`${c.label}-${c.period}`} className="rounded-lg border bg-card p-3">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: c.tone }} />
+                <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: toneColor(tone) }} />
                 <span className="truncate">{c.label}</span>
                 {/* الفترة جنب الاسم دايمًا — رقم من غير فترة مالوش معنى */}
                 <span className="ms-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px]">
                   {c.period}
                 </span>
               </div>
-              <p className="mt-1.5 text-lg font-black tabular-nums">
+              <p
+                className="mt-1.5 text-lg font-black tabular-nums"
+                style={{ color: toneColor(tone) }}
+              >
                 {q.isLoading ? (
                   <span className="inline-block h-5 w-24 animate-pulse rounded bg-muted" />
                 ) : q.isError ? (
@@ -204,12 +214,15 @@ function ActionItems() {
     currentBusinessIds?.length ? { businessIds: currentBusinessIds } : {}
   );
 
+  // **السلسلة الآمنة كاملة.** `q.data?.unpaidExpenses.count` بتحمي `q.data` بس —
+  // ولو الرد رجع من غير `unpaidExpenses`، القراءة بتوقّع اللوحة كلها بشاشة بيضا.
+  // ده نفس الغلط اللي وقّع صفحة الحسابات قبل كده، ووقع هنا تاني.
   const items = [
-    q.data?.unpaidExpenses.count
+    q.data?.unpaidExpenses?.count
       ? {
           key: "expenses",
-          label: `${q.data.unpaidExpenses.count} مصروف مستحق`,
-          detail: `${egp(q.data.unpaidExpenses.amount)} ج.م لسه ماخرجتش من الخزنة`,
+          label: `${q.data?.unpaidExpenses?.count} مصروف مستحق`,
+          detail: `${egp(q.data?.unpaidExpenses?.amount)} ج.م لسه ماخرجتش من الخزنة`,
           to: "/expenses",
         }
       : null,
@@ -221,11 +234,11 @@ function ActionItems() {
           to: "/supplier-statements",
         }
       : null,
-    q.data?.unfinishedPayroll.count
+    q.data?.unfinishedPayroll?.count
       ? {
           key: "payroll",
-          label: `${q.data.unfinishedPayroll.count} دورة مرتبات مش مكتملة`,
-          detail: `${egp(q.data.unfinishedPayroll.amount)} ج.م`,
+          label: `${q.data?.unfinishedPayroll?.count} دورة مرتبات مش مكتملة`,
+          detail: `${egp(q.data?.unfinishedPayroll?.amount)} ج.م`,
           to: "/salary-preparation",
         }
       : null,
