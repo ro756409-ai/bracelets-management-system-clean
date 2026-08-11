@@ -409,6 +409,7 @@ import {
   getTreasurySummary,
   getDailyLedgerSummary,
   getAccountingControlCenter,
+  getAccountingActionItems,
   getTreasuryHistoryWithBalances,
   listAdCampaigns,
   getExpenseCategories,
@@ -6125,6 +6126,15 @@ export const appRouter = router({
         const businessIds = await scopeBusinessIds(ctx.tenantId, input);
         return listAdCampaigns({ ...input, businessIds });
       }),
+
+    /** «محتاج إجراء» — بنود مستنية تصرّف، مش أرقام للعلم. */
+    actionItems: permissionProcedure("accounting.view")
+      .input(z.object({ businessIds: z.array(z.number()).optional() }).optional())
+      .query(async ({ ctx, input }) =>
+        getAccountingActionItems({
+          businessIds: await scopeBusinessIds(ctx.tenantId, input ?? {}),
+        })
+      ),
 
     dailySummary: permissionProcedure("accounting.view")
       .input(

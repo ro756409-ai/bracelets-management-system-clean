@@ -241,10 +241,18 @@ describe("الأداء", () => {
     expect(dash).not.toContain("staleTime");
   });
 
-  it("نداء واحد للوحة كلها مش نداء لكل كارت", () => {
+  it("🔑 كروت الأرقام كلها من نداء واحد — مش نداء لكل كارت", () => {
+    // الأصل: لو كل كارت نادى لوحده، الأرقام بتيجي من لحظات مختلفة والمجموع مايطلعش
+    // صح. القاعدة دي على **الكروت**. الأقسام اللي تحتها (محتاج إجراء، آخر الحركات)
+    // بيانات مختلفة تمامًا ومش داخلة في المجموع، فكل واحد بنداء واحد.
     const queries = [...dash.matchAll(/trpc\.[a-zA-Z.]+\.useQuery/g)].map(m => m[0]);
-    expect(queries).toHaveLength(1);
     expect(queries[0]).toContain("accounting.controlCenter");
+    expect(queries).toHaveLength(4);
+    expect(queries.slice(1).sort()).toEqual([
+      "trpc.accounting.actionItems.useQuery",
+      "trpc.accounting.treasuryHistory.useQuery",
+      "trpc.suppliers.dashboardTotals.useQuery",
+    ]);
   });
 });
 
@@ -329,16 +337,44 @@ describe("التابات", () => {
   const bar = listOf("TABS");
   const hidden = listOf("HIDDEN_TABS");
 
-  it("🔑 الشريط فيه اللي التاجر بيفتحه كل يوم وبس", () => {
-    for (const label of ["اللوحة", "المخزون", "الإعلانات", "سجل الخزنة"]) {
-      expect(bar, label).toContain(`label: "${label}"`);
+  it("🔑 السبعة اللي هما النموذج الذهني كله", () => {
+    // اللوحة · التحصيلات · المصروفات · المصانع · الإعلانات · المرتبات · الخزنة.
+    // مفيش تامن — أي زيادة معناها إن الحسابات رجعت تتفرّع.
+    const labels = [...bar.matchAll(/label: "([^"]+)"/g)].map(m => m[1]);
+    expect(labels).toEqual([
+      "اللوحة",
+      "التحصيلات",
+      "المصروفات",
+      "المصانع",
+      "الإعلانات",
+      "المرتبات",
+      "الخزنة",
+    ]);
+  });
+
+  it("🔑 وكلهم بيرندروا جوه الشريط — التاجر مايخرجش من الحسابات", () => {
+    // قبل كده «تحصيل اليوم» كانت صفحة مستقلة، فالتبديل بينها وبين الخزنة كان بيوديك
+    // بره الحسابات وتفقد الشريط.
+    for (const section of [
+      "<DailyCollections />",
+      "<SupplierStatements />",
+      "<Advertising />",
+      "<SalaryProfiles />",
+    ]) {
+      expect(page, section).toContain(section);
     }
   });
 
-  it("🔑 والقديم اتشال من الشريط فعلًا — مش مكتوب وسايب", () => {
-    for (const label of ["التحصيلات", "المصروفات", "المرتبات"]) {
-      expect(bar, label).not.toContain(`label: "${label}"`);
-      expect(hidden, label).toContain(`label: "${label}"`);
+  it("🔑 ومساراتهم كلها بتعدّي على الحسابات", () => {
+    const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+    for (const path of [
+      "/daily-collections",
+      "/supplier-statements",
+      "/advertising",
+      "/salary-profiles",
+    ]) {
+      const route = app.slice(app.indexOf(`<Route path="${path}">`));
+      expect(route.slice(0, 120), path).toContain("<Accounting />");
     }
   });
 
@@ -349,11 +385,18 @@ describe("التابات", () => {
     }
   });
 
-  it("🔑 ومحدش اتشال من غير بديل", () => {
-    // كل تاب اتخفي لازم يكون ليه شاشة تانية بتعمل نفس الشغل، وإلا يبقى التاجر خسر ميزة.
-    const sidebar = fs.readFileSync("client/src/components/DashboardLayout.tsx", "utf-8");
-    expect(sidebar).toContain('path: "/daily-collections"'); // بديل التحصيلات والمصروفات
-    expect(sidebar).toContain('path: "/salary-preparation"'); // بديل المرتبات
+  it("🔑 ومحدش اتشال من غير بديل — كل مخفي مساره لسه بيفتح", () => {
+    // المخفي مش محذوف: أي رابط قديم أو bookmark لازم يفضل شغّال.
+    const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+    for (const path of [
+      "/goods-receipt",
+      "/salary-preparation",
+      "/closings",
+      "/shipping-finance",
+      "/accounting-settings",
+    ]) {
+      expect(app, path).toContain(`<Route path="${path}">`);
+    }
   });
 
   it("🔑 ومساراتها لسه بتفتح", () => {
@@ -364,5 +407,67 @@ describe("التابات", () => {
   it("🔑 ولوحة الأرباح التفصيلية ما اتشالتش — اتنقلت للمتقدم", () => {
     expect(page).toContain("<OverviewSection />");
     expect(page).toContain("أقسام متقدمة");
+  });
+});
+
+// ───────────────── محتاج إجراء + آخر الحركات ─────────────────
+
+describe("🔑 «محتاج إجراء» بنود مش كروت", () => {
+  const fn = codeOnly(db).slice(
+    codeOnly(db).indexOf("export async function getAccountingActionItems"),
+    codeOnly(db).indexOf("export async function getAccountingControlCenter")
+  );
+
+  it("🔑 المصروف المستحق = المعتمد ناقص المدفوع", () => {
+    expect(fn).toContain('inArray(expenses.status, ["accrued", "partially_paid"]');
+    expect(fn).toContain("${expenses.amount} - ${expenses.paidAmount}");
+  });
+
+  it("🔑 ومش محدود باليوم — الالتزام قايم لحد ما يتدفع", () => {
+    expect(fn).not.toContain("toExclusive");
+    expect(fn).not.toContain("businessDayRange");
+  });
+
+  it("🔑 ودورة المرتبات المش مكتملة = أي حالة غير مدفوع أو ملغي", () => {
+    expect(fn).toContain("NOT IN ('paid', 'cancelled')");
+  });
+
+  it("🔑 قراءة بحتة", () => {
+    for (const write of [".insert(", ".update(", ".delete(", "transaction("]) {
+      expect(fn, write).not.toContain(write);
+    }
+  });
+
+  it("🔑 والقسم بيختفي لما مفيش حاجة مستنية", () => {
+    // قايمة فاضية خبر كويس — مش مساحة تتملي بأصفار.
+    expect(dash).toContain("if (q.isLoading || items.length === 0) return null");
+  });
+
+  it("🔑 والأصفار مابتتعرضش كبنود", () => {
+    // «مصروف مستحق: ٠» بند بيطلب منك تعمل ولا حاجة.
+    expect(dash).toContain("q.data?.unpaidExpenses.count");
+    expect(dash).toContain("].filter(Boolean)");
+  });
+
+  it("🔑 وكل بند بيوديك للشاشة اللي تتصرف فيها", () => {
+    for (const to of ['to: "/expenses"', 'to: "/supplier-statements"', 'to: "/salary-preparation"']) {
+      expect(dash, to).toContain(to);
+    }
+  });
+});
+
+describe("🔑 آخر الحركات", () => {
+  it("🔑 من نفس مصدر سجل الخزنة — مفيش تعريف تاني لـ«حركة»", () => {
+    expect(dash).toContain("trpc.accounting.treasuryHistory.useQuery");
+    expect(dash).toContain("limit: 10");
+  });
+
+  it("🔑 والألوان بقاعدة واحدة: أخضر داخل وأحمر خارج", () => {
+    expect(dash).toContain('isIn ? "var(--success)" : "var(--destructive)"');
+    expect(dash).toContain('{isIn ? "+" : "−"}');
+  });
+
+  it("🔑 وبيعرض الرصيد بعد الحركة", () => {
+    expect(dash).toContain("الرصيد {egp(Number(row.balanceAfter))}");
   });
 });

@@ -13,6 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { PageHeader, SectionCard } from "@/components/shared";
+import { toneColor } from "@/components/accounting/Surface";
 import { toast } from "sonner";
 import {
   costPerOrder, costPerMessage, conversionRate, roas,
@@ -178,14 +179,16 @@ export default function Advertising() {
   const showError = (k: string) =>
     errors[k] ? <p className="mt-1 text-xs text-destructive">{errors[k]}</p> : null;
 
+  // النغمة معنى: الصرف فلوس خارجة، والعدّادات والمتوسطات معلومة. مفيش لون للشكل —
+  // «رسايل» كانت كهرماني و«العائد» بنفسجي، والاتنين مالهمش علاقة بمستحق ولا بخطر.
   const cards = [
-    { label: "صرف النهاردة", value: money(todaySpend), icon: Megaphone, tone: "var(--purple)" },
-    { label: "صرف الفترة", value: money(totals.spend), icon: TrendingUp, tone: "var(--info)" },
-    { label: "أوردرات", value: String(totals.orders), icon: ShoppingCart, tone: "var(--success)" },
-    { label: "رسايل", value: String(totals.messages), icon: MessageSquare, tone: "var(--warning)" },
-    { label: "متوسط تكلفة الأوردر", value: money(totals.avgCostPerOrder), icon: ShoppingCart, tone: "var(--success)" },
-    { label: "متوسط تكلفة الرسالة", value: money(totals.avgCostPerMessage), icon: MessageSquare, tone: "var(--warning)" },
-    { label: "العائد على الإنفاق", value: totals.roas == null ? "—" : `${dec(totals.roas)}×`, icon: TrendingUp, tone: "var(--purple)" },
+    { label: "صرف النهاردة", value: money(todaySpend), icon: Megaphone, tone: "out" as const },
+    { label: "صرف الفترة", value: money(totals.spend), icon: TrendingUp, tone: "out" as const },
+    { label: "أوردرات", value: String(totals.orders), icon: ShoppingCart, tone: "neutral" as const },
+    { label: "رسايل", value: String(totals.messages), icon: MessageSquare, tone: "neutral" as const },
+    { label: "متوسط تكلفة الأوردر", value: money(totals.avgCostPerOrder), icon: ShoppingCart, tone: "neutral" as const },
+    { label: "متوسط تكلفة الرسالة", value: money(totals.avgCostPerMessage), icon: MessageSquare, tone: "neutral" as const },
+    { label: "العائد على الإنفاق", value: totals.roas == null ? "—" : `${dec(totals.roas)}×`, icon: TrendingUp, tone: "in" as const },
   ];
 
   return (
@@ -359,7 +362,7 @@ export default function Advertising() {
             return (
               <div key={c.label} className="rounded-lg border bg-card p-3">
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: c.tone }} />
+                  <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: toneColor(c.tone) }} />
                   <span className="truncate">{c.label}</span>
                 </div>
                 <p className="mt-1.5 text-base font-black tabular-nums">

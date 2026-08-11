@@ -559,3 +559,53 @@ describe("🔑 صفحة الإعدادات اتبسّطت من غير ما حا�
     expect(top).toContain("<FinancialAccountSettings");
   });
 });
+
+// ───────────────── درج المصروف السريع ─────────────────
+
+describe("🔑 مصروف جديد في درج — مش فورم دايم", () => {
+  const drawer = fs.readFileSync(
+    "client/src/components/accounting/ExpenseDrawer.tsx",
+    "utf-8"
+  );
+  const expenses = fs.readFileSync("client/src/pages/Expenses.tsx", "utf-8");
+
+  it("🔑 الحقول اليومية بس", () => {
+    for (const field of ["التاريخ", "التصنيف", "المبلغ", "المصروف بيخص إيه"]) {
+      expect(drawer, field).toContain(field);
+    }
+    expect(drawer).toContain("صورة الفاتورة (اختياري)");
+  });
+
+  it("🔑 وإجرايين: سجّل بس · سجّل وادفع", () => {
+    expect(drawer).toContain("سجّل بس (مستحق)");
+    expect(drawer).toContain("سجّل وادفع");
+    expect(drawer).toContain("submit(false)");
+    expect(drawer).toContain("submit(true)");
+  });
+
+  it("🔑 ومفيش مسار دفع جديد — نفس expenseRecordSimple", () => {
+    // الدالة دي بتمشي المسودة والإرسال والاعتماد والدفع بالترتيب، وبتعدّي على جسر
+    // الخزنة. أي مسار تاني كان هيبقى تعريف تاني للمصروف.
+    expect(drawer).toContain("trpc.accountingV2.expenseRecordSimple.useMutation");
+    for (const forbidden of ["treasuryCreate", "expensePay", "expenseCreate"]) {
+      expect(drawer, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it("🔑 وصفحة المصروفات بقت تقرير — الزرار بيفتح الدرج", () => {
+    expect(expenses).toContain("<NewExpenseButton");
+    expect(expenses).toContain("كام صرفت، كام مدفوع، وكام لسه عليك");
+    // الجملة المحاسبية القديمة اتشالت — والفحص على الكود مش على التعليق اللي
+    // بيشرح إزاي اتشالت، وإلا التأكيد بيقيس شرحه هو.
+    expect(codeOnly(expenses)).not.toContain("الاستحقاق حسب Service Period");
+  });
+
+  it("🔑 والإجراء الأساسي واحد — «سجّل بس» أهدى", () => {
+    const actions = drawer.slice(drawer.indexOf("سجّل بس (مستحق)") - 300);
+    expect(actions).toContain('variant="outline"');
+  });
+
+  it("وبيقول إن الخصم مرة واحدة", () => {
+    expect(drawer).toContain("بيخصم من «{DEFAULT_TREASURY_LABEL}» مرة واحدة");
+  });
+});
