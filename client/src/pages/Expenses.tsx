@@ -56,6 +56,7 @@ import {
   countActiveFilters,
   type FilterDescriptor,
 } from "@/components/shared";
+import { NewExpenseButton } from "@/components/accounting/ExpenseDrawer";
 import { formatMoney } from "@/lib/money";
 import { printExpenses } from "@/lib/printExpenses";
 
@@ -364,10 +365,17 @@ export function ExpensesSection() {
 
   return (
     <div className="space-y-4">
+      {/*
+        الوصف كان بيقول «الاستحقاق حسب Service Period والدفع منفصل على الحساب المالي»
+        — دي جملة لمحاسب. الصفحة دي تقرير: كام صرفت، كام مدفوع، وكام لسه عليك.
+      */}
       <SectionHeader
-        description="الاستحقاق حسب Service Period والدفع منفصل على الحساب المالي"
+        description="كام صرفت، كام مدفوع، وكام لسه عليك"
         actions={
           <>
+            {businessId != null && (
+              <NewExpenseButton businessId={businessId} onSaved={invalidateAll} />
+            )}
             <Button
               variant="outline"
               size="sm"
