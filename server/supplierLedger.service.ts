@@ -3,10 +3,15 @@ import { and, desc, eq, inArray, like } from "drizzle-orm";
 import {
   businessConfigurationValues,
   businessEvents,
+  productVariants,
+  products,
+  purchaseReceiptItems,
   purchaseReceipts,
 } from "../drizzle/schema";
 import {
   buildStatement,
+  MOVEMENT_LABELS,
+  MOVEMENT_SIGN,
   summariseStatement,
   summariseSuppliers,
   type SupplierMovement,
@@ -441,7 +446,206 @@ export async function recordSupplierAdjustment(input: {
   });
 }
 
+/**
+ * إلغاء حركة اتسجّلت على حساب المصنع.
+ *
+ * **مش حذف.** الحركة الأصلية بتفضل مكانها في الكشف، وبتتسجّل حركة عكسية بتلغي أثرها.
+ * ده مش تشدد محاسبي — ده الفرق بين كشف تقدر تراجعه وكشف رقمه بيتغيّر ومحدش عارف ليه.
+ *
+ * العكسية بتتسجّل كـ`adjustment` عن قصد: `payment` إشارتها مقفولة على «ناقص» في محرّك
+ * الكشف، فدفعة بمبلغ سالب كانت هتفضل تنقّص. `adjustment` هي النوع الوحيد اللي الاتجاه
+ * فيه جاي مع الرقم — فبتعرف تمشي في الاتجاهين. المحرّك نفسه مااتغيّرش ولا حرف.
+ *
+ * ولو الأصل كان دفعة، الفلوس بترجع الخزنة في نفس الترانزاكشن. دفعة اتلغت والخزنة
+ * فاضلة ناقصة معناها إن الدرج بيقول رقم والحساب بيقول رقم تاني.
+ */
+export async function reverseSupplierMovement(input: {
+  businessId: number;
+  supplierKey: string;
+  /** `business_events.id` للحركة الأصلية. */
+  eventId: number;
+  reason: string;
+  actor: Actor;
+}) {
+  if (!input.reason.trim())
+    throw new Error("إلغاء الحركة يتطلب سببًا موثقًا");
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const [original] = await db
+    .select()
+    .from(businessEvents)
+    .where(
+      and(
+        eq(businessEvents.id, input.eventId),
+        eq(businessEvents.businessId, input.businessId)
+      )
+    )
+    .limit(1);
+  if (!original) throw new Error("الحركة غير موجودة");
+
+  const movementType = SUPPLIER_EVENTS[original.eventType];
+  if (!movementType)
+    throw new Error("الحركة دي مش حركة حساب مصنع — الإلغاء من مكانها الأصلي");
+  if (movementType === "adjustment")
+    throw new Error("التسوية نفسها مابتتلغيش — سجّل تسوية معاكسة بسبب واضح");
+
+  const payload = parseJson<{ supplierKey?: string; amount?: string }>(
+    original.payloadJson,
+    {}
+  );
+  if (payload.supplierKey !== input.supplierKey)
+    throw new Error("الحركة دي مش على المصنع ده");
+
+  const originalAmount = Number(payload.amount ?? 0);
+  // الأثر الأصلي على الرصيد، والعكسية هي عكسه بالظبط.
+  const originalSigned =
+    movementType === "opening_balance"
+      ? originalAmount
+      : MOVEMENT_SIGN[movementType] * Math.abs(originalAmount);
+  const reversalAmount = -originalSigned;
+  if (reversalAmount === 0) throw new Error("الحركة دي مالهاش أثر تتلغي");
+
+  const label = MOVEMENT_LABELS[movementType];
+  const db2 = db;
+  return db2.transaction(async tx => {
+    const event = await createBusinessEventInTransaction(tx, {
+      businessId: input.businessId,
+      eventType: "supplier.adjustment",
+      sourceType: "supplier",
+      sourceReference: input.supplierKey,
+      // مفتاح مربوط بالحركة الأصلية — فالضغط مرتين على «إلغاء» بيلغي مرة واحدة.
+      idempotencyKey: `supplier:${input.supplierKey}:reversal:${original.id}`,
+      occurredAt: new Date(),
+      payload: {
+        supplierKey: input.supplierKey,
+        amount: money(reversalAmount),
+        reference: null,
+        notes: `إلغاء ${label} — ${input.reason.trim()}`,
+      },
+      actor: input.actor,
+      reversesEventId: original.id,
+    });
+    if (event.duplicate) throw new Error("الحركة دي اتلغت خلاص");
+
+    // الدفعة بس هي اللي مسّت الخزنة، فهي بس اللي بترجّع.
+    if (movementType === "payment") {
+      const treasury = await addTreasuryTransactionInTransaction(tx, {
+        businessId: input.businessId,
+        type: "deposit",
+        direction: "in",
+        amount: money(Math.abs(originalAmount)),
+        description: `إلغاء دفعة لمصنع`,
+        notes: input.reason.trim(),
+        referenceType: "manual",
+        referenceId: null,
+        performedBy: input.actor.id,
+        performedByName: input.actor.name,
+        transactionDate: new Date(),
+      });
+      if (!treasury) throw new Error("تعذر تسجيل حركة الخزنة — الإلغاء اترجع");
+    }
+    return { eventId: event.event.id, reversedEventId: original.id };
+  });
+}
+
 // ───────────────────────── القراءة ─────────────────────────
+
+/**
+ * الشغل اللي الورشة سلمته — إذونات الاستلام المعتمدة وبنودها.
+ *
+ * ده **عرض** للي موجود في `purchase_receipts` و`purchase_receipt_items`، مش مصدر
+ * أرقام جديد: نفس الإذونات اللي بتغذّي حركة `goods_received` في الكشف. الإجمالي تحت
+ * الجدول لازم يساوي «الورشة سلمتني» فوق، لأن الاتنين بيتحسبوا من نفس الصفوف.
+ *
+ * المسودات داخلة كمان — بس متعلّم عليها إنها لسه مش معتمدة، فالتاجر يعرف إنها مش
+ * داخلة في الحساب. إخفاؤها كان بيخلي إذن اتكتب ومااتعتمدش يختفي من غير أثر.
+ */
+export async function listSupplierReceipts(input: {
+  businessId: number;
+  supplierKey: string;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const suppliers = await listSuppliers(input.businessId);
+  const supplier = suppliers.find(s => s.key === input.supplierKey);
+  if (!supplier) return [];
+
+  // نفس قاعدة الربط اللي في `collectMovements`: الربط الصريح الأول، وبعدين الاسم
+  // الكامل. مفيش مطابقة تقريبية هنا كمان.
+  const nameMap = await nameToKeyMap(input.businessId);
+  const historicalNames = [...nameMap.entries()]
+    .filter(([, key]) => key === input.supplierKey)
+    .map(([name]) => name);
+  const names = [...new Set([supplier.name, ...historicalNames])];
+
+  const receipts = await db
+    .select()
+    .from(purchaseReceipts)
+    .where(
+      and(
+        eq(purchaseReceipts.businessId, input.businessId),
+        inArray(purchaseReceipts.supplierName, names)
+      )
+    )
+    .orderBy(desc(purchaseReceipts.receiptDate), desc(purchaseReceipts.id));
+  if (receipts.length === 0) return [];
+
+  const lines = await db
+    .select({
+      id: purchaseReceiptItems.id,
+      receiptId: purchaseReceiptItems.receiptId,
+      productId: purchaseReceiptItems.productId,
+      variantId: purchaseReceiptItems.variantId,
+      quantity: purchaseReceiptItems.quantity,
+      unitCost: purchaseReceiptItems.unitCost,
+      lineTotal: purchaseReceiptItems.lineTotal,
+      productName: products.name,
+      variantName: productVariants.name,
+    })
+    .from(purchaseReceiptItems)
+    .leftJoin(products, eq(purchaseReceiptItems.productId, products.id))
+    .leftJoin(productVariants, eq(purchaseReceiptItems.variantId, productVariants.id))
+    .where(
+      inArray(
+        purchaseReceiptItems.receiptId,
+        receipts.map(receipt => receipt.id)
+      )
+    )
+    .orderBy(purchaseReceiptItems.id);
+
+  const byReceipt = new Map<number, typeof lines>();
+  for (const line of lines) {
+    const bucket = byReceipt.get(line.receiptId);
+    if (bucket) bucket.push(line);
+    else byReceipt.set(line.receiptId, [line]);
+  }
+
+  return receipts.map(receipt => {
+    const items = byReceipt.get(receipt.id) ?? [];
+    return {
+      id: receipt.id,
+      reference: receipt.reference,
+      receiptDate: receipt.receiptDate,
+      status: receipt.status,
+      /** المعتمد بس هو اللي داخل في حساب المصنع. */
+      countsInBalance: receipt.status === "approved",
+      totalAmount: Number(receipt.totalAmount ?? 0),
+      totalQuantity: items.reduce((sum, item) => sum + item.quantity, 0),
+      // `reason` هو حقل الملاحظة الموجود على الإذن — سبب الإلغاء بيتكتب فيه كمان.
+      notes: receipt.reason ?? null,
+      evidenceUrl: receipt.evidenceUrl ?? null,
+      items: items.map(item => ({
+        id: item.id,
+        productName: item.productName ?? "صنف محذوف",
+        variantName: item.variantName ?? null,
+        quantity: item.quantity,
+        unitCost: Number(item.unitCost ?? 0),
+        lineTotal: Number(item.lineTotal ?? 0),
+      })),
+    };
+  });
+}
 
 /**
  * كل حركات مصنع واحد — من الأحداث ومن الإذونات.

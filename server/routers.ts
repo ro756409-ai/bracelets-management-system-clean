@@ -460,6 +460,8 @@ import {
   recordReworkFee,
   recordOpeningBalance,
   recordSupplierAdjustment,
+  listSupplierReceipts,
+  reverseSupplierMovement,
   getSupplierStatement,
   getSupplierSummaries,
   getSupplierDashboardTotals,
@@ -6800,6 +6802,51 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) =>
         recordSupplierAdjustment({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    /**
+     * الشغل اللي الورشة سلمته — إذونات الاستلام وبنودها.
+     *
+     * قراءة فقط، من `purchase_receipts` و`purchase_receipt_items` — نفس الصفوف اللي
+     * الكشف بيبني منها حركة «استلام بضاعة»، فمفيش رقم تاني ولا جدول تاني.
+     */
+    receipts: permissionProcedure("accounting.view")
+      .input(z.object({ businessId: z.number(), supplierKey: z.string().min(1) }))
+      .query(async ({ ctx, input }) =>
+        listSupplierReceipts({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
+    /**
+     * إلغاء حركة على حساب المصنع — حركة عكسية، مش حذف.
+     *
+     * التاريخ المالي مابيتمسحش: الأصل بيفضل والعكسية بتتسجّل جنبه ومربوطة بيه. إلغاء
+     * إذن استلام معتمد مساره التاني (`inventory.purchaseReceiptVoid`) لأنه بيمس
+     * المخزون كمان.
+     */
+    reverseMovement: permissionProcedure("accounting.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          supplierKey: z.string().min(1),
+          eventId: z.number(),
+          reason: z.string().min(1).max(500),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        reverseSupplierMovement({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx.tenantId,

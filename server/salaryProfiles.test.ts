@@ -412,13 +412,18 @@ describe("🔑 المرتبات مساحة واحدة", () => {
     }
   });
 
-  it("🔑 والأعمدة اللي طلبها التاجر كلها موجودة", () => {
-    for (const col of [
-      "الموظف", "المرتب الأساسي", "الأيام", "السلف",
-      "البونص", "الخصم", "الصافي", "المدفوع", "المتبقي",
-    ]) {
-      expect(page, col).toContain(`<th className="p-2">${col}</th>`);
-    }
+  it("🔑 والأعمدة اللي طلبها التاجر كلها موجودة بالترتيب", () => {
+    // العناوين اتقصّرت («المرتب» بدل «المرتب الأساسي»، «المستحق» بدل «الصافي») عشان
+    // الصف يفضل في سطر واحد، واتزاد عمود «الإجراء». الفحص بقى على الترتيب نفسه —
+    // ده اللي التاجر بيقرا بيه — مش على شكل الـclass.
+    const head = page.slice(page.indexOf("<th>الموظف</th>"));
+    const order = [...head.slice(0, head.indexOf("</tr>")).matchAll(/<th[^>]*>([^<]+)<\/th>/g)].map(
+      m => m[1]
+    );
+    expect(order).toEqual([
+      "الموظف", "المرتب", "الأيام", "السلف",
+      "البونص", "الخصم", "المستحق", "المدفوع", "المتبقي", "الحالة",
+    ]);
   });
 
   it("🔑 والمحرّك زي ما هو — نفس الـendpoints مش مسار جديد", () => {
@@ -446,19 +451,32 @@ describe("🔑 المرتبات مساحة واحدة", () => {
     expect(code).toContain('editNumber(row, "deductions"');
   });
 
-  it("🔑 والمدفوع بيتقفل بعد الصرف", () => {
+  it("🔑 والتعديل مفتوح في المسودة بس", () => {
     expect(code).toContain('const isPaid = period?.status === "paid"');
-    expect(code).toContain("disabled={isPaid}");
+    expect(code).toContain('const isDraft = period?.status === "draft"');
+    // كان `disabled={isPaid}` — يعني الدورة المعتمدة (قبل الصرف) كانت لسه بتتعدّل
+    // والأرقام المعتمدة تتغيّر تحت. دلوقتي الإدخال في المسودة بس.
+    expect(code).toContain("disabled={!isDraft}");
   });
 
   it("🔑 إجراء أساسي واحد واضح — والباقي أهدى", () => {
-    // «اصرف» هو الوحيد بلون أساسي؛ «احسب من الأول» و«اعتماد» outline.
-    const actions = code.slice(code.indexOf("دليل الصرف"));
-    expect(actions).toContain('variant="outline"');
-    expect(actions).toContain("اصرف ${formatMoney(totals.net)} من الخزنة".replace("${formatMoney(totals.net)}", "${formatMoney(totals.net)}"));
+    const actions = code.slice(code.indexOf('<Panel\n            title="متابعة الموظفين"'));
+    const header = actions.slice(0, actions.indexOf("<TableScroll>"));
+    expect(header).toContain('variant="outline"');
+    // «اصرف» هو الوحيد من غير outline، وبيقول الرقم اللي هيخرج فعلًا (المتبقي).
+    expect(header).toContain("اصرف {formatMoney(totals.remaining)}");
   });
 
-  it("والصرف مقفول من غير دليل", () => {
+  it("🔑 ودليل الصرف بقى جوه الدرج مش ثابت فوق الصفحة", () => {
     expect(code).toContain("!evidence.trim()");
+    // الحقل جوه `PayrollActionDialog` — مش في جسم الشاشة.
+    const dialog = code.slice(code.indexOf("function PayrollActionDialog("));
+    expect(dialog).toContain("دليل الصرف");
+    // على الكود بدون التعليقات: الشرح اللي فوق الدرج بيذكر اسم الحقل نفسه.
+    const workspace = code.slice(
+      code.indexOf("function PeriodWorkspace("),
+      code.indexOf("function PayrollActionDialog(")
+    );
+    expect(workspace).not.toContain("دليل الصرف");
   });
 });

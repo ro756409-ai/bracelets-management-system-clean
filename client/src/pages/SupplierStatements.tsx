@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
@@ -20,7 +20,26 @@ import {
   quickRange,
   type SupplierMovementType,
 } from "@shared/supplierLedger";
-import { Factory, ArrowRight, Link2, PackagePlus } from "lucide-react";
+import {
+  Factory,
+  ArrowRight,
+  Link2,
+  PackagePlus,
+  Trash2,
+  Wrench,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
+import {
+  Kpi,
+  Panel,
+  ScreenHeader,
+  TableScroll,
+  toneColor,
+  TABLE_CLASS,
+  TABLE_HEAD_CLASS,
+} from "@/components/accounting/Surface";
+import { SupplierPaymentDrawer } from "@/components/accounting/SupplierPaymentDrawer";
 import GoodsReceipt from "./GoodsReceipt";
 
 /**
@@ -374,6 +393,16 @@ function HistoricalNames({ businessId }: { businessId: number }) {
 
 // ───────────────────────── الكشف التفصيلي ─────────────────────────
 
+/**
+ * كشف حساب ورشة واحدة.
+ *
+ * فوق **تلات أرقام بس**: سلّمني كام، حوّلت كام، وباقي كام. الست كروت اللي كانت هنا
+ * (افتتاحي · بضاعة · مدفوع · مرتجعات · تشطيب · رصيد) كانت بتخلي التاجر يقرا ست أرقام
+ * عشان يطلع بواحد — وهو داخل عشان الواحد ده. المرتجعات والتشطيب مش اختفوا: هما جوه
+ * كشف الحركات تحت، وداخلين في «الباقي» زي ما هما.
+ *
+ * والباقي هو نفسه `totals.balance` الجاي من نفس المحرّك — مفيش معادلة تانية اتكتبت هنا.
+ */
 function SupplierStatement({
   businessId,
   supplierKey,
@@ -388,6 +417,8 @@ function SupplierStatement({
   const [movementType, setMovementType] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [receiptOpen, setReceiptOpen] = useState(false);
+  const [payOpen, setPayOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const dates = useMemo(() => quickRange(range, new Date()), [range]);
   const statement = trpc.suppliers.statement.useQuery({
@@ -403,12 +434,14 @@ function SupplierStatement({
 
   const data = statement.data;
   const totals = data?.totals;
-  const state = describeBalance(totals?.balance ?? 0);
+  const balance = totals?.balance ?? 0;
+  const supplierName = data?.supplier?.name ?? "الورشة";
 
   const refresh = async () => {
     await Promise.all([
       utils.suppliers.statement.invalidate(),
       utils.suppliers.summaries.invalidate(),
+      utils.suppliers.receipts.invalidate(),
       utils.accounting.controlCenter.invalidate(),
       utils.accounting.treasuryHistory.invalidate(),
     ]);
@@ -416,36 +449,70 @@ function SupplierStatement({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h2 className="text-lg font-bold">{data?.supplier?.name ?? "المصنع"}</h2>
-          <p className="text-sm" style={{ color: state.tone === "owed" ? "var(--destructive)" : "var(--success)" }}>
-            {state.text}
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={onBack}>
-          رجوع للقايمة
-        </Button>
+      <ScreenHeader
+        title={supplierName}
+        subtitle="الشغل اللي استلمته، اللي حوّلته، والباقي"
+        action={
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => setPayOpen(true)}>
+              + دفعة للورشة
+            </Button>
+            <Button variant="outline" size="sm" onClick={onBack}>
+              رجوع للقايمة
+            </Button>
+          </div>
+        }
+      />
+
+      {/*
+        تلات أرقام. اللون مشتق من المعنى مش متبعت: الباقي أحمر لما يكون عليك، وأخضر
+        لما يكون ليك — والعنوان نفسه بيتغيّر عشان الرقم مايفضلش ملبّس.
+      */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <Kpi
+          label="الورشة سلمتني"
+          value={formatMoney(totals?.goodsReceived ?? 0)}
+          tone="neutral"
+          hint="قيمة الشغل المستلم والمعتمد"
+        />
+        <Kpi
+          label="حولت للورشة"
+          value={formatMoney(totals?.paid ?? 0)}
+          tone="out"
+          hint="إجمالي الدفعات"
+        />
+        <Kpi
+          label={balance >= 0 ? "المتبقي للورشة" : "ليك عند الورشة"}
+          value={formatMoney(Math.abs(balance))}
+          tone={Math.abs(balance) < 0.01 ? "neutral" : balance > 0 ? "out" : "in"}
+          hint={
+            Math.abs(balance) < 0.01
+              ? "الحساب متعادل"
+              : "بعد المرتجعات وإعادة التشطيب والتسويات"
+          }
+        />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <Stat label="الرصيد الافتتاحي" value={totals?.openingBalance ?? 0} />
-        <Stat label="إجمالي البضاعة" value={totals?.goodsReceived ?? 0} />
-        <Stat label="إجمالي المدفوع" value={totals?.paid ?? 0} />
-        <Stat label="إجمالي المرتجعات" value={totals?.returns ?? 0} />
-        <Stat label="إعادة التشطيب" value={totals?.reworkFees ?? 0} />
-        <Stat label="الرصيد الحالي" value={totals?.balance ?? 0} strong />
-      </div>
+      <SupplierPaymentDrawer
+        businessId={businessId}
+        supplierKey={supplierKey}
+        supplierName={supplierName}
+        open={payOpen}
+        onClose={() => setPayOpen(false)}
+        onSaved={refresh}
+      />
 
-      <SupplierActions businessId={businessId} supplierKey={supplierKey} onDone={refresh} />
+      <SupplierReceipts
+        businessId={businessId}
+        supplierKey={supplierKey}
+        supplierName={supplierName}
+        onDone={refresh}
+      />
 
       {/*
         إذن الاستلام الحقيقي — نفس المكوّن اللي في صفحة «إذن استلام بضاعة»، مش نسخة
-        مصغّرة منه. الأصناف والكميات والسادة/المحفور كلهم زي ما هم، والمصنع مقفول على
-        اللي إنت واقف عليه.
-
-        الاستلام بيعمل حاجتين: بيزوّد المخزون **و**بيزوّد حساب المصنع. فورم مبسّط هنا
-        كان هيسجّل الحساب من غير مخزون — يعني يبقى عليك دَيْن لبضاعة النظام مايعرفهاش.
+        مصغّرة منه. الاستلام بيزوّد المخزون **و**حساب الورشة؛ فورم مبسّط كان هيسجّل
+        الحساب من غير مخزون.
       */}
       <details className="rounded-lg border bg-card" open={receiptOpen}>
         <summary
@@ -455,8 +522,8 @@ function SupplierStatement({
             setReceiptOpen(open => !open);
           }}
         >
-          <PackagePlus className="h-4 w-4 text-emerald-700" />
-          استلام بضاعة من {data?.supplier?.name ?? "المصنع"}
+          <PackagePlus className="h-4 w-4 text-[var(--success)]" />
+          تسجيل استلام جديد من {supplierName}
         </summary>
         <div className="border-t p-4">
           <GoodsReceipt
@@ -466,136 +533,397 @@ function SupplierStatement({
           />
           <p className="mt-3 rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
             الحفظ لوحده مايحرّكش الحساب — <strong>الاعتماد</strong> هو اللي بيزوّد
-            المخزون ويسجّل القيمة على المصنع. تلاقي زرار الاعتماد في قايمة الاستلامات
-            تحت الفورم.
+            المخزون ويسجّل القيمة على الورشة.
           </p>
         </div>
       </details>
 
-      <Card>
-        <CardContent className="space-y-3 p-4">
-          <div className="flex flex-wrap gap-2">
-            {QUICK.map(item => (
-              <Button
-                key={item.key}
-                size="sm"
-                variant={range === item.key ? "default" : "outline"}
-                onClick={() => setRange(item.key)}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <Label>نوع الحركة</Label>
-              <Select value={movementType} onValueChange={setMovementType}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">الكل</SelectItem>
-                  {Object.entries(MOVEMENT_LABELS).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>بحث بالمرجع</Label>
-              <Input
-                className="mt-1"
-                placeholder="رقم إذن أو مرجع تحويل"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/*
+        باقي الحركات — مرتجعات وإعادة تشطيب وتسويات ورصيد افتتاحي.
 
-      <Card>
-        <CardContent className="p-4">
-          {(data?.rows.length ?? 0) === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              مفيش حركات في الفترة دي.
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[56rem] text-sm">
-                <thead>
-                  <tr className="border-b text-right text-xs text-muted-foreground">
-                    <th className="p-2">التاريخ والوقت</th>
-                    <th className="p-2">نوع الحركة</th>
-                    <th className="p-2">المرجع</th>
-                    <th className="p-2">البيان</th>
-                    <th className="p-2">القيمة</th>
-                    <th className="p-2">الرصيد قبل</th>
-                    <th className="p-2">الرصيد بعد</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data!.rows.map(row => (
-                    <tr key={row.id} className="border-b last:border-0">
-                      <td className="p-2 whitespace-nowrap text-xs">
-                        {new Date(row.occurredAt).toLocaleString("ar-EG", {
-                          dateStyle: "short",
-                          timeStyle: "short",
-                        })}
-                      </td>
-                      <td className="p-2 whitespace-nowrap">{row.label}</td>
-                      <td className="p-2 text-muted-foreground">{row.reference ?? "—"}</td>
-                      <td className="p-2 text-muted-foreground">{row.description || "—"}</td>
-                      <td
-                        className="p-2 tabular-nums font-semibold whitespace-nowrap"
-                        style={{
-                          color:
-                            row.signedAmount > 0
-                              ? "var(--destructive)"
-                              : "var(--success)",
-                        }}
-                      >
-                        {row.signedAmount > 0 ? "+" : "−"}
-                        {formatMoney(Math.abs(row.signedAmount))}
-                      </td>
-                      <td className="p-2 tabular-nums text-muted-foreground">
-                        {formatMoney(row.balanceBefore)}
-                      </td>
-                      <td className="p-2 tabular-nums font-medium">
-                        {formatMoney(row.balanceAfter)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        مطويّة عن قصد: دي حاجات بتحصل مرة كل فترة، والصفحة المفروض تفتح على الشغل
+        والفلوس مش على أدوات التسوية.
+      */}
+      <details className="rounded-lg border bg-card" open={moreOpen}>
+        <summary
+          className="flex cursor-pointer select-none items-center gap-2 px-4 py-3 text-sm font-medium"
+          onClick={event => {
+            event.preventDefault();
+            setMoreOpen(open => !open);
+          }}
+        >
+          <Wrench className="h-4 w-4 text-[var(--warning)]" />
+          مرتجعات · إعادة تشطيب · تسويات
+        </summary>
+        <div className="border-t p-4">
+          <SupplierActions
+            businessId={businessId}
+            supplierKey={supplierKey}
+            onDone={refresh}
+          />
+        </div>
+      </details>
+
+      <Panel title="كل حركات الحساب">
+        <div className="mb-3 flex flex-wrap gap-2">
+          {QUICK.map(item => (
+            <Button
+              key={item.key}
+              size="sm"
+              variant={range === item.key ? "default" : "outline"}
+              onClick={() => setRange(item.key)}
+            >
+              {item.label}
+            </Button>
+          ))}
+        </div>
+        <div className="mb-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>نوع الحركة</Label>
+            <Select value={movementType} onValueChange={setMovementType}>
+              <SelectTrigger className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">الكل</SelectItem>
+                {Object.entries(MOVEMENT_LABELS).map(([key, label]) => (
+                  <SelectItem key={key} value={key}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>بحث بالمرجع</Label>
+            <Input
+              className="mt-1"
+              placeholder="رقم إذن أو مرجع تحويل"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {(data?.rows.length ?? 0) === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            مفيش حركات في الفترة دي.
+          </p>
+        ) : (
+          <TableScroll>
+            <table className={`${TABLE_CLASS} min-w-[52rem]`}>
+              <thead>
+                <tr className={TABLE_HEAD_CLASS}>
+                  <th>التاريخ والوقت</th>
+                  <th>نوع الحركة</th>
+                  <th>المرجع</th>
+                  <th>البيان</th>
+                  <th>القيمة</th>
+                  <th>الرصيد قبل</th>
+                  <th>الرصيد بعد</th>
+                  <th className="text-left">الإجراءات</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data!.rows.map(row => (
+                  <MovementRow
+                    key={row.id}
+                    row={row}
+                    businessId={businessId}
+                    supplierKey={supplierKey}
+                    onDone={refresh}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
+        )}
+      </Panel>
     </div>
   );
 }
 
-function Stat({
-  label,
-  value,
-  strong,
+/**
+ * سطر حركة ومعاه إجراءاته.
+ *
+ * **«حذف» هنا معناه حركة عكسية.** الحركات دي كلها أثّرت على الحساب — وبعضها على
+ * الخزنة كمان — فمسحها من الجدول كان بيغيّر رصيد الشهر اللي فات من غير ما حد يعرف.
+ * العكسية بتخلي الرقم يرجع صح والسطرين الاتنين يفضلوا مكتوبين.
+ *
+ * الاستلام مالوش زرار هنا: مساره في جدول الاستلامات فوق، لأن إلغاءه بيمس المخزون كمان.
+ */
+function MovementRow({
+  row,
+  businessId,
+  supplierKey,
+  onDone,
 }: {
-  label: string;
-  value: number;
-  strong?: boolean;
+  row: any;
+  businessId: number;
+  supplierKey: string;
+  onDone: () => Promise<void>;
 }) {
+  const reverse = trpc.suppliers.reverseMovement.useMutation({
+    onSuccess: async () => {
+      toast.success("اتسجّلت حركة عكسية — الرصيد اترجع");
+      await onDone();
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  // الاستلام والإلغاء والتسوية العكسية مالهمش إلغاء من هنا.
+  const canReverse =
+    row.type === "payment" ||
+    row.type === "return_credit" ||
+    row.type === "rework_fee" ||
+    row.type === "opening_balance";
+
+  const onReverse = () => {
+    const reason = window.prompt(
+      `الحركة دي أثّرت على الحساب. حذفها هيعمل حركة عكسية ويحافظ على السجل.\n\nاكتب السبب:`
+    );
+    if (reason === null) return;
+    if (!reason.trim()) return toast.error("السبب مطلوب");
+    reverse.mutate({ businessId, supplierKey, eventId: row.id, reason: reason.trim() });
+  };
+
   return (
-    <Card>
-      <CardContent className="p-3">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className={`mt-1 tabular-nums ${strong ? "text-lg font-bold" : "font-semibold"}`}>
-          {formatMoney(value)}
+    <tr className="border-b last:border-0">
+      <td className="whitespace-nowrap text-xs">
+        {new Date(row.occurredAt).toLocaleString("ar-EG", {
+          dateStyle: "short",
+          timeStyle: "short",
+        })}
+      </td>
+      <td className="whitespace-nowrap">{row.label}</td>
+      <td className="text-muted-foreground">{row.reference ?? "—"}</td>
+      <td className="text-muted-foreground">{row.description || "—"}</td>
+      <td
+        className="whitespace-nowrap font-semibold tabular-nums"
+        style={{ color: toneColor(row.signedAmount > 0 ? "out" : "in") }}
+      >
+        {row.signedAmount > 0 ? "+" : "−"}
+        {formatMoney(Math.abs(row.signedAmount))}
+      </td>
+      <td className="tabular-nums text-muted-foreground">
+        {formatMoney(row.balanceBefore)}
+      </td>
+      <td className="font-medium tabular-nums">{formatMoney(row.balanceAfter)}</td>
+      <td className="text-left">
+        {canReverse ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive"
+            disabled={reverse.isPending}
+            onClick={onReverse}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+// ───────────────────────── الشغل المستلم ─────────────────────────
+
+/**
+ * «الشغل اللي استلمته من الورشة».
+ *
+ * جدول واحد كل سطر فيه استلام حقيقي — مش خليط من حركات محاسبية. الاستلام اللي فيه
+ * أكتر من صنف بيتفتح على بنوده بدل ما يتفرد في الجدول ويضيّع الصف الواحد.
+ *
+ * الإجمالي تحت بيجمع **المعتمد بس**، عشان يساوي «الورشة سلمتني» فوق بالحرف. المسودة
+ * بتبان بعلامة إنها لسه مش داخلة في الحساب — إخفاؤها كان بيخلي إذن اتكتب ومااتعتمدش
+ * يختفي من غير أثر.
+ */
+function SupplierReceipts({
+  businessId,
+  supplierKey,
+  supplierName,
+  onDone,
+}: {
+  businessId: number;
+  supplierKey: string;
+  supplierName: string;
+  onDone: () => Promise<void>;
+}) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const receipts = trpc.suppliers.receipts.useQuery({ businessId, supplierKey });
+  const rows = receipts.data ?? [];
+
+  const voidReceipt = trpc.accountingV2.purchaseReceiptVoid.useMutation({
+    onSuccess: async (result: any) => {
+      toast.success(
+        result?.reversed
+          ? "اتسجّل إلغاء الاستلام — المخزون والحساب اترجعوا"
+          : "اتلغى الاستلام (كان لسه مسودة)"
+      );
+      await onDone();
+    },
+    onError: (error: { message: string }) => toast.error(error.message),
+  });
+
+  const approvedTotal = rows
+    .filter(row => row.countsInBalance)
+    .reduce((sum, row) => sum + row.totalAmount, 0);
+
+  const toggle = (id: number) =>
+    setExpanded(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const onVoid = (row: (typeof rows)[number]) => {
+    const approved = row.countsInBalance;
+    const message = approved
+      ? "الحركة دي أثرت على الحساب. حذفها هيعمل حركة عكسية ويحافظ على السجل. متأكد؟\n\nاكتب السبب:"
+      : "الاستلام ده لسه مسودة ومأثرش على أي حساب. اكتب سبب الإلغاء:";
+    const reason = window.prompt(message);
+    if (reason === null) return;
+    if (!reason.trim()) return toast.error("السبب مطلوب");
+    voidReceipt.mutate({ businessId, receiptId: row.id, reason: reason.trim() });
+  };
+
+  return (
+    <Panel title={`الشغل اللي استلمته من ${supplierName}`}>
+      {receipts.isLoading ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">جاري التحميل...</p>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          مفيش استلامات لسه من الورشة دي.
         </p>
-      </CardContent>
-    </Card>
+      ) : (
+        <TableScroll>
+          <table className={`${TABLE_CLASS} min-w-[52rem]`}>
+            <thead>
+              <tr className={TABLE_HEAD_CLASS}>
+                <th>التاريخ</th>
+                <th>بيان الشغل</th>
+                <th>الصنف</th>
+                <th>النوع / الحفر</th>
+                <th>الكمية</th>
+                <th>سعر القطعة</th>
+                <th>إجمالي الاستلام</th>
+                <th>ملاحظات</th>
+                <th className="text-left">الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => {
+                const single = row.items.length === 1 ? row.items[0] : null;
+                const isOpen = expanded.has(row.id);
+                return (
+                  <Fragment key={row.id}>
+                    <tr className="border-b last:border-0">
+                      <td className="whitespace-nowrap text-xs">
+                        {new Date(row.receiptDate).toLocaleDateString("ar-EG")}
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{row.reference ?? `استلام #${row.id}`}</span>
+                          {!row.countsInBalance && (
+                            <span
+                              className="rounded-full bg-muted px-2 py-0.5 text-[10px]"
+                              style={{ color: toneColor("due") }}
+                            >
+                              {row.status === "voided" ? "ملغي" : "لسه مش معتمد"}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      {single ? (
+                        <>
+                          <td>{single.productName}</td>
+                          <td className="text-[var(--info)]">{single.variantName ?? "—"}</td>
+                          <td className="tabular-nums">{single.quantity} قطعة</td>
+                          <td className="tabular-nums">{formatMoney(single.unitCost)}</td>
+                        </>
+                      ) : (
+                        <>
+                          <td colSpan={3}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => toggle(row.id)}
+                            >
+                              {isOpen ? (
+                                <ChevronUp className="ml-1 h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronDown className="ml-1 h-3.5 w-3.5" />
+                              )}
+                              {row.items.length} أصناف · {row.totalQuantity} قطعة
+                            </Button>
+                          </td>
+                          <td className="text-muted-foreground">—</td>
+                        </>
+                      )}
+                      <td className="font-semibold tabular-nums">
+                        {formatMoney(row.totalAmount)}
+                      </td>
+                      <td className="max-w-[12rem] truncate text-muted-foreground" title={row.notes ?? ""}>
+                        {row.notes || "—"}
+                      </td>
+                      <td className="text-left">
+                        {row.status === "voided" ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-destructive"
+                            disabled={voidReceipt.isPending}
+                            onClick={() => onVoid(row)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                    {!single && isOpen && (
+                      <tr className="bg-muted/30">
+                        <td colSpan={9} className="p-0">
+                          <table className={`${TABLE_CLASS} w-full`}>
+                            <tbody>
+                              {row.items.map(item => (
+                                <tr key={item.id} className="border-b last:border-0">
+                                  <td className="w-[18rem] ps-8">{item.productName}</td>
+                                  <td className="text-[var(--info)]">{item.variantName ?? "—"}</td>
+                                  <td className="tabular-nums">{item.quantity} قطعة</td>
+                                  <td className="tabular-nums">{formatMoney(item.unitCost)}</td>
+                                  <td className="tabular-nums font-medium">
+                                    {formatMoney(item.lineTotal)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 font-bold">
+                <td colSpan={6} className="text-right">
+                  إجمالي الشغل المستلم
+                </td>
+                <td className="tabular-nums">{formatMoney(approvedTotal)}</td>
+                <td colSpan={2} />
+              </tr>
+            </tfoot>
+          </table>
+        </TableScroll>
+      )}
+    </Panel>
   );
 }
 
