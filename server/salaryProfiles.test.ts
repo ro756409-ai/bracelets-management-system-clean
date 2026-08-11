@@ -400,3 +400,65 @@ describe("🔑 نموذج المرتب بيبان لما تدوس تعديل", (
     expect(modal).toContain("event.stopPropagation()");
   });
 });
+
+// ───────────────── مساحة المرتبات الواحدة ─────────────────
+
+describe("🔑 المرتبات مساحة واحدة", () => {
+  const code = codeOnly(page);
+
+  it("🔑 دورة الشهر والمرتبات والسُلف في صفحة واحدة", () => {
+    for (const section of ["<PeriodWorkspace", "<ProfilesSection", "<AdvancesSection"]) {
+      expect(code, section).toContain(section);
+    }
+  });
+
+  it("🔑 والأعمدة اللي طلبها التاجر كلها موجودة", () => {
+    for (const col of [
+      "الموظف", "المرتب الأساسي", "الأيام", "السلف",
+      "البونص", "الخصم", "الصافي", "المدفوع", "المتبقي",
+    ]) {
+      expect(page, col).toContain(`<th className="p-2">${col}</th>`);
+    }
+  });
+
+  it("🔑 والمحرّك زي ما هو — نفس الـendpoints مش مسار جديد", () => {
+    // القاعدة: الواجهة اتغيّرت، المحرك تحتها ما اتلمسش.
+    for (const call of [
+      "trpc.payroll.periodCreate",
+      "trpc.payroll.periodRecalculate",
+      "trpc.payroll.itemUpdate",
+      "trpc.payroll.periodApprove",
+      "trpc.payroll.periodPay",
+      "trpc.payroll.advanceCreate",
+    ]) {
+      expect(code, call).toContain(call);
+    }
+  });
+
+  it("🔑 ومفيش مسار دفع جديد اتعمل", () => {
+    expect(code).not.toContain("treasuryCreate");
+    expect(code).not.toContain("expensePay");
+  });
+
+  it("🔑 البونص والخصم بيتعدّلوا في الجدول — مش نافذة لكل موظف", () => {
+    // دول أكتر حقلين بيتغيّروا كل شهر؛ نافذة لكل واحد كانت بتخلي قفل الشهر رحلة.
+    expect(code).toContain('editNumber(row, "bonuses"');
+    expect(code).toContain('editNumber(row, "deductions"');
+  });
+
+  it("🔑 والمدفوع بيتقفل بعد الصرف", () => {
+    expect(code).toContain('const isPaid = period?.status === "paid"');
+    expect(code).toContain("disabled={isPaid}");
+  });
+
+  it("🔑 إجراء أساسي واحد واضح — والباقي أهدى", () => {
+    // «اصرف» هو الوحيد بلون أساسي؛ «احسب من الأول» و«اعتماد» outline.
+    const actions = code.slice(code.indexOf("دليل الصرف"));
+    expect(actions).toContain('variant="outline"');
+    expect(actions).toContain("اصرف ${formatMoney(totals.net)} من الخزنة".replace("${formatMoney(totals.net)}", "${formatMoney(totals.net)}"));
+  });
+
+  it("والصرف مقفول من غير دليل", () => {
+    expect(code).toContain("!evidence.trim()");
+  });
+});
