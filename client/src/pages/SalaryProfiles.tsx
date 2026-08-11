@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
@@ -14,6 +14,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatMoney } from "@/lib/money";
+import { netFromComponents } from "@shared/payrollCalc";
+import {
+  Kpi,
+  KpiRow,
+  Panel,
+  TableScroll,
+  toneColor,
+  TABLE_CLASS,
+  TABLE_HEAD_CLASS,
+  type Tone,
+} from "@/components/accounting/Surface";
 import { Users, Pencil, Trash2, Wallet } from "lucide-react";
 
 /**
@@ -768,11 +779,23 @@ const MONTHS = [
  * البونص والخصم بيتعدّلوا في الجدول على طول: دول أكتر حقلين بيتغيّروا كل شهر، وفتح
  * نافذة لكل موظف كان بيخلي قفل الشهر رحلة.
  */
+/**
+ * دورة المرتب — ملخص فوق، وجدول متابعة تحت.
+ *
+ * **السلفة بتتخصم لوحدها.** كانت بتفضل صفر في المسودة وماتظهرش غير بعد الاعتماد،
+ * فالتاجر بيبص على «المستحق» ويلاقيه أكبر من اللي هيدفعه فعلًا. الجدول هنا بيقرا
+ * السُلف المعلّقة للموظف ويعرضها ويخصمها في المعاينة — من غير خانة إدخال، عشان
+ * مايحصلش خصم مرتين: مرة يدوي ومرة تلقائي وقت الاعتماد.
+ *
+ * والمعاينة بتستخدم `netFromComponents` — نفس الدالة اللي السيرفر بيحسب بيها. لو
+ * الشاشة كتبت المعادلة عندها، أول تعديل في واحدة بيخلي المعروض غير المصروف.
+ */
 function PeriodWorkspace({ businessId }: { businessId: number }) {
   const utils = trpc.useUtils();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  const [payOpen, setPayOpen] = useState(false);
 
   const periods = trpc.payroll.periodList.useQuery(
     { businessIds: [businessId], year },
@@ -787,10 +810,29 @@ function PeriodWorkspace({ businessId }: { businessId: number }) {
   );
   const items: any[] = detail.data?.items ?? [];
 
+  /*
+    السُلف المعلّقة — اللي اتصرفت من الخزنة ولسه ماتسوّتش على مرتب.
+
+    بتتقرا هنا عشان المسودة توري الرقم قبل الاعتماد. الاعتماد نفسه هو اللي بيكتبها
+    على السطر ويعلّمها «مُسوّاة» — والكتابة دي بتستبدل مش بتزوّد، فمفيش خصم مرتين.
+  */
+  const pendingAdvances = trpc.payroll.advanceList.useQuery(
+    { businessIds: [businessId], status: "pending", limit: 500 },
+    { retry: false }
+  );
+  const pendingByEmployee = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const row of (pendingAdvances.data?.advances ?? []) as any[]) {
+      map.set(row.employeeId, (map.get(row.employeeId) ?? 0) + Number(row.amount ?? 0));
+    }
+    return map;
+  }, [pendingAdvances.data]);
+
   const refresh = async () => {
     await Promise.all([
       utils.payroll.periodList.invalidate(),
       utils.payroll.periodGet.invalidate(),
+      utils.payroll.advanceList.invalidate(),
       utils.accounting.controlCenter.invalidate(),
       utils.accounting.treasuryHistory.invalidate(),
     ]);
@@ -810,25 +852,53 @@ function PeriodWorkspace({ businessId }: { businessId: number }) {
     onError,
   });
   const approve = trpc.payroll.periodApprove.useMutation({
-    onSuccess: async () => { toast.success("اتعتمدت"); await refresh(); },
+    onSuccess: async () => { toast.success("اتعتمدت"); setPayOpen(false); await refresh(); },
     onError,
   });
   const pay = trpc.payroll.periodPay.useMutation({
-    onSuccess: async () => { toast.success("اتصرفت — والخزنة نقصت"); await refresh(); },
+    onSuccess: async () => { toast.success("اتصرفت — والخزنة نقصت"); setPayOpen(false); await refresh(); },
     onError,
   });
 
-  const [evidence, setEvidence] = useState("");
   const isPaid = period?.status === "paid";
-  const totals = items.reduce(
-    (sum, row) => ({
-      base: sum.base + Number(row.baseSalary ?? 0),
-      advances: sum.advances + Number(row.advances ?? 0),
-      bonuses: sum.bonuses + Number(row.bonuses ?? 0),
-      deductions: sum.deductions + Number(row.deductions ?? 0),
-      net: sum.net + Number(row.netSalary ?? 0),
+  const isDraft = period?.status === "draft";
+
+  /** السطر بأرقامه المعروضة — السلفة الفعلية والمستحق بعدها. */
+  const rows = useMemo(
+    () =>
+      items.map(row => {
+        // بعد الاعتماد السطر نفسه بيحمل السلفة؛ قبل كده المعلّق هو المصدر.
+        const stored = Number(row.advances ?? 0);
+        const advances = stored > 0 ? stored : (pendingByEmployee.get(row.employeeId) ?? 0);
+        const due =
+          stored > 0
+            ? Number(row.netSalary ?? 0)
+            : netFromComponents({
+                baseSalary: Number(row.baseSalary ?? 0),
+                overtimeAmount: Number(row.overtimeAmount ?? 0),
+                bonuses: Number(row.bonuses ?? 0),
+                commissions: Number(row.commissions ?? 0),
+                absenceDeduction: Number(row.absenceDeduction ?? 0),
+                deductions: Number(row.deductions ?? 0),
+                advances,
+              });
+        const paid = isPaid ? due : 0;
+        return { row, advances, due, paid, remaining: due - paid };
+      }),
+    [items, pendingByEmployee, isPaid]
+  );
+
+  const totals = rows.reduce(
+    (sum, r) => ({
+      base: sum.base + Number(r.row.baseSalary ?? 0),
+      advances: sum.advances + r.advances,
+      bonuses: sum.bonuses + Number(r.row.bonuses ?? 0),
+      deductions: sum.deductions + Number(r.row.deductions ?? 0),
+      due: sum.due + r.due,
+      paid: sum.paid + r.paid,
+      remaining: sum.remaining + r.remaining,
     }),
-    { base: 0, advances: 0, bonuses: 0, deductions: 0, net: 0 }
+    { base: 0, advances: 0, bonuses: 0, deductions: 0, due: 0, paid: 0, remaining: 0 }
   );
 
   const editNumber = (row: any, field: "bonuses" | "deductions", value: string) => {
@@ -837,169 +907,283 @@ function PeriodWorkspace({ businessId }: { businessId: number }) {
     updateItem.mutate({ id: row.id, [field]: amount } as any);
   };
 
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Users className="h-5 w-5 text-emerald-700" />
-            دورة {MONTHS[month - 1]} {year}
-          </CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={String(month)} onValueChange={v => setMonth(Number(v))}>
-              <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {MONTHS.map((name, index) => (
-                  <SelectItem key={name} value={String(index + 1)}>{name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={String(year)} onValueChange={v => setYear(Number(v))}>
-              <SelectTrigger className="h-9 w-24"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {[now.getFullYear(), now.getFullYear() - 1].map(y => (
-                  <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </CardHeader>
+  /** الصفر الهادي — الرقم اللي مالوش معنى مايشدّش العين. */
+  const money = (value: number, tone?: Tone) =>
+    value === 0 ? (
+      <span className="text-muted-foreground/50">—</span>
+    ) : (
+      <span style={tone ? { color: toneColor(tone) } : undefined}>{formatMoney(value)}</span>
+    );
 
-      <CardContent className="space-y-3">
-        {!period ? (
-          <div className="rounded-md border bg-muted/40 p-6 text-center">
-            <p className="mb-3 text-sm text-muted-foreground">
-              لسه مافيش دورة للشهر ده. افتحها وهتتملى لوحدها من مرتبات الموظفين تحت.
-            </p>
-            <Button
-              disabled={create.isPending}
-              onClick={() => create.mutate({ businessId, year, month })}
-            >
-              افتح دورة {MONTHS[month - 1]}
-            </Button>
-          </div>
-        ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[56rem] text-sm">
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-base font-bold">
+          <Users className="h-5 w-5 text-[var(--success)]" />
+          دورة {MONTHS[month - 1]} {year}
+        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={String(month)} onValueChange={v => setMonth(Number(v))}>
+            <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {MONTHS.map((name, index) => (
+                <SelectItem key={name} value={String(index + 1)}>{name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={String(year)} onValueChange={v => setYear(Number(v))}>
+            <SelectTrigger className="h-9 w-24"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {[now.getFullYear(), now.getFullYear() - 1].map(y => (
+                <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {!period ? (
+        <div className="rounded-lg border bg-muted/40 p-6 text-center">
+          <p className="mb-3 text-sm text-muted-foreground">
+            لسه مافيش دورة للشهر ده. افتحها وهتتملى لوحدها من مرتبات الموظفين تحت.
+          </p>
+          <Button
+            disabled={create.isPending}
+            onClick={() => create.mutate({ businessId, year, month })}
+          >
+            افتح دورة {MONTHS[month - 1]}
+          </Button>
+        </div>
+      ) : (
+        <>
+          {/*
+            أربع كروت. الرقم اللي التاجر جاي عشانه هو الأخير — «المطلوب دفعه» — وهو
+            الصافي بعد السلف والخصومات والبونص وأي مدفوع، مش مجموع المرتبات.
+          */}
+          <KpiRow>
+            <Kpi
+              label="إجمالي المرتبات الأساسية"
+              value={formatMoney(totals.base)}
+              tone="neutral"
+              hint={`${rows.length} موظف`}
+            />
+            <Kpi
+              label="إجمالي السلف"
+              value={formatMoney(totals.advances)}
+              tone="due"
+              hint="اتصرفت من الخزنة قبل كده"
+            />
+            {/*
+              رقمين في كارت واحد — من غير «ج.م» مرتين، عشان السطر مايتكسرش. الوحدة
+              مكتوبة تحت مرة واحدة.
+            */}
+            <Kpi
+              label="البونص والخصومات"
+              value={`${totals.bonuses.toLocaleString("ar-EG")} / ${totals.deductions.toLocaleString("ar-EG")}`}
+              tone="neutral"
+              hint="بونص / خصم (ج.م)"
+            />
+            <Kpi
+              label="إجمالي المطلوب دفعه للموظفين"
+              value={formatMoney(totals.remaining)}
+              tone={totals.remaining > 0 ? "out" : "in"}
+              hint={isPaid ? "اتصرفت بالكامل" : "بعد السلف والخصومات"}
+            />
+          </KpiRow>
+
+          <Panel
+            title="متابعة الموظفين"
+            action={
+              <div className="flex flex-wrap gap-2">
+                {isDraft && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={recalc.isPending}
+                    onClick={() => recalc.mutate({ id: period.id })}
+                  >
+                    احسب من الأول
+                  </Button>
+                )}
+                {isDraft && (
+                  <Button size="sm" variant="outline" onClick={() => setPayOpen(true)}>
+                    اعتماد
+                  </Button>
+                )}
+                {period.status === "approved" && (
+                  <Button size="sm" onClick={() => setPayOpen(true)}>
+                    اصرف {formatMoney(totals.remaining)}
+                  </Button>
+                )}
+                {isPaid && (
+                  <span className="text-sm font-semibold" style={{ color: toneColor("in") }}>
+                    اتصرفت — {formatMoney(totals.paid)}
+                  </span>
+                )}
+              </div>
+            }
+          >
+            <TableScroll>
+              <table className={`${TABLE_CLASS} min-w-[52rem]`}>
                 <thead>
-                  <tr className="border-b text-right text-xs text-muted-foreground">
-                    <th className="p-2">الموظف</th>
-                    <th className="p-2">المرتب الأساسي</th>
-                    <th className="p-2">الأيام</th>
-                    <th className="p-2">السلف</th>
-                    <th className="p-2">البونص</th>
-                    <th className="p-2">الخصم</th>
-                    <th className="p-2">الصافي</th>
-                    <th className="p-2">المدفوع</th>
-                    <th className="p-2">المتبقي</th>
+                  <tr className={TABLE_HEAD_CLASS}>
+                    <th>الموظف</th>
+                    <th>المرتب</th>
+                    <th>الأيام</th>
+                    <th>السلف</th>
+                    <th>البونص</th>
+                    <th>الخصم</th>
+                    <th>المستحق</th>
+                    <th>المدفوع</th>
+                    <th>المتبقي</th>
+                    <th className="text-left">الحالة</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map(row => {
-                    const net = Number(row.netSalary ?? 0);
-                    return (
-                      <tr key={row.id} className="border-b last:border-0">
-                        <td className="p-2 font-medium">{row.employeeName}</td>
-                        <td className="p-2 tabular-nums">{formatMoney(Number(row.baseSalary ?? 0))}</td>
-                        <td className="p-2 tabular-nums text-muted-foreground">
-                          {row.attendanceDays ?? 0}
-                          {Number(row.absenceDays) > 0 && (
-                            <span style={{ color: "var(--warning)" }}> (غياب {row.absenceDays})</span>
-                          )}
-                        </td>
-                        <td className="p-2 tabular-nums">{formatMoney(Number(row.advances ?? 0))}</td>
-                        <td className="p-2">
-                          <Input
-                            className="h-8 w-24" dir="ltr" inputMode="decimal"
-                            defaultValue={String(Number(row.bonuses ?? 0))}
-                            disabled={isPaid}
-                            onBlur={e => editNumber(row, "bonuses", e.target.value)}
-                          />
-                        </td>
-                        <td className="p-2">
-                          <Input
-                            className="h-8 w-24" dir="ltr" inputMode="decimal"
-                            defaultValue={String(Number(row.deductions ?? 0))}
-                            disabled={isPaid}
-                            onBlur={e => editNumber(row, "deductions", e.target.value)}
-                          />
-                        </td>
-                        <td className="p-2 font-bold tabular-nums">{formatMoney(net)}</td>
-                        <td className="p-2 tabular-nums" style={{ color: isPaid ? "var(--success)" : undefined }}>
-                          {isPaid ? formatMoney(net) : "—"}
-                        </td>
-                        <td className="p-2 tabular-nums" style={{ color: isPaid ? undefined : "var(--warning)" }}>
-                          {isPaid ? "—" : formatMoney(net)}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {rows.map(({ row, advances, due, paid, remaining }) => (
+                    <tr key={row.id} className="border-b last:border-0">
+                      <td className="font-semibold">{row.employeeName}</td>
+                      <td className="tabular-nums">{money(Number(row.baseSalary ?? 0))}</td>
+                      <td className="tabular-nums text-muted-foreground">
+                        {row.attendanceDays ?? 0}
+                        {Number(row.absenceDays) > 0 && (
+                          <span style={{ color: toneColor("due") }}> (غياب {row.absenceDays})</span>
+                        )}
+                      </td>
+                      {/* السلفة عرض بس — الإدخال اليدوي هو اللي بيعمل خصم مرتين. */}
+                      <td className="tabular-nums" title="بتتخصم لوحدها من السلف المسجّلة">
+                        {money(advances, "due")}
+                      </td>
+                      <td>
+                        <Input
+                          className="h-8 w-20" dir="ltr" inputMode="decimal"
+                          defaultValue={String(Number(row.bonuses ?? 0))}
+                          disabled={!isDraft}
+                          onBlur={e => editNumber(row, "bonuses", e.target.value)}
+                        />
+                      </td>
+                      <td>
+                        <Input
+                          className="h-8 w-20" dir="ltr" inputMode="decimal"
+                          defaultValue={String(Number(row.deductions ?? 0))}
+                          disabled={!isDraft}
+                          onBlur={e => editNumber(row, "deductions", e.target.value)}
+                        />
+                      </td>
+                      <td className="font-bold tabular-nums">{money(due)}</td>
+                      <td className="tabular-nums">{money(paid, "in")}</td>
+                      <td className="text-base font-bold tabular-nums">
+                        {money(remaining, remaining > 0 ? "out" : "in")}
+                      </td>
+                      <td className="text-left text-xs text-muted-foreground">
+                        {isPaid ? "اتصرف" : isDraft ? "مسودة" : "معتمد"}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 font-bold">
-                    <td className="p-2">الإجمالي ({items.length})</td>
-                    <td className="p-2 tabular-nums">{formatMoney(totals.base)}</td>
-                    <td className="p-2" />
-                    <td className="p-2 tabular-nums">{formatMoney(totals.advances)}</td>
-                    <td className="p-2 tabular-nums">{formatMoney(totals.bonuses)}</td>
-                    <td className="p-2 tabular-nums">{formatMoney(totals.deductions)}</td>
-                    <td className="p-2 tabular-nums">{formatMoney(totals.net)}</td>
-                    <td className="p-2" colSpan={2} />
+                    <td>الإجمالي ({rows.length})</td>
+                    <td className="tabular-nums">{formatMoney(totals.base)}</td>
+                    <td />
+                    <td className="tabular-nums" style={{ color: toneColor("due") }}>
+                      {formatMoney(totals.advances)}
+                    </td>
+                    <td className="tabular-nums">{formatMoney(totals.bonuses)}</td>
+                    <td className="tabular-nums" style={{ color: toneColor("out") }}>
+                      {formatMoney(totals.deductions)}
+                    </td>
+                    <td className="tabular-nums">{formatMoney(totals.due)}</td>
+                    <td className="tabular-nums" style={{ color: toneColor("in") }}>
+                      {formatMoney(totals.paid)}
+                    </td>
+                    <td className="tabular-nums" style={{ color: toneColor(totals.remaining > 0 ? "out" : "in") }}>
+                      {formatMoney(totals.remaining)}
+                    </td>
+                    <td />
                   </tr>
                 </tfoot>
               </table>
-            </div>
+            </TableScroll>
+          </Panel>
 
-            {/* إجراء أساسي واحد واضح، والباقي أهدى. */}
-            <div className="flex flex-wrap items-end gap-2 border-t pt-3">
-              {!isPaid && (
-                <div className="min-w-[14rem] flex-1">
-                  <Label className="text-xs">دليل الصرف</Label>
-                  <Input
-                    className="mt-1 h-9"
-                    placeholder="رقم تحويل أو ملاحظة"
-                    value={evidence}
-                    onChange={e => setEvidence(e.target.value)}
-                  />
-                </div>
-              )}
-              {period.status === "draft" && (
-                <Button
-                  variant="outline"
-                  disabled={recalc.isPending}
-                  onClick={() => recalc.mutate({ id: period.id })}
-                >
-                  احسب من الأول
-                </Button>
-              )}
-              {period.status === "draft" && (
-                <Button
-                  variant="outline"
-                  disabled={approve.isPending || !evidence.trim()}
-                  onClick={() => approve.mutate({ id: period.id, evidenceUrl: evidence.trim() })}
-                >
-                  اعتماد
-                </Button>
-              )}
-              {period.status === "approved" && (
-                <Button
-                  disabled={pay.isPending || !evidence.trim()}
-                  onClick={() => pay.mutate({ id: period.id, evidenceUrl: evidence.trim() })}
-                >
-                  {pay.isPending ? "جاري الصرف..." : `اصرف ${formatMoney(totals.net)} من الخزنة`}
-                </Button>
-              )}
-              {isPaid && (
-                <span className="rounded-md px-3 py-2 text-sm" style={{ color: "var(--success)" }}>
-                  اتصرفت — {formatMoney(totals.net)}
-                </span>
-              )}
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
+          <PayrollActionDialog
+            open={payOpen}
+            mode={isDraft ? "approve" : "pay"}
+            amount={totals.remaining}
+            pending={approve.isPending || pay.isPending}
+            onClose={() => setPayOpen(false)}
+            onConfirm={evidenceUrl =>
+              isDraft
+                ? approve.mutate({ id: period.id, evidenceUrl })
+                : pay.mutate({ id: period.id, evidenceUrl })
+            }
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * الاعتماد والصرف — درج، مش خانة ثابتة فوق الصفحة.
+ *
+ * «دليل الصرف» كان حقل مفتوح طول الوقت في أعلى الشاشة، وهو مطلوب عند لحظة واحدة بس.
+ * الصفحة الأساسية جدول متابعة؛ الفورم بيظهر لما يحصل الفعل.
+ */
+function PayrollActionDialog({
+  open,
+  mode,
+  amount,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  mode: "approve" | "pay";
+  amount: number;
+  pending: boolean;
+  onClose: () => void;
+  onConfirm: (evidenceUrl: string) => void;
+}) {
+  const [evidence, setEvidence] = useState("");
+  if (!open) return null;
+  const isPay = mode === "pay";
+  return (
+    <div
+      dir="rtl"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="my-8 w-full max-w-md rounded-lg border bg-card p-4 shadow-lg"
+        onClick={event => event.stopPropagation()}
+      >
+        <h3 className="mb-1 font-bold">{isPay ? "صرف المرتبات" : "اعتماد الدورة"}</h3>
+        <p className="mb-4 text-sm text-muted-foreground">
+          {isPay
+            ? `هيخرج من الخزنة ${formatMoney(amount)} — الصافي بعد السلف، مش إجمالي المرتبات.`
+            : "الاعتماد بيخصم السلف المعلّقة من كل موظف ويقفل الأرقام."}
+        </p>
+        <div>
+          <Label className="text-xs">دليل الصرف *</Label>
+          <Input
+            className="mt-1"
+            placeholder="رقم تحويل أو ملاحظة"
+            value={evidence}
+            onChange={e => setEvidence(e.target.value)}
+          />
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <Button variant="outline" onClick={onClose}>إلغاء</Button>
+          <Button
+            disabled={pending || !evidence.trim()}
+            onClick={() => onConfirm(evidence.trim())}
+          >
+            {pending ? "..." : isPay ? "اصرف" : "اعتماد"}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
