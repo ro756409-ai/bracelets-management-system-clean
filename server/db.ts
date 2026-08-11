@@ -112,6 +112,10 @@ import {
   toMinorUnits,
 } from "../shared/accountingMoney";
 import { businessDateKey, businessDayRange } from "../shared/businessTime";
+import {
+  ORDER_CONTENT_HEADER_FIELDS,
+  orderContentChangedAfterShipment,
+} from "../shared/orderContent";
 import { captureExpectedShippingSnapshotInTransaction } from "./shippingSnapshotV2.service";
 
 // ==================== CAIRO TIMEZONE HELPERS ====================
@@ -3186,6 +3190,86 @@ export async function getOrderEditLogs(orderId: number) {
     .orderBy(desc(orderEditLogs.createdAt));
 }
 
+/**
+ * هل محتوى الصندوق اتغيّر بعد ما الشحنة اتعملت في بوسطة؟
+ *
+ * **مشتق، مش متخزّن.** الإشارة موجودة أصلاً في `order_edit_logs`: المسارين اللي
+ * بيغيّروا المحتوى بيسجّلوا فيه — `editOrderFull` بيسجّل باسم الحقل،
+ * و`replaceOrderItemsFromEditor` بيسجّل `orderItems`. فمفيش داعي لعمود جديد ولا
+ * migration، وده أهم من الاختصار: عمود جديد معناه نسخة تانية من نفس الحقيقة، وده
+ * بالظبط نوع العطل اللي إحنا بنقفله.
+ *
+ * وبيسأل عن المحتوى بس — تعديل تليفون أو ملاحظة داخلية بعد الإرسال مايولّدش تحذير.
+ */
+export async function orderContentChangedAfterShipmentCreation(
+  orderId: number
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [order] = await db
+    .select({ bostaSentAt: orders.bostaSentAt })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  if (!order?.bostaSentAt) return false;
+  const logs = await db
+    .select({ field: orderEditLogs.field, createdAt: orderEditLogs.createdAt })
+    .from(orderEditLogs)
+    .where(eq(orderEditLogs.orderId, orderId));
+  return orderContentChangedAfterShipment(logs, order.bostaSentAt);
+}
+
+/**
+ * تعيين منتج يدويًا لأوردر جه من الموقع بصنف مش متطابق مع الكتالوج.
+ *
+ * كان بيكتب في الهيدر بس. والبنود في الحالة دي بتبقى فيها **الاسم الخام اللي جه من
+ * الموقع** و`productId = null` — فالمدير بيعيّن المنتج الصح، الشاشة بتوريه صح، وبوسطة
+ * بتاخد الاسم الخام. نفس عطل «آية الكرسي» بالظبط، بس داخل من باب تاني.
+ *
+ * الاسم بيتكتب على البند لما يكون البند الوحيد بس: أوردر فيه تلات أصناف مش متطابقة
+ * تعيينهم كلهم لنفس الاسم بيضيّع اللي العميل طلبه. المعرّفات (منتج/variant) بتتكتب
+ * على كل بند مش متطابق لأنها هي اللي بتربط بالمخزون.
+ */
+export async function resolveOrderReviewProduct(
+  orderId: number,
+  input: { productId: number; variantId?: number | null; productName?: string }
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.transaction(async tx => {
+    await tx
+      .update(orders)
+      .set({
+        productId: input.productId,
+        variantId: input.variantId ?? null,
+        ...(input.productName ? { productName: input.productName } : {}),
+        needsReview: false,
+        reviewReason: null,
+      })
+      .where(eq(orders.id, orderId));
+
+    const items = await tx
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId));
+    const unresolved = items.filter((item: OrderItem) => item.productId == null);
+    if (unresolved.length === 0) return;
+    for (const item of unresolved) {
+      if (item.stockOutQuantity > 0 || item.costCapturedAt != null) continue;
+      await tx
+        .update(orderItems)
+        .set({
+          productId: input.productId,
+          variantId: input.variantId ?? null,
+          ...(input.productName && items.length === 1
+            ? { productName: input.productName }
+            : {}),
+        })
+        .where(eq(orderItems.id, item.id));
+    }
+  });
+}
+
 // Full order edit with change tracking
 export async function editOrderFull(
   orderId: number,
@@ -3249,6 +3333,60 @@ export async function editOrderFull(
   }
 
   if (Object.keys(orderUpdates).length === 0) return currentOrder;
+
+  // ==================== محتوى الصندوق ====================
+  //
+  // الدالة دي كانت بتكتب في هيدر الأوردر بس. والهيدر مرآة لـ`order_items`، فتعديل
+  // اسم المنتج أو نوع الحفر من هنا كان بيسيب البنود على القديم — والشاشة بتقرا الهيدر
+  // فبتبان مظبوطة، وبوسطة بتقرا البنود فبتاخد القديم. ده كان أصل العطل بالظبط.
+  //
+  // النسخة دي بتقفل الاحتمال ده تمامًا: يا إما التغيير يتطبّق على البنود كمان، يا إما
+  // يترفض. مفيش حالة تالتة بينجح فيها تعديل ويسيب الهيدر مختلف عن البنود.
+  const contentChanges = ORDER_CONTENT_HEADER_FIELDS.filter(
+    field => field in orderUpdates
+  );
+  if (contentChanges.length > 0) {
+    const existingItems = await db
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId));
+
+    if (existingItems.length > 1) {
+      // سلة فيها أكتر من صنف مالهاش «اسم منتج» واحد ولا «كمية» واحدة، فالتعديل من
+      // الهيدر مبهم أصلاً: تغيير الاسم لـ«آية الكرسي» يقصد أنهي بند؟ محرر البنود هو
+      // اللي بيعرف يجاوب. الرفض هنا هو خط الدفاع الأخير — الشاشات كلها بتوجّه لمحرر
+      // البنود قبل ما توصل لهنا، فالرسالة دي المفروض ما تظهرش لموظف في الاستخدام
+      // العادي؛ بتظهر لو نسخة قديمة من الواجهة لسه شغالة عند حد.
+      throw new Error(
+        "الأوردر ده فيه أكتر من صنف — عدّل الأصناف من محرر بنود الأوردر"
+      );
+    }
+
+    if (existingItems.length === 1) {
+      const item = existingItems[0];
+      // نفس الحارس اللي في محرر البنود: بعد ما المخزون يخرج أو التكلفة تتسجّل، البنود
+      // بقت سجل محاسبي مش بيانات تشغيل.
+      if (item.stockOutQuantity > 0 || item.costCapturedAt != null) {
+        throw new Error(
+          "لا يمكن تعديل محتوى الأوردر بعد خروج المخزون؛ استخدم Reversal موثق"
+        );
+      }
+      const itemUpdates: Record<string, any> = {};
+      if ("productId" in orderUpdates) itemUpdates.productId = orderUpdates.productId ?? null;
+      if ("productName" in orderUpdates) itemUpdates.productName = orderUpdates.productName;
+      if ("variantId" in orderUpdates) itemUpdates.variantId = orderUpdates.variantId ?? null;
+      if ("quantity" in orderUpdates) itemUpdates.quantity = orderUpdates.quantity;
+      if ("size" in orderUpdates) itemUpdates.size = orderUpdates.size ?? null;
+      if ("color" in orderUpdates) itemUpdates.color = orderUpdates.color ?? null;
+      await db
+        .update(orderItems)
+        .set(itemUpdates)
+        .where(eq(orderItems.id, item.id));
+    }
+    // `existingItems.length === 0`: أوردر قديم (استيراد أو تكرار) مالوش بنود أصلاً.
+    // الهيدر هو مصدره الوحيد — الشاشة بتشتق منه بند واحد، وبوسطة بترجع له كـfallback —
+    // فالكتابة عليه لوحدها هنا مابتخلقش اختلاف.
+  }
 
   // Handle inventory changes if quantity changed. Skipped for orders with no resolved
   // product (needsReview) — they have never deducted stock, so there is nothing to adjust.

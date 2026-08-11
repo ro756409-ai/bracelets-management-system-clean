@@ -400,6 +400,8 @@ import {
   getBusinessIdsByGroupId,
   getActiveBusinessGroups,
   editOrderFull,
+  resolveOrderReviewProduct,
+  orderContentChangedAfterShipmentCreation,
   getOrderEditLogs,
   logOrderEdit,
   getAccountingDashboard,
@@ -2279,7 +2281,11 @@ export const appRouter = router({
         if (!order) return order;
         await requireScopedBusinessId(ctx.tenantId, order.businessId);
         const items = await getOrderItems(input.id);
-        return { ...order, items };
+        // الشاشة لازم تعرف إن اللي بتوريه اتغيّر بعد ما بوسطة أخدت نسختها — من غير
+        // كده الأوردر بيبان مظبوط جوّه، وبوسطة عندها حاجة تانية، ومحدش يعرف.
+        const contentChangedAfterShipment =
+          await orderContentChangedAfterShipmentCreation(input.id);
+        return { ...order, items, contentChangedAfterShipment };
       }),
 
     /** Header stat cards on the Orders page — same business-group scope as `orders.list`. */
@@ -2545,13 +2551,13 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الأوردر غير موجود",
           });
-        await updateOrder(input.orderId, {
+        // بيكتب الهيدر والبنود مع بعض في transaction واحدة — البنود هي المصدر اللي
+        // بوسطة بتقرا منه، فتعيين المنتج في الهيدر لوحده كان بيسيبها على الاسم الخام.
+        await resolveOrderReviewProduct(input.orderId, {
           productId: input.productId,
           variantId: input.variantId ?? null,
-          ...(input.productName ? { productName: input.productName } : {}),
-          needsReview: false,
-          reviewReason: null,
-        } as any);
+          productName: input.productName,
+        });
         await addActivityLog({
           action: "resolve_order_review",
           entityType: "order",
@@ -2908,7 +2914,12 @@ export const appRouter = router({
           });
         const newOrderNumber = await generateOrderNumber();
         const actingEmpId = await resolveActingEmployeeId(ctx);
-        await createOrder({
+        // البنود بتتنسخ مع الأوردر. من غير كده الأوردر المكرّر كان بيطلع بهيدر بس،
+        // فأوردر فيه تلات نقوش مختلفة بيتكرّر من غير أي نقش — وبوسطة بتستلم سطر
+        // مجمّع مكان القطع.
+        const originalItems = await getOrderItems(input.orderId);
+        await createOrderWithItems(
+          {
           orderNumber: newOrderNumber,
           businessId: originalOrder.businessId,
           customerName: originalOrder.customerName,
@@ -2930,7 +2941,30 @@ export const appRouter = router({
           pageName: originalOrder.pageName,
           adName: originalOrder.adName,
           lastUpdatedBy: actingEmpId,
-        });
+          } as any,
+          originalItems.length > 0
+            ? originalItems.map(item => ({
+                productId: item.productId ?? undefined,
+                productName: item.productName,
+                variantId: item.variantId ?? undefined,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice != null ? Number(item.unitPrice) : undefined,
+                size: item.size ?? undefined,
+                color: item.color ?? undefined,
+              }))
+            : [
+                // أوردر قديم مالوش بنود — الهيدر بيتحوّل لبند واحد، فالنسخة الجديدة
+                // تبدأ بمصدر حقيقة واحد بدل ما تورّث الفراغ.
+                {
+                  productId: originalOrder.productId ?? undefined,
+                  productName: originalOrder.productName,
+                  variantId: originalOrder.variantId ?? undefined,
+                  quantity: originalOrder.quantity ?? 1,
+                  size: originalOrder.size ?? undefined,
+                  color: originalOrder.color ?? undefined,
+                },
+              ]
+        );
         await addActivityLog({
           action: "duplicate_order",
           entityType: "order",

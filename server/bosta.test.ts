@@ -166,23 +166,29 @@ describe("🔑 نوع الحفر بيوصل بوسطة", () => {
     expect(block).not.toContain("db.select().from(orderItems)");
   });
 
-  it("🔑 والوصف بيحط نوع الحفر جنب اسم الصنف", () => {
-    expect(block).toContain("it.variantName");
-    expect(block).toContain("`${it.productName} - ${variant}`");
+  /*
+    تكوين الوصف نفسه اتنقل لـ`shared/orderContent.ts` عشان يبقى قابل للاختبار
+    بالتشغيل مش بقراءة النص — الاختبارات السلوكية بتاعته في
+    `orderContentLifecycle.test.ts` (نوع الحفر، البند من غير نوع، المقاس واللون،
+    مجموع الكميات، والقص). اللي فاضل هنا هو **الوصلة**: الخدمة بتقرا البنود الحالية
+    وبتسلّمها للدالة المشتركة، ومابتكوّنش وصف تاني لوحدها.
+  */
+  it("🔑 الوصف بيتبني من البنود عن طريق الدالة المشتركة", () => {
+    expect(block).toContain("buildShipmentContents(");
+    expect(block).toContain("variantName: it.variantName");
+    expect(block).toContain("quantity: it.quantity");
   });
 
-  it("🔑 والبند اللي مالوش نوع مابيجيش بشرطة فاضية", () => {
-    expect(block).toContain("variant ? ");
-    expect(block).toContain(": it.productName");
+  it("🔑 والمقاس واللون بيتبعتوا كمان — دول جزء من اللي جوه الصندوق", () => {
+    expect(block).toContain("size: it.size");
+    expect(block).toContain("color: it.color");
   });
 
-  it("🔑 عدد القطع لسه مجموع الكميات", () => {
-    expect(block).toContain("bostaItems.reduce((s, it) => s + (it.quantity || 0), 0)");
-  });
-
-  it("🔑 والوصف الطويل بيتقص بدل ما الشحنة تترفض", () => {
-    expect(block).toContain("DESCRIPTION_LIMIT");
-    expect(block).toContain("وغيرها");
+  it("🔑 الهيدر fallback بس — مش مصدر موازي", () => {
+    expect(block).toContain("{ productName: order.productName, quantity: order.quantity }");
+    // مفيش وصف بيتلزق بالإيد في الخدمة؛ لو رجع، الاختلاف بيرجع معاه.
+    expect(block).not.toContain(".join(");
+    expect(block).not.toContain(".slice(");
   });
 
   it("🔑 نفس الدالة اللي الشاشة بتعرض بيها — فاللي التاجر شايفه هو اللي بيتبعت", () => {

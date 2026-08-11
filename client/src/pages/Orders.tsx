@@ -53,6 +53,7 @@ import {
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
+import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
@@ -1987,6 +1988,12 @@ export default function Orders() {
               <Card>
                 <CardHeader className="pb-2 pt-3"><CardTitle className="type-subheading">بيانات المنتج</CardTitle></CardHeader>
                 <CardContent className="grid grid-cols-2 gap-3 text-sm">
+                  {(order as any).contentChangedAfterShipment && (
+                    /* بوسطة أخدت نسختها قبل التعديل ده، ومفيش مسار تحديث شحنة. */
+                    <div className="col-span-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2.5 py-2 text-xs font-semibold text-[var(--warning)]">
+                      ⚠️ {SHIPMENT_STALE_WARNING}
+                    </div>
+                  )}
                   <div><span className="text-muted-foreground">المنتج:</span> <span className="font-semibold">{order.productName}</span></div>
                   <div><span className="text-muted-foreground">الكمية:</span> <span className="font-semibold">{order.quantity}</span></div>
                   {order.color && <div><span className="text-muted-foreground">اللون:</span> <span className="font-semibold">{order.color}</span></div>}

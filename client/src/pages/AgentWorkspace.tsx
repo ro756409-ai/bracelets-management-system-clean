@@ -14,6 +14,11 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  OrderEditDialog,
+  type OrderEditSavePayload,
+} from "@/components/orders/OrderEditDialog";
+import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { toast } from "sonner";
 import { CheckCircle, XCircle, Clock, Phone, MapPin, Package, Calendar, User, Edit2 } from "lucide-react";
 
@@ -46,11 +51,7 @@ export default function AgentWorkspace() {
   const [cancelNotes, setCancelNotes] = useState("");
   const [postponeDate, setPostponeDate] = useState("");
   const [postponeNotes, setPostponeNotes] = useState("");
-  // Edit order state
-  const [editQuantity, setEditQuantity] = useState<number>(1);
-  const [editTotalAmount, setEditTotalAmount] = useState<number>(0);
-  const [editNotes, setEditNotes] = useState("");
-  const [editProductName, setEditProductName] = useState("");
+  const { values: GOVERNORATES } = useGovernorateOptions();
 
   // تاريخ التوزيع - افتراضياً اليوم
   const todayCairo = useMemo(() => {
@@ -86,14 +87,65 @@ export default function AgentWorkspace() {
     onError: (e) => toast.error(e.message),
   });
 
-  const editOrderMutation = trpc.orders.editOrder.useMutation({
-    onSuccess: () => {
-      toast.success("✅ تم تعديل الأوردر بنجاح");
-      utils.orders.myOrders.invalidate();
-      setShowEditDialog(false);
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  /**
+   * التعديل هنا بيمشي على **نفس** المسار اللي في صفحة الأوردرات وشاشة الموظف:
+   * `editOrderItems` للسلة و`editOrder` لبيانات العميل. الشاشة دي كان عندها فورم
+   * صغير خاص بيها بيبعت اسم المنتج والكمية على `editOrder` لوحدها — والمسار ده بيكتب
+   * في هيدر الأوردر بس، فالبنود (اللي بوسطة بتقرا منها) كانت بتفضل على القديم.
+   * محرر بنود تاني بمنطق تاني هو اللي خلق الاختلاف، فالحل مش تصليحه — الحل إنه يتشال.
+   */
+  const editOrderMutation = trpc.orders.editOrder.useMutation();
+  const editItemsMutation = trpc.orders.editOrderItems.useMutation();
+  const editSaving = editOrderMutation.isPending || editItemsMutation.isPending;
+
+  const { data: products } = trpc.products.list.useQuery(undefined);
+  const { data: variantsList } = trpc.variants.all.useQuery(undefined);
+  const {
+    data: editItemsData,
+    isLoading: editItemsLoading,
+    error: editItemsError,
+  } = trpc.orders.orderItems.useQuery(
+    { orderId: selectedOrderId ?? 0 },
+    { enabled: showEditDialog && selectedOrderId != null, retry: false }
+  );
+  const editingOrder = orders.find(o => o.id === selectedOrderId) ?? null;
+
+  /** نفس ترتيب الحفظ اللي في صفحة الأوردرات: البنود الأول عشان الإجمالي يتحسب منها. */
+  async function saveOrderEdit(payload: OrderEditSavePayload) {
+    const { orderId, header, headerDirty, items, itemsDirty, shippingFees } = payload;
+    if (itemsDirty) {
+      await editItemsMutation.mutateAsync({
+        orderId,
+        items: items.map((l: any) => ({
+          productId: l.productId,
+          productName: l.productName,
+          variantId: l.variantId,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          discount: l.discount,
+        })),
+        shippingFees,
+      });
+    }
+    if (headerDirty) {
+      await editOrderMutation.mutateAsync({
+        orderId,
+        customerName: header.customerName,
+        customerPhone: header.customerPhone,
+        customerPhone2: header.customerPhone2,
+        customerAddress: header.customerAddress,
+        governorate: header.governorate,
+        city: header.city,
+        paymentMethod: header.paymentMethod,
+        notes: header.notes,
+        ...(itemsDirty ? {} : { shippingFees }),
+      });
+    }
+    toast.success("✅ تم تعديل الأوردر بنجاح");
+    utils.orders.myOrders.invalidate();
+    utils.orders.orderItems.invalidate({ orderId });
+    setShowEditDialog(false);
+  }
 
   const postponeMutation = trpc.orders.postpone.useMutation({
     onSuccess: () => {
@@ -303,10 +355,6 @@ export default function AgentWorkspace() {
                     className="h-7 text-xs border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10"
                     onClick={() => {
                       setSelectedOrderId(order.id);
-                      setEditQuantity(order.quantity ?? 1);
-                      setEditTotalAmount(Number(order.totalAmount));
-                      setEditNotes(order.notes ?? "");
-                      setEditProductName(order.productName ?? "");
                       setShowEditDialog(true);
                     }}
                   >
@@ -353,78 +401,22 @@ export default function AgentWorkspace() {
         </div>
       )}
 
-      {/* Edit Order Dialog */}
-      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>تعديل بيانات الأوردر</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>اسم المنتج</Label>
-              <Input
-                value={editProductName}
-                onChange={e => setEditProductName(e.target.value)}
-                placeholder="اسم المنتج..."
-                className="mt-1"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>الكمية <span className="text-destructive">*</span></Label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={editQuantity}
-                  onChange={e => setEditQuantity(Number(e.target.value))}
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>المبلغ الإجمالي <span className="text-destructive">*</span></Label>
-                <Input
-                  type="number"
-                  min={0}
-                  value={editTotalAmount}
-                  onChange={e => setEditTotalAmount(Number(e.target.value))}
-                  className="mt-1"
-                />
-              </div>
-            </div>
-            <div>
-              <Label>ملاحظات</Label>
-              <Textarea
-                value={editNotes}
-                onChange={e => setEditNotes(e.target.value)}
-                placeholder="ملاحظات إضافية..."
-                className="mt-1"
-                rows={3}
-              />
-            </div>
-            <p className="text-xs text-muted-foreground bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded p-2">
-              ⚠️ لو كان الأوردر مؤكد، سيتم تعديل الجرد تلقائياً
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowEditDialog(false)}>رجوع</Button>
-            <Button
-              disabled={editQuantity < 1 || editTotalAmount < 0 || editOrderMutation.isPending}
-              onClick={() => {
-                if (!selectedOrderId) return;
-                editOrderMutation.mutate({
-                  orderId: selectedOrderId,
-                  quantity: editQuantity,
-                  totalAmount: editTotalAmount,
-                  productName: editProductName || undefined,
-                  notes: editNotes || undefined,
-                });
-              }}
-            >
-              حفظ التعديل
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* تعديل الأوردر — نفس محرر البنود المشترك اللي في صفحة الأوردرات */}
+      <OrderEditDialog
+        open={showEditDialog}
+        onOpenChange={open => { setShowEditDialog(open); if (!open) setSelectedOrderId(null); }}
+        order={editingOrder}
+        items={editItemsData}
+        itemsLoading={editItemsLoading}
+        itemsError={editItemsError}
+        products={(products ?? []) as any}
+        variants={(variantsList ?? []) as any}
+        configuredGovernorates={GOVERNORATES}
+        saving={editSaving}
+        onSave={saveOrderEdit}
+        showEmployeeNotes={false}
+        allowItemsEdit={user?.role === "admin"}
+      />
 
       {/* Cancel Dialog */}
       <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>

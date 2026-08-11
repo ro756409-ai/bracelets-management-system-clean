@@ -7,8 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowRight, Save, Edit2, X, Package, User, MapPin, Phone, FileText, Calendar, Hash, Truck, RefreshCw, CheckCircle, AlertCircle, Printer } from "lucide-react";
+import {
+  OrderEditDialog,
+  type OrderEditSavePayload,
+} from "@/components/orders/OrderEditDialog";
+import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
+import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { toast } from "sonner";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -56,7 +61,9 @@ export default function OrderDetails() {
 
   const orderId = params?.id ? parseInt(params.id) : 0;
   const [isEditing, setIsEditing] = useState(false);
+  const [showItemsEditor, setShowItemsEditor] = useState(false);
   const [editData, setEditData] = useState<any>({});
+  const { values: GOVERNORATES } = useGovernorateOptions();
 
   const { data: order, isLoading, refetch } = trpc.orders.get.useQuery(
     { id: orderId },
@@ -94,6 +101,53 @@ export default function OrderDetails() {
       toast.error(err.message || "حدث خطأ أثناء التعديل");
     },
   });
+
+  // محرر البنود المشترك — نفس اللي في صفحة الأوردرات وشاشة الموظف وشاشة التأكيدات.
+  const { data: variantsList } = trpc.variants.all.useQuery(undefined);
+  const {
+    data: itemsData,
+    isLoading: itemsLoading,
+    error: itemsError,
+  } = trpc.orders.orderItems.useQuery(
+    { orderId },
+    { enabled: showItemsEditor && orderId > 0, retry: false }
+  );
+  const editItemsMutation = trpc.orders.editOrderItems.useMutation();
+
+  async function saveItemsEdit(payload: OrderEditSavePayload) {
+    const { orderId: id, header, headerDirty, items, itemsDirty, shippingFees } = payload;
+    if (itemsDirty) {
+      await editItemsMutation.mutateAsync({
+        orderId: id,
+        items: items.map((l: any) => ({
+          productId: l.productId,
+          productName: l.productName,
+          variantId: l.variantId,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          discount: l.discount,
+        })),
+        shippingFees,
+      });
+    }
+    if (headerDirty) {
+      await editMutation.mutateAsync({
+        orderId: id,
+        customerName: header.customerName,
+        customerPhone: header.customerPhone,
+        customerPhone2: header.customerPhone2,
+        customerAddress: header.customerAddress,
+        governorate: header.governorate,
+        city: header.city,
+        paymentMethod: header.paymentMethod,
+        notes: header.notes,
+        ...(itemsDirty ? {} : { shippingFees }),
+      });
+    }
+    toast.success("✅ تم حفظ التعديلات");
+    setShowItemsEditor(false);
+    refetch();
+  }
 
   useEffect(() => {
     if (order) {
@@ -136,11 +190,6 @@ export default function OrderDetails() {
     if (editData.customerPhone !== order.customerPhone) updates.customerPhone = editData.customerPhone;
     if (editData.customerAddress !== order.customerAddress) updates.customerAddress = editData.customerAddress;
     if (editData.governorate !== order.governorate) updates.governorate = editData.governorate;
-    if (editData.productId !== order.productId) {
-      updates.productId = editData.productId;
-      updates.productName = editData.productName;
-    }
-    if (editData.quantity !== order.quantity) updates.quantity = editData.quantity;
     if (Number(editData.totalAmount) !== Number(order.totalAmount)) updates.totalAmount = Number(editData.totalAmount);
     if (editData.notes !== (order.notes || "")) updates.notes = editData.notes;
 
@@ -165,6 +214,22 @@ export default function OrderDetails() {
 
   return (
     <div className="space-y-6">
+      {(order as any).contentChangedAfterShipment && (
+        /*
+          بوسطة مالهاش عندنا مسار «تحديث شحنة»، فاللي عندها هو نسخة وقت الإرسال. لو
+          المحتوى اتعدّل بعدها، الشاشة لازم تقول كده بصراحة — عرض أوردر معدّل جوّه
+          والشحنة برّه مختلفة من غير أي إشارة هو أسوأ من الغلط نفسه.
+        */
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3 text-sm">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--warning)]" />
+          <div>
+            <p className="font-semibold text-[var(--warning)]">{SHIPMENT_STALE_WARNING}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              لو الفرق يهم، ألغِ الشحنة في بوسطة وأنشئ شحنة جديدة — التحديث التلقائي مش متاح.
+            </p>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -353,24 +418,17 @@ export default function OrderDetails() {
           <CardContent className="space-y-4">
             <div>
               <Label className="text-muted-foreground text-xs">المنتج</Label>
-              {isEditing ? (
-                <Select
-                  value={String(editData.productId)}
-                  onValueChange={(val) => {
-                    const prod = products?.find((p: any) => p.id === Number(val));
-                    setEditData({ ...editData, productId: Number(val), productName: prod?.name || editData.productName });
-                  }}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {products?.map((p: any) => (
-                      <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
+              {/*
+                المنتج والكمية بيتعدّلوا من محرر البنود، مش من هنا. الفورم ده كان بيبعت
+                اسم المنتج والكمية على مسار بيكتب في هيدر الأوردر بس، فالبنود (اللي
+                بوسطة والتجهيز بيقروا منها) كانت بتفضل على القديم.
+              */}
+              <div className="flex items-center justify-between gap-2">
                 <p className="font-medium">{order.productName}</p>
-              )}
+                <Button variant="outline" size="sm" onClick={() => setShowItemsEditor(true)}>
+                  <Package className="h-3.5 w-3.5 ml-1" /> تعديل الأصناف
+                </Button>
+              </div>
             </div>
             {Array.isArray((order as any).items) && (order as any).items.length > 0 && (
               <div className="rounded-xl border border-[var(--warning)]/30 bg-[var(--warning)]/10/60 p-3">
@@ -399,11 +457,7 @@ export default function OrderDetails() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label className="text-muted-foreground text-xs">الكمية</Label>
-                {isEditing ? (
-                  <Input type="number" min={1} value={editData.quantity} onChange={e => setEditData({ ...editData, quantity: parseInt(e.target.value) || 1 })} />
-                ) : (
-                  <p className="font-medium">{order.quantity}</p>
-                )}
+                <p className="font-medium">{order.quantity}</p>
               </div>
               <div>
                 <Label className="text-muted-foreground text-xs">المبلغ الإجمالي</Label>
@@ -527,6 +581,21 @@ export default function OrderDetails() {
           </CardContent>
         </Card>
       </div>
+
+      {/* محرر بنود الأوردر — نفس المكوّن المشترك في كل الشاشات */}
+      <OrderEditDialog
+        open={showItemsEditor}
+        onOpenChange={setShowItemsEditor}
+        order={order}
+        items={itemsData}
+        itemsLoading={itemsLoading}
+        itemsError={itemsError}
+        products={(products ?? []) as any}
+        variants={(variantsList ?? []) as any}
+        configuredGovernorates={GOVERNORATES}
+        saving={editItemsMutation.isPending || editMutation.isPending}
+        onSave={saveItemsEdit}
+      />
     </div>
   );
 }

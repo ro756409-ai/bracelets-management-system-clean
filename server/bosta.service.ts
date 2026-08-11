@@ -5,7 +5,16 @@
  */
 
 import { Request, Response, Express } from "express";
-import { getDb, getBusinessIdsByGroupSlug, getOrderItems } from "./db";
+import {
+  getDb,
+  getBusinessIdsByGroupSlug,
+  getOrderItems,
+  orderContentChangedAfterShipmentCreation,
+} from "./db";
+import {
+  buildShipmentContents,
+  SHIPMENT_STALE_WARNING,
+} from "../shared/orderContent";
 import { orders } from "../drizzle/schema";
 import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
 import { requireAdminOrManager } from "./authMiddleware";
@@ -201,11 +210,18 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
   }
 
   // Prevent duplicate sending (same order already sent)
+  //
+  // بوسطة مالهاش عندنا مسار «تحديث شحنة» — مفيش PUT/PATCH على `/deliveries` في الملف
+  // ده — فالرجوع بدري هنا معناه إن اللي عند بوسطة هو نسخة وقت الإرسال. لو المحتوى
+  // اتعدّل بعدها، لازم يتقال بصراحة بدل ما الضغطة ترجع «تمام» والتاجر يفتكر إن بوسطة
+  // اتحدّثت.
   if (order.bostaShipmentId) {
+    const stale = await orderContentChangedAfterShipmentCreation(orderId);
     return {
       success: true,
       shipmentId: order.bostaShipmentId,
       trackingNumber: order.bostaTrackingNumber ?? undefined,
+      warning: stale ? SHIPMENT_STALE_WARNING : undefined,
     };
   }
 
@@ -268,26 +284,21 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
   //
   // `getOrderItems` هي نفس الدالة اللي الشاشة بتعرض بيها البنود، فاللي التاجر بيشوفه
   // في «تفاصيل الحفر لكل قطعة» هو بالحرف اللي بيتبعت لبوسطة.
+  //
+  // **القراءة دي بتحصل هنا، وقت الإرسال.** مفيش snapshot متخزّن من الموقع ولا وصف
+  // متكاش من إرسال سابق: أي تعديل اتحفظ قبل الضغطة دي بيبقى موجود في الـpayload.
   const bostaItems = await getOrderItems(orderId);
-  let bostaDescription = order.productName || "أساور نحاسية";
-  let bostaItemsCount = order.quantity ?? 1;
-  if (bostaItems.length > 0) {
-    bostaDescription = bostaItems
-      .map(it => {
-        const variant = (it.variantName ?? "").trim();
-        const name = variant ? `${it.productName} - ${variant}` : it.productName;
-        return `${name} ×${it.quantity}`;
-      })
-      .join("، ");
-    const sumQty = bostaItems.reduce((s, it) => s + (it.quantity || 0), 0);
-    if (sumQty > 0) bostaItemsCount = sumQty;
-  }
-  // بوسطة بترفض الوصف الطويل. القص بيسيب أول البنود كاملة وبيقول إن فيه باقي، بدل ما
-  // الشحنة كلها تترفض — والعدد فوق لسه بيقول القطع كام.
-  const DESCRIPTION_LIMIT = 480;
-  if (bostaDescription.length > DESCRIPTION_LIMIT) {
-    bostaDescription = `${bostaDescription.slice(0, DESCRIPTION_LIMIT - 12).trimEnd()}… وغيرها`;
-  }
+  const { description: bostaDescription, itemsCount: bostaItemsCount } =
+    buildShipmentContents(
+      bostaItems.map(it => ({
+        productName: it.productName,
+        variantName: it.variantName,
+        quantity: it.quantity,
+        size: it.size,
+        color: it.color,
+      })),
+      { productName: order.productName, quantity: order.quantity }
+    );
 
   const payload: Record<string, unknown> = {
     type: DELIVERY_TYPE,

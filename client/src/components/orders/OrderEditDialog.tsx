@@ -94,6 +94,13 @@ type Props = {
   footerSlot?: React.ReactNode;
   /** Hidden for roles with no business seeing internal notes. */
   showEmployeeNotes?: boolean;
+  /**
+   * البنود للعرض بس.
+   *
+   * `editOrderItems` على السيرفر للمدير، و«مساحة العمل» مفتوحة لأي حساب مسجّل. بدل ما
+   * الموظف يعدّل ويستنى وياخد «غير مصرح» بعد ما يكتب، الشاشة بتقول من الأول مين يقدر.
+   */
+  allowItemsEdit?: boolean;
 };
 
 /**
@@ -122,7 +129,7 @@ export function OrderEditDialog({
   open, onOpenChange, order, items, itemsLoading = false, itemsError = null,
   products, variants, configuredGovernorates, governoratesLoading = false,
   governoratesError = false, saving = false, onSave, footerSlot,
-  showEmployeeNotes = true,
+  showEmployeeNotes = true, allowItemsEdit = true,
 }: Props) {
   const [header, setHeader] = useState<OrderEditHeader>(EMPTY_HEADER);
   const [baseline, setBaseline] = useState("");
@@ -384,8 +391,13 @@ export function OrderEditDialog({
                 onShippingFeesChange={v => { setShippingFees(v); setLinesDirty(true); }}
                 derivedFromHeader={items?.derivedFromHeader ?? false}
                 isLoading={itemsLoading && lines.length === 0}
-                disabled={saving}
+                disabled={saving || !allowItemsEdit}
               />
+              {!allowItemsEdit && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  تعديل الأصناف وأنواع الحفر متاح للمدير — بيانات العميل تحت تقدر تعدّلها.
+                </p>
+              )}
             </section>
 
             <section className="rounded-lg border border-[var(--warning)]/30 bg-[var(--warning)]/10 p-3">
