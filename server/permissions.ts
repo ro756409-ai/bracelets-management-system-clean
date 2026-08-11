@@ -17,6 +17,17 @@ export const ALL_PERMISSIONS = [
   "orders.view",
   "orders.create",
   "orders.update",
+  // تعديل **محتوى** الأوردر — الأصناف وأنواع الحفر والكميات: إضافة قطعة، حذف قطعة،
+  // تغيير المنتج أو الـvariant.
+  //
+  // مفصولة عن `orders.update` عن قصد. `orders.update` هي تعديل بيانات العميل: الاسم،
+  // التليفون، العنوان، المحافظة، الملاحظات. اللي جوه الصندوق مسؤولية تانية خالص —
+  // بيحرّك مخزون، وبيغيّر اللي بيتبعت لبوسطة، وبيتطبع على البوليصة. الفصل بيخلّي
+  // المالك يدّي موظف حق تصحيح عنوان من غير حق يغيّر الطلب نفسه.
+  //
+  // الأدوار اللي بتأكد الأوردرات (`order_confirmation` و`agent`) واخداها افتراضيًا،
+  // لأن ده شغلها اليومي: العميل بيتكلم في التليفون ويغيّر النقش أو يزوّد قطعة.
+  "orders.edit_items",
   "orders.confirm",
   "orders.cancel",
   "orders.export",
@@ -128,8 +139,8 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     "accounting.create", "treasury.transfer", "settlements.create",
   ],
   viewer: ["dashboard.view", "orders.view"],
-  order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update"],
-  agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update"],
+  order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items"],
+  agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items"],
   data_entry: ["orders.view", "orders.create"],
   facebook_entry: ["orders.view", "orders.create"],
   shipping: ["orders.view", "orders.export", "shipping_ops.view"],

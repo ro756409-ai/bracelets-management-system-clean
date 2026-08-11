@@ -63,6 +63,7 @@ import { orders as ordersTable } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
 import {
   ALL_PERMISSIONS,
+  hasTenantPermission,
   isAdminTierRole,
   isOwnerRole,
   hasPermission,
@@ -400,6 +401,8 @@ import {
   getBusinessIdsByGroupId,
   getActiveBusinessGroups,
   editOrderFull,
+  resolveOrderReviewProduct,
+  orderContentChangedAfterShipmentCreation,
   getOrderEditLogs,
   logOrderEdit,
   getAccountingDashboard,
@@ -553,6 +556,24 @@ async function requireActor(ctx: any): Promise<{ id: number; name: string }> {
       message: "تعذر تحديد منفذ العملية",
     });
   return { id, name: actor.name ?? "غير معروف" };
+}
+
+/**
+ * مين بيعدّل محتوى الأوردر — بيشتغل على الجلستين.
+ *
+ * `orders.editOrderItems` بقت `permissionProcedure`، يعني موظف بصلاحية `orders.edit_items`
+ * يقدر يوصلها بكوكي الموظف من غير حساب مالك — وساعتها `ctx.user` بيبقى null. السجل لازم
+ * يقول اسم الشخص ودوره الحقيقي، مش «Admin» على طول؛ سجل تدقيق بيسمّي الكل بنفس الاسم
+ * مش سجل تدقيق.
+ */
+function resolveOrderEditor(ctx: any): { id: number; name: string; role: string } {
+  const emp = ctx.employee;
+  if (emp) return { id: emp.id, name: emp.name, role: emp.role };
+  return {
+    id: ctx.user?.id ?? 0,
+    name: ctx.user?.name ?? "مدير",
+    role: ctx.user?.role ?? "admin",
+  };
 }
 
 async function assertLegacyInventoryMutationAllowed(businessId: number) {
@@ -1820,6 +1841,30 @@ export const appRouter = router({
   }),
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
+
+    /**
+     * صلاحيات الجلسة الحالية — نفس المصدر اللي السيرفر بيحكم بيه.
+     *
+     * الواجهة لازم تقرا من هنا مش تعيد استنتاج الأدوار بنفسها: لو الشاشة بتحسب
+     * «ده مدير يعني يقدر» والسيرفر بيحسب حاجة تانية، الاتنين بيفرقوا في يوم من الأيام
+     * والمستخدم بيشوف زرار بيرجّع «غير مصرح».
+     *
+     * `publicProcedure` عشان الجلسة الغريبة تاخد قايمة فاضية بدل ما الشاشة تكسر —
+     * والقايمة الفاضية معناها «مايقدرش يعمل حاجة»، وده الافتراض الصح.
+     */
+    myPermissions: publicProcedure.query(async ({ ctx }) => {
+      if (ctx.user?.role === "admin") return [...ALL_PERMISSIONS];
+      const role = ctx.employee?.role;
+      if (!role || ctx.tenantId == null) return [];
+      const granted = await Promise.all(
+        ALL_PERMISSIONS.map(async permission =>
+          (await hasTenantPermission(ctx.tenantId!, role, permission))
+            ? permission
+            : null
+        )
+      );
+      return granted.filter((p): p is (typeof ALL_PERMISSIONS)[number] => p !== null);
+    }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
@@ -2279,7 +2324,11 @@ export const appRouter = router({
         if (!order) return order;
         await requireScopedBusinessId(ctx.tenantId, order.businessId);
         const items = await getOrderItems(input.id);
-        return { ...order, items };
+        // الشاشة لازم تعرف إن اللي بتوريه اتغيّر بعد ما بوسطة أخدت نسختها — من غير
+        // كده الأوردر بيبان مظبوط جوّه، وبوسطة عندها حاجة تانية، ومحدش يعرف.
+        const contentChangedAfterShipment =
+          await orderContentChangedAfterShipmentCreation(input.id);
+        return { ...order, items, contentChangedAfterShipment };
       }),
 
     /** Header stat cards on the Orders page — same business-group scope as `orders.list`. */
@@ -2545,13 +2594,13 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الأوردر غير موجود",
           });
-        await updateOrder(input.orderId, {
+        // بيكتب الهيدر والبنود مع بعض في transaction واحدة — البنود هي المصدر اللي
+        // بوسطة بتقرا منه، فتعيين المنتج في الهيدر لوحده كان بيسيبها على الاسم الخام.
+        await resolveOrderReviewProduct(input.orderId, {
           productId: input.productId,
           variantId: input.variantId ?? null,
-          ...(input.productName ? { productName: input.productName } : {}),
-          needsReview: false,
-          reviewReason: null,
-        } as any);
+          productName: input.productName,
+        });
         await addActivityLog({
           action: "resolve_order_review",
           entityType: "order",
@@ -2786,7 +2835,18 @@ export const appRouter = router({
         };
       }),
 
-    editOrderItems: adminProcedure
+    /*
+      محتوى الأوردر ورا صلاحية واحدة: `orders.edit_items`.
+
+      `permissionProcedure` هو الحارس الموجود أصلاً في المشروع، وبيعمل تلات حاجات في
+      مكان واحد — بيقبل الجلستين (حساب المالك وكوكي الموظف)، بيسمح للمالك/الأدمن
+      تلقائيًا، وبيقرا override الـtenant من `tenant_role_permissions` فالمالك يقدر
+      يمنح أو يمنع من غير Deploy. فمفيش نظام صلاحيات موازي هنا.
+
+      الحارس ده على السيرفر مش في الواجهة: نداء مباشر للـendpoint من غير الصلاحية
+      بيترفض بنفس الشكل.
+    */
+    editOrderItems: permissionProcedure("orders.edit_items")
       .input(
         z.object({
           orderId: z.number(),
@@ -2812,7 +2872,7 @@ export const appRouter = router({
         const order = await getOrderById(input.orderId);
         if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
         await requireScopedBusinessId(ctx.tenantId, order.businessId);
-        const actingEmpId = await resolveActingEmployeeId(ctx);
+        const editor = resolveOrderEditor(ctx);
         const result = await replaceOrderItemsFromEditor(
           input.orderId,
           input.items.map(i => ({
@@ -2826,17 +2886,21 @@ export const appRouter = router({
             color: i.color ?? null,
           })),
           input.shippingFees,
-          { id: actingEmpId ?? 0, name: ctx.user.name || "Admin", role: "admin" }
+          editor
         );
         await addActivityLog({
           action: "edit_order_items",
           entityType: "order",
           entityId: input.orderId,
           description: `تعديل بنود أوردر #${input.orderId} — ${result.itemCount} بند، إجمالي ${result.totalAmount}`,
-          metadata: { itemCount: result.itemCount, totalAmount: result.totalAmount },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
+          metadata: {
+            orderId: input.orderId,
+            itemCount: result.itemCount,
+            totalAmount: result.totalAmount,
+          },
+          performedBy: editor.id,
+          performedByName: editor.name,
+          performedByRole: editor.role,
         });
         return { success: true, ...result };
       }),
@@ -2908,7 +2972,12 @@ export const appRouter = router({
           });
         const newOrderNumber = await generateOrderNumber();
         const actingEmpId = await resolveActingEmployeeId(ctx);
-        await createOrder({
+        // البنود بتتنسخ مع الأوردر. من غير كده الأوردر المكرّر كان بيطلع بهيدر بس،
+        // فأوردر فيه تلات نقوش مختلفة بيتكرّر من غير أي نقش — وبوسطة بتستلم سطر
+        // مجمّع مكان القطع.
+        const originalItems = await getOrderItems(input.orderId);
+        await createOrderWithItems(
+          {
           orderNumber: newOrderNumber,
           businessId: originalOrder.businessId,
           customerName: originalOrder.customerName,
@@ -2930,7 +2999,30 @@ export const appRouter = router({
           pageName: originalOrder.pageName,
           adName: originalOrder.adName,
           lastUpdatedBy: actingEmpId,
-        });
+          } as any,
+          originalItems.length > 0
+            ? originalItems.map(item => ({
+                productId: item.productId ?? undefined,
+                productName: item.productName,
+                variantId: item.variantId ?? undefined,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice != null ? Number(item.unitPrice) : undefined,
+                size: item.size ?? undefined,
+                color: item.color ?? undefined,
+              }))
+            : [
+                // أوردر قديم مالوش بنود — الهيدر بيتحوّل لبند واحد، فالنسخة الجديدة
+                // تبدأ بمصدر حقيقة واحد بدل ما تورّث الفراغ.
+                {
+                  productId: originalOrder.productId ?? undefined,
+                  productName: originalOrder.productName,
+                  variantId: originalOrder.variantId ?? undefined,
+                  quantity: originalOrder.quantity ?? 1,
+                  size: originalOrder.size ?? undefined,
+                  color: originalOrder.color ?? undefined,
+                },
+              ]
+        );
         await addActivityLog({
           action: "duplicate_order",
           entityType: "order",
@@ -3634,7 +3726,8 @@ export const appRouter = router({
         };
       }),
 
-    editOrderItems: requireEmployeePermission("orders.update")
+    /* نفس الصلاحية بالظبط اللي على مسار المالك — قاعدة واحدة مش اتنين. */
+    editOrderItems: permissionProcedure("orders.edit_items")
       .input(
         z.object({
           orderId: z.number(),
@@ -3683,10 +3776,14 @@ export const appRouter = router({
           entityType: "order",
           entityId: input.orderId,
           description: `تعديل بنود أوردر #${input.orderId} — ${result.itemCount} بند، إجمالي ${result.totalAmount}`,
-          metadata: { itemCount: result.itemCount, totalAmount: result.totalAmount },
+          metadata: {
+            orderId: input.orderId,
+            itemCount: result.itemCount,
+            totalAmount: result.totalAmount,
+          },
           performedBy: emp.id,
           performedByName: emp.name,
-          performedByRole: "employee",
+          performedByRole: emp.role,
         });
         return { success: true, ...result };
       }),

@@ -79,11 +79,23 @@ describe("النافذة معزولة عن الشبكة والصلاحيات", (
 });
 
 describe("الحماية على السيرفر فضلت منفصلة", () => {
-  it("🔑 المالك على adminProcedure والموظف على صلاحية + ملكية", () => {
+  /*
+    القراءة فضلت مقسومة زي ما هي — المالك على `adminProcedure`، والموظف على
+    `orders.view` + فحص ملكية.
+
+    الكتابة اتوحّدت على `orders.edit_items`: صلاحية واحدة بتحكم تعديل محتوى الصندوق
+    من المسارين. قبل كده كان المسار الإداري بيسأل «إنت أدمن؟» والمسار التاني بيسأل
+    عن `orders.update` — يعني قاعدتين مختلفتين لنفس الفعل، وواحدة منهم كانت بتخلط
+    تعديل عنوان العميل بتغيير اللي جوه الشحنة.
+  */
+  it("🔑 القراءة مقسومة، والكتابة على صلاحية واحدة", () => {
     expect(compact).toContain("orderItems: adminProcedure");
-    expect(compact).toContain("editOrderItems: adminProcedure");
     expect(compact).toContain('orderItems: requireEmployeePermission("orders.view")');
-    expect(compact).toContain('editOrderItems: requireEmployeePermission("orders.update")');
+    const writeGates = compact.match(/editOrderItems: \w+\("?[\w.]*"?\)/g) ?? [];
+    expect(writeGates).toHaveLength(2);
+    for (const gate of writeGates) {
+      expect(gate).toBe('editOrderItems: permissionProcedure("orders.edit_items")');
+    }
   });
 
   it("🔑 مسار الموظف لسه بيفحص ملكية الأوردر", () => {
