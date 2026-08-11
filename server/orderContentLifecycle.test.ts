@@ -377,9 +377,27 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
       expect(items[0].variantName).toBe("ذكر الرحمن");
 
       // ── STEP 2: الموظف بيغيّر الحفر ───────────────────────────────
-      await replaceOrderItemsFromEditor(
+      //
+      // من خلال الراوتر بجلسة موظف تأكيدات حقيقية — يعني الصلاحية والرحلة بيتختبروا
+      // مع بعض، مش كل واحد لوحده.
+      const { appRouter } = await import("./routers");
+      const employeeCaller = appRouter.createCaller({
+        req: { protocol: "https", headers: {}, cookies: {} },
+        res: { clearCookie: () => {} },
+        user: null,
+        employee: {
+          id: editor.id,
+          name: editor.name,
+          role: "order_confirmation",
+          tenantId: 1,
+          businessId: fixture.businessId,
+          isActive: true,
+        },
+        tenantId: 1,
+      } as any);
+      await employeeCaller.employeePortal.editOrderItems({
         orderId,
-        [
+        items: [
           {
             productId: fixture.productId,
             productName: "أسورة نحاس",
@@ -389,9 +407,8 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
             discount: 0,
           },
         ],
-        0,
-        editor
-      );
+        shippingFees: 0,
+      });
       items = await getOrderItems(orderId);
       expect(items.map(i => i.variantName)).toEqual(["آية الكرسي"]);
 

@@ -53,6 +53,7 @@ import {
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
+import { usePermission } from "@/hooks/usePermission";
 import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
@@ -188,6 +189,7 @@ export default function Orders() {
   // but the two governorate FILTERS on this page read this list directly and were
   // rendering empty for exactly the same reason.
   const { values: GOVERNORATES } = useGovernorateOptions();
+  const canEditItems = usePermission("orders.edit_items");
   const sourceOptions = useOperationalOptions("order_source").options;
   const returnReasonOptions = useOperationalOptions("return_reason").options;
   const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
@@ -1550,6 +1552,7 @@ export default function Orders() {
         saving={editSaving}
         onSave={saveOrderEdit}
         showEmployeeNotes={false}
+        allowItemsEdit={canEditItems}
       />
 
       {/* Return Dialog */}

@@ -19,6 +19,7 @@ import {
   type OrderEditSavePayload,
 } from "@/components/orders/OrderEditDialog";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
+import { usePermission } from "@/hooks/usePermission";
 import { toast } from "sonner";
 import { CheckCircle, XCircle, Clock, Phone, MapPin, Package, Calendar, User, Edit2 } from "lucide-react";
 
@@ -52,6 +53,7 @@ export default function AgentWorkspace() {
   const [postponeDate, setPostponeDate] = useState("");
   const [postponeNotes, setPostponeNotes] = useState("");
   const { values: GOVERNORATES } = useGovernorateOptions();
+  const canEditItems = usePermission("orders.edit_items");
 
   // تاريخ التوزيع - افتراضياً اليوم
   const todayCairo = useMemo(() => {
@@ -415,7 +417,7 @@ export default function AgentWorkspace() {
         saving={editSaving}
         onSave={saveOrderEdit}
         showEmployeeNotes={false}
-        allowItemsEdit={user?.role === "admin"}
+        allowItemsEdit={canEditItems}
       />
 
       {/* Cancel Dialog */}

@@ -13,6 +13,7 @@ import {
   type OrderEditSavePayload,
 } from "@/components/orders/OrderEditDialog";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
+import { usePermission } from "@/hooks/usePermission";
 import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { toast } from "sonner";
 
@@ -64,6 +65,7 @@ export default function OrderDetails() {
   const [showItemsEditor, setShowItemsEditor] = useState(false);
   const [editData, setEditData] = useState<any>({});
   const { values: GOVERNORATES } = useGovernorateOptions();
+  const canEditItems = usePermission("orders.edit_items");
 
   const { data: order, isLoading, refetch } = trpc.orders.get.useQuery(
     { id: orderId },
@@ -595,6 +597,7 @@ export default function OrderDetails() {
         configuredGovernorates={GOVERNORATES}
         saving={editItemsMutation.isPending || editMutation.isPending}
         onSave={saveItemsEdit}
+        allowItemsEdit={canEditItems}
       />
     </div>
   );

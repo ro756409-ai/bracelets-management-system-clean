@@ -159,8 +159,10 @@ describe("حواجز الملكية", () => {
 
 describe("كتابة بنود الأوردر", () => {
   it("🔑 البنود بتتكتب في order_items مش في الملاحظات", () => {
+    // الصلاحية بقت `orders.edit_items` — مفصولة عن `orders.update` (بيانات العميل)
+    // لأن تغيير اللي جوه الصندوق بيحرّك مخزون وبيوصل بوسطة والبوليصة.
     expect(compactRouters).toContain(
-      'editOrderItems: requireEmployeePermission("orders.update")'
+      'editOrderItems: permissionProcedure("orders.edit_items")'
     );
     expect(db).toContain("export async function replaceOrderItemsFromEditor");
     expect(db).toContain("await tx.insert(orderItems).values(");
