@@ -1612,85 +1612,81 @@ export async function confirmOrder(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [order] = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.id, orderId))
-    .limit(1);
-  if (!order) throw new Error("Order not found");
-  if (order.businessId == null)
-    throw new Error(
-      "Order has no Business and cannot enter accounting workflow"
-    );
-  const [business] = await db
-    .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
-    .from(businesses)
-    .where(eq(businesses.id, order.businessId))
-    .limit(1);
-  const accountingInventoryActive = Boolean(business?.accountingGoLiveAt);
-
-  if (order.status === "confirmed") return;
-
-  const missingFields: string[] = [];
-  if (
-    !order.governorate ||
-    order.governorate.trim() === "" ||
-    order.governorate.trim() === "غير محدد"
-  ) {
-    missingFields.push("اسم المحافظة");
-  }
-  if (!order.customerAddress || order.customerAddress.trim().length < 5) {
-    missingFields.push("العنوان بالتفصيل");
-  }
-  if (missingFields.length > 0) {
-    throw new Error(
-      `لا يمكن تأكيد الأوردر - بيانات ناقصة: ${missingFields.join(" و ")}`
-    );
-  }
-
-  const qty = order.quantity ?? 1;
-  if (!accountingInventoryActive && order.productId) {
-    const [product] = await db
+  // تأكيد ذرّي: القفل والحالة والخصم كلهم في transaction واحدة.
+  //
+  // كان الفحص `status === "confirmed"` بيتعمل قبل أي قفل، فتأكيدين متزامنين لنفس
+  // الأوردر كانوا يعدّوا الاتنين ويخصموا المخزون **مرتين**. القفل `for update` على صف
+  // الأوردر بيخلّيهم يتسلسلوا: الأول بيأكّد ويخصم، والتاني بيستنى، بيقرا الحالة
+  // "confirmed"، وبيرجع من غير خصم تاني.
+  return db.transaction(async tx => {
+    const [order] = await tx
       .select()
-      .from(products)
-      .where(eq(products.id, order.productId))
-      .limit(1);
-    if (product && product.currentStock < qty) {
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!order) throw new Error("Order not found");
+    if (order.businessId == null)
       throw new Error(
-        `لا يمكن تأكيد الأوردر - المخزون غير كافي (المتاح: ${product.currentStock}، المطلوب: ${qty})`
+        "Order has no Business and cannot enter accounting workflow"
+      );
+    const [business] = await tx
+      .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
+      .from(businesses)
+      .where(eq(businesses.id, order.businessId))
+      .limit(1);
+    const accountingInventoryActive = Boolean(business?.accountingGoLiveAt);
+
+    // خصم واحد لكل أوردر — التأكيد المتزامن التاني بيرجع من هنا.
+    if (order.status === "confirmed") return;
+
+    const missingFields: string[] = [];
+    if (
+      !order.governorate ||
+      order.governorate.trim() === "" ||
+      order.governorate.trim() === "غير محدد"
+    ) {
+      missingFields.push("اسم المحافظة");
+    }
+    if (!order.customerAddress || order.customerAddress.trim().length < 5) {
+      missingFields.push("العنوان بالتفصيل");
+    }
+    if (missingFields.length > 0) {
+      throw new Error(
+        `لا يمكن تأكيد الأوردر - بيانات ناقصة: ${missingFields.join(" و ")}`
       );
     }
-  }
 
-  await db
-    .update(orders)
-    .set({
-      status: "confirmed",
-      confirmedAt: new Date(),
-      lastUpdatedBy: updatedBy,
-      // Preserve whatever confirmation record already exists (e.g. a legacy-imported
-      // order) rather than overwriting it — this function only ever runs once per order
-      // anyway (guarded by the early return above), but keep the intent explicit.
-      ...(order.confirmedByEmployeeId == null && updatedBy
-        ? {
-            confirmedByEmployeeId: updatedBy,
-            confirmedByEmployeeName: confirmedByName ?? null,
-          }
-        : {}),
-    })
-    .where(eq(orders.id, orderId));
+    const qty = order.quantity ?? 1;
 
-  if (!accountingInventoryActive && order.productId) {
-    await addInventoryMovement({
-      productId: order.productId,
-      type: "out",
-      quantity: qty,
-      reason: `تأكيد أوردر ${order.orderNumber}`,
-      orderId: order.id,
-      performedBy: updatedBy,
-      businessId: order.businessId,
-    });
-  }
+    await tx
+      .update(orders)
+      .set({
+        status: "confirmed",
+        confirmedAt: new Date(),
+        lastUpdatedBy: updatedBy,
+        ...(order.confirmedByEmployeeId == null && updatedBy
+          ? {
+              confirmedByEmployeeId: updatedBy,
+              confirmedByEmployeeName: confirmedByName ?? null,
+            }
+          : {}),
+      })
+      .where(eq(orders.id, orderId));
+
+    // فحص المخزون والخصم بقوا جوّه الحركة الذرّية (قفل صف المنتج + فحص + خصم).
+    if (!accountingInventoryActive && order.productId) {
+      await addInventoryMovementInTransaction(tx, {
+        productId: order.productId,
+        type: "out",
+        quantity: qty,
+        reason: `تأكيد أوردر ${order.orderNumber}`,
+        orderId: order.id,
+        performedBy: updatedBy,
+        businessId: order.businessId,
+      });
+    }
+  });
 }
 
 export async function postponeOrder(
@@ -2083,13 +2079,31 @@ export async function editOrderWithInventory(
 }
 
 // ==================== INVENTORY ====================
-export async function addInventoryMovement(data: InsertInventoryMovement) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const product = await getProductById(data.productId);
+/**
+ * حركة مخزون قديمة — **ذرّية**: السجل (`inventory_movements`) والرصيد المخزّن
+ * (`products.currentStock`) بيتكتبوا مع بعض في transaction واحدة، أو ولا واحد.
+ *
+ * كانوا سطرين منفصلين، فـcrash بينهم كان بيسيب الرصيد ≠ مجموع الحركات. وفحص «المخزون
+ * كافي؟» كان بيقرا من غير قفل، فطلبين «out» متزامنين كانوا يعدّوا الاتنين ويطلّعوا رصيد
+ * سالب. القفل `for update` على صف المنتج بيخلّي أي حركتين على نفس المنتج يتسلسلوا:
+ * التاني بيستنى، بيقرا الرصيد بعد الأول، وبيتفحص على القيمة الصح.
+ *
+ * الدالة دي **بتفترض إنها جوّه transaction** — للنداءات اللي بتحرّك الحالة والمخزون مع
+ * بعض (تأكيد، مرتجع). النسخة الـstandalone تحتها بتلفّها في transaction لوحدها.
+ */
+export async function addInventoryMovementInTransaction(
+  tx: any,
+  data: InsertInventoryMovement
+) {
+  const [product] = await tx
+    .select()
+    .from(products)
+    .where(eq(products.id, data.productId))
+    .limit(1)
+    .for("update");
   if (!product) throw new Error("المنتج غير موجود");
   const movementBusinessId = data.businessId ?? product.businessId;
-  const [business] = await db
+  const [business] = await tx
     .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
     .from(businesses)
     .where(eq(businesses.id, movementBusinessId))
@@ -2098,16 +2112,23 @@ export async function addInventoryMovement(data: InsertInventoryMovement) {
     throw new Error(
       "بعد Go-Live استخدم Purchase Receipt أو Reservation/Dispatch بدل الحركة اليدوية"
     );
-  if (data.type === "out") {
-    if (data.quantity > product.currentStock) {
-      throw new Error(
-        `الكمية الصادرة (${data.quantity}) أكبر من المخزون الحالي (${product.currentStock})`
-      );
-    }
+  if (data.type === "out" && data.quantity > product.currentStock) {
+    throw new Error(
+      `الكمية الصادرة (${data.quantity}) أكبر من المخزون الحالي (${product.currentStock})`
+    );
   }
-  await db.insert(inventoryMovements).values(data);
+  await tx.insert(inventoryMovements).values(data);
   const delta = data.type === "in" ? data.quantity : -data.quantity;
-  await updateProductStock(data.productId, delta);
+  await tx
+    .update(products)
+    .set({ currentStock: sql`${products.currentStock} + ${delta}` })
+    .where(eq(products.id, data.productId));
+}
+
+export async function addInventoryMovement(data: InsertInventoryMovement) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(tx => addInventoryMovementInTransaction(tx, data));
 }
 
 export async function getInventoryMovements(
@@ -2232,70 +2253,78 @@ export async function markOrderAsReturned(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const orderRows = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.id, orderId))
-    .limit(1);
-  if (orderRows.length === 0) throw new Error("الأوردر غير موجود");
-  const order = orderRows[0];
-  if (order.businessId == null)
-    throw new Error("Order has no Business and cannot be returned");
-  const [returnBusiness] = await db
-    .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
-    .from(businesses)
-    .where(eq(businesses.id, order.businessId))
-    .limit(1);
-  if (returnBusiness?.accountingGoLiveAt)
-    throw new Error(
-      "بعد Go-Live سجل Returned أو Partial Return من المصدر الرسمي ثم نفّذ الفحص"
-    );
+  // مرتجع ذرّي: قفل صف الأوردر، فحص الحالة، عكس المخزون، وسجل المرتجع — كلهم مع بعض.
+  //
+  // مرتجعين متزامنين لنفس الأوردر كانوا يقروا الاتنين `status="delivered"`، يعدّوا
+  // الفحص، ويرجّعوا المخزون **مرتين**. القفل بيسلسلهم: الأول بيرجّع، والتاني بيلاقي
+  // الحالة "returned" (مش في المسموح) وبيترفض من غير stock-in تاني.
+  return db.transaction(async tx => {
+    const [order] = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!order) throw new Error("الأوردر غير موجود");
+    if (order.businessId == null)
+      throw new Error("Order has no Business and cannot be returned");
+    const [returnBusiness] = await tx
+      .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
+      .from(businesses)
+      .where(eq(businesses.id, order.businessId))
+      .limit(1);
+    if (returnBusiness?.accountingGoLiveAt)
+      throw new Error(
+        "بعد Go-Live سجل Returned أو Partial Return من المصدر الرسمي ثم نفّذ الفحص"
+      );
 
-  const allowedStatuses = ["confirmed", "shipped", "delivered", "preparing"];
-  if (!allowedStatuses.includes(order.status)) {
-    throw new Error(`لا يمكن إرجاع أوردر بحالة: ${order.status}`);
-  }
+    // نفس فحص الحالة هو حارس الازدواج — بعد أول مرتجع الحالة "returned" مش في المسموح.
+    const allowedStatuses = ["confirmed", "shipped", "delivered", "preparing"];
+    if (!allowedStatuses.includes(order.status)) {
+      throw new Error(`لا يمكن إرجاع أوردر بحالة: ${order.status}`);
+    }
 
-  await db
-    .update(orders)
-    .set({ status: "returned", lastUpdatedBy: processedBy })
-    .where(eq(orders.id, orderId));
+    await tx
+      .update(orders)
+      .set({ status: "returned", lastUpdatedBy: processedBy })
+      .where(eq(orders.id, orderId));
 
-  // Only restore stock when a product was actually resolved for this order.
-  if (restoreStock && order.productId != null) {
-    await addInventoryMovement({
-      productId: order.productId,
-      type: "in",
-      quantity: order.quantity,
-      reason: `مرتجع - أوردر ${order.orderNumber}`,
+    // عكس المخزون بس لو المنتج متحدد — والحركة نفسها ذرّية جوّه نفس الـtx.
+    if (restoreStock && order.productId != null) {
+      await addInventoryMovementInTransaction(tx, {
+        productId: order.productId,
+        type: "in",
+        quantity: order.quantity,
+        reason: `مرتجع - أوردر ${order.orderNumber}`,
+        orderId: order.id,
+        performedBy: processedBy,
+        businessId: order.businessId,
+      });
+    }
+
+    await tx.insert(returnsTable).values({
       orderId: order.id,
-      performedBy: processedBy,
+      orderNumber: order.orderNumber,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      governorate: order.governorate,
+      productId: order.productId,
+      productName: order.productName,
+      quantity: order.quantity,
+      totalAmount: order.totalAmount,
+      returnReason,
+      notes: notes ?? null,
+      stockRestored: restoreStock,
+      processedBy,
       businessId: order.businessId,
     });
-  }
 
-  await db.insert(returnsTable).values({
-    orderId: order.id,
-    orderNumber: order.orderNumber,
-    customerName: order.customerName,
-    customerPhone: order.customerPhone,
-    governorate: order.governorate,
-    productId: order.productId,
-    productName: order.productName,
-    quantity: order.quantity,
-    totalAmount: order.totalAmount,
-    returnReason,
-    notes: notes ?? null,
-    stockRestored: restoreStock,
-    processedBy,
-    businessId: order.businessId,
+    return {
+      success: true,
+      orderNumber: order.orderNumber,
+      stockRestored: restoreStock,
+    };
   });
-
-  return {
-    success: true,
-    orderNumber: order.orderNumber,
-    stockRestored: restoreStock,
-  };
 }
 
 export async function getReturnsList(
@@ -3416,8 +3445,9 @@ export async function editOrderFull(
     const newQty = orderUpdates.quantity;
     const diff = newQty - oldQty;
     if (diff !== 0) {
-      // Deduct additional from stock if increased, restore if decreased
-      await updateProductStock(productId, -diff);
+      // خصم الفرق (زيادة) أو رده (نقص). `addInventoryMovement` بيحرّك الرصيد بنفسه،
+      // فالنداء المنفصل لـ`updateProductStock` كان بيطبّق الفرق **مرتين** — drift على
+      // كل تعديل كمية. اتشال؛ الحركة الذرّية هي اللي بتحرّك الرصيد.
       await addInventoryMovement({
         businessId: currentOrder.businessId,
         productId,

@@ -16,8 +16,24 @@ import {
   SHIPMENT_STALE_WARNING,
 } from "../shared/orderContent";
 import { orders } from "../drizzle/schema";
-import { eq, and, isNotNull, ne, inArray } from "drizzle-orm";
+import { eq, and, isNotNull, isNull, ne, inArray, notInArray, or } from "drizzle-orm";
 import { requireAdminOrManager } from "./authMiddleware";
+
+/**
+ * حالات إنشاء الشحنة على `orders.bostaStatus`.
+ *
+ * `bostaStatus` عمود نص حر (varchar) — بيخزّن حالات التسليم العربية من الـwebhook
+ * بعد الإرسال. قبل الإرسال بيمرّ بالحالات دي، فمفيش migration.
+ *
+ *   creating   ← اتحجز للإنشاء، والنداء بيكلّم بوسطة دلوقتي
+ *   uncertain  ← النداء وقع بعد ما بوسطة **ممكن** تكون أنشأت الشحنة — retry أعمى ممنوع
+ *   sent       ← اتأكد الإنشاء ومعاه shipmentId
+ *   failed     ← بوسطة رفضت الطلب (مفيش شحنة اتعملت) — retry آمن
+ */
+const BOSTA_CREATING = "creating";
+const BOSTA_UNCERTAIN = "uncertain";
+const UNCERTAIN_MESSAGE =
+  "حالة إنشاء الشحنة غير مؤكدة — راجع بوسطة قبل إعادة المحاولة عشان ما تتعملش شحنة تانية";
 
 // Clean up any accidental "KEY=value" format from env
 const BOSTA_BASE_URL = (process.env.BOSTA_BASE_URL || "https://app.bosta.co/api/v0")
@@ -225,6 +241,15 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
     };
   }
 
+  // حالة غير مؤكدة من محاولة سابقة — retry أعمى ممنوع لأنه ممكن يكرّر الشحنة.
+  //
+  // بوسطة أنشأت الشحنة، بس الاتصال وقع قبل ما نحفظ الـshipmentId. مفيش عندنا مسار
+  // lookup-by-reference متأكد منه، فمانقدرش نأكّد exactly-once — بنوقف ونطلب مراجعة
+  // بشرية بدل ما نبعت تاني على الأعمى.
+  if (order.bostaStatus === BOSTA_UNCERTAIN || order.bostaStatus === BOSTA_CREATING) {
+    return { success: false, error: UNCERTAIN_MESSAGE };
+  }
+
   // تحذير (ليس منع): إذا كان نفس رقم التليفون له شحنة بوسطة في أوردر آخر
   // يسمح بإرسال أوردرات متعددة لنفس العميل مع تسجيل تنبيه للمراجعة
   let duplicatePhoneWarning: string | undefined;
@@ -337,6 +362,37 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
     };
   }
 
+  // الحجز الذرّي — أهم سطر في الحماية من الشحنة المزدوجة.
+  //
+  // UPDATE واحد بشرط: النقل لـ"creating" بينجح **مرة واحدة** لأوردر لسه ماتشحنش. الطلب
+  // التاني المتزامن (ضغطة تانية، أو bulk متداخل مع فردي) بيلاقي الصف اتقفل وبقى
+  // "creating" فبيطابق صفر صفوف — فمابيكلّمش بوسطة. مفيش transaction مفتوح على نداء
+  // الشبكة؛ القفل لحظي على مستوى الصف في MySQL وقت الـUPDATE بس.
+  const claim = await db.update(orders)
+    .set({ bostaStatus: BOSTA_CREATING })
+    .where(and(
+      eq(orders.id, orderId),
+      isNull(orders.bostaShipmentId),
+      or(
+        isNull(orders.bostaStatus),
+        notInArray(orders.bostaStatus, [BOSTA_CREATING, BOSTA_UNCERTAIN])
+      )
+    ));
+  const claimed = Number((claim as any)?.[0]?.affectedRows ?? (claim as any)?.affectedRows ?? 0);
+  if (claimed !== 1) {
+    // طلب تاني كسب الحجز، أو الأوردر بقى uncertain في اللحظة دي. نعيد القراءة عشان
+    // نرجّع الرسالة الصح: لو اتشحن فعلًا نرجّع الشحنة، غير كده «تحت الإنشاء/غير مؤكد».
+    const [fresh] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (fresh?.bostaShipmentId) {
+      return {
+        success: true,
+        shipmentId: fresh.bostaShipmentId,
+        trackingNumber: fresh.bostaTrackingNumber ?? undefined,
+      };
+    }
+    return { success: false, error: UNCERTAIN_MESSAGE };
+  }
+
   // Log request (without API key)
   console.log("[Bosta] Sending shipment:", JSON.stringify({
     orderId,
@@ -381,13 +437,16 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
       return { success: false, error: errMsg };
     }
   } catch (err: unknown) {
+    // الحالة الأخطر: النداء وقع بعد ما بوسطة **ممكن** تكون أنشأت الشحنة (timeout بين
+    // C وD). "failed" هنا كان بيغري بـretry أعمى يعمل شحنة تانية — فبنحطّها "uncertain"
+    // بدلها. الطلب الجاي بيترفض لحد ما التاجر يراجع بوسطة يدويًا.
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.error("[Bosta] Error:", errMsg);
+    console.error("[Bosta] Error (uncertain):", errMsg);
     await db!.update(orders).set({
-      bostaLastError: errMsg,
-      bostaStatus: "failed",
+      bostaLastError: `${UNCERTAIN_MESSAGE} — ${errMsg}`,
+      bostaStatus: BOSTA_UNCERTAIN,
     }).where(eq(orders.id, orderId));
-    return { success: false, error: errMsg };
+    return { success: false, error: UNCERTAIN_MESSAGE };
   }
 }
 
