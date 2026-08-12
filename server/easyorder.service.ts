@@ -384,13 +384,20 @@ export async function upsertEasyOrder(
     websiteId: opts.channelId ?? null,
   };
 
+  // اسم البند = اسم المنتج لوحده. نوع الحفر بيتخزّن في `variantId` وبس.
+  //
+  // كان بيتلزق جوه الاسم كمان («أسورة نحاس - ذكر التحصين»)، فالبند بيبقى فيه نسختين
+  // من نفس المعلومة. الموظف بيغيّر النوع لـ«سادة»، المعرّف بيتغيّر والاسم بيفضل، وأي
+  // شاشة بتركّب الاتنين بتطلع «أسورة نحاس - ذكر التحصين - سادة» — القديم والجديد مع
+  // بعض. الاسم المركّب مكانه العرض (وهيدر الأوردر تحت)، مش الصف اللي بيتعدّل.
+  //
+  // الصنف اللي مااتطابقش مالوش `productId` ولا `variantId`، فبيفضل باسمه الخام —
+  // ده كل اللي جه من الموقع عنه.
   const itemRows = resolved.map((r) => ({
     productId: r.match.matched ? r.match.productId : undefined,
     variantId: r.match.matched ? r.match.variantId : undefined,
     productName: r.match.matched
-      ? r.match.variantName
-        ? `${r.match.productName} - ${r.match.variantName}`
-        : r.match.productName
+      ? r.match.productName
       : r.item.externalName || "صنف غير معروف",
     quantity: r.item.quantity,
     unitPrice: r.item.unitPrice,

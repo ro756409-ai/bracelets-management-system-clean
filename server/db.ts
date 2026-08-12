@@ -3452,6 +3452,47 @@ export async function editOrderFull(
 // ==================== ORDER ITEMS (بنود الأوردر المتعددة) ====================
 
 /**
+ * اسم البند = اسم **المنتج** لوحده. نوع الحفر عمود مستقل (`variantId`).
+ *
+ * العطل اللي الدالة دي بتقفله: الأوردر الجاي من الموقع كان بيتخزّن باسم مركّب —
+ * «أسورة نحاس - ذكر التحصين» — يعني نوع الحفر متلزّق جوه الاسم **وكمان** متسجّل في
+ * `variantId`. الموظف بيغيّر النوع لـ«سادة»، الـ`variantId` بيتغيّر، والاسم بيفضل
+ * زي ما هو. وأي شاشة بتركّب الاتنين بتطلع:
+ *
+ *     أسورة نحاس - ذكر التحصين - سادة
+ *
+ * القديم والجديد مع بعض. مش لأن البند اتضاف مرتين — البند واحد — لكن لأن نسخة قديمة
+ * من الاختيار فضلت عايشة جوه حقل تاني.
+ *
+ * الحل مش إن الواجهة تفتكر تحدّث الاسم لما النوع يتغيّر؛ ده بيتنسي. الحل إن **الكاتب
+ * الوحيد** للبنود يشتق الاسم من المعرّف: طول ما `productId` موجود، الاسم بيتاخد من
+ * الكتالوج ومابيتصدّقش من العميل. كده أي صف قديم مسموم بيتصلّح أول ما الأوردر يتحفظ،
+ * ومفيش مسار جديد يقدر يسمّمه تاني.
+ *
+ * البند اللي مالوش `productId` (صنف مش متطابق جاي من الموقع) بيفضل باسمه الخام —
+ * ده كل اللي عندنا عنه.
+ */
+async function withCatalogProductNames<T extends { productId?: number | null; productName: string }>(
+  tx: any,
+  items: T[]
+): Promise<T[]> {
+  const ids = [...new Set(items.map(item => item.productId).filter((id): id is number => id != null))];
+  if (ids.length === 0) return items;
+  const rows = await tx
+    .select({ id: products.id, name: products.name })
+    .from(products)
+    .where(inArray(products.id, ids));
+  const nameById = new Map<number, string>(
+    rows.map((row: { id: number; name: string }) => [row.id, row.name])
+  );
+  return items.map(item => {
+    const canonical = item.productId != null ? nameById.get(item.productId) : undefined;
+    // المنتج اتمسح من الكتالوج؟ الاسم المحفوظ هو اللي فاضل — أحسن من اسم فاضي.
+    return canonical ? { ...item, productName: canonical } : item;
+  });
+}
+
+/**
  * استبدال بنود أوردر بالكامل (حذف القديم وإضافة الجديد)
  * كل بند: { productId?, productName, quantity, unitPrice? }
  */
@@ -3488,6 +3529,9 @@ async function replaceOrderItemsInTransaction(
     items.some(item => !Number.isInteger(item.quantity) || item.quantity <= 0)
   )
     throw new Error("كمية بند الأوردر غير صالحة");
+
+  // الاسم من الكتالوج مش من المتصل — ده اللي بيمنع نوع حفر قديم يعيش جوه الاسم.
+  items = await withCatalogProductNames(tx, items);
 
   const [business] = await tx
     .select()
@@ -3632,6 +3676,14 @@ export async function replaceOrderItemsFromEditor(
   }
 
   return db.transaction(async tx => {
+    // الاسم من الكتالوج مش من الشاشة.
+    //
+    // الموظف بيغيّر «نوع الحفر» من القايمة، فبيتبعت `variantId` جديد ومعاه نفس الاسم
+    // اللي كان محفوظ. لو الاسم ده كان مركّب من قبل («أسورة نحاس - ذكر التحصين»)،
+    // البند بيبقى فيه اختيارين: القديم في الاسم والجديد في المعرّف. الاشتقاق هنا
+    // بيقفل ده مهما كان اللي المتصل بعته.
+    lines = await withCatalogProductNames(tx, lines);
+
     const [order] = await tx
       .select()
       .from(orders)
