@@ -355,6 +355,14 @@ export async function getCategoriesByBusiness(businessId: number) {
     .orderBy(asc(categories.name));
 }
 
+/** التصنيف بالـid — للتحقق من نطاقه قبل التعديل. */
+export async function getCategoryById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(categories).where(eq(categories.id, id)).limit(1);
+  return row ?? null;
+}
+
 export async function createCategory(data: InsertCategory) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -381,6 +389,14 @@ export async function getWarehousesByBusiness(businessId: number) {
       and(eq(warehouses.businessId, businessId), eq(warehouses.isActive, true))
     )
     .orderBy(asc(warehouses.name));
+}
+
+/** المخزن بالـid — للتحقق من نطاقه قبل التعديل. */
+export async function getWarehouseById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(warehouses).where(eq(warehouses.id, id)).limit(1);
+  return row ?? null;
 }
 
 export async function createWarehouse(data: InsertWarehouse) {

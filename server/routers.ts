@@ -261,6 +261,60 @@ function requireTenantId(emp: { tenantId: number | null }): number {
 }
 
 /**
+ * الموظف ده تابع لنطاقي؟
+ *
+ * الموظف كيان تابع للـtenant (بيتخلق بـ`tenantId: ctx.tenantId`)، فالفحص الأساسي على
+ * الـtenant. لكن الصف القديم اللي `tenantId` بتاعه لسه `null` مايتقفلش في وش صاحبه —
+ * بيتفحص بنطاق نشاطه بدل ما يترفض. الاتنين مع بعض بيقفلوا الشركة التانية من غير ما
+ * يكسروا بيانات قايمة.
+ */
+async function assertEmployeeInScope<
+  T extends { tenantId?: number | null; businessId?: number | null },
+>(tenantId: number, target: T | null | undefined): Promise<T> {
+  if (!target)
+    throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
+  if (target.tenantId != null && target.tenantId !== tenantId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "الموظف ده تابع لحساب تاني",
+    });
+  }
+  // النشاط بيتفحص كمان: صف قديم من غير tenant، أو موظف اتنقل لنشاط برّه النطاق.
+  if (target.businessId != null) {
+    await scopeBusinessId(tenantId, target.businessId);
+  }
+  return target;
+}
+
+/**
+ * السجل ده تابع لنطاقي؟
+ *
+ * الحارس اللي كان ناقص على مسارات التعديل. `scopeBusinessId` بتحمي المدخل اللي جاي من
+ * العميل، لكن التعديل بالـid بيقرا السجل الأول — ونطاق السجل هو اللي لازم يتفحص، مش
+ * اللي العميل بعته. من غير كده أدمن شركة أ يقدر يعدّل صف شركة ب لو عرف رقمه.
+ *
+ * بتعدّي على **نفس** `scopeBusinessId` عشان مايبقاش فيه منطق عزل موازي: قاعدة واحدة،
+ * ورسالة رفض واحدة، ومكان واحد يتغيّر لو القاعدة اتغيّرت.
+ *
+ * السجل اللي `businessId` بتاعه `null` بيترفض: ده صف مش تابع لحد، والتعديل عليه من
+ * جلسة نطاقها محدد قرار مالوش أساس.
+ */
+async function assertRecordInScope(
+  tenantId: number,
+  record: { businessId?: number | null } | null | undefined,
+  notFoundMessage: string
+): Promise<void> {
+  if (!record) throw new TRPCError({ code: "NOT_FOUND", message: notFoundMessage });
+  if (record.businessId == null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "السجل ده مش مربوط بنشاط — مش مسموح تعديله من هنا",
+    });
+  }
+  await scopeBusinessId(tenantId, record.businessId);
+}
+
+/**
  * Multi-tenancy: clamps a client-supplied businessId/businessIds filter to the ids that
  * actually belong to the caller's tenant, so a session can never read another tenant's data
  * just by passing an arbitrary id — the id list must never be trusted as-is from the client.
@@ -272,6 +326,27 @@ function requireTenantId(emp: { tenantId: number | null }): number {
  * case (the request falls through to whatever downstream query will fail with its own clear
  * "Database not available" error) instead of asserting a false FORBIDDEN.
  */
+/**
+ * مُعرّف مستحيل — بيخلي أي فلتر يطابق صفر صفوف.
+ *
+ * كل قرّاء `db.ts` بيتعاملوا مع المصفوفة الفاضية كـ«من غير فلتر» (`businessIds.length > 0`
+ * قبل ما يضيفوا الشرط). يعني جلسة نطاقها **متحقّق وفاضي** — tenant لسه ماتربطش بأي
+ * نشاط — كانت بتشوف **كل** بيانات النظام: أوردرات وخزنة ومخزون وكل حاجة.
+ *
+ * القرّاء ٢٨. تعديلهم واحد واحد معناه ٢٨ فرصة لواحد يتنسي، والنسيان ده هو نفسه اللي
+ * عمل الثغرة. بدل كده النطاق الفاضي بيتحوّل هنا لمُعرّف مستحيل: `inArray(id, [-1])`
+ * بيطابق ولا صف، وكل قارئ بيفضل زي ما هو ويشتغل صح.
+ *
+ * `null` (مش `[]`) لسه معناها «الداتابيز مش متاحة فمقدرش أتحقق» — دي حالة تانية
+ * بالكامل ومتوثّقة في `getBusinessIdsForTenant`.
+ */
+const NO_BUSINESS = -1;
+
+/** النطاق المتحقّق — والفاضي منه بيمنع كل حاجة بدل ما يسمح بكل حاجة. */
+function denyWhenEmpty(allowed: number[]): number[] {
+  return allowed.length > 0 ? allowed : [NO_BUSINESS];
+}
+
 async function scopeBusinessIds(
   tenantId: number,
   requested?: { businessId?: number | null; businessIds?: number[] | null }
@@ -284,9 +359,10 @@ async function scopeBusinessIds(
         ? [requested.businessId]
         : undefined;
   if (allowed == null) return requestedIds;
-  if (!requestedIds) return allowed;
+  if (!requestedIds) return denyWhenEmpty(allowed);
   const allowedSet = new Set(allowed);
-  return requestedIds.filter(id => allowedSet.has(id));
+  // الترشيح ممكن يطلّع مصفوفة فاضية كمان — نفس الفخ بالظبط.
+  return denyWhenEmpty(requestedIds.filter(id => allowedSet.has(id)));
 }
 
 /**
@@ -393,9 +469,11 @@ import {
   updateBusiness,
   getCategoriesByBusiness,
   createCategory,
+  getCategoryById,
   updateCategory,
   getWarehousesByBusiness,
   createWarehouse,
+  getWarehouseById,
   updateWarehouse,
   getBusinessGroupsWithBusinesses,
   getBusinessIdsByGroupId,
@@ -1921,8 +1999,12 @@ export const appRouter = router({
       }),
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
-        return getEmployeeById(input.id);
+      .query(async ({ ctx, input }) => {
+        // كان بيرجّع أي موظف في النظام بالـid — بيانات موظف شركة تانية بالاسم والتليفون.
+        return assertEmployeeInScope(
+          ctx.tenantId,
+          await getEmployeeById(input.id)
+        );
       }),
     create: adminProcedure
       .input(
@@ -1957,12 +2039,19 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
-        const target = await getEmployeeById(id);
-        if (!target)
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "الموظف غير موجود",
-          });
+        // الحارس الأول قبل أي حاجة: الموظف ده أصلاً بتاعي؟
+        //
+        // من غيره، أدمن شركة أ كان يقدر يعطّل موظفين شركة ب، أو يغيّر أدوارهم، أو
+        // **ينقلهم لشركته** — الـ`businessId` جاي من العميل.
+        const target = await assertEmployeeInScope(
+          ctx.tenantId,
+          await getEmployeeById(id)
+        );
+
+        // والنشاط الجديد كمان لازم يكون في نطاقي — النقل بيمشي في الاتجاهين.
+        if (data.businessId !== undefined) {
+          data.businessId = await scopeBusinessId(ctx.tenantId, data.businessId);
+        }
 
         await assertMayAssignOwnerRole(ctx, data.role, target.role);
 
@@ -5520,18 +5609,49 @@ export const appRouter = router({
   businesses: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
-      return getAllBusinesses(businessIds ?? undefined);
+      return getAllBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
     }),
     activeList: protectedProcedure.query(async ({ ctx }) => {
       const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
-      return getActiveBusinesses(businessIds ?? undefined);
+      return getActiveBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
     }),
-    // Business Groups
-    groups: protectedProcedure.query(async () => {
-      return getActiveBusinessGroups();
+    /*
+      المجموعات والأنشطة — مقصورة على نطاق الجلسة.
+
+      الاتنين دول كانوا بيرجّعوا **كل** أنشطة النظام لأي مستخدم مسجّل، و`BusinessContext`
+      بينادي `groupsWithBusinesses` في كل تحميل صفحة — فقايمة اختيار النشاط كانت ممكن
+      تتملى بأنشطة شركة تانية.
+
+      الفلترة بتمشي من **الأنشطة** مش من `business_groups.tenantId`: عمود المجموعة
+      nullable ولسه بيتملى بسكربت backfill، فالفلترة عليه كانت هتخفي المجموعات القديمة
+      وتفضّي القايمة على الإنتاج الحالي. النشاط هو اللي بيحدد النطاق، والمجموعة بتبان
+      لو فيها نشاط مسموح.
+    */
+    groups: protectedProcedure.query(async ({ ctx }) => {
+      const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+      const groups = await getActiveBusinessGroups();
+      if (allowed == null) return groups;
+      const mine = new Set(
+        (await getActiveBusinesses(denyWhenEmpty(allowed)))
+          .map(business => business.groupId)
+          .filter((id): id is number => id != null)
+      );
+      return groups.filter(group => mine.has(group.id));
     }),
-    groupsWithBusinesses: protectedProcedure.query(async () => {
-      return getBusinessGroupsWithBusinesses();
+    groupsWithBusinesses: protectedProcedure.query(async ({ ctx }) => {
+      const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+      const groups = await getBusinessGroupsWithBusinesses();
+      if (allowed == null) return groups;
+      const allowedSet = new Set(denyWhenEmpty(allowed));
+      return groups
+        .map(group => ({
+          ...group,
+          businesses: group.businesses.filter(business =>
+            allowedSet.has(business.id)
+          ),
+        }))
+        // المجموعة اللي مالهاش أي نشاط مسموح مابتظهرش أصلاً — اسمها لوحده معلومة.
+        .filter(group => group.businesses.length > 0);
     }),
     businessIdsByGroup: protectedProcedure
       .input(
@@ -5572,8 +5692,11 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
+        // من غير السطر ده، أدمن شركة أ يقدر يبعت `isActive: false` على نشاط شركة ب
+        // ويوقّفها. النشاط نفسه هو وحدة النطاق، فبيتفحص مباشرة.
+        await scopeBusinessId(ctx.tenantId, id);
         await updateBusiness(id, data);
         return { success: true };
       }),
@@ -5598,8 +5721,12 @@ export const appRouter = router({
           name: z.string().min(2),
         })
       )
-      .mutation(async ({ input }) => {
-        await createCategory(input);
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(
+          ctx.tenantId,
+          input.businessId
+        );
+        await createCategory({ ...input, businessId });
         return { success: true };
       }),
     updateCategory: adminProcedure
@@ -5610,8 +5737,13 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
+        await assertRecordInScope(
+          ctx.tenantId,
+          await getCategoryById(id),
+          "التصنيف غير موجود"
+        );
         await updateCategory(id, data);
         return { success: true };
       }),
@@ -5636,8 +5768,12 @@ export const appRouter = router({
           name: z.string().min(2),
         })
       )
-      .mutation(async ({ input }) => {
-        await createWarehouse(input);
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(
+          ctx.tenantId,
+          input.businessId
+        );
+        await createWarehouse({ ...input, businessId });
         return { success: true };
       }),
     updateWarehouse: adminProcedure
@@ -5648,8 +5784,14 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
+        // تعطيل مخزن شركة تانية بيوقّف استلام البضاعة عندها.
+        await assertRecordInScope(
+          ctx.tenantId,
+          await getWarehouseById(id),
+          "المخزن غير موجود"
+        );
         await updateWarehouse(id, data);
         return { success: true };
       }),
