@@ -54,8 +54,8 @@ describe("Fix 1: Express import/export routes protection", () => {
     // Verify the import exists by reading the file
     const fs = await import("fs");
     const content = fs.readFileSync("server/importExcel.ts", "utf-8");
-    expect(content).toContain(
-      'import { requireAdminOrManager } from "./authMiddleware"'
+    expect(content).toMatch(
+      /import \{ requireAdminOrManager[^}]*\} from "\.\/authMiddleware"/
     );
   });
 
@@ -445,7 +445,8 @@ describe("Auth middleware module", () => {
     const fs = await import("fs");
     const content = fs.readFileSync("server/authMiddleware.ts", "utf-8");
     expect(content).toContain("export async function requireAdminOrManager");
-    expect(content).toContain("isActiveManagerSession");
+    // بيحلّ الجلسة النشطة (owner cookie ثم employee_token) عبر resolveActiveManager.
+    expect(content).toContain("resolveActiveManager");
     // Employee-token fallback must accept the whole admin tier (super_admin/admin/manager),
     // not just a literal "manager" role — a plain admin employee should not be locked out.
     expect(content).toContain("isAdminTierRole(emp.role)");

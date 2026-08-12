@@ -1285,6 +1285,81 @@ export async function createOrderWithItems(
 }
 
 /**
+ * مصدر كشف التكرار للاستيراد — **مقيّد بالنشاط ومحدود بالحجم**.
+ *
+ * الاستيراد القديم كان بيحمّل `getOrders({ limit: 100000 })` — كل أوردرات **كل الشركات**
+ * في الذاكرة. ده كشف تسريب عابر للـtenants وكان بيتقل مع الحجم. هنا بنجيب أوردرات
+ * النشاط ده بس، والصفوف اللي ممكن تطابق فعلًا: نفس `externalOrderId` من الملف، أو
+ * المتسجّلة من `since` (النهاردة) — بحقول قليلة بس.
+ */
+export async function getImportDedupOrders(
+  businessId: number,
+  externalOrderIds: string[],
+  since: Date
+): Promise<
+  Array<{
+    id: number;
+    customerPhone: string;
+    productName: string;
+    externalOrderId: string | null;
+    createdAt: Date;
+  }>
+> {
+  const db = await getDb();
+  if (!db) return [];
+  const matchConds: any[] = [gte(orders.createdAt, since)];
+  const ids = externalOrderIds.filter(Boolean);
+  if (ids.length > 0) matchConds.push(inArray(orders.externalOrderId, ids));
+  const rows = await db
+    .select({
+      id: orders.id,
+      customerPhone: orders.customerPhone,
+      productName: orders.productName,
+      externalOrderId: orders.externalOrderId,
+      createdAt: orders.createdAt,
+    })
+    .from(orders)
+    .where(and(eq(orders.businessId, businessId), or(...matchConds)));
+  return rows as any;
+}
+
+/**
+ * استيراد دفعة أوردرات **الكل-أو-لا-شيء** — كلهم في transaction واحدة.
+ *
+ * لو أي صف فشل insert، الترانزاكشن بترجع بالكامل ومفيش أوردر واحد بيتكتب — فمستحيل
+ * نصف استيراد. أرقام الأوردرات بتتولّد **جوه** الترانزاكشن من قيمة قصوى واحدة ثم تصاعدي،
+ * فمفيش نداء متكرر للـMAX. لو استيرادين متزامنين طلبوا نفس الرقم، قيد `orderNumber`
+ * الفريد بيرفض التاني والدفعة بتاعته بترجع كلها — آمن، مفيش أرقام مكررة.
+ *
+ * الصفوف المستبعدة (مكرر/منتج مش مطابق) بتتفلتر **قبل** النداء ده — مابتوصلش هنا أصلًا.
+ */
+export async function importOrdersAtomic(
+  businessId: number,
+  rows: Array<Omit<InsertOrder, "orderNumber" | "businessId">>
+): Promise<{ insertedIds: number[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (rows.length === 0) return { insertedIds: [] };
+  return db.transaction(async tx => {
+    const [maxRow] = await tx
+      .select({ maxNum: sql<string>`MAX(CAST(${orders.orderNumber} AS UNSIGNED))` })
+      .from(orders);
+    let next = Number(maxRow?.maxNum ?? 0);
+    const insertedIds: number[] = [];
+    for (const row of rows) {
+      next += 1;
+      const id = await createOrderInTransaction(tx, {
+        ...row,
+        businessId,
+        orderNumber: String(next),
+      } as InsertOrder);
+      if (id) insertedIds.push(id);
+    }
+    return { insertedIds };
+  });
+}
+
+/**
  * Which status a raw status write is allowed to move an order into, keyed by its current
  * status. Only guards the generic update path — the dedicated functions (confirmOrder,
  * postponeOrder, cancelOrder, markOrdersAsPrinted, markOrderAsReturned) already encode

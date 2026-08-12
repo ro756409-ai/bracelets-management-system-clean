@@ -1,8 +1,9 @@
 import type { Express, Request, Response } from "express";
-import { requireAdminOrManager } from "./authMiddleware";
+import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import multer from "multer";
 import * as XLSX from "xlsx";
 import * as db from "./db";
+import type { InsertOrder } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
 import { findPotentialDuplicates, type ExistingOrderForDuplicateCheck } from "./duplicateDetection";
 
@@ -432,127 +433,157 @@ export function registerImportRoutes(app: Express) {
           return res.status(400).json({ error: "لم يتم رفع أي ملف" });
         }
 
-        // تحديد النشاط المختار من الفلتر
-        const businessId = req.body?.businessId ? parseInt(req.body.businessId) : 1;
+        // ── عزل الـtenant: ممنوع الثقة في businessId من العميل ──
+        // الجلسة اتحقّقت في requireAdminOrManager وعلّقت الهوية على req. النشاط المستهدف
+        // لازم يكون تابع لنفس الـtenant — نفس نمط Phase A، ومفيش default صامت (كان 1).
+        const auth = (req as RequestWithAuth).authInfo;
+        if (!auth || auth.tenantId == null) {
+          return res.status(403).json({ error: "جلستك مش مربوطة بنشاط — لا يمكن الاستيراد" });
+        }
+        const requestedBusinessId = req.body?.businessId
+          ? parseInt(String(req.body.businessId), 10)
+          : NaN;
+        if (!Number.isInteger(requestedBusinessId) || requestedBusinessId <= 0) {
+          return res
+            .status(400)
+            .json({ error: "لازم تحدد النشاط اللي هتستورد فيه" });
+        }
+        const allowed = await db.getBusinessIdsForTenant(auth.tenantId);
+        if (!allowed || !allowed.includes(requestedBusinessId)) {
+          return res
+            .status(403)
+            .json({ error: "النشاط ده مش تابع لحسابك" });
+        }
+        const businessId = requestedBusinessId;
 
         const { preview, errors } = parseExcelRows(req.file.buffer);
 
         if (preview.length === 0) {
-          return res.json({ imported: 0, skipped: 0, errors });
+          return res.json({ imported: 0, skipped: 0, duplicates: 0, errors });
         }
 
-        let imported = 0;
         let skipped = 0;
         let duplicates = 0;
         const importErrors: string[] = [...errors];
 
-        // Get all products for matching (filter by business if specified)
-        const products = await db.getAllProducts(businessId || undefined);
+        // المنتجات للمطابقة — مقيّدة بالنشاط ده بس.
+        const products = await db.getAllProducts(businessId);
 
-        // جلب كل الأوردرات الموجودة لكشف التكرار
-        const existingOrders = await db.getOrders({ limit: 100000 });
-        const existingOrdersById = new Map(existingOrders.orders.map((o: any) => [o.id, o]));
-        // ملاحظة: productId غير مُمرَّر عمدًا هنا — المطابقة تتم بالاسم مثل السلوك السابق تمامًا
-        const existingForDuplicateCheck: ExistingOrderForDuplicateCheck[] = existingOrders.orders.map((o: any) => ({
-          id: o.id,
-          customerPhone: o.customerPhone,
-          productName: o.productName,
-          externalOrderId: o.externalOrderId,
-        }));
-
+        // كشف التكرار **داخل النشاط ده فقط** ومحدود بالحجم: الصفوف اللي ممكن تطابق —
+        // نفس externalOrderId من الملف، أو المتسجّلة النهاردة. مش كل أوردرات كل الشركات.
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        const fileExternalIds = preview
+          .map((r: any) => String(r.orderId || ""))
+          .filter(Boolean);
+        const existing = await db.getImportDedupOrders(
+          businessId,
+          fileExternalIds,
+          today
+        );
+        const existingOrdersById = new Map(existing.map(o => [o.id, o]));
+        const existingForDuplicateCheck: ExistingOrderForDuplicateCheck[] = existing.map(
+          o => ({
+            id: o.id,
+            customerPhone: o.customerPhone,
+            productName: o.productName,
+            externalOrderId: o.externalOrderId,
+          })
+        );
 
         // كشف التكرار داخل الملف نفسه
         const fileUUIDs = new Set<string>();
         const filePhoneProductKeys = new Set<string>();
 
+        // ── المرحلة ١: التصنيف بلا أي كتابة — بنبني قايمة الصفوف الصالحة للإدخال ──
+        const toInsert: Array<Omit<InsertOrder, "orderNumber" | "businessId">> = [];
         for (const row of preview) {
-          try {
-            const phone = row.customerPhone.replace(/\s+/g, '');
+          const phone = row.customerPhone.replace(/\s+/g, "");
+          const uuid = row.orderId || "";
 
-            // كشف التكرار بالـ UUID (Order ID) فقط — فريد عالمياً بين كل الستورات
-            // الـ ID الرقمي (externalId) ممكن يتكرر بين ستورين مختلفين فلا يصلح لكشف التكرار
-            const uuid = row.orderId || '';
-
-            const dbMatches = findPotentialDuplicates(
-              { customerPhone: row.customerPhone, productName: row.productName, externalOrderId: uuid || undefined },
-              existingForDuplicateCheck
-            );
-
-            const isDuplicateByUUID =
-              Boolean(uuid) &&
-              (dbMatches.some(m => m.signals.includes("sameExternalOrderId")) || fileUUIDs.has(uuid));
-
-            if (isDuplicateByUUID) {
-              duplicates++;
-              importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر بالـ UUID (${uuid})`);
-              continue;
-            }
-
-            // كشف التكرار بالهاتف + المنتج + نفس اليوم
-            const phoneProductKey = `${phone}|${row.productName}`;
-            const isDuplicateByPhoneProductToday = dbMatches.some(m => {
-              if (!m.signals.includes("samePhoneAndProduct")) return false;
-              const existingOrder = existingOrdersById.get(m.orderId) as any;
-              if (!existingOrder) return false;
-              const orderDate = new Date(existingOrder.createdAt);
-              orderDate.setHours(0, 0, 0, 0);
-              return orderDate.getTime() === today.getTime();
-            });
-            const isDuplicateByPhoneProduct = isDuplicateByPhoneProductToday || filePhoneProductKeys.has(phoneProductKey);
-            if (isDuplicateByPhoneProduct) {
-              duplicates++;
-              importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر (نفس الهاتف + المنتج اليوم)`);
-              continue;
-            }
-
-            // تسجيل لكشف التكرار داخل نفس الملف
-            if (uuid) fileUUIDs.add(uuid);
-            filePhoneProductKeys.add(phoneProductKey);
-
-            // Find matching product using smart matching (pass variant for better accuracy)
-            const matchedProduct = matchProduct(row.productName, products, row.variantRaw);
-            if (!matchedProduct) {
-              // Do NOT fallback to first product — report for manual review
-              importErrors.push(`صف ${row.rowIndex}: منتج غير مطابق "${row.productName}" — يحتاج مراجعة يدوية`);
-              skipped++;
-              continue;
-            }
-
-            // دائماً نولد orderNumber تلقائي من السيستم — الـ ID الرقمي من Easy Order ممكن يتكرر بين ستورين
-            const finalOrderNumber = await db.generateOrderNumber();
-
-            // تحديد اسم البيدج/الكامبين من utm_campaign
-            const utmStoreName = (row.utmCampaign || '').trim();
-            const adName = utmStoreName || undefined;
-
-            // تحديد المصدر كـ easyorder موحد
-            const orderSource = 'easyorder' as const;
-
-            await db.createOrder({
-              orderNumber: finalOrderNumber,
-              customerName: row.customerName,
+          const dbMatches = findPotentialDuplicates(
+            {
               customerPhone: row.customerPhone,
-              customerAddress: row.customerAddress,
-              governorate: row.governorate,
-              productId: matchedProduct.id,
               productName: row.productName,
-              quantity: row.quantity,
-              totalAmount: row.totalAmount,
-              source: orderSource,
-              status: "new",
-              notes: row.notes,
-              importRowIndex: row.rowIndex,
-              externalOrderId: row.orderId || undefined,
-              adName: adName || undefined,
-              businessId: businessId,
-            });
-            imported++;
-          } catch (err: any) {
-            skipped++;
-            importErrors.push(`صف ${row.rowIndex}: ${err.message}`);
+              externalOrderId: uuid || undefined,
+            },
+            existingForDuplicateCheck
+          );
+
+          const isDuplicateByUUID =
+            Boolean(uuid) &&
+            (dbMatches.some(m => m.signals.includes("sameExternalOrderId")) ||
+              fileUUIDs.has(uuid));
+          if (isDuplicateByUUID) {
+            duplicates++;
+            importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر بالـ UUID (${uuid})`);
+            continue;
           }
+
+          const phoneProductKey = `${phone}|${row.productName}`;
+          const isDuplicateByPhoneProductToday = dbMatches.some(m => {
+            if (!m.signals.includes("samePhoneAndProduct")) return false;
+            const existingOrder = existingOrdersById.get(m.orderId);
+            if (!existingOrder) return false;
+            const orderDate = new Date(existingOrder.createdAt);
+            orderDate.setHours(0, 0, 0, 0);
+            return orderDate.getTime() === today.getTime();
+          });
+          const isDuplicateByPhoneProduct =
+            isDuplicateByPhoneProductToday || filePhoneProductKeys.has(phoneProductKey);
+          if (isDuplicateByPhoneProduct) {
+            duplicates++;
+            importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر (نفس الهاتف + المنتج اليوم)`);
+            continue;
+          }
+
+          const matchedProduct = matchProduct(row.productName, products, row.variantRaw);
+          if (!matchedProduct) {
+            importErrors.push(`صف ${row.rowIndex}: منتج غير مطابق "${row.productName}" — يحتاج مراجعة يدوية`);
+            skipped++;
+            continue;
+          }
+
+          // بعد ما الصف عدّى كل الفحوص — سجّله في كشف التكرار داخل الملف وضيفه للإدخال.
+          if (uuid) fileUUIDs.add(uuid);
+          filePhoneProductKeys.add(phoneProductKey);
+
+          const adName = (row.utmCampaign || "").trim() || undefined;
+          toInsert.push({
+            customerName: row.customerName,
+            customerPhone: row.customerPhone,
+            customerAddress: row.customerAddress,
+            governorate: row.governorate,
+            productId: matchedProduct.id,
+            productName: row.productName,
+            quantity: row.quantity,
+            totalAmount: row.totalAmount,
+            source: "easyorder",
+            status: "new",
+            notes: row.notes,
+            importRowIndex: row.rowIndex,
+            externalOrderId: row.orderId || undefined,
+            adName,
+          } as Omit<InsertOrder, "orderNumber" | "businessId">);
+        }
+
+        // ── المرحلة ٢: الإدخال **الكل-أو-لا-شيء** في transaction واحدة ──
+        // لو أي صف فشل، الدفعة كلها بترجع — مفيش نصف استيراد بلا تقرير.
+        let imported = 0;
+        try {
+          const result = await db.importOrdersAtomic(businessId, toInsert);
+          imported = result.insertedIds.length;
+        } catch (err: any) {
+          return res.status(500).json({
+            imported: 0,
+            skipped,
+            duplicates,
+            errors: [
+              ...importErrors,
+              `فشل الاستيراد — اترجعت الدفعة كلها ومفيش أوردر اتكتب: ${err?.message ?? err}`,
+            ],
+            allOrNothing: true,
+          });
         }
 
         return res.json({ imported, skipped, duplicates, errors: importErrors });
@@ -772,8 +803,22 @@ export function registerWhatsAppImportRoutes(app: Express) {
           return res.status(400).json({ error: "لم يتم رفع أي ملف" });
         }
 
-        // تحديد النشاط المختار من الفلتر
-        const businessId = req.body?.businessId ? parseInt(req.body.businessId) : 1;
+        // نفس عزل الـtenant زي /api/import/execute — ممنوع الثقة في businessId من العميل.
+        const auth = (req as RequestWithAuth).authInfo;
+        if (!auth || auth.tenantId == null) {
+          return res.status(403).json({ error: "جلستك مش مربوطة بنشاط — لا يمكن الاستيراد" });
+        }
+        const requestedBusinessId = req.body?.businessId
+          ? parseInt(String(req.body.businessId), 10)
+          : NaN;
+        if (!Number.isInteger(requestedBusinessId) || requestedBusinessId <= 0) {
+          return res.status(400).json({ error: "لازم تحدد النشاط اللي هتستورد فيه" });
+        }
+        const allowed = await db.getBusinessIdsForTenant(auth.tenantId);
+        if (!allowed || !allowed.includes(requestedBusinessId)) {
+          return res.status(403).json({ error: "النشاط ده مش تابع لحسابك" });
+        }
+        const businessId = requestedBusinessId;
 
         const { preview, errors } = parseWhatsAppExcel(req.file.buffer);
 
@@ -781,46 +826,51 @@ export function registerWhatsAppImportRoutes(app: Express) {
           return res.json({ imported: 0, skipped: 0, errors });
         }
 
-        let imported = 0;
         let skipped = 0;
         const importErrors: string[] = [...errors];
 
-        const products = await db.getAllProducts(businessId || undefined);
+        const products = await db.getAllProducts(businessId);
 
+        // تصنيف بلا كتابة → قايمة الإدخال، ثم الكل-أو-لا-شيء.
+        const toInsert: Array<Omit<InsertOrder, "orderNumber" | "businessId">> = [];
         for (const row of preview) {
-          try {
-            const matchedProduct = matchProduct(row.productName, products);
-
-            if (!matchedProduct) {
-              importErrors.push(`صف ${row.rowIndex}: منتج غير مطابق "${row.productName}" — يحتاج مراجعة يدوية`);
-              skipped++;
-              continue;
-            }
-
-            const finalOrderNumber = await db.generateOrderNumber();
-
-            await db.createOrder({
-              orderNumber: finalOrderNumber,
-              customerName: row.customerName,
-              customerPhone: row.customerPhone,
-              customerAddress: row.customerAddress,
-              governorate: row.governorate,
-              productId: matchedProduct.id,
-              productName: row.productName,
-              quantity: row.quantity,
-              totalAmount: row.totalAmount,
-              source: "facebook",
-              status: "new",
-              notes: row.notes,
-              pageName: row.pageName || undefined,
-              importRowIndex: row.rowIndex,
-              businessId: businessId,
-            });
-            imported++;
-          } catch (err: any) {
+          const matchedProduct = matchProduct(row.productName, products);
+          if (!matchedProduct) {
+            importErrors.push(`صف ${row.rowIndex}: منتج غير مطابق "${row.productName}" — يحتاج مراجعة يدوية`);
             skipped++;
-            importErrors.push(`صف ${row.rowIndex}: ${err.message}`);
+            continue;
           }
+          toInsert.push({
+            customerName: row.customerName,
+            customerPhone: row.customerPhone,
+            customerAddress: row.customerAddress,
+            governorate: row.governorate,
+            productId: matchedProduct.id,
+            productName: row.productName,
+            quantity: row.quantity,
+            totalAmount: row.totalAmount,
+            source: "facebook",
+            status: "new",
+            notes: row.notes,
+            pageName: row.pageName || undefined,
+            importRowIndex: row.rowIndex,
+          } as Omit<InsertOrder, "orderNumber" | "businessId">);
+        }
+
+        let imported = 0;
+        try {
+          const result = await db.importOrdersAtomic(businessId, toInsert);
+          imported = result.insertedIds.length;
+        } catch (err: any) {
+          return res.status(500).json({
+            imported: 0,
+            skipped,
+            errors: [
+              ...importErrors,
+              `فشل الاستيراد — اترجعت الدفعة كلها ومفيش أوردر اتكتب: ${err?.message ?? err}`,
+            ],
+            allOrNothing: true,
+          });
         }
 
         return res.json({ imported, skipped, errors: importErrors });
