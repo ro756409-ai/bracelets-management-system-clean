@@ -246,13 +246,24 @@ export function OrderItemsEditor({
                 <Select
                   value={line.variantId ? String(line.variantId) : NO_VARIANT}
                   onValueChange={value => {
+                    /*
+                      الاسم بيترجع لاسم المنتج لوحده مع كل تغيير في النوع.
+
+                      البند الجاي من الموقع كان اسمه مركّب («أسورة نحاس - ذكر التحصين»).
+                      لو الموظف غيّر النوع والاسم فضل زي ما هو، البند بيبقى فيه اختيارين:
+                      القديم في الاسم والجديد في المعرّف. السيرفر بيشتق الاسم من الكتالوج
+                      برضه — ده هنا عشان اللي على الشاشة يبقى هو اللي هيتحفظ بالظبط.
+                    */
+                    const catalogName =
+                      products.find(p => p.id === line.productId)?.name ?? line.productName;
                     if (value === NO_VARIANT) {
-                      patch(index, { variantId: null });
+                      patch(index, { variantId: null, productName: catalogName });
                       return;
                     }
                     const variant = productVariants.find(v => v.id === Number(value));
                     patch(index, {
                       variantId: Number(value),
+                      productName: catalogName,
                       unitPrice:
                         variant?.price != null ? Number(variant.price) : line.unitPrice,
                     });

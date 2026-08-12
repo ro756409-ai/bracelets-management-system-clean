@@ -93,7 +93,15 @@ const LINE_SEPARATOR = "، ";
 /** بند واحد ← نص. */
 export function describeShipmentLine(line: ShipmentContentLine): string {
   const variant = (line.variantName ?? "").trim();
-  const base = variant ? `${line.productName} - ${variant}` : line.productName;
+  const name = line.productName.trim();
+  // الصف القديم اللي اسمه لسه مركّب من نوعه («أسورة نحاس - سادة») مايتركّبش تاني.
+  //
+  // الإصلاح الحقيقي في الكتابة: اسم البند بقى اسم المنتج لوحده، والنوع في `variantId`.
+  // بس الصفوف اللي اتخزّنت قبل كده لسه شايلة الاسم المركّب لحد ما الأوردر يتحفظ تاني،
+  // والحارس ده بيمنعها تطلع «أسورة نحاس - ذكر التحصين - سادة» على البوليصة في الوقت
+  // ده. حارس عرض لصف قديم — مش بديل عن تصحيح البيانات.
+  const alreadyNamed = variant.length > 0 && name.endsWith(`- ${variant}`);
+  const base = variant && !alreadyNamed ? `${name} - ${variant}` : name;
   // المقاس واللون بيتضافوا لما يكونوا موجودين بس. البند اللي مالوش مقاس مايتكتبش
   // «(مقاس: )» — الفراغ ده بيخلي البوليصة تبان غلط ومحدش بيثق فيها.
   const extras: string[] = [];
