@@ -75,6 +75,11 @@ async function getClient(config: ObjectStorageConfig): Promise<S3ClientType> {
       accessKeyId: config.accessKeyId,
       secretAccessKey: config.secretAccessKey,
     },
+    // نسخ aws-sdk الحديثة (3.729+) بتضيف checksum تلقائي (CRC32) بيرفضه R2/MinIO/Spaces،
+    // فالرفع بيفشل على أي تخزين متوافق مع S3 غير AWS نفسه. بنطلبه "عند اللزوم" بس —
+    // AWS بيفضل شغّال، وR2 وأخواته بيرفعوا عادي.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
   cachedConfigJson = key;
   return cachedClient;
