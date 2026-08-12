@@ -69,6 +69,80 @@ export function toNumber(value: unknown): number {
 }
 
 /**
+ * الحقول اللازمة لحساب تكلفة المرتب في الربح — مجموعة فرعية من صف `payroll_items`.
+ * أي صف من الجدول بيلبّي الشكل ده (decimals بترجع نصوص، فبنقبل نص أو رقم).
+ */
+export type SalaryCostInput = {
+  baseSalary: string | number | null;
+  overtimeAmount: string | number | null;
+  bonuses: string | number | null;
+  commissions: string | number | null;
+  absenceDeduction: string | number | null;
+  deductions: string | number | null;
+};
+
+/**
+ * **التعريف الوحيد المعتمد لتكلفة المرتب في الربح** — استخدمه في كل مكان، مافيش صيغة
+ * تانية للمرتب في أي شاشة أو محرّك.
+ *
+ *   تكلفة المرتب = الأساسي + الأوفرتايم + البونص + العمولة − خصم الغياب − الخصومات
+ *
+ * **السُلفة مابتتخصمش هنا.** السُلفة مش مصروف مرتب جديد — هي كاش اتدفع للموظف مقدّمًا
+ * وبيقلّل *المتبقّي* اللي هيتصرف من المرتب، مش تكلفة العمالة. طرحها كان هيخصم المرتب
+ * مرتين: مرة كسُلفة ومرة كجزء من المرتب. التكلفة دي بتظهر **مرة واحدة** في الربح.
+ *
+ * مثال: أساسي ٥٠٠٠، بونص ٥٠٠، غياب ٣٠٠، خصم ٢٠٠ ⇒ التكلفة ٥٠٠٠. لو فيه سُلفة ٱلف،
+ * التكلفة تفضل ٥٠٠٠ (المتبقّي للموظف ٤٠٠٠، لكن تكلفة النشاط ٥٠٠٠).
+ */
+export function salaryCostForProfit(item: SalaryCostInput): number {
+  return (
+    toNumber(item.baseSalary) +
+    toNumber(item.overtimeAmount) +
+    toNumber(item.bonuses) +
+    toNumber(item.commissions) -
+    toNumber(item.absenceDeduction) -
+    toNumber(item.deductions)
+  );
+}
+
+/**
+ * تصنيف دورة رواتب تاريخية مقابل التعريف المعتمد الجديد — **تشخيص، مش تعديل**.
+ *
+ * المحرّك القديم كان بيستحق `totalGross` في أحداث `expense.accrued`. التعريف الجديد
+ * (`salaryCostForProfit`) = إجمالي − غياب − خصومات. الفرق المتوقّع بين الاتنين هو
+ * بالظبط (الغياب + الخصومات). التصنيف بيفرّق التلات حالات من غير ما يلمس أي حدث تاريخي:
+ *
+ *  • MATCHES: القديم = الجديد (مفيش غياب ولا خصومات في الدورة).
+ *  • LEGACY_DIFFERENCE: الفرق = (غياب + خصومات) بالظبط — الفرق المنهجي المعروف، مفهوم.
+ *  • AMBIGUOUS: الفرق حاجة تانية — محتاج نظرة بشرية (أحداث ناقصة، تعديل يدوي، ترحيل جزئي).
+ *
+ * القرار: مافيش backfill ولا كتابة على الأحداث دلوقتي. ده بيكتشف الفروقات ويصنّفها بس.
+ */
+export type PayrollHistoryVerdict =
+  | "MATCHES"
+  | "LEGACY_DIFFERENCE"
+  | "AMBIGUOUS";
+
+export function classifyPayrollHistory(input: {
+  /** مجموع `salaryCostForProfit` لبنود الدورة (التعريف الجديد). */
+  canonicalCost: number;
+  /** مجموع مبالغ أحداث `expense.accrued` القديمة للدورة (totalGross). */
+  legacyAccrued: number;
+  /** مجموع (خصم الغياب + الخصومات) لبنود الدورة — الفرق المنهجي المتوقّع. */
+  absencePlusDeductions: number;
+  /** هامش التقريب. */
+  tolerance?: number;
+}): { verdict: PayrollHistoryVerdict; difference: number } {
+  const tol = input.tolerance ?? 0.01;
+  const difference =
+    Math.round((input.legacyAccrued - input.canonicalCost) * 100) / 100;
+  if (Math.abs(difference) < tol) return { verdict: "MATCHES", difference };
+  if (Math.abs(difference - input.absencePlusDeductions) < tol)
+    return { verdict: "LEGACY_DIFFERENCE", difference };
+  return { verdict: "AMBIGUOUS", difference };
+}
+
+/**
  * أجر اليوم للمرتب الشهري.
  *
  * الأساس إعداد مش رقم ثابت: ٣٠٠٠ ÷ ٣٠ = ١٠٠، و٣٠٠٠ ÷ ٢٦ = ١١٥.٣٨. الفرق ده بيوصل

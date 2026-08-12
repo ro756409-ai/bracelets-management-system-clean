@@ -355,6 +355,14 @@ export async function getCategoriesByBusiness(businessId: number) {
     .orderBy(asc(categories.name));
 }
 
+/** التصنيف بالـid — للتحقق من نطاقه قبل التعديل. */
+export async function getCategoryById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(categories).where(eq(categories.id, id)).limit(1);
+  return row ?? null;
+}
+
 export async function createCategory(data: InsertCategory) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -381,6 +389,14 @@ export async function getWarehousesByBusiness(businessId: number) {
       and(eq(warehouses.businessId, businessId), eq(warehouses.isActive, true))
     )
     .orderBy(asc(warehouses.name));
+}
+
+/** المخزن بالـid — للتحقق من نطاقه قبل التعديل. */
+export async function getWarehouseById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db.select().from(warehouses).where(eq(warehouses.id, id)).limit(1);
+  return row ?? null;
 }
 
 export async function createWarehouse(data: InsertWarehouse) {
@@ -1269,6 +1285,81 @@ export async function createOrderWithItems(
 }
 
 /**
+ * مصدر كشف التكرار للاستيراد — **مقيّد بالنشاط ومحدود بالحجم**.
+ *
+ * الاستيراد القديم كان بيحمّل `getOrders({ limit: 100000 })` — كل أوردرات **كل الشركات**
+ * في الذاكرة. ده كشف تسريب عابر للـtenants وكان بيتقل مع الحجم. هنا بنجيب أوردرات
+ * النشاط ده بس، والصفوف اللي ممكن تطابق فعلًا: نفس `externalOrderId` من الملف، أو
+ * المتسجّلة من `since` (النهاردة) — بحقول قليلة بس.
+ */
+export async function getImportDedupOrders(
+  businessId: number,
+  externalOrderIds: string[],
+  since: Date
+): Promise<
+  Array<{
+    id: number;
+    customerPhone: string;
+    productName: string;
+    externalOrderId: string | null;
+    createdAt: Date;
+  }>
+> {
+  const db = await getDb();
+  if (!db) return [];
+  const matchConds: any[] = [gte(orders.createdAt, since)];
+  const ids = externalOrderIds.filter(Boolean);
+  if (ids.length > 0) matchConds.push(inArray(orders.externalOrderId, ids));
+  const rows = await db
+    .select({
+      id: orders.id,
+      customerPhone: orders.customerPhone,
+      productName: orders.productName,
+      externalOrderId: orders.externalOrderId,
+      createdAt: orders.createdAt,
+    })
+    .from(orders)
+    .where(and(eq(orders.businessId, businessId), or(...matchConds)));
+  return rows as any;
+}
+
+/**
+ * استيراد دفعة أوردرات **الكل-أو-لا-شيء** — كلهم في transaction واحدة.
+ *
+ * لو أي صف فشل insert، الترانزاكشن بترجع بالكامل ومفيش أوردر واحد بيتكتب — فمستحيل
+ * نصف استيراد. أرقام الأوردرات بتتولّد **جوه** الترانزاكشن من قيمة قصوى واحدة ثم تصاعدي،
+ * فمفيش نداء متكرر للـMAX. لو استيرادين متزامنين طلبوا نفس الرقم، قيد `orderNumber`
+ * الفريد بيرفض التاني والدفعة بتاعته بترجع كلها — آمن، مفيش أرقام مكررة.
+ *
+ * الصفوف المستبعدة (مكرر/منتج مش مطابق) بتتفلتر **قبل** النداء ده — مابتوصلش هنا أصلًا.
+ */
+export async function importOrdersAtomic(
+  businessId: number,
+  rows: Array<Omit<InsertOrder, "orderNumber" | "businessId">>
+): Promise<{ insertedIds: number[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (rows.length === 0) return { insertedIds: [] };
+  return db.transaction(async tx => {
+    const [maxRow] = await tx
+      .select({ maxNum: sql<string>`MAX(CAST(${orders.orderNumber} AS UNSIGNED))` })
+      .from(orders);
+    let next = Number(maxRow?.maxNum ?? 0);
+    const insertedIds: number[] = [];
+    for (const row of rows) {
+      next += 1;
+      const id = await createOrderInTransaction(tx, {
+        ...row,
+        businessId,
+        orderNumber: String(next),
+      } as InsertOrder);
+      if (id) insertedIds.push(id);
+    }
+    return { insertedIds };
+  });
+}
+
+/**
  * Which status a raw status write is allowed to move an order into, keyed by its current
  * status. Only guards the generic update path — the dedicated functions (confirmOrder,
  * postponeOrder, cancelOrder, markOrdersAsPrinted, markOrderAsReturned) already encode
@@ -1596,85 +1687,81 @@ export async function confirmOrder(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [order] = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.id, orderId))
-    .limit(1);
-  if (!order) throw new Error("Order not found");
-  if (order.businessId == null)
-    throw new Error(
-      "Order has no Business and cannot enter accounting workflow"
-    );
-  const [business] = await db
-    .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
-    .from(businesses)
-    .where(eq(businesses.id, order.businessId))
-    .limit(1);
-  const accountingInventoryActive = Boolean(business?.accountingGoLiveAt);
-
-  if (order.status === "confirmed") return;
-
-  const missingFields: string[] = [];
-  if (
-    !order.governorate ||
-    order.governorate.trim() === "" ||
-    order.governorate.trim() === "غير محدد"
-  ) {
-    missingFields.push("اسم المحافظة");
-  }
-  if (!order.customerAddress || order.customerAddress.trim().length < 5) {
-    missingFields.push("العنوان بالتفصيل");
-  }
-  if (missingFields.length > 0) {
-    throw new Error(
-      `لا يمكن تأكيد الأوردر - بيانات ناقصة: ${missingFields.join(" و ")}`
-    );
-  }
-
-  const qty = order.quantity ?? 1;
-  if (!accountingInventoryActive && order.productId) {
-    const [product] = await db
+  // تأكيد ذرّي: القفل والحالة والخصم كلهم في transaction واحدة.
+  //
+  // كان الفحص `status === "confirmed"` بيتعمل قبل أي قفل، فتأكيدين متزامنين لنفس
+  // الأوردر كانوا يعدّوا الاتنين ويخصموا المخزون **مرتين**. القفل `for update` على صف
+  // الأوردر بيخلّيهم يتسلسلوا: الأول بيأكّد ويخصم، والتاني بيستنى، بيقرا الحالة
+  // "confirmed"، وبيرجع من غير خصم تاني.
+  return db.transaction(async tx => {
+    const [order] = await tx
       .select()
-      .from(products)
-      .where(eq(products.id, order.productId))
-      .limit(1);
-    if (product && product.currentStock < qty) {
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!order) throw new Error("Order not found");
+    if (order.businessId == null)
       throw new Error(
-        `لا يمكن تأكيد الأوردر - المخزون غير كافي (المتاح: ${product.currentStock}، المطلوب: ${qty})`
+        "Order has no Business and cannot enter accounting workflow"
+      );
+    const [business] = await tx
+      .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
+      .from(businesses)
+      .where(eq(businesses.id, order.businessId))
+      .limit(1);
+    const accountingInventoryActive = Boolean(business?.accountingGoLiveAt);
+
+    // خصم واحد لكل أوردر — التأكيد المتزامن التاني بيرجع من هنا.
+    if (order.status === "confirmed") return;
+
+    const missingFields: string[] = [];
+    if (
+      !order.governorate ||
+      order.governorate.trim() === "" ||
+      order.governorate.trim() === "غير محدد"
+    ) {
+      missingFields.push("اسم المحافظة");
+    }
+    if (!order.customerAddress || order.customerAddress.trim().length < 5) {
+      missingFields.push("العنوان بالتفصيل");
+    }
+    if (missingFields.length > 0) {
+      throw new Error(
+        `لا يمكن تأكيد الأوردر - بيانات ناقصة: ${missingFields.join(" و ")}`
       );
     }
-  }
 
-  await db
-    .update(orders)
-    .set({
-      status: "confirmed",
-      confirmedAt: new Date(),
-      lastUpdatedBy: updatedBy,
-      // Preserve whatever confirmation record already exists (e.g. a legacy-imported
-      // order) rather than overwriting it — this function only ever runs once per order
-      // anyway (guarded by the early return above), but keep the intent explicit.
-      ...(order.confirmedByEmployeeId == null && updatedBy
-        ? {
-            confirmedByEmployeeId: updatedBy,
-            confirmedByEmployeeName: confirmedByName ?? null,
-          }
-        : {}),
-    })
-    .where(eq(orders.id, orderId));
+    const qty = order.quantity ?? 1;
 
-  if (!accountingInventoryActive && order.productId) {
-    await addInventoryMovement({
-      productId: order.productId,
-      type: "out",
-      quantity: qty,
-      reason: `تأكيد أوردر ${order.orderNumber}`,
-      orderId: order.id,
-      performedBy: updatedBy,
-      businessId: order.businessId,
-    });
-  }
+    await tx
+      .update(orders)
+      .set({
+        status: "confirmed",
+        confirmedAt: new Date(),
+        lastUpdatedBy: updatedBy,
+        ...(order.confirmedByEmployeeId == null && updatedBy
+          ? {
+              confirmedByEmployeeId: updatedBy,
+              confirmedByEmployeeName: confirmedByName ?? null,
+            }
+          : {}),
+      })
+      .where(eq(orders.id, orderId));
+
+    // فحص المخزون والخصم بقوا جوّه الحركة الذرّية (قفل صف المنتج + فحص + خصم).
+    if (!accountingInventoryActive && order.productId) {
+      await addInventoryMovementInTransaction(tx, {
+        productId: order.productId,
+        type: "out",
+        quantity: qty,
+        reason: `تأكيد أوردر ${order.orderNumber}`,
+        orderId: order.id,
+        performedBy: updatedBy,
+        businessId: order.businessId,
+      });
+    }
+  });
 }
 
 export async function postponeOrder(
@@ -2067,13 +2154,31 @@ export async function editOrderWithInventory(
 }
 
 // ==================== INVENTORY ====================
-export async function addInventoryMovement(data: InsertInventoryMovement) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const product = await getProductById(data.productId);
+/**
+ * حركة مخزون قديمة — **ذرّية**: السجل (`inventory_movements`) والرصيد المخزّن
+ * (`products.currentStock`) بيتكتبوا مع بعض في transaction واحدة، أو ولا واحد.
+ *
+ * كانوا سطرين منفصلين، فـcrash بينهم كان بيسيب الرصيد ≠ مجموع الحركات. وفحص «المخزون
+ * كافي؟» كان بيقرا من غير قفل، فطلبين «out» متزامنين كانوا يعدّوا الاتنين ويطلّعوا رصيد
+ * سالب. القفل `for update` على صف المنتج بيخلّي أي حركتين على نفس المنتج يتسلسلوا:
+ * التاني بيستنى، بيقرا الرصيد بعد الأول، وبيتفحص على القيمة الصح.
+ *
+ * الدالة دي **بتفترض إنها جوّه transaction** — للنداءات اللي بتحرّك الحالة والمخزون مع
+ * بعض (تأكيد، مرتجع). النسخة الـstandalone تحتها بتلفّها في transaction لوحدها.
+ */
+export async function addInventoryMovementInTransaction(
+  tx: any,
+  data: InsertInventoryMovement
+) {
+  const [product] = await tx
+    .select()
+    .from(products)
+    .where(eq(products.id, data.productId))
+    .limit(1)
+    .for("update");
   if (!product) throw new Error("المنتج غير موجود");
   const movementBusinessId = data.businessId ?? product.businessId;
-  const [business] = await db
+  const [business] = await tx
     .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
     .from(businesses)
     .where(eq(businesses.id, movementBusinessId))
@@ -2082,16 +2187,23 @@ export async function addInventoryMovement(data: InsertInventoryMovement) {
     throw new Error(
       "بعد Go-Live استخدم Purchase Receipt أو Reservation/Dispatch بدل الحركة اليدوية"
     );
-  if (data.type === "out") {
-    if (data.quantity > product.currentStock) {
-      throw new Error(
-        `الكمية الصادرة (${data.quantity}) أكبر من المخزون الحالي (${product.currentStock})`
-      );
-    }
+  if (data.type === "out" && data.quantity > product.currentStock) {
+    throw new Error(
+      `الكمية الصادرة (${data.quantity}) أكبر من المخزون الحالي (${product.currentStock})`
+    );
   }
-  await db.insert(inventoryMovements).values(data);
+  await tx.insert(inventoryMovements).values(data);
   const delta = data.type === "in" ? data.quantity : -data.quantity;
-  await updateProductStock(data.productId, delta);
+  await tx
+    .update(products)
+    .set({ currentStock: sql`${products.currentStock} + ${delta}` })
+    .where(eq(products.id, data.productId));
+}
+
+export async function addInventoryMovement(data: InsertInventoryMovement) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(tx => addInventoryMovementInTransaction(tx, data));
 }
 
 export async function getInventoryMovements(
@@ -2216,70 +2328,78 @@ export async function markOrderAsReturned(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const orderRows = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.id, orderId))
-    .limit(1);
-  if (orderRows.length === 0) throw new Error("الأوردر غير موجود");
-  const order = orderRows[0];
-  if (order.businessId == null)
-    throw new Error("Order has no Business and cannot be returned");
-  const [returnBusiness] = await db
-    .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
-    .from(businesses)
-    .where(eq(businesses.id, order.businessId))
-    .limit(1);
-  if (returnBusiness?.accountingGoLiveAt)
-    throw new Error(
-      "بعد Go-Live سجل Returned أو Partial Return من المصدر الرسمي ثم نفّذ الفحص"
-    );
+  // مرتجع ذرّي: قفل صف الأوردر، فحص الحالة، عكس المخزون، وسجل المرتجع — كلهم مع بعض.
+  //
+  // مرتجعين متزامنين لنفس الأوردر كانوا يقروا الاتنين `status="delivered"`، يعدّوا
+  // الفحص، ويرجّعوا المخزون **مرتين**. القفل بيسلسلهم: الأول بيرجّع، والتاني بيلاقي
+  // الحالة "returned" (مش في المسموح) وبيترفض من غير stock-in تاني.
+  return db.transaction(async tx => {
+    const [order] = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!order) throw new Error("الأوردر غير موجود");
+    if (order.businessId == null)
+      throw new Error("Order has no Business and cannot be returned");
+    const [returnBusiness] = await tx
+      .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
+      .from(businesses)
+      .where(eq(businesses.id, order.businessId))
+      .limit(1);
+    if (returnBusiness?.accountingGoLiveAt)
+      throw new Error(
+        "بعد Go-Live سجل Returned أو Partial Return من المصدر الرسمي ثم نفّذ الفحص"
+      );
 
-  const allowedStatuses = ["confirmed", "shipped", "delivered", "preparing"];
-  if (!allowedStatuses.includes(order.status)) {
-    throw new Error(`لا يمكن إرجاع أوردر بحالة: ${order.status}`);
-  }
+    // نفس فحص الحالة هو حارس الازدواج — بعد أول مرتجع الحالة "returned" مش في المسموح.
+    const allowedStatuses = ["confirmed", "shipped", "delivered", "preparing"];
+    if (!allowedStatuses.includes(order.status)) {
+      throw new Error(`لا يمكن إرجاع أوردر بحالة: ${order.status}`);
+    }
 
-  await db
-    .update(orders)
-    .set({ status: "returned", lastUpdatedBy: processedBy })
-    .where(eq(orders.id, orderId));
+    await tx
+      .update(orders)
+      .set({ status: "returned", lastUpdatedBy: processedBy })
+      .where(eq(orders.id, orderId));
 
-  // Only restore stock when a product was actually resolved for this order.
-  if (restoreStock && order.productId != null) {
-    await addInventoryMovement({
-      productId: order.productId,
-      type: "in",
-      quantity: order.quantity,
-      reason: `مرتجع - أوردر ${order.orderNumber}`,
+    // عكس المخزون بس لو المنتج متحدد — والحركة نفسها ذرّية جوّه نفس الـtx.
+    if (restoreStock && order.productId != null) {
+      await addInventoryMovementInTransaction(tx, {
+        productId: order.productId,
+        type: "in",
+        quantity: order.quantity,
+        reason: `مرتجع - أوردر ${order.orderNumber}`,
+        orderId: order.id,
+        performedBy: processedBy,
+        businessId: order.businessId,
+      });
+    }
+
+    await tx.insert(returnsTable).values({
       orderId: order.id,
-      performedBy: processedBy,
+      orderNumber: order.orderNumber,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      governorate: order.governorate,
+      productId: order.productId,
+      productName: order.productName,
+      quantity: order.quantity,
+      totalAmount: order.totalAmount,
+      returnReason,
+      notes: notes ?? null,
+      stockRestored: restoreStock,
+      processedBy,
       businessId: order.businessId,
     });
-  }
 
-  await db.insert(returnsTable).values({
-    orderId: order.id,
-    orderNumber: order.orderNumber,
-    customerName: order.customerName,
-    customerPhone: order.customerPhone,
-    governorate: order.governorate,
-    productId: order.productId,
-    productName: order.productName,
-    quantity: order.quantity,
-    totalAmount: order.totalAmount,
-    returnReason,
-    notes: notes ?? null,
-    stockRestored: restoreStock,
-    processedBy,
-    businessId: order.businessId,
+    return {
+      success: true,
+      orderNumber: order.orderNumber,
+      stockRestored: restoreStock,
+    };
   });
-
-  return {
-    success: true,
-    orderNumber: order.orderNumber,
-    stockRestored: restoreStock,
-  };
 }
 
 export async function getReturnsList(
@@ -3400,8 +3520,9 @@ export async function editOrderFull(
     const newQty = orderUpdates.quantity;
     const diff = newQty - oldQty;
     if (diff !== 0) {
-      // Deduct additional from stock if increased, restore if decreased
-      await updateProductStock(productId, -diff);
+      // خصم الفرق (زيادة) أو رده (نقص). `addInventoryMovement` بيحرّك الرصيد بنفسه،
+      // فالنداء المنفصل لـ`updateProductStock` كان بيطبّق الفرق **مرتين** — drift على
+      // كل تعديل كمية. اتشال؛ الحركة الذرّية هي اللي بتحرّك الرصيد.
       await addInventoryMovement({
         businessId: currentOrder.businessId,
         productId,
@@ -4577,55 +4698,66 @@ export async function recordOrderCollection(
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [order] = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.id, orderId))
-    .limit(1);
-  if (!order) throw new Error("الأوردر غير موجود");
 
-  const expected = Number(order.totalAmount);
-  const previous =
-    order.collectedAmount != null ? Number(order.collectedAmount) : 0;
-  const status =
-    collectedAmount <= 0
-      ? "failed"
-      : collectedAmount < expected
-        ? "partial"
-        : "collected";
-  const when = collectedAt ?? new Date();
+  // تحصيل ذرّي: قفل صف الأوردر، قراءة المحصّل الحالي، حساب الفرق، تحديث الأوردر،
+  // وحركة الخزنة — كلهم في transaction واحدة.
+  //
+  // كانت القراءة والتحديث وحركة الخزنة تلات عمليات منفصلة بلا قفل. تحصيلين متزامنين
+  // لنفس الأوردر (المحصّل ٠) كانوا يقروا الاتنين ٠، يحسبوا فرق ٤٠٠، ويدخّلوا **٨٠٠**
+  // للخزنة والأوردر يقول ٤٠٠. القفل `for update` بيسلسلهم: الأول بيحصّل، والتاني بيقرا
+  // المحصّل الجديد (٤٠٠) فبيحسب فرق ٠ ومابيدخّلش تاني.
+  return db.transaction(async tx => {
+    const [order] = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!order) throw new Error("الأوردر غير موجود");
 
-  await db
-    .update(orders)
-    .set({
-      collectedAmount: collectedAmount.toFixed(2),
-      collectedAt: when,
-      collectionStatus: status as any,
-    })
-    .where(eq(orders.id, orderId));
+    const expected = Number(order.totalAmount);
+    const previous =
+      order.collectedAmount != null ? Number(order.collectedAmount) : 0;
+    const status =
+      collectedAmount <= 0
+        ? "failed"
+        : collectedAmount < expected
+          ? "partial"
+          : "collected";
+    const when = collectedAt ?? new Date();
 
-  // بنسجّل الفرق مش المبلغ كامل: لو التحصيل اتصحّح من ٤٠٠ لـ٤٥٠، اللي دخل الخزنة
-  // فعلاً هو ٥٠ — تسجيل ٤٥٠ تاني كان هيحسب الأوردر مرتين.
-  const delta = collectedAmount - previous;
-  if (delta !== 0) {
-    await addTreasuryTransaction({
-      businessId: order.businessId,
-      type: previous === 0 ? "collection" : "adjustment",
-      direction: delta > 0 ? "in" : "out",
-      amount: Math.abs(delta).toFixed(2),
-      description: `تحصيل أوردر ${order.orderNumber} — ${order.customerName}`,
-      notes:
-        previous === 0
-          ? undefined
-          : `تصحيح من ${previous.toFixed(2)} إلى ${collectedAmount.toFixed(2)}`,
-      referenceType: "order",
-      referenceId: orderId,
-      performedBy: actor.id,
-      performedByName: actor.name,
-      transactionDate: when,
-    } as any);
-  }
-  return { status, delta };
+    await tx
+      .update(orders)
+      .set({
+        collectedAmount: collectedAmount.toFixed(2),
+        collectedAt: when,
+        collectionStatus: status as any,
+      })
+      .where(eq(orders.id, orderId));
+
+    // بنسجّل الفرق مش المبلغ كامل: لو التحصيل اتصحّح من ٤٠٠ لـ٤٥٠، اللي دخل الخزنة
+    // فعلاً هو ٥٠. والفرق بيتحسب **جوّه القفل** فوق المحصّل المتحدّث، فمفيش ازدواج.
+    const delta = collectedAmount - previous;
+    if (delta !== 0) {
+      await addTreasuryTransactionInTransaction(tx, {
+        businessId: order.businessId,
+        type: previous === 0 ? "collection" : "adjustment",
+        direction: delta > 0 ? "in" : "out",
+        amount: Math.abs(delta).toFixed(2),
+        description: `تحصيل أوردر ${order.orderNumber} — ${order.customerName}`,
+        notes:
+          previous === 0
+            ? undefined
+            : `تصحيح من ${previous.toFixed(2)} إلى ${collectedAmount.toFixed(2)}`,
+        referenceType: "order",
+        referenceId: orderId,
+        performedBy: actor.id,
+        performedByName: actor.name,
+        transactionDate: when,
+      } as any);
+    }
+    return { status, delta };
+  });
 }
 
 // ==================== ACCOUNTING DASHBOARD ====================
@@ -4815,11 +4947,16 @@ export async function getAccountingDashboard(params: {
   const productCost = Number(cost?.amount ?? 0);
   const totalExpenses = Number(exp?.amount ?? 0);
   const totalReturns = Number(ret?.amount ?? 0);
-  // صافي الربح = المبيعات − (تكلفة المنتجات + الشحن + المصروفات + المرتجعات).
-  // مبني على المبيعات مش على المحصّل عن قصد: ده ربح محقّق دفتريًا، والفرق بينه وبين
-  // الكاش الفعلي هو "المعلّق" المعروض جنبه.
-  const netProfit =
-    totalSales - (productCost + shippingCost + totalExpenses + totalReturns);
+  // صافي الربح من **المحرّك الوحيد** `computeRealizedProfit` — نفس اللي بتقراه صفحة
+  // المحاسبة ومركز التحكّم بالظبط. مفيش معادلة ربح مستقلة هنا؛ الأرقام فوق
+  // (مبيعات/مصروفات إلخ) بتفضل تجميعات تشغيلية للعرض بس، مش تعريف تاني للربح.
+  // استيراد كسول لمنع دورة (accountingV2.service بيستورد من هنا).
+  const { computeRealizedProfit } = await import("./accountingV2.service");
+  const realized = await computeRealizedProfit({
+    businessIds,
+    dateFrom,
+    dateTo,
+  });
 
   return {
     totalSales,
@@ -4830,10 +4967,8 @@ export async function getAccountingDashboard(params: {
     totalReturns,
     pendingCollection: Number(pending?.amount ?? 0),
     treasuryBalance: await getTreasuryBalance(businessIds),
-    netProfit,
-    // هامش الربح كنسبة من المبيعات. القسمة محميّة: مفيش مبيعات معناها مفيش هامش (صفر)،
-    // مش Infinity ولا NaN — والواجهة بتعرضه كنسبة على طول.
-    profitMargin: totalSales > 0 ? (netProfit / totalSales) * 100 : 0,
+    netProfit: realized.netProfit,
+    profitMargin: realized.profitMargin,
     todaySales: Number(todayRow?.amount ?? 0),
     todayOrders: Number(todayRow?.count ?? 0),
     monthSales: Number(monthRow?.amount ?? 0),
@@ -4968,11 +5103,14 @@ export async function getTreasurySummary(
     // والمرتجع بيأثروا على الكاش برضه، وحصره في نوعين كان بيخلي الرقم مش مطابق للرصيد.
     todayNet: Number(today?.inflow ?? 0) - Number(today?.outflow ?? 0),
     // V2 callers pass the realized profit calculated from immutable Business Events.
-    // The legacy fallback remains readable only before a Business Accounting Go-Live.
+    // الحارس: لو مااتبعتش، بنقراها من **نفس المحرّك الوحيد** مباشرةً — مش معادلة تانية.
     monthProfit:
       realizedMonthProfit ??
-      (await getAccountingDashboard({ businessIds, dateFrom: monthStart }))
-        .netProfit,
+      (
+        await (
+          await import("./accountingV2.service")
+        ).computeRealizedProfit({ businessIds, dateFrom: monthStart })
+      ).netProfit,
     pendingCollection: Number(pending?.amount ?? 0),
     recentTransactions,
   };
@@ -5389,6 +5527,10 @@ export async function getAccountingControlCenter(input: {
     .from(inventoryBalances)
     .where(ids ? inArray(inventoryBalances.businessId, ids) : undefined);
 
+  // الربح من **المحرّك الوحيد** `computeRealizedProfit` — نفس اللي بتقراه صفحة المحاسبة
+  // وملخّص الخزنة بالظبط، فنفس الفترة بتدّي نفس الرقم في كل الشاشات. استيراد كسول عشان
+  // `accountingV2.service` بيستورد من الملف ده (منع دورة). مرتين بنطاقين (يوم/شهر).
+  const { computeRealizedProfit } = await import("./accountingV2.service");
   const [
     collections, buckets, received, due, stockValue, treasuryBalance, dayProfit, monthProfit,
   ] = await Promise.all([
@@ -5398,9 +5540,8 @@ export async function getAccountingControlCenter(input: {
     dueQuery.then(one),
     stockQuery.then(one),
     getTreasuryBalance(input.businessIds),
-    // الربح من نفس المحرك، مرتين بنطاقين. مفيش معادلة ربح تانية هنا ولا في الواجهة.
-    getAccountingDashboard({ businessIds: ids, dateFrom: from, dateTo: toExclusive }),
-    getAccountingDashboard({ businessIds: ids, dateFrom: monthFrom, dateTo: toExclusive }),
+    computeRealizedProfit({ businessIds: ids, dateFrom: from, dateTo: toExclusive }),
+    computeRealizedProfit({ businessIds: ids, dateFrom: monthFrom, dateTo: toExclusive }),
   ]);
 
   return {

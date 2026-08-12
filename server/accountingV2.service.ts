@@ -14,6 +14,7 @@ import {
 } from "drizzle-orm";
 import {
   accountingClosings,
+  adSpendEntries,
   businessEvents,
   businesses,
   financialAccounts,
@@ -21,12 +22,15 @@ import {
   financialTransactions,
   orderItems,
   orders,
+  payrollItems,
+  payrollPeriods,
   shipmentChargeSnapshots,
   type FinancialAccount,
   type InsertBusinessEvent,
 } from "../drizzle/schema";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
-import { getDb } from "./db";
+import { salaryCostForProfit } from "../shared/payrollCalc";
+import { addTreasuryTransactionInTransaction, getDb } from "./db";
 
 export type Actor = { id: number; name: string };
 
@@ -353,6 +357,214 @@ function parseEventPayload(payloadJson: string): DashboardPayload {
   }
 }
 
+/**
+ * المحرّك الوحيد لصافي الربح الفعلي — **مصدر الحقيقة الوحيد** لكل شاشة (المحاسبة،
+ * مركز التحكّم، الـKPIs، التقارير). ممنوع أي معادلة ربح تانية في أي مكان؛ الكل بينده هنا.
+ *
+ * أساس **الاستحقاق** (accrual) للفترة اللي حصل فيها الإيراد والتكلفة — مش تاريخ خروج
+ * الكاش. الكاش حاجة تانية بتتعرض في الخزنة، ومابتتخلطش بالربح.
+ *
+ * كل جنيه تكلفة بيقع في سلة واحدة بس — الحماية من الازدواج مبنية في القراءة:
+ *  • الإيراد/COGS/الشحن/الخسائر: من `business_events` (delivered/returned/shipping/scrap).
+ *  • المصروفات التشغيلية والإعلانات: من أحداث `expense.accrued` بتاعة `expense_accrual`،
+ *    والإعلان بيتفرز بعضوية `ad_spend_entries.expenseId` — فالإعلان بيتحسب مرة واحدة،
+ *    ومابيتطرحش تاني كتشغيلي.
+ *  • المرتبات: **مش** من أحداث `expense.accrued` (اللي بتُنشأ بقيمة `totalGross` قديمة)،
+ *    لكن من `payroll_items` بالتعريف المعتمد الوحيد `salaryCostForProfit`. أحداث المرتبات
+ *    (`sourceType = 'payroll_period'`) **مستبعدة** من سلة المصروفات هنا، فالمرتب بيتحسب
+ *    مرة واحدة بالتعريف الصح. مافيش أي كتابة على الأحداث التاريخية — استبعاد وقت القراءة بس.
+ *
+ * ملاحظة توافق تاريخي: أحداث المرتبات القديمة سايبينها زي ما هي في الجدول (append-only)،
+ * بس مش بنعتمد على قيمتها في الربح. سكربت التصنيف بيقارن القديم بالجديد للتشخيص.
+ */
+export type RealizedProfitBreakdown = {
+  revenue: number;
+  revenueReversals: number;
+  netRevenue: number;
+  cogs: number;
+  shippingCost: number;
+  operatingExpenses: number;
+  advertising: number;
+  payrollCost: number;
+  scrapLoss: number;
+  netProfit: number;
+  profitMargin: number;
+};
+
+/** أول يوم من شهر الدورة كـDate بتوقيت UTC — للفلترة على نافذة الفترة. */
+function payrollPeriodMonthStart(year: number, month: number): Date {
+  return new Date(Date.UTC(year, month - 1, 1));
+}
+
+export async function computeRealizedProfit(input: {
+  businessIds?: number[] | null;
+  dateFrom?: Date;
+  dateTo?: Date;
+}): Promise<RealizedProfitBreakdown> {
+  const empty: RealizedProfitBreakdown = {
+    revenue: 0,
+    revenueReversals: 0,
+    netRevenue: 0,
+    cogs: 0,
+    shippingCost: 0,
+    operatingExpenses: 0,
+    advertising: 0,
+    payrollCost: 0,
+    scrapLoss: 0,
+    netProfit: 0,
+    profitMargin: 0,
+  };
+  const db = await getDb();
+  // نطاق فاضي = رفض (نفس نمط denyWhenEmpty في العزل) — مش "كل الأنشطة".
+  const businessIds = input.businessIds ?? [];
+  if (!db || businessIds.length === 0) return empty;
+
+  const eventConditions: any[] = [
+    inArray(businessEvents.businessId, businessIds),
+    eq(businessEvents.status, "active"),
+  ];
+  if (input.dateFrom)
+    eventConditions.push(
+      gte(businessEvents.accountingEffectiveAt, input.dateFrom)
+    );
+  if (input.dateTo)
+    eventConditions.push(
+      lt(businessEvents.accountingEffectiveAt, input.dateTo)
+    );
+  const events = await db
+    .select()
+    .from(businessEvents)
+    .where(and(...eventConditions))
+    .orderBy(asc(businessEvents.accountingEffectiveAt));
+
+  let revenue = 0n;
+  let revenueReversals = 0n;
+  let cogs = 0n;
+  let shippingCost = 0n;
+  let scrapLoss = 0n;
+  // أحداث المصروفات غير-المرتبات: بنجمّعها بالـexpenseId عشان نفرز الإعلان عن التشغيلي
+  // بعد ما نعرف مين مربوط بحملة. المرتبات (payroll_period) مستبعدة تمامًا من هنا.
+  const expenseAccrualByExpenseId = new Map<number, bigint>();
+  let expenseAccrualNoId = 0n;
+  for (const event of events) {
+    const payload = parseEventPayload(event.payloadJson);
+    if (event.eventType === "shipment.delivered") {
+      revenue += readMoney(payload, "revenue");
+      cogs += readMoney(payload, "cogs");
+    } else if (
+      event.eventType === "shipment.returned" ||
+      event.eventType === "shipment.partial_return"
+    ) {
+      revenueReversals += readMoney(payload, "revenueReversal");
+      cogs -= readMoney(payload, "returnsPendingInspection");
+    } else if (event.eventType === "shipping.charge_recognized") {
+      shippingCost += readMoney(payload, "amount");
+    } else if (event.eventType === "shipping.cost_adjustment") {
+      shippingCost += readMoney(payload, "amount");
+    } else if (event.eventType === "expense.accrued") {
+      // المرتبات ليها مصدرها المعتمد (payroll_items) — بنستبعد حدثها من سلة المصروفات
+      // عشان مايتحسبش مرتين. ما عداها بيتجمّع بالـexpenseId للفرز.
+      if (event.sourceType === "payroll_period") continue;
+      const amount = readMoney(payload, "amount");
+      const expenseId = Number(payload.expenseId ?? 0);
+      if (expenseId > 0) {
+        expenseAccrualByExpenseId.set(
+          expenseId,
+          (expenseAccrualByExpenseId.get(expenseId) ?? 0n) + amount
+        );
+      } else {
+        expenseAccrualNoId += amount;
+      }
+    } else if (
+      event.eventType === "inventory.return_inspected" &&
+      Array.isArray(payload.items)
+    ) {
+      for (const item of payload.items) {
+        if (item.disposition === "scrap" || item.disposition === "missing") {
+          scrapLoss +=
+            toMinorUnits(String(item.unitCostSnapshot ?? "0")) *
+            BigInt(Number(item.quantity ?? 0));
+        }
+      }
+    }
+  }
+
+  // فرز الإعلانات: أي مصروف مربوط بحملة (`ad_spend_entries.expenseId`) بيتحسب إعلان،
+  // والباقي تشغيلي. الإعلان جوّه المصروفات أصلاً — الفرز بيمنع خصمه مرتين.
+  let advertising = 0n;
+  let operatingExpenses = expenseAccrualNoId;
+  const expenseIds = [...expenseAccrualByExpenseId.keys()];
+  const adExpenseIds = new Set<number>();
+  if (expenseIds.length > 0) {
+    const adRows = await db
+      .select({ expenseId: adSpendEntries.expenseId })
+      .from(adSpendEntries)
+      .where(inArray(adSpendEntries.expenseId, expenseIds));
+    for (const row of adRows) adExpenseIds.add(Number(row.expenseId));
+  }
+  for (const [expenseId, amount] of expenseAccrualByExpenseId) {
+    if (adExpenseIds.has(expenseId)) advertising += amount;
+    else operatingExpenses += amount;
+  }
+
+  // المرتبات — التعريف المعتمد الوحيد، مرة واحدة. الدورات المعتمدة/المدفوعة اللي شهرها
+  // واقع في نافذة الفترة. كل صف بيمرّ على `salaryCostForProfit` (نفس المنطق في كل مكان).
+  const payrollConditions: any[] = [
+    inArray(payrollPeriods.businessId, businessIds),
+    inArray(payrollPeriods.status, ["approved", "paid"] as any),
+  ];
+  const payrollRows = await db
+    .select({
+      year: payrollPeriods.year,
+      month: payrollPeriods.month,
+      baseSalary: payrollItems.baseSalary,
+      overtimeAmount: payrollItems.overtimeAmount,
+      bonuses: payrollItems.bonuses,
+      commissions: payrollItems.commissions,
+      absenceDeduction: payrollItems.absenceDeduction,
+      deductions: payrollItems.deductions,
+    })
+    .from(payrollItems)
+    .innerJoin(payrollPeriods, eq(payrollItems.periodId, payrollPeriods.id))
+    .where(and(...payrollConditions));
+  let payrollCost = 0n;
+  for (const row of payrollRows) {
+    const monthStart = payrollPeriodMonthStart(row.year, row.month);
+    if (input.dateFrom && monthStart < input.dateFrom) continue;
+    if (input.dateTo && monthStart >= input.dateTo) continue;
+    // نفس البدائية المشتركة — بنحوّل لأصغر وحدة بعد الحساب عشان الجمع يفضل مضبوط.
+    payrollCost += toMinorUnits(salaryCostForProfit(row).toFixed(2));
+  }
+
+  const netRevenueMinor = revenue - revenueReversals;
+  const netProfitMinor =
+    netRevenueMinor -
+    cogs -
+    shippingCost -
+    operatingExpenses -
+    advertising -
+    payrollCost -
+    scrapLoss;
+  const netRevenue = Number(fromMinorUnits(netRevenueMinor));
+  const netProfit = Number(fromMinorUnits(netProfitMinor));
+  return {
+    revenue: Number(fromMinorUnits(revenue)),
+    revenueReversals: Number(fromMinorUnits(revenueReversals)),
+    netRevenue,
+    cogs: Number(fromMinorUnits(cogs)),
+    shippingCost: Number(fromMinorUnits(shippingCost)),
+    operatingExpenses: Number(fromMinorUnits(operatingExpenses)),
+    advertising: Number(fromMinorUnits(advertising)),
+    payrollCost: Number(fromMinorUnits(payrollCost)),
+    scrapLoss: Number(fromMinorUnits(scrapLoss)),
+    netProfit,
+    profitMargin:
+      netRevenueMinor > 0n
+        ? Number((netProfitMinor * 10000n) / netRevenueMinor) / 100
+        : 0,
+  };
+}
+
 /** Accounting dashboard source of truth: immutable Business Events plus order snapshots. */
 export async function getBusinessEventDashboard(input: {
   businessIds: number[];
@@ -366,6 +578,9 @@ export async function getBusinessEventDashboard(input: {
       revenueReversals: 0,
       cogs: 0,
       shippingCost: 0,
+      operatingExpenses: 0,
+      advertising: 0,
+      payrollCost: 0,
       expenses: 0,
       scrapLoss: 0,
       netProfit: 0,
@@ -387,63 +602,8 @@ export async function getBusinessEventDashboard(input: {
   };
   if (!db || input.businessIds.length === 0) return empty;
 
-  const eventConditions: any[] = [
-    inArray(businessEvents.businessId, input.businessIds),
-    eq(businessEvents.status, "active"),
-  ];
-  if (input.dateFrom)
-    eventConditions.push(
-      gte(businessEvents.accountingEffectiveAt, input.dateFrom)
-    );
-  if (input.dateTo)
-    eventConditions.push(
-      lt(businessEvents.accountingEffectiveAt, input.dateTo)
-    );
-  const events = await db
-    .select()
-    .from(businessEvents)
-    .where(and(...eventConditions))
-    .orderBy(asc(businessEvents.accountingEffectiveAt));
-
-  let revenue = 0n;
-  let revenueReversals = 0n;
-  let cogs = 0n;
-  let shippingCost = 0n;
-  let expensesAmount = 0n;
-  let scrapLoss = 0n;
-  for (const event of events) {
-    const payload = parseEventPayload(event.payloadJson);
-    if (event.eventType === "shipment.delivered") {
-      revenue += readMoney(payload, "revenue");
-      cogs += readMoney(payload, "cogs");
-    } else if (
-      event.eventType === "shipment.returned" ||
-      event.eventType === "shipment.partial_return"
-    ) {
-      revenueReversals += readMoney(payload, "revenueReversal");
-      cogs -= readMoney(payload, "returnsPendingInspection");
-    } else if (event.eventType === "shipping.charge_recognized") {
-      shippingCost += readMoney(payload, "amount");
-    } else if (event.eventType === "shipping.cost_adjustment") {
-      shippingCost += readMoney(payload, "amount");
-    } else if (event.eventType === "expense.accrued") {
-      expensesAmount += readMoney(payload, "amount");
-    } else if (
-      event.eventType === "inventory.return_inspected" &&
-      Array.isArray(payload.items)
-    ) {
-      for (const item of payload.items) {
-        if (item.disposition === "scrap" || item.disposition === "missing") {
-          scrapLoss +=
-            toMinorUnits(String(item.unitCostSnapshot ?? "0")) *
-            BigInt(Number(item.quantity ?? 0));
-        }
-      }
-    }
-  }
-  const realizedRevenue = revenue - revenueReversals;
-  const realizedProfit =
-    realizedRevenue - cogs - shippingCost - expensesAmount - scrapLoss;
+  // الربح الفعلي من المحرّك الوحيد — مافيش حساب ربح تاني هنا.
+  const realized = await computeRealizedProfit(input);
 
   const orderConditions: any[] = [
     inArray(orders.businessId, input.businessIds),
@@ -525,17 +685,21 @@ export async function getBusinessEventDashboard(input: {
 
   return {
     realized: {
-      revenue: Number(fromMinorUnits(realizedRevenue)),
-      revenueReversals: Number(fromMinorUnits(revenueReversals)),
-      cogs: Number(fromMinorUnits(cogs)),
-      shippingCost: Number(fromMinorUnits(shippingCost)),
-      expenses: Number(fromMinorUnits(expensesAmount)),
-      scrapLoss: Number(fromMinorUnits(scrapLoss)),
-      netProfit: Number(fromMinorUnits(realizedProfit)),
-      profitMargin:
-        realizedRevenue > 0n
-          ? Number((realizedProfit * 10000n) / realizedRevenue) / 100
-          : 0,
+      revenue: realized.revenue,
+      revenueReversals: realized.revenueReversals,
+      cogs: realized.cogs,
+      shippingCost: realized.shippingCost,
+      // البنود المفصّلة — الإعلانات والمرتبات كل واحدة لوحدها، والتشغيلي من غيرهم.
+      operatingExpenses: realized.operatingExpenses,
+      advertising: realized.advertising,
+      payrollCost: realized.payrollCost,
+      // `expenses` = مجموع السلال التلاتة، للتوافق مع أي قارئ قديم بيعرض المصروفات كرقم
+      // واحد. البنود فوق بتجمعه بالظبط — مفيش ازدواج.
+      expenses:
+        realized.operatingExpenses + realized.advertising + realized.payrollCost,
+      scrapLoss: realized.scrapLoss,
+      netProfit: realized.netProfit,
+      profitMargin: realized.profitMargin,
     },
     projected: {
       revenue: Number(fromMinorUnits(projectedRevenue)),
@@ -685,4 +849,66 @@ export async function postFinancialTransactionInTransaction(
     }
     return { id: transactionId };
   }
+}
+
+/**
+ * إيداع/سحب يدوي على الخزنة — **idempotent بمعرّف عملية**.
+ *
+ * الإدخال اليدوي كان بينادي `addTreasuryTransaction` مباشرة بلا أي حماية، فـdouble-click
+ * = حركتين. الحل مش heuristic على (المبلغ + الوصف + اليوم) — عمليتين شرعيتين ممكن
+ * يبقوا متطابقين تمامًا (إيداعين ٥٠٠ نفس اليوم بنفس الوصف). الحل معرّف عملية بيولّده
+ * العميل لكل ضغطة مقصودة:
+ *
+ *   نفس الطلب اتبعت تاني (retry شبكة) → نفس المعرّف → حركة واحدة.
+ *   عملية جديدة مقصودة حتى بنفس البيانات → معرّف جديد → حركة جديدة.
+ *
+ * بيعيد استخدام `business_events` (UNIQUE على businessId + idempotencyKey) — **مفيش
+ * migration**. الحدث والحركة في transaction واحدة.
+ */
+export async function recordManualTreasuryEntry(input: {
+  businessId: number;
+  type: "deposit" | "withdrawal";
+  amount: string;
+  description: string;
+  notes?: string;
+  transactionDate: Date;
+  operationId: string;
+  actor: Actor;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const event = await createBusinessEventInTransaction(tx, {
+      businessId: input.businessId,
+      eventType: `treasury.manual_${input.type}`,
+      sourceType: "treasury_manual",
+      sourceReference: input.operationId,
+      idempotencyKey: `treasury:manual:${input.operationId}`,
+      occurredAt: input.transactionDate,
+      payload: {
+        type: input.type,
+        amount: input.amount,
+        description: input.description,
+      },
+      actor: input.actor,
+    });
+    // نفس معرّف العملية اتبعت قبل كده → الحركة اتعملت خلاص. مفيش حركة تانية.
+    if (event.duplicate) {
+      return { duplicate: true as const, transaction: null };
+    }
+    const treasury = await addTreasuryTransactionInTransaction(tx, {
+      businessId: input.businessId,
+      type: input.type,
+      direction: input.type === "deposit" ? "in" : "out",
+      amount: input.amount,
+      description: input.description,
+      notes: input.notes ?? null,
+      referenceType: "manual",
+      referenceId: null,
+      performedBy: input.actor.id,
+      performedByName: input.actor.name,
+      transactionDate: input.transactionDate,
+    } as any);
+    return { duplicate: false as const, transaction: treasury };
+  });
 }

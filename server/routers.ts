@@ -58,6 +58,13 @@ import {
   getOrderItemsForOrders,
 } from "./db";
 import { employees } from "../drizzle/schema";
+import {
+  assertAllOwned,
+  assertOwned,
+  OutOfScopeError,
+  RecordNotFoundError,
+  type ScopedEntity,
+} from "./tenantScope";
 import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
 import { orders as ordersTable } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
@@ -92,6 +99,7 @@ import {
   getBusinessEventDashboard,
   getFinancialAccounts,
   postFinancialTransaction,
+  recordManualTreasuryEntry,
 } from "./accountingV2.service";
 import {
   approvePurchaseReceipt,
@@ -261,6 +269,104 @@ function requireTenantId(emp: { tenantId: number | null }): number {
 }
 
 /**
+ * الحارس الموحّد للوصول بالمعرّف.
+ *
+ * `adminProcedure` بتقول «إنت أدمن» — مابتقولش «أدمن على إيه». السطر ده هو اللي بيجاوب
+ * السؤال التاني، وبيتحط في كل إجراء بياخد معرّف سجل من العميل.
+ *
+ * السجل نفسه في `tenantScope.ts`، وبياخد نفس `getBusinessIdsForTenant` اللي
+ * `scopeBusinessId` بتستخدمها — فمفيش قاعدة عزل تانية، وتغيير القاعدة بيتم في مكان واحد.
+ */
+async function requireOwned(
+  tenantId: number,
+  entity: ScopedEntity | "variant",
+  id: number
+): Promise<void> {
+  const allowed = await getBusinessIdsForTenant(tenantId);
+  try {
+    await assertOwned(allowed, entity, id);
+  } catch (error) {
+    if (error instanceof OutOfScopeError)
+      throw new TRPCError({ code: "FORBIDDEN", message: error.message });
+    if (error instanceof RecordNotFoundError)
+      throw new TRPCError({ code: "NOT_FOUND", message: error.message });
+    throw error;
+  }
+}
+
+/** نفس الحارس لمجموعة معرّفات — الرفض على أول واحد برّه النطاق. */
+async function requireAllOwned(
+  tenantId: number,
+  entity: ScopedEntity,
+  ids: number[]
+): Promise<void> {
+  const allowed = await getBusinessIdsForTenant(tenantId);
+  try {
+    await assertAllOwned(allowed, entity, ids);
+  } catch (error) {
+    if (error instanceof OutOfScopeError)
+      throw new TRPCError({ code: "FORBIDDEN", message: error.message });
+    if (error instanceof RecordNotFoundError)
+      throw new TRPCError({ code: "NOT_FOUND", message: error.message });
+    throw error;
+  }
+}
+
+/**
+ * الموظف ده تابع لنطاقي؟
+ *
+ * الموظف كيان تابع للـtenant (بيتخلق بـ`tenantId: ctx.tenantId`)، فالفحص الأساسي على
+ * الـtenant. لكن الصف القديم اللي `tenantId` بتاعه لسه `null` مايتقفلش في وش صاحبه —
+ * بيتفحص بنطاق نشاطه بدل ما يترفض. الاتنين مع بعض بيقفلوا الشركة التانية من غير ما
+ * يكسروا بيانات قايمة.
+ */
+async function assertEmployeeInScope<
+  T extends { tenantId?: number | null; businessId?: number | null },
+>(tenantId: number, target: T | null | undefined): Promise<T> {
+  if (!target)
+    throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
+  if (target.tenantId != null && target.tenantId !== tenantId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "الموظف ده تابع لحساب تاني",
+    });
+  }
+  // النشاط بيتفحص كمان: صف قديم من غير tenant، أو موظف اتنقل لنشاط برّه النطاق.
+  if (target.businessId != null) {
+    await scopeBusinessId(tenantId, target.businessId);
+  }
+  return target;
+}
+
+/**
+ * السجل ده تابع لنطاقي؟
+ *
+ * الحارس اللي كان ناقص على مسارات التعديل. `scopeBusinessId` بتحمي المدخل اللي جاي من
+ * العميل، لكن التعديل بالـid بيقرا السجل الأول — ونطاق السجل هو اللي لازم يتفحص، مش
+ * اللي العميل بعته. من غير كده أدمن شركة أ يقدر يعدّل صف شركة ب لو عرف رقمه.
+ *
+ * بتعدّي على **نفس** `scopeBusinessId` عشان مايبقاش فيه منطق عزل موازي: قاعدة واحدة،
+ * ورسالة رفض واحدة، ومكان واحد يتغيّر لو القاعدة اتغيّرت.
+ *
+ * السجل اللي `businessId` بتاعه `null` بيترفض: ده صف مش تابع لحد، والتعديل عليه من
+ * جلسة نطاقها محدد قرار مالوش أساس.
+ */
+async function assertRecordInScope(
+  tenantId: number,
+  record: { businessId?: number | null } | null | undefined,
+  notFoundMessage: string
+): Promise<void> {
+  if (!record) throw new TRPCError({ code: "NOT_FOUND", message: notFoundMessage });
+  if (record.businessId == null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "السجل ده مش مربوط بنشاط — مش مسموح تعديله من هنا",
+    });
+  }
+  await scopeBusinessId(tenantId, record.businessId);
+}
+
+/**
  * Multi-tenancy: clamps a client-supplied businessId/businessIds filter to the ids that
  * actually belong to the caller's tenant, so a session can never read another tenant's data
  * just by passing an arbitrary id — the id list must never be trusted as-is from the client.
@@ -272,6 +378,27 @@ function requireTenantId(emp: { tenantId: number | null }): number {
  * case (the request falls through to whatever downstream query will fail with its own clear
  * "Database not available" error) instead of asserting a false FORBIDDEN.
  */
+/**
+ * مُعرّف مستحيل — بيخلي أي فلتر يطابق صفر صفوف.
+ *
+ * كل قرّاء `db.ts` بيتعاملوا مع المصفوفة الفاضية كـ«من غير فلتر» (`businessIds.length > 0`
+ * قبل ما يضيفوا الشرط). يعني جلسة نطاقها **متحقّق وفاضي** — tenant لسه ماتربطش بأي
+ * نشاط — كانت بتشوف **كل** بيانات النظام: أوردرات وخزنة ومخزون وكل حاجة.
+ *
+ * القرّاء ٢٨. تعديلهم واحد واحد معناه ٢٨ فرصة لواحد يتنسي، والنسيان ده هو نفسه اللي
+ * عمل الثغرة. بدل كده النطاق الفاضي بيتحوّل هنا لمُعرّف مستحيل: `inArray(id, [-1])`
+ * بيطابق ولا صف، وكل قارئ بيفضل زي ما هو ويشتغل صح.
+ *
+ * `null` (مش `[]`) لسه معناها «الداتابيز مش متاحة فمقدرش أتحقق» — دي حالة تانية
+ * بالكامل ومتوثّقة في `getBusinessIdsForTenant`.
+ */
+const NO_BUSINESS = -1;
+
+/** النطاق المتحقّق — والفاضي منه بيمنع كل حاجة بدل ما يسمح بكل حاجة. */
+function denyWhenEmpty(allowed: number[]): number[] {
+  return allowed.length > 0 ? allowed : [NO_BUSINESS];
+}
+
 async function scopeBusinessIds(
   tenantId: number,
   requested?: { businessId?: number | null; businessIds?: number[] | null }
@@ -284,9 +411,10 @@ async function scopeBusinessIds(
         ? [requested.businessId]
         : undefined;
   if (allowed == null) return requestedIds;
-  if (!requestedIds) return allowed;
+  if (!requestedIds) return denyWhenEmpty(allowed);
   const allowedSet = new Set(allowed);
-  return requestedIds.filter(id => allowedSet.has(id));
+  // الترشيح ممكن يطلّع مصفوفة فاضية كمان — نفس الفخ بالظبط.
+  return denyWhenEmpty(requestedIds.filter(id => allowedSet.has(id)));
 }
 
 /**
@@ -393,9 +521,11 @@ import {
   updateBusiness,
   getCategoriesByBusiness,
   createCategory,
+  getCategoryById,
   updateCategory,
   getWarehousesByBusiness,
   createWarehouse,
+  getWarehouseById,
   updateWarehouse,
   getBusinessGroupsWithBusinesses,
   getBusinessIdsByGroupId,
@@ -1921,8 +2051,12 @@ export const appRouter = router({
       }),
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
-        return getEmployeeById(input.id);
+      .query(async ({ ctx, input }) => {
+        // كان بيرجّع أي موظف في النظام بالـid — بيانات موظف شركة تانية بالاسم والتليفون.
+        return assertEmployeeInScope(
+          ctx.tenantId,
+          await getEmployeeById(input.id)
+        );
       }),
     create: adminProcedure
       .input(
@@ -1957,12 +2091,19 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
-        const target = await getEmployeeById(id);
-        if (!target)
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "الموظف غير موجود",
-          });
+        // الحارس الأول قبل أي حاجة: الموظف ده أصلاً بتاعي؟
+        //
+        // من غيره، أدمن شركة أ كان يقدر يعطّل موظفين شركة ب، أو يغيّر أدوارهم، أو
+        // **ينقلهم لشركته** — الـ`businessId` جاي من العميل.
+        const target = await assertEmployeeInScope(
+          ctx.tenantId,
+          await getEmployeeById(id)
+        );
+
+        // والنشاط الجديد كمان لازم يكون في نطاقي — النقل بيمشي في الاتجاهين.
+        if (data.businessId !== undefined) {
+          data.businessId = await scopeBusinessId(ctx.tenantId, data.businessId);
+        }
 
         await assertMayAssignOwnerRole(ctx, data.role, target.role);
 
@@ -1998,6 +2139,7 @@ export const appRouter = router({
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "employee", input.id);
         const target = await getEmployeeById(input.id);
         if (!target)
           throw new TRPCError({
@@ -2033,7 +2175,8 @@ export const appRouter = router({
           password: z.string().min(6),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "employee", input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         // Check username uniqueness
@@ -2062,7 +2205,10 @@ export const appRouter = router({
           newPassword: z.string().min(6),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        // كتابة `passwordHash` على موظف شركة تانية = دخول بهويته. الحارس هنا أهم
+        // حارس في الملف كله.
+        await requireOwned(ctx.tenantId, "employee", input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
@@ -2081,6 +2227,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "employee", input.employeeId);
         return getEmployeeInventory(input.employeeId);
       }),
 
@@ -2110,7 +2257,8 @@ export const appRouter = router({
           statuses: z.array(z.string()).optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "employee", input.employeeId);
         const result = await reclaimEmployeeOrders(
           input.employeeId,
           input.statuses
@@ -2139,7 +2287,8 @@ export const appRouter = router({
       }),
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "product", input.id);
         return getProductById(input.id);
       }),
     create: adminProcedure
@@ -2410,8 +2559,14 @@ export const appRouter = router({
           ids: z.array(z.number()),
         })
       )
-      .query(async ({ input }) => {
-        return getOrdersByIds(input.ids);
+      .query(async ({ ctx, input }) => {
+        // سياسة القراءة بالمعرّفات: نرجّع المملوك بس (زي فلاتر businessIds التانية) —
+        // مش نرفض الطلب كله. كده مفيش تسريب حتى عن **وجود** معرّف تابع لشركة تانية.
+        const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+        const rows = await getOrdersByIds(input.ids);
+        if (allowed == null) return rows;
+        const allowedSet = new Set(allowed);
+        return rows.filter((o: any) => allowedSet.has(o.businessId));
       }),
 
     create: protectedProcedure
@@ -2496,6 +2651,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
+        await requireOwned(ctx.tenantId, "order", id);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await updateOrder(id, { ...data, lastUpdatedBy: actingEmpId });
         return { success: true };
@@ -2509,6 +2665,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await assignOrderToEmployee(
           input.orderId,
@@ -2526,6 +2683,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        // كل أوردر في القايمة، مش أول واحد بس.
+        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
+        await requireOwned(ctx.tenantId, "employee", input.employeeId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await bulkAssignOrders(
           input.orderIds,
@@ -2551,6 +2711,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const { id: actingEmpId, name: actingEmpName } =
           await resolveActingEmployeeIdAndName(ctx);
         await confirmOrder(input.orderId, actingEmpId ?? 0, actingEmpName);
@@ -2590,6 +2751,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const order = await getOrderById(input.orderId);
         if (!order)
           throw new TRPCError({
@@ -2623,7 +2785,8 @@ export const appRouter = router({
           allowToOpenPackage: z.boolean().optional().default(true),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         if (!isBostaEnabled())
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -2642,12 +2805,14 @@ export const appRouter = router({
           allowToOpenPackage: z.boolean().optional().default(true),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         if (!isBostaEnabled())
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "Bosta غير مفعل",
           });
+        // كل أوردر في القايمة لازم يكون في النطاق — الرفض قبل أي شحنة تتعمل.
+        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
         const results = await Promise.allSettled(
           input.orderIds.map(id =>
             createBostaShipment(id, {
@@ -2685,6 +2850,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await postponeOrder(
           input.orderId,
@@ -2704,6 +2870,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await cancelOrder(
           input.orderId,
@@ -2734,6 +2901,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await updateOrder(input.orderId, {
           status: "no_answer",
@@ -2768,6 +2936,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const { orderId, ...updates } = input;
         const result = await editOrderFull(orderId, updates, {
@@ -2914,7 +3083,8 @@ export const appRouter = router({
           orderId: z.number(),
         })
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         return getOrderEditLogs(input.orderId);
       }),
 
@@ -2925,6 +3095,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         await deleteOrder(input.orderId);
         await addActivityLog({
           action: "delete_order",
@@ -2945,6 +3116,8 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        // حذف جماعي — الرفض قبل أي مسح لو أي أوردر برّه النطاق.
+        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
         await deleteOrders(input.orderIds);
         await addActivityLog({
           action: "bulk_delete_orders",
@@ -2966,6 +3139,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const originalOrder = await getOrderById(input.orderId);
         if (!originalOrder)
           throw new TRPCError({
@@ -3049,10 +3223,18 @@ export const appRouter = router({
           code: "INTERNAL_SERVER_ERROR",
           message: "DB error",
         });
-      const [result] = await db.execute(
-        sql`UPDATE orders SET status = 'new' WHERE status = 'no_answer'`
-      );
-      const count = (result as any).affectedRows || 0;
+      // العزل: التحويل بالجملة لازم يتقيّد بأنشطة الـtenant بتاعه. من غير الفلتر ده كان
+      // أدمن شركة بيقلب حالة أوردرات كل الشركات. `scopeBusinessIds` بترجع أنشطة الـtenant
+      // (أو [-1] لو فاضي = يمنع الكل)، و`undefined` للمالك على مستوى المنصة (مفيش فلتر).
+      const scoped = await scopeBusinessIds(ctx.tenantId);
+      const conds = [eq(ordersTable.status, "no_answer" as any)];
+      if (scoped) conds.push(inArray(ordersTable.businessId, scoped));
+      const result: any = await db
+        .update(ordersTable)
+        .set({ status: "new" as any })
+        .where(and(...conds));
+      const count =
+        Number(result?.[0]?.affectedRows ?? result?.affectedRows ?? 0) || 0;
       if (count > 0) {
         await addActivityLog({
           action: "convert_no_answer",
@@ -3075,10 +3257,16 @@ export const appRouter = router({
           code: "INTERNAL_SERVER_ERROR",
           message: "DB error",
         });
-      const [result] = await db.execute(
-        sql`UPDATE orders SET status = 'new', postponedTo = NULL WHERE status = 'postponed'`
-      );
-      const count = (result as any).affectedRows || 0;
+      // نفس العزل زي convertNoAnswerToNew — التحويل بالجملة على أنشطة الـtenant بس.
+      const scoped = await scopeBusinessIds(ctx.tenantId);
+      const conds = [eq(ordersTable.status, "postponed" as any)];
+      if (scoped) conds.push(inArray(ordersTable.businessId, scoped));
+      const result: any = await db
+        .update(ordersTable)
+        .set({ status: "new" as any, postponedTo: null })
+        .where(and(...conds));
+      const count =
+        Number(result?.[0]?.affectedRows ?? result?.affectedRows ?? 0) || 0;
       if (count > 0) {
         await addActivityLog({
           action: "convert_postponed",
@@ -3101,6 +3289,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "employee", input.employeeId);
         const db = await getDb();
         if (!db)
           throw new TRPCError({
@@ -3187,7 +3376,10 @@ export const appRouter = router({
           limit: z.number().default(100),
         })
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        // الفلتر اختياري — بيتفحص لما يتبعت بس. من غيره القايمة مقصوصة أصلاً تحت.
+        if (input.orderId != null)
+          await requireOwned(ctx.tenantId, "order", input.orderId);
         return getScanLogs(input);
       }),
 
@@ -3411,6 +3603,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
+        await requireOwned(requireTenantId(emp), "order", input.orderId);
         const order = await getOrderById(input.orderId);
         if (!order)
           throw new TRPCError({
@@ -4025,6 +4218,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
+        await requireOwned(requireTenantId(emp), "order", input.orderId);
         await assignOrderToEmployee(input.orderId, input.employeeId, emp.id);
         return { success: true };
       }),
@@ -4039,6 +4233,9 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
+        const tenantId = requireTenantId(emp);
+        await requireAllOwned(tenantId, "order", input.orderIds);
+        await requireOwned(tenantId, "employee", input.employeeId);
         await bulkAssignOrders(input.orderIds, input.employeeId, emp.id);
         return { success: true };
       }),
@@ -4162,6 +4359,9 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
+        // الربط بأوردر اختياري — بيتفحص لما يتبعت بس.
+        if (input.orderId != null)
+          await requireOwned(requireTenantId(emp), "order", input.orderId);
         if (emp.role !== "manager" && emp.role !== "warehouse")
           throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
         await addInventoryMovement({
@@ -4182,6 +4382,8 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         if (emp.role !== "manager" && emp.role !== "warehouse")
           throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
+        if (input.productId != null)
+          await requireOwned(requireTenantId(emp), "product", input.productId);
         return getInventoryMovements(
           input.productId,
           input.limit,
@@ -4316,7 +4518,8 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(requireTenantId((ctx as any).employee), "employee", input.id);
         const { id, ...data } = input;
         await updateEmployee(id, data);
         return { success: true };
@@ -4325,7 +4528,8 @@ export const appRouter = router({
     // Delete employee
     deleteEmployee: managerPortalProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(requireTenantId((ctx as any).employee), "employee", input.id);
         await deleteEmployee(input.id);
         return { success: true };
       }),
@@ -4339,7 +4543,8 @@ export const appRouter = router({
           password: z.string().min(6),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(requireTenantId((ctx as any).employee), "employee", input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const existing = await db
@@ -4369,7 +4574,8 @@ export const appRouter = router({
           newPassword: z.string().min(6),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(requireTenantId((ctx as any).employee), "employee", input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
@@ -4436,6 +4642,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
+        await requireOwned(requireTenantId(emp), "order", input.orderId);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -4458,6 +4665,11 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(
+          requireTenantId((ctx as any).employee),
+          "order",
+          input.orderId
+        );
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -4494,7 +4706,8 @@ export const appRouter = router({
           orderId: z.number(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -4509,7 +4722,12 @@ export const appRouter = router({
           orderId: z.number(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(
+          requireTenantId((ctx as any).employee),
+          "order",
+          input.orderId
+        );
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -4588,6 +4806,14 @@ export const appRouter = router({
           .padStart(3, "0");
         const orderNumber = `FB-${timestamp}-${random}`;
         // عدد القطع لكل بند (افتراضي 1 لو غير محدد)
+        // كل منتج مختار لازم يكون في نطاق الموظف — الإنشاء بيربط الأوردر بيهم.
+        await requireAllOwned(
+          requireTenantId((ctx as any).employee),
+          "product",
+          input.selectedProducts
+            .map(p => p.productId)
+            .filter((id): id is number => id != null)
+        );
         const itemsWithQty = input.selectedProducts.map(p => ({
           ...p,
           quantity: p.quantity ?? 1,
@@ -4726,6 +4952,11 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(
+          requireTenantId((ctx as any).employee),
+          "order",
+          input.orderId
+        );
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -4783,6 +5014,11 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(
+          requireTenantId((ctx as any).employee),
+          "order",
+          input.orderId
+        );
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -4904,7 +5140,12 @@ export const appRouter = router({
           productId: z.number().int().min(1),
         })
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireOwned(
+          requireTenantId((ctx as any).employee),
+          "product",
+          input.productId
+        );
         const db = await getDb();
         if (!db) return [];
         const { productVariants } = await import("../drizzle/schema");
@@ -5263,6 +5504,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const userId = ctx.user?.id ?? 0;
         return markOrderAsReturned(
           input.orderId,
@@ -5367,6 +5609,8 @@ export const appRouter = router({
         })
       )
       .query(async ({ input, ctx }) => {
+        if (input.employeeId != null)
+          await requireOwned(ctx.tenantId, "employee", input.employeeId);
         const db = await getDb();
         if (!db) return [];
         const { tasks } = await import("../drizzle/schema");
@@ -5400,7 +5644,8 @@ export const appRouter = router({
           status: z.enum(["new", "in_progress", "done"]),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "task", input.taskId);
         const db = await getDb();
         if (!db) throw new Error("قاعدة البيانات غير متاحة");
         const { tasks } = await import("../drizzle/schema");
@@ -5414,7 +5659,8 @@ export const appRouter = router({
     // حذف مهمة (مدير فقط)
     delete: protectedProcedure
       .input(z.object({ taskId: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "task", input.taskId);
         const db = await getDb();
         if (!db) throw new Error("قاعدة البيانات غير متاحة");
         const { tasks } = await import("../drizzle/schema");
@@ -5434,6 +5680,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
         const result = await createPrintLog({
           type: input.type,
           orderIds: input.orderIds,
@@ -5468,7 +5715,8 @@ export const appRouter = router({
           id: z.number(),
         })
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "printLog", input.id);
         const log = await getPrintLogById(input.id);
         if (!log)
           throw new TRPCError({
@@ -5520,18 +5768,49 @@ export const appRouter = router({
   businesses: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
-      return getAllBusinesses(businessIds ?? undefined);
+      return getAllBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
     }),
     activeList: protectedProcedure.query(async ({ ctx }) => {
       const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
-      return getActiveBusinesses(businessIds ?? undefined);
+      return getActiveBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
     }),
-    // Business Groups
-    groups: protectedProcedure.query(async () => {
-      return getActiveBusinessGroups();
+    /*
+      المجموعات والأنشطة — مقصورة على نطاق الجلسة.
+
+      الاتنين دول كانوا بيرجّعوا **كل** أنشطة النظام لأي مستخدم مسجّل، و`BusinessContext`
+      بينادي `groupsWithBusinesses` في كل تحميل صفحة — فقايمة اختيار النشاط كانت ممكن
+      تتملى بأنشطة شركة تانية.
+
+      الفلترة بتمشي من **الأنشطة** مش من `business_groups.tenantId`: عمود المجموعة
+      nullable ولسه بيتملى بسكربت backfill، فالفلترة عليه كانت هتخفي المجموعات القديمة
+      وتفضّي القايمة على الإنتاج الحالي. النشاط هو اللي بيحدد النطاق، والمجموعة بتبان
+      لو فيها نشاط مسموح.
+    */
+    groups: protectedProcedure.query(async ({ ctx }) => {
+      const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+      const groups = await getActiveBusinessGroups();
+      if (allowed == null) return groups;
+      const mine = new Set(
+        (await getActiveBusinesses(denyWhenEmpty(allowed)))
+          .map(business => business.groupId)
+          .filter((id): id is number => id != null)
+      );
+      return groups.filter(group => mine.has(group.id));
     }),
-    groupsWithBusinesses: protectedProcedure.query(async () => {
-      return getBusinessGroupsWithBusinesses();
+    groupsWithBusinesses: protectedProcedure.query(async ({ ctx }) => {
+      const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+      const groups = await getBusinessGroupsWithBusinesses();
+      if (allowed == null) return groups;
+      const allowedSet = new Set(denyWhenEmpty(allowed));
+      return groups
+        .map(group => ({
+          ...group,
+          businesses: group.businesses.filter(business =>
+            allowedSet.has(business.id)
+          ),
+        }))
+        // المجموعة اللي مالهاش أي نشاط مسموح مابتظهرش أصلاً — اسمها لوحده معلومة.
+        .filter(group => group.businesses.length > 0);
     }),
     businessIdsByGroup: protectedProcedure
       .input(
@@ -5572,8 +5851,11 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
+        // من غير السطر ده، أدمن شركة أ يقدر يبعت `isActive: false` على نشاط شركة ب
+        // ويوقّفها. النشاط نفسه هو وحدة النطاق، فبيتفحص مباشرة.
+        await scopeBusinessId(ctx.tenantId, id);
         await updateBusiness(id, data);
         return { success: true };
       }),
@@ -5598,8 +5880,12 @@ export const appRouter = router({
           name: z.string().min(2),
         })
       )
-      .mutation(async ({ input }) => {
-        await createCategory(input);
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(
+          ctx.tenantId,
+          input.businessId
+        );
+        await createCategory({ ...input, businessId });
         return { success: true };
       }),
     updateCategory: adminProcedure
@@ -5610,8 +5896,13 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
+        await assertRecordInScope(
+          ctx.tenantId,
+          await getCategoryById(id),
+          "التصنيف غير موجود"
+        );
         await updateCategory(id, data);
         return { success: true };
       }),
@@ -5636,8 +5927,12 @@ export const appRouter = router({
           name: z.string().min(2),
         })
       )
-      .mutation(async ({ input }) => {
-        await createWarehouse(input);
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(
+          ctx.tenantId,
+          input.businessId
+        );
+        await createWarehouse({ ...input, businessId });
         return { success: true };
       }),
     updateWarehouse: adminProcedure
@@ -5648,8 +5943,14 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
+        // تعطيل مخزن شركة تانية بيوقّف استلام البضاعة عندها.
+        await assertRecordInScope(
+          ctx.tenantId,
+          await getWarehouseById(id),
+          "المخزن غير موجود"
+        );
         await updateWarehouse(id, data);
         return { success: true };
       }),
@@ -5696,7 +5997,8 @@ export const appRouter = router({
       }),
     get: adminProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "salesChannel", input.id);
         return getSalesChannelById(input.id);
       }),
     create: adminProcedure
@@ -5800,7 +6102,8 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "salesChannel", input.id);
         const { id, ...data } = input;
         const current = await getSalesChannelById(id);
         if (!current)
@@ -5843,26 +6146,30 @@ export const appRouter = router({
           field: z.enum(["apiToken", "webhookSecret"]),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "salesChannel", input.id);
         await clearSalesChannelSecret(input.id, input.field);
         return { success: true };
       }),
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "salesChannel", input.id);
         await deleteSalesChannel(input.id);
         return { success: true };
       }),
     reactivate: adminProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "salesChannel", input.id);
         await reactivateSalesChannel(input.id);
         return { success: true };
       }),
     /** Verifies the channel's stored API credentials without importing anything. */
     testConnection: adminProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "salesChannel", input.id);
         return testChannelConnection(input.id);
       }),
     /** Manual "Sync Now" — pulls orders for a date range and upserts them idempotently. */
@@ -5881,6 +6188,7 @@ export const appRouter = router({
             message: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية",
           });
         }
+        await requireOwned(ctx.tenantId, "salesChannel", input.id);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         return syncOrdersByDateRange({
           channelId: input.id,
@@ -5899,6 +6207,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "salesChannel", input.id);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         return syncOrdersByDateRange({
           channelId: input.id,
@@ -5917,7 +6226,9 @@ export const appRouter = router({
           })
           .optional()
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        if (input?.channelId != null)
+          await requireOwned(ctx.tenantId, "salesChannel", input.channelId);
         return getSyncLogs({
           channelId: input?.channelId,
           limit: input?.limit ?? 50,
@@ -5934,7 +6245,8 @@ export const appRouter = router({
           includeInactive: z.boolean().optional(),
         })
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "product", input.productId);
         return getVariantsByProduct(input.productId, {
           includeInactive: input.includeInactive,
         });
@@ -5957,7 +6269,8 @@ export const appRouter = router({
       }),
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "variant", input.id);
         return getVariantById(input.id);
       }),
     create: adminProcedure
@@ -6019,8 +6332,9 @@ export const appRouter = router({
           isActive: z.boolean().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const { id, price, costPrice, ...rest } = input;
+        await requireOwned(ctx.tenantId, "variant", id);
         if (rest.name?.trim()) {
           const current = await getVariantById(id);
           const productId = current?.productId;
@@ -6104,7 +6418,8 @@ export const appRouter = router({
       }),
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "variant", input.id);
         await deleteVariant(input.id);
         return { success: true };
       }),
@@ -6302,6 +6617,9 @@ export const appRouter = router({
           notes: z.string().optional(),
           transactionDate: z.date().optional(),
           businessId: z.number(),
+          // معرّف العملية — العميل بيولّده لكل ضغطة مقصودة. retry بنفس المعرّف = حركة
+          // واحدة؛ عملية جديدة (حتى بنفس المبلغ والوصف) = معرّف جديد = حركة جديدة.
+          operationId: z.string().min(8).max(64),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -6310,19 +6628,24 @@ export const appRouter = router({
           input.businessId
         );
         const actor = await resolveActingEmployeeIdAndName(ctx);
-        const row = await addTreasuryTransaction({
+        const result = await recordManualTreasuryEntry({
           businessId,
           type: input.type,
-          direction: input.type === "deposit" ? "in" : "out",
           amount: input.amount.toFixed(2),
           description: input.description,
           notes: input.notes,
-          referenceType: "manual",
-          performedBy: actor.id ?? ctx.user!.id,
-          performedByName: actor.name ?? "غير معروف",
           transactionDate: input.transactionDate ?? new Date(),
-        } as any);
-        return { success: true, transaction: row };
+          operationId: input.operationId,
+          actor: {
+            id: actor.id ?? ctx.user!.id,
+            name: actor.name ?? "غير معروف",
+          },
+        });
+        return {
+          success: true,
+          duplicate: result.duplicate,
+          transaction: result.transaction,
+        };
       }),
 
     // ---------- تصنيفات المصروفات ----------
@@ -6379,7 +6702,8 @@ export const appRouter = router({
           description: z.string().optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "expenseCategory", input.id);
         const { id, ...rest } = input;
         await updateExpenseCategory(id, rest);
         return { success: true };
@@ -6387,7 +6711,8 @@ export const appRouter = router({
 
     expenseCategoryArchive: permissionProcedure("accounting.manage")
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "expenseCategory", input.id);
         await archiveExpenseCategory(input.id);
         return { success: true };
       }),
@@ -6565,7 +6890,10 @@ export const appRouter = router({
     /** سجل تحصيل أوردر واحد — كل خطوة ومين عملها */
     collectionHistory: permissionProcedure("accounting.view")
       .input(z.object({ orderId: z.number() }))
-      .query(async ({ input }) => getOrderCollectionHistory(input.orderId)),
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
+        return getOrderCollectionHistory(input.orderId);
+      }),
 
     collectionRecord: permissionProcedure("accounting.manage")
       .input(
@@ -6576,6 +6904,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "order", input.orderId);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         return recordOrderCollection(
           input.orderId,
@@ -6946,7 +7275,10 @@ export const appRouter = router({
     // ---------- ملفات الرواتب ----------
     profileList: adminProcedure
       .input(z.object({ employeeId: z.number() }))
-      .query(async ({ input }) => getSalaryProfiles(input.employeeId)),
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "employee", input.employeeId);
+        return getSalaryProfiles(input.employeeId);
+      }),
 
     /** الساري لكل موظف في النشاط — للشاشة اللي المالك بيدير منها المرتبات. */
     profileListByBusiness: adminProcedure
@@ -7030,6 +7362,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "salaryProfile", input.id);
         const { id, ...rest } = input;
         const actor = await resolveActingEmployeeIdAndName(ctx);
         await updateSalaryProfile(id, rest, {
@@ -7158,7 +7491,10 @@ export const appRouter = router({
 
     periodGet: adminProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => getPayrollPeriod(input.id)),
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
+        return getPayrollPeriod(input.id);
+      }),
 
     periodCreate: adminProcedure
       .input(
@@ -7200,6 +7536,7 @@ export const appRouter = router({
     periodRecalculate: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         return recalculatePayrollPeriod(input.id, {
           id: actor.id ?? ctx.user.id,
@@ -7224,6 +7561,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "payrollItem", input.id);
         const { id, ...rest } = input;
         const actor = await resolveActingEmployeeIdAndName(ctx);
         // decimal في drizzle نص — الأرقام بتتحول قبل الحفظ عشان الدقة تفضل ثابتة
@@ -7252,6 +7590,7 @@ export const appRouter = router({
     periodApprove: adminProcedure
       .input(z.object({ id: z.number(), evidenceUrl: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
           id: actor.id ?? ctx.user.id,
@@ -7286,6 +7625,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
           id: actor.id ?? ctx.user.id,
@@ -7322,6 +7662,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
           id: actor.id ?? ctx.user.id,
@@ -7343,6 +7684,7 @@ export const appRouter = router({
     periodDelete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         await deletePayrollPeriod(input.id);
         await addActivityLog({

@@ -235,6 +235,7 @@ export default function DailyLedger() {
           description: description.trim(),
           notes: notes.trim() || undefined,
           transactionDate: when,
+          operationId: crypto.randomUUID(),
         });
       }
       toast.success(`✅ ${ACTION_META[action].label} — اتسجّل`);

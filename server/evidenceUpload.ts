@@ -5,6 +5,11 @@ import type { Express, Request } from "express";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import { COOKIE_NAME } from "../shared/const";
+import {
+  getObject,
+  isObjectStorageConfigured,
+  putObject,
+} from "./objectStorage";
 
 const allowedTypes = new Map([
   ["application/pdf", ".pdf"],
@@ -66,12 +71,18 @@ export function registerEvidenceUploadRoutes(app: Express) {
         if (!hasValidSignature(req.file.mimetype, req.file.buffer)) {
           return res.status(415).json({ error: "محتوى الملف لا يطابق نوعه" });
         }
-        await mkdir(root, { recursive: true });
         const filename = `${randomUUID()}${extension}`;
-        await writeFile(path.join(root, filename), req.file.buffer, {
-          flag: "wx",
-          mode: 0o600,
-        });
+        // تخزين دائم لو متظبّط (S3/R2/MinIO)، وإلا قرص محلي (تطوير بس). المرجع اللي
+        // بيتخزّن هو نفسه في الحالتين — مسار مُتحقّق، مش رابط bucket عام.
+        if (isObjectStorageConfigured()) {
+          await putObject(filename, req.file.buffer, req.file.mimetype);
+        } else {
+          await mkdir(root, { recursive: true });
+          await writeFile(path.join(root, filename), req.file.buffer, {
+            flag: "wx",
+            mode: 0o600,
+          });
+        }
         return res
           .status(201)
           .json({
@@ -97,7 +108,11 @@ export function registerEvidenceUploadRoutes(app: Express) {
       requireAuthenticated(req);
       if (!/^[a-f0-9-]+\.(pdf|jpg|png|webp)$/.test(req.params.filename))
         return res.sendStatus(404);
-      const file = await readFile(path.join(root, req.params.filename));
+      // من التخزين الدائم لو متظبّط، وإلا القرص المحلي. null = ملف مش موجود → 404.
+      const file = isObjectStorageConfigured()
+        ? await getObject(req.params.filename)
+        : await readFile(path.join(root, req.params.filename));
+      if (!file) return res.sendStatus(404);
       const extension = path.extname(req.params.filename);
       const mimeType =
         [...allowedTypes.entries()].find(([, ext]) => ext === extension)?.[0] ??
