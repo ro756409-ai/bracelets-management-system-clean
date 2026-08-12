@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "fs";
+import jwt from "jsonwebtoken";
 import type { TrpcContext } from "./_core/context";
+
+// لازم قبل استيراد الراوتر — بيتقرا وقت التحميل.
+process.env.JWT_SECRET ||= "test-secret";
 
 /**
  * عزل الشركات — جلستين حقيقيتين على الراوتر الحقيقي.
@@ -31,6 +35,11 @@ const state = {
   employees: [
     { id: 501, tenantId: TENANT_A, businessId: BIZ_A, name: "موظف أ", role: "agent", isActive: true },
     { id: 502, tenantId: TENANT_B, businessId: BIZ_B, name: "موظف ب", role: "agent", isActive: true },
+    // مديرين — عشان فحص الدور في `managerPortalProcedure` يعدّي، فالاختبار يقيس
+    // **النطاق** مش الدور. من غيرهم الرفض كان ممكن يبقى بسبب الدور والاختبار يعدّي
+    // وهو مش بيقيس حاجة.
+    { id: 511, tenantId: TENANT_A, businessId: BIZ_A, name: "مدير أ", role: "manager", isActive: true },
+    { id: 512, tenantId: TENANT_B, businessId: BIZ_B, name: "مدير ب", role: "manager", isActive: true },
   ],
   categories: [
     { id: 601, businessId: BIZ_A, name: "تصنيف أ", isActive: true },
@@ -40,6 +49,26 @@ const state = {
     { id: 701, businessId: BIZ_A, name: "مخزن أ", isActive: true },
     { id: 702, businessId: BIZ_B, name: "مخزن ب", isActive: true },
   ],
+  orders: [
+    { id: 801, businessId: BIZ_A },
+    { id: 802, businessId: BIZ_B },
+  ],
+  salesChannels: [
+    { id: 901, businessId: BIZ_A },
+    { id: 902, businessId: BIZ_B },
+  ],
+  payrollPeriods: [
+    { id: 1001, businessId: BIZ_A },
+    { id: 1002, businessId: BIZ_B },
+  ],
+  expenseCategories: [
+    { id: 1101, businessId: BIZ_A },
+    { id: 1102, businessId: BIZ_B },
+  ],
+  printLogs: [
+    { id: 1201, businessId: BIZ_A },
+    { id: 1202, businessId: BIZ_B },
+  ],
   /** كل كتابة بتتسجّل هنا — الإثبات إن الرفض حصل **قبل** أي تعديل. */
   writes: [] as { table: string; id?: number; data?: any }[],
 };
@@ -48,7 +77,24 @@ vi.mock("./db", async importOriginal => {
   const actual = await importOriginal<typeof import("./db")>();
   return {
     ...actual,
-    getDb: async () => null,
+    /*
+      طبقة صغيرة بتخدم `getEmployeeFromCookie` بس — عشان جلسة كوكي الموظف تبقى
+      حقيقية والحارس يتنفّذ فعلاً. أي استعلام تاني بيرجّع فاضي، فالإجراء بيفشل **بعد**
+      الحارس — وده بالظبط اللي الاختبار بيفرّق بينه وبين الرفض.
+    */
+    getDb: async () =>
+      ({
+        select: () => ({
+          from: (table: any) => ({
+            where: () => ({
+              limit: async () =>
+                String(table?.[Symbol.for("drizzle:Name")] ?? "") === "employees"
+                  ? state.employees.filter(e => e.id === lastEmployeeId)
+                  : [],
+            }),
+          }),
+        }),
+      }) as any,
     getBusinessIdsForTenant: async (tenantId: number) =>
       state.businesses.filter(b => b.tenantId === tenantId).map(b => b.id),
     getAllBusinesses: async (ids?: number[]) =>
@@ -91,6 +137,40 @@ vi.mock("./db", async importOriginal => {
   };
 });
 
+vi.mock("./tenantScope", async importOriginal => {
+  const actual = await importOriginal<typeof import("./tenantScope")>();
+  const TABLES: Record<string, () => { id: number; businessId: number | null }[]> = {
+    employee: () => state.employees,
+    order: () => state.orders,
+    salesChannel: () => state.salesChannels,
+    payrollPeriod: () => state.payrollPeriods,
+    expenseCategory: () => state.expenseCategories,
+    printLog: () => state.printLogs,
+    payrollItem: () => [],
+    product: () => [],
+    warehouse: () => state.warehouses,
+    category: () => state.categories,
+    task: () => [],
+  };
+  return {
+    ...actual,
+    // نفس منطق الأصل بالحرف — بس بيقرا من الـstate بدل MySQL.
+    assertOwned: async (
+      allowed: number[] | null,
+      entity: string,
+      id: number
+    ) => {
+      const row = (TABLES[entity]?.() ?? []).find(r => r.id === id);
+      if (!row) throw new actual.RecordNotFoundError("السجل غير موجود");
+      if (allowed == null) return;
+      if (row.businessId == null || !allowed.includes(row.businessId))
+        throw new actual.OutOfScopeError();
+    },
+  };
+});
+
+let lastEmployeeId = 0;
+
 const { appRouter } = await import("./routers");
 
 function session(tenantId: number): TrpcContext {
@@ -117,6 +197,18 @@ function session(tenantId: number): TrpcContext {
       isActive: true,
     } as any,
     tenantId,
+  } as TrpcContext;
+}
+
+/** جلسة كوكي الموظف — بتوكن موقّع فعلاً، عشان `employeePortal.*` تشتغل. */
+function employeeSession(tenantId: number): TrpcContext {
+  const employeeId = tenantId === TENANT_A ? 511 : 512;
+  lastEmployeeId = employeeId;
+  const token = jwt.sign({ employeeId }, process.env.JWT_SECRET!);
+  const base = session(tenantId) as any;
+  return {
+    ...base,
+    req: { protocol: "https", headers: {}, cookies: { employee_token: token } },
   } as TrpcContext;
 }
 
@@ -323,5 +415,186 @@ describe("🔑 آلية واحدة للعزل", () => {
       const body = routers.slice(start, routers.indexOf("\n}", start));
       expect(body, guard).toContain("scopeBusinessId(");
     }
+  });
+});
+
+// ==================== مصفوفة الوصول بالمعرّف ====================
+
+/**
+ * المصفوفة: لكل إجراء حسّاس — أ→أ مسموح · أ→ب ممنوع · ب→ب مسموح · ب→أ ممنوع.
+ *
+ * الرفض المطلوب هو `FORBIDDEN` تحديدًا — مش أي فشل. فشل تاني (سجل مش موجود، داتابيز
+ * مقفولة) معناه إن الاختبار بيقيس حاجة تانية والحارس ممكن يكون مش موجود أصلاً.
+ */
+const MATRIX: {
+  name: string;
+  call: (c: any, id: number) => Promise<unknown>;
+  a: number;
+  b: number;
+}[] = [
+  // ── بيانات الدخول: أخطر مجموعة ──
+  { name: "employees.changePassword", a: 501, b: 502,
+    call: (c, id) => c.employees.changePassword({ id, newPassword: "hacked123" }) },
+  { name: "employees.setCredentials", a: 501, b: 502,
+    call: (c, id) => c.employees.setCredentials({ id, username: "u" + id, password: "hacked123" }) },
+  { name: "employees.delete", a: 501, b: 502,
+    call: (c, id) => c.employees.delete({ id }) },
+
+  // ── بيانات ربط التكاملات ──
+  { name: "salesChannels.clearSecret", a: 901, b: 902,
+    call: (c, id) => c.salesChannels.clearSecret({ id, field: "apiToken" }) },
+  { name: "salesChannels.delete", a: 901, b: 902,
+    call: (c, id) => c.salesChannels.delete({ id }) },
+  { name: "salesChannels.reactivate", a: 901, b: 902,
+    call: (c, id) => c.salesChannels.reactivate({ id }) },
+  { name: "salesChannels.testConnection", a: 901, b: 902,
+    call: (c, id) => c.salesChannels.testConnection({ id }) },
+  { name: "salesChannels.syncNow", a: 901, b: 902,
+    call: (c, id) => c.salesChannels.syncNow({ id, from: new Date(2026, 0, 1), to: new Date(2026, 0, 2) }) },
+  { name: "salesChannels.retrySync", a: 901, b: 902,
+    call: (c, id) => c.salesChannels.retrySync({ id, from: new Date(2026, 0, 1), to: new Date(2026, 0, 2) }) },
+
+  // ── المرتبات: فلوس ──
+  { name: "payroll.periodGet", a: 1001, b: 1002, call: (c, id) => c.payroll.periodGet({ id }) },
+  { name: "payroll.periodApprove", a: 1001, b: 1002, call: (c, id) => c.payroll.periodApprove({ id, evidenceUrl: "x" }) },
+  { name: "payroll.periodPay", a: 1001, b: 1002, call: (c, id) => c.payroll.periodPay({ id, evidenceUrl: "x" }) },
+  { name: "payroll.periodCancel", a: 1001, b: 1002, call: (c, id) => c.payroll.periodCancel({ id, reason: "x" }) },
+  { name: "payroll.periodDelete", a: 1001, b: 1002, call: (c, id) => c.payroll.periodDelete({ id }) },
+  { name: "payroll.periodRecalculate", a: 1001, b: 1002, call: (c, id) => c.payroll.periodRecalculate({ id }) },
+
+  // ── الأوردرات ──
+  { name: "orders.delete", a: 801, b: 802, call: (c, id) => c.orders.delete({ orderId: id }) },
+  { name: "orders.sendToBosta", a: 801, b: 802, call: (c, id) => c.orders.sendToBosta({ orderId: id }) },
+  { name: "orders.cancel", a: 801, b: 802, call: (c, id) => c.orders.cancel({ orderId: id, cancelReason: "x" }) },
+  { name: "orders.confirm", a: 801, b: 802, call: (c, id) => c.orders.confirm({ orderId: id }) },
+  { name: "orders.duplicate", a: 801, b: 802, call: (c, id) => c.orders.duplicate({ orderId: id }) },
+  { name: "orders.getEditHistory", a: 801, b: 802, call: (c, id) => c.orders.getEditHistory({ orderId: id }) },
+  { name: "orders.editOrder", a: 801, b: 802, call: (c, id) => c.orders.editOrder({ orderId: id, customerName: "x" }) },
+
+  // ── المصروفات والطباعة ──
+  { name: "accounting.expenseCategoryUpdate", a: 1101, b: 1102,
+    call: (c, id) => c.accounting.expenseCategoryUpdate({ id, name: "x" }) },
+  { name: "accounting.expenseCategoryArchive", a: 1101, b: 1102,
+    call: (c, id) => c.accounting.expenseCategoryArchive({ id }) },
+  { name: "printLogs.getById", a: 1201, b: 1202, call: (c, id) => c.printLogs.getById({ id }) },
+];
+
+describe("🔑 مصفوفة الوصول بالمعرّف — أ ↔ ب", () => {
+  for (const entry of MATRIX) {
+    it(`🔑 ${entry.name}: أ → سجل ب = FORBIDDEN`, async () => {
+      expect(await denied(() => entry.call(asA(), entry.b))).toBe("FORBIDDEN");
+      expect(state.writes, "مفيش كتابة قبل الرفض").toHaveLength(0);
+    });
+
+    it(`🔑 ${entry.name}: ب → سجل أ = FORBIDDEN`, async () => {
+      expect(await denied(() => entry.call(asB(), entry.a))).toBe("FORBIDDEN");
+      expect(state.writes).toHaveLength(0);
+    });
+
+    it(`${entry.name}: أ → سجل أ = بيعدّي الحارس`, async () => {
+      // بيفشل بعد كده لأسباب تانية (داتابيز مقفولة في الاختبار) — المهم إنه **مش** رفض نطاق.
+      const code = await denied(() => entry.call(asA(), entry.a));
+      expect(code).not.toBe("FORBIDDEN");
+    });
+  }
+});
+
+describe("🔑 النطاق الفاضي والجلسة الغريبة", () => {
+  const orphan = () => appRouter.createCaller(session(999));
+
+  it("🔑 tenant من غير أنشطة مايوصلش لأي سجل", async () => {
+    for (const entry of MATRIX.slice(0, 8)) {
+      expect(await denied(() => entry.call(orphan(), entry.a)), entry.name).toBe(
+        "FORBIDDEN"
+      );
+    }
+    expect(state.writes).toHaveLength(0);
+  });
+
+  it("🔑 جلسة غير مسجّلة مرفوضة", async () => {
+    const anon = appRouter.createCaller({
+      req: { protocol: "https", headers: {}, cookies: {} },
+      res: { clearCookie: () => {} },
+      user: null,
+      employee: null,
+      tenantId: null,
+    } as any);
+    expect(await denied(() => anon.employees.changePassword({ id: 502, newPassword: "x123456" })))
+      .toBe("UNAUTHORIZED");
+    expect(await denied(() => anon.orders.delete({ orderId: 802 }))).toBe("UNAUTHORIZED");
+  });
+});
+
+describe("🔑 الحارس واحد ومركزي", () => {
+  it("سجل الكيانات بيغطي اللي بيتوصلهم بمعرّف", async () => {
+    const { SCOPED_ENTITY_NAMES } = await import("./tenantScope");
+    for (const entity of ["employee", "order", "salesChannel", "payrollPeriod",
+                          "expenseCategory", "printLog", "warehouse", "category"]) {
+      expect(SCOPED_ENTITY_NAMES, entity).toContain(entity);
+    }
+  });
+
+  it("🔑 وكل الحُرّاس بيعدّوا على requireOwned واحدة", () => {
+    const routers = fs.readFileSync("server/routers.ts", "utf-8");
+    // تعريف واحد بس.
+    expect((routers.match(/async function requireOwned\(/g) ?? []).length).toBe(1);
+    // وبيستخدم سجل الكيانات المشترك.
+    const fn = routers.slice(routers.indexOf("async function requireOwned("));
+    expect(fn.slice(0, 700)).toContain("assertOwned(allowed, entity, id)");
+  });
+});
+
+// ==================== مسارات كوكي الموظف ====================
+
+/**
+ * `employeePortal.*` بتتنادي بجلسة كوكي حقيقية (توكن موقّع) — مش بجلسة المالك. دي
+ * أخطر تلات نقط في الملف كله: الاتنين الأولانيين بيكتبوا `passwordHash`، يعني الرفض
+ * هنا هو الفرق بين «تسريب بيانات» و«دخول بهوية حد تاني».
+ */
+describe("🔑 مسارات المدير في بوابة الموظف", () => {
+  const asEmpA = () => appRouter.createCaller(employeeSession(TENANT_A));
+
+  it("🔑 changeEmployeePassword على موظف ب = FORBIDDEN", async () => {
+    const caller = asEmpA();
+    lastEmployeeId = 511;
+    expect(
+      await denied(() =>
+        caller.employeePortal.changeEmployeePassword({ id: 502, newPassword: "hacked123" })
+      )
+    ).toBe("FORBIDDEN");
+    expect(state.writes).toHaveLength(0);
+  });
+
+  it("🔑 setEmployeeCredentials على موظف ب = FORBIDDEN", async () => {
+    const caller = asEmpA();
+    lastEmployeeId = 511;
+    expect(
+      await denied(() =>
+        caller.employeePortal.setEmployeeCredentials({
+          id: 502,
+          username: "stolen",
+          password: "hacked123",
+        })
+      )
+    ).toBe("FORBIDDEN");
+    expect(state.writes).toHaveLength(0);
+  });
+
+  it("🔑 deleteEmployee على موظف ب = FORBIDDEN", async () => {
+    const caller = asEmpA();
+    lastEmployeeId = 511;
+    expect(
+      await denied(() => caller.employeePortal.deleteEmployee({ id: 502 }))
+    ).toBe("FORBIDDEN");
+    expect(state.writes).toHaveLength(0);
+  });
+
+  it("وموظف أ نفسه بيعدّي الحارس", async () => {
+    const caller = asEmpA();
+    lastEmployeeId = 511;
+    const code = await denied(() =>
+      caller.employeePortal.changeEmployeePassword({ id: 501, newPassword: "ok123456" })
+    );
+    expect(code).not.toBe("FORBIDDEN");
   });
 });
