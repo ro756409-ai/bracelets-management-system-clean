@@ -132,6 +132,15 @@ vi.mock("./db", async importOriginal => {
     updateWarehouse: async (id: number, data: any) => {
       state.writes.push({ table: "warehouses", id, data });
     },
+    getOrdersByIds: async (ids: number[]) =>
+      state.orders.filter(o => ids.includes(o.id)),
+    deleteOrders: async (ids: number[]) => {
+      state.writes.push({ table: "orders:bulkDelete", data: ids });
+    },
+    createPrintLog: async (data: any) => {
+      state.writes.push({ table: "printLogs:create", data });
+      return { id: 1 };
+    },
     countActiveAdminTierEmployees: async () => 5,
     addActivityLog: async () => {},
   };
@@ -165,6 +174,20 @@ vi.mock("./tenantScope", async importOriginal => {
       if (allowed == null) return;
       if (row.businessId == null || !allowed.includes(row.businessId))
         throw new actual.OutOfScopeError();
+    },
+    assertAllOwned: async (
+      allowed: number[] | null,
+      entity: string,
+      ids: number[]
+    ) => {
+      if (ids.length === 0 || allowed == null) return;
+      const all = TABLES[entity]?.() ?? [];
+      for (const id of ids) {
+        const row = all.find(r => r.id === id);
+        if (!row) throw new actual.RecordNotFoundError("السجل غير موجود");
+        if (row.businessId == null || !allowed.includes(row.businessId))
+          throw new actual.OutOfScopeError();
+      }
     },
   };
 });
@@ -596,5 +619,65 @@ describe("🔑 مسارات المدير في بوابة الموظف", () => {
       caller.employeePortal.changeEmployeePassword({ id: 501, newPassword: "ok123456" })
     );
     expect(code).not.toBe("FORBIDDEN");
+  });
+});
+
+// ==================== مصفوفة المعرّفات (Bulk) ====================
+
+/**
+ * سياسة المصفوفات: الكتابة بترفض كله لو أي عنصر برّه النطاق (`requireAllOwned`)،
+ * والقراءة بترجّع المملوك بس. الاختبارات بتثبت الاتنين على الراوتر الحقيقي.
+ */
+describe("🔑 Bulk — كتابة بترفض كله، قراءة بترجّع المملوك", () => {
+  it("🔑 bulkDelete [A, B] من أ = مرفوض ومفيش حذف", async () => {
+    expect(await denied(() => asA().orders.bulkDelete({ orderIds: [801, 802] }))).toBe(
+      "FORBIDDEN"
+    );
+    expect(state.writes).toHaveLength(0);
+  });
+
+  it("✅ bulkDelete [A, A] من أ = بيعدّي الحارس", async () => {
+    // بند تاني بنفس شركة أ.
+    state.orders.push({ id: 803, businessId: BIZ_A });
+    await asA().orders.bulkDelete({ orderIds: [801, 803] });
+    expect(state.writes.some(w => w.table === "orders:bulkDelete")).toBe(true);
+    state.orders.pop();
+  });
+
+  it("🔑 bulkSendToBosta [A, B] من أ = مرفوض", async () => {
+    const code = await denied(() =>
+      asA().orders.bulkSendToBosta({ orderIds: [801, 802] })
+    );
+    // ممكن يترفض بـBAD_REQUEST لو Bosta مش مفعّل — بس الأهم إنه **مش** بينجح على B.
+    expect(["FORBIDDEN", "BAD_REQUEST"]).toContain(code);
+    expect(state.writes).toHaveLength(0);
+  });
+
+  it("🔑 printLogs.create [A, B] من أ = مرفوض ومفيش سجل", async () => {
+    expect(
+      await denied(() =>
+        asA().printLogs.create({ type: "labels", orderIds: [801, 802] })
+      )
+    ).toBe("FORBIDDEN");
+    expect(state.writes).toHaveLength(0);
+  });
+
+  it("🔑 getByIds [A, B] من أ = بترجّع أوردر أ بس", async () => {
+    const rows: any[] = await asA().orders.getByIds({ ids: [801, 802] });
+    expect(rows.map(o => o.id)).toEqual([801]);
+  });
+
+  it("🔑 والعكس — getByIds [A, B] من ب = بترجّع ب بس", async () => {
+    const rows: any[] = await asB().orders.getByIds({ ids: [801, 802] });
+    expect(rows.map(o => o.id)).toEqual([802]);
+  });
+
+  it("🔑 والحُرّاس بينادوا requireAllOwned مش requireOwned على أول عنصر", () => {
+    const routers = fs.readFileSync("server/routers.ts", "utf-8");
+    for (const proc of ["bulkDelete", "bulkSendToBosta"]) {
+      const i = routers.indexOf(`${proc}:`);
+      const body = routers.slice(i, i + 700);
+      expect(body, proc).toContain('requireAllOwned(ctx.tenantId, "order", input.orderIds)');
+    }
   });
 });

@@ -2558,8 +2558,14 @@ export const appRouter = router({
           ids: z.array(z.number()),
         })
       )
-      .query(async ({ input }) => {
-        return getOrdersByIds(input.ids);
+      .query(async ({ ctx, input }) => {
+        // سياسة القراءة بالمعرّفات: نرجّع المملوك بس (زي فلاتر businessIds التانية) —
+        // مش نرفض الطلب كله. كده مفيش تسريب حتى عن **وجود** معرّف تابع لشركة تانية.
+        const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+        const rows = await getOrdersByIds(input.ids);
+        if (allowed == null) return rows;
+        const allowedSet = new Set(allowed);
+        return rows.filter((o: any) => allowedSet.has(o.businessId));
       }),
 
     create: protectedProcedure
@@ -2798,12 +2804,14 @@ export const appRouter = router({
           allowToOpenPackage: z.boolean().optional().default(true),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         if (!isBostaEnabled())
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "Bosta غير مفعل",
           });
+        // كل أوردر في القايمة لازم يكون في النطاق — الرفض قبل أي شحنة تتعمل.
+        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
         const results = await Promise.allSettled(
           input.orderIds.map(id =>
             createBostaShipment(id, {
@@ -3107,6 +3115,8 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        // حذف جماعي — الرفض قبل أي مسح لو أي أوردر برّه النطاق.
+        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
         await deleteOrders(input.orderIds);
         await addActivityLog({
           action: "bulk_delete_orders",
@@ -5655,6 +5665,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
         const result = await createPrintLog({
           type: input.type,
           orderIds: input.orderIds,
