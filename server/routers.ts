@@ -3223,10 +3223,18 @@ export const appRouter = router({
           code: "INTERNAL_SERVER_ERROR",
           message: "DB error",
         });
-      const [result] = await db.execute(
-        sql`UPDATE orders SET status = 'new' WHERE status = 'no_answer'`
-      );
-      const count = (result as any).affectedRows || 0;
+      // العزل: التحويل بالجملة لازم يتقيّد بأنشطة الـtenant بتاعه. من غير الفلتر ده كان
+      // أدمن شركة بيقلب حالة أوردرات كل الشركات. `scopeBusinessIds` بترجع أنشطة الـtenant
+      // (أو [-1] لو فاضي = يمنع الكل)، و`undefined` للمالك على مستوى المنصة (مفيش فلتر).
+      const scoped = await scopeBusinessIds(ctx.tenantId);
+      const conds = [eq(ordersTable.status, "no_answer" as any)];
+      if (scoped) conds.push(inArray(ordersTable.businessId, scoped));
+      const result: any = await db
+        .update(ordersTable)
+        .set({ status: "new" as any })
+        .where(and(...conds));
+      const count =
+        Number(result?.[0]?.affectedRows ?? result?.affectedRows ?? 0) || 0;
       if (count > 0) {
         await addActivityLog({
           action: "convert_no_answer",
@@ -3249,10 +3257,16 @@ export const appRouter = router({
           code: "INTERNAL_SERVER_ERROR",
           message: "DB error",
         });
-      const [result] = await db.execute(
-        sql`UPDATE orders SET status = 'new', postponedTo = NULL WHERE status = 'postponed'`
-      );
-      const count = (result as any).affectedRows || 0;
+      // نفس العزل زي convertNoAnswerToNew — التحويل بالجملة على أنشطة الـtenant بس.
+      const scoped = await scopeBusinessIds(ctx.tenantId);
+      const conds = [eq(ordersTable.status, "postponed" as any)];
+      if (scoped) conds.push(inArray(ordersTable.businessId, scoped));
+      const result: any = await db
+        .update(ordersTable)
+        .set({ status: "new" as any, postponedTo: null })
+        .where(and(...conds));
+      const count =
+        Number(result?.[0]?.affectedRows ?? result?.affectedRows ?? 0) || 0;
       if (count > 0) {
         await addActivityLog({
           action: "convert_postponed",
