@@ -216,8 +216,10 @@ describe("🔑 المرحلة الأولى مابتكتبش حاجة", () => {
 });
 
 describe("🔑 الربح من محرك واحد", () => {
-  it("اللوحة بتنادي getAccountingDashboard مش بتحسب بنفسها", () => {
-    expect(controlCenterFn).toContain("getAccountingDashboard({");
+  it("اللوحة بتنادي المحرّك الوحيد computeRealizedProfit مش بتحسب بنفسها", () => {
+    // مركز التحكّم بيقرا الربح من نفس محرّك صفحة المحاسبة بالظبط — مفيش معادلة تانية هنا.
+    expect(controlCenterFn).toContain("computeRealizedProfit({");
+    expect(controlCenterFn).not.toContain("getAccountingDashboard({");
     expect(controlCenterFn).not.toMatch(/netProfit\s*=\s*[^;]*[-+]/);
   });
 

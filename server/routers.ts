@@ -99,6 +99,7 @@ import {
   getBusinessEventDashboard,
   getFinancialAccounts,
   postFinancialTransaction,
+  recordManualTreasuryEntry,
 } from "./accountingV2.service";
 import {
   approvePurchaseReceipt,
@@ -6602,6 +6603,9 @@ export const appRouter = router({
           notes: z.string().optional(),
           transactionDate: z.date().optional(),
           businessId: z.number(),
+          // معرّف العملية — العميل بيولّده لكل ضغطة مقصودة. retry بنفس المعرّف = حركة
+          // واحدة؛ عملية جديدة (حتى بنفس المبلغ والوصف) = معرّف جديد = حركة جديدة.
+          operationId: z.string().min(8).max(64),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -6610,19 +6614,24 @@ export const appRouter = router({
           input.businessId
         );
         const actor = await resolveActingEmployeeIdAndName(ctx);
-        const row = await addTreasuryTransaction({
+        const result = await recordManualTreasuryEntry({
           businessId,
           type: input.type,
-          direction: input.type === "deposit" ? "in" : "out",
           amount: input.amount.toFixed(2),
           description: input.description,
           notes: input.notes,
-          referenceType: "manual",
-          performedBy: actor.id ?? ctx.user!.id,
-          performedByName: actor.name ?? "غير معروف",
           transactionDate: input.transactionDate ?? new Date(),
-        } as any);
-        return { success: true, transaction: row };
+          operationId: input.operationId,
+          actor: {
+            id: actor.id ?? ctx.user!.id,
+            name: actor.name ?? "غير معروف",
+          },
+        });
+        return {
+          success: true,
+          duplicate: result.duplicate,
+          transaction: result.transaction,
+        };
       }),
 
     // ---------- تصنيفات المصروفات ----------
@@ -6881,7 +6890,6 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
         await requireOwned(ctx.tenantId, "order", input.orderId);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         return recordOrderCollection(

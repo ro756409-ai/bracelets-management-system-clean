@@ -17,20 +17,24 @@
  * الحساب نفسه في `shared/reconciliation.ts` ومُختبَر هناك. هنا بنجيب الأرقام بس.
  */
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   businessEvents,
   expensePayments,
+  orders,
   payrollPeriods,
   treasuryTransactions,
 } from "../drizzle/schema";
 import {
   buildReport,
+  classifyTreasuryType,
   formatReport,
+  reconcileCollections,
   reconcileOnce,
   reconcileSupplier,
-  reconcileTreasury,
+  reconcileTreasuryByDirection,
   type Check,
+  type TreasuryClass,
 } from "../shared/reconciliation";
 import { getDb } from "../server/db";
 import {
@@ -70,11 +74,13 @@ async function reconcileBusiness(businessId: number, name: string) {
   const checks: Check[] = [];
 
   // ── الخزنة ──
+  // بنجيب النوع كمان عشان التصنيف — لكن الحساب بالاتجاه (كامل)، مش بتعداد الأنواع.
   const rows = await db
     .select({
       amount: treasuryTransactions.amount,
       balanceAfter: treasuryTransactions.balanceAfter,
       direction: treasuryTransactions.direction,
+      type: treasuryTransactions.type,
     })
     .from(treasuryTransactions)
     .where(eq(treasuryTransactions.businessId, businessId))
@@ -93,28 +99,74 @@ async function reconcileBusiness(businessId: number, name: string) {
       : num(first.balanceAfter) + num(first.amount);
   const currentBalance = num(rows[rows.length - 1].balanceAfter);
 
-  const [collections, deposits, withdrawals, expenseOut] = await Promise.all([
-    treasurySum(db, businessId, "collection", "in"),
-    treasurySum(db, businessId, "deposit", "in"),
-    treasurySum(db, businessId, "withdrawal", "out"),
-    treasurySum(db, businessId, "expense", "out"),
-  ]);
+  // مجموع الداخل والخارج عبر **كل** الأنواع — كامل بالبناء. وتصنيف كل نوع للتشخيص.
+  let totalIn = 0;
+  let totalOut = 0;
+  const byClass: Record<TreasuryClass, { in: number; out: number; count: number }> = {
+    INFLOW: { in: 0, out: 0, count: 0 },
+    OUTFLOW: { in: 0, out: 0, count: 0 },
+    REVERSAL_ADJUSTMENT: { in: 0, out: 0, count: 0 },
+    NON_CASH: { in: 0, out: 0, count: 0 },
+  };
+  // صافي التحصيل (داخل − خارج) لمطابقته بالمحصّل على الأوردرات.
+  let treasuryCollectionsNet = 0;
+  for (const r of rows) {
+    const amount = num(r.amount);
+    const cls = classifyTreasuryType(String(r.type));
+    if (r.direction === "in") {
+      totalIn += amount;
+      byClass[cls].in += amount;
+    } else {
+      totalOut += amount;
+      byClass[cls].out += amount;
+    }
+    byClass[cls].count += 1;
+    if (r.type === "collection")
+      treasuryCollectionsNet += r.direction === "in" ? amount : -amount;
+  }
 
-  // «مصروف» في الخزنة بيغطي المصروفات والإعلانات والمرتبات — كلهم بيمرّوا من
-  // `payExpense`/`payPayrollPeriodV2`. فبنجمّعهم في بند واحد بدل ما نخمّن التقسيم.
   checks.push(
-    reconcileTreasury({
+    reconcileTreasuryByDirection({
       openingBalance,
-      collections: collections.total,
-      deposits: deposits.total,
-      expensesPaid: expenseOut.total,
-      advertisingPaid: 0,
-      payrollPaid: 0,
-      factoryPayments: 0,
-      withdrawals: withdrawals.total,
+      totalIn,
+      totalOut,
       currentBalance,
     })
   );
+
+  // تصنيف الحركات — سطر لكل فئة، للقراءة بس (مش فحص).
+  console.log(`\n  تصنيف حركات الخزنة (${name}):`);
+  for (const cls of Object.keys(byClass) as TreasuryClass[]) {
+    const c = byClass[cls];
+    if (c.count === 0) continue;
+    console.log(
+      `    ${cls}: ${c.count} حركة · داخل ${c.in.toFixed(2)} · خارج ${c.out.toFixed(2)}`
+    );
+  }
+
+  // ── التحصيل: الخزنة مقابل الأوردرات ──
+  const soldStatuses = ["printed", "preparing", "shipped", "delivered", "returned"];
+  const [ordersCollectedRow] = await db
+    .select({
+      total: sql<string>`COALESCE(SUM(${orders.collectedAmount}), 0)`,
+    })
+    .from(orders)
+    .where(
+      and(
+        eq(orders.businessId, businessId),
+        inArray(orders.status, soldStatuses as any)
+      )
+    );
+  checks.push(
+    reconcileCollections({
+      treasuryCollectionsNet,
+      ordersCollected: num(ordersCollectedRow?.total),
+    })
+  );
+
+  // «مصروف» في الخزنة بيغطي المصروفات والإعلانات والمرتبات — كلهم بيمرّوا من
+  // `payExpense`/`payPayrollPeriodV2`. محتاجينه للفحص «مرة واحدة» تحت.
+  const expenseOut = await treasurySum(db, businessId, "expense", "out");
 
   // ── مرة واحدة بالظبط: دفعات المصروفات ──
   const [expensePaid] = await db

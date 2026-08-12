@@ -464,6 +464,7 @@ function ManualTransactionDialog({
       notes: notes.trim() || undefined,
       transactionDate: new Date(date + "T12:00:00"),
       businessId,
+      operationId: crypto.randomUUID(),
     });
   };
 

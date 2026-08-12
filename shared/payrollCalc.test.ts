@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   calcBaseSalary, calcAbsenceDeduction, calcOvertime, calcCommission, calcPayrollLine,
   applyRounding, dailyRateFromMonthly, parseManualFields, mergeWithManualEdits,
-  COMMISSION_BASIS_STATUS, toNumber,
+  COMMISSION_BASIS_STATUS, toNumber, salaryCostForProfit, classifyPayrollHistory,
   type PayrollSettingsInput, type SalaryProfileInput, type PayrollLineInput,
 } from "./payrollCalc";
 
@@ -250,5 +250,93 @@ describe("التعديلات اليدوية — لا يُكتب فوقها", () 
       { bonuses: 200, deductions: 100, advances: 300 }, "none");
     // 3000 + 800 + 200 − 100 − 300
     expect(m.netSalary).toBe(3600);
+  });
+});
+
+describe("salaryCostForProfit — التعريف المعتمد الوحيد لتكلفة المرتب في الربح", () => {
+  it("المثال المعتمد: أساسي ٥٠٠٠ + بونص ٥٠٠ − غياب ٣٠٠ − خصم ٢٠٠ = ٥٠٠٠", () => {
+    const cost = salaryCostForProfit({
+      baseSalary: 5000, overtimeAmount: 0, bonuses: 500,
+      commissions: 0, absenceDeduction: 300, deductions: 200,
+    });
+    expect(cost).toBe(5000);
+  });
+
+  it("السُلفة مابتغيّرش التكلفة — التكلفة تفضل ٥٠٠٠ مهما كانت السُلفة", () => {
+    // نفس الصف، السُلفة مش داخلة في المدخلات أصلاً — البدائية مالهاش حقل advances.
+    const cost = salaryCostForProfit({
+      baseSalary: 5000, overtimeAmount: 0, bonuses: 500,
+      commissions: 0, absenceDeduction: 300, deductions: 200,
+    });
+    expect(cost).toBe(5000); // سُلفة ١٠٠٠ أو صفر — نفس التكلفة
+  });
+
+  it("الأوفرتايم والعمولة بيدخلوا مرة واحدة", () => {
+    const cost = salaryCostForProfit({
+      baseSalary: 4000, overtimeAmount: 300, bonuses: 100,
+      commissions: 250, absenceDeduction: 0, deductions: 0,
+    });
+    expect(cost).toBe(4650);
+  });
+
+  it("الغياب والخصومات بيتطرحوا مرة واحدة بالظبط", () => {
+    const base = salaryCostForProfit({
+      baseSalary: 4000, overtimeAmount: 0, bonuses: 0,
+      commissions: 0, absenceDeduction: 0, deductions: 0,
+    });
+    const withCuts = salaryCostForProfit({
+      baseSalary: 4000, overtimeAmount: 0, bonuses: 0,
+      commissions: 0, absenceDeduction: 150, deductions: 250,
+    });
+    expect(base - withCuts).toBe(400); // مش ٨٠٠ (مرتين) ولا صفر (متجاهل)
+  });
+
+  it("بيقبل النصوص الراجعة من decimal في drizzle", () => {
+    const cost = salaryCostForProfit({
+      baseSalary: "5000.00", overtimeAmount: "0.00", bonuses: "500.00",
+      commissions: "0.00", absenceDeduction: "300.00", deductions: "200.00",
+    });
+    expect(cost).toBe(5000);
+  });
+
+  it("null بيتعامل كصفر مش NaN", () => {
+    const cost = salaryCostForProfit({
+      baseSalary: 3000, overtimeAmount: null, bonuses: null,
+      commissions: null, absenceDeduction: null, deductions: null,
+    });
+    expect(cost).toBe(3000);
+  });
+});
+
+describe("classifyPayrollHistory — تصنيف الدورات التاريخية (تشخيص فقط)", () => {
+  it("MATCHES لما القديم = الجديد (مفيش غياب/خصومات)", () => {
+    const r = classifyPayrollHistory({
+      canonicalCost: 5000, legacyAccrued: 5000, absencePlusDeductions: 0,
+    });
+    expect(r.verdict).toBe("MATCHES");
+    expect(r.difference).toBe(0);
+  });
+
+  it("LEGACY_DIFFERENCE لما الفرق = غياب + خصومات بالظبط", () => {
+    // القديم استحق ٥٠٠٠ (إجمالي)، الجديد ٤٥٠٠ (بعد غياب ٣٠٠ + خصم ٢٠٠).
+    const r = classifyPayrollHistory({
+      canonicalCost: 4500, legacyAccrued: 5000, absencePlusDeductions: 500,
+    });
+    expect(r.verdict).toBe("LEGACY_DIFFERENCE");
+    expect(r.difference).toBe(500);
+  });
+
+  it("AMBIGUOUS لما الفرق حاجة تانية مش الغياب والخصومات", () => {
+    const r = classifyPayrollHistory({
+      canonicalCost: 4500, legacyAccrued: 5000, absencePlusDeductions: 100,
+    });
+    expect(r.verdict).toBe("AMBIGUOUS");
+  });
+
+  it("بيتحمّل كسور التقريب", () => {
+    const r = classifyPayrollHistory({
+      canonicalCost: 4499.995, legacyAccrued: 5000, absencePlusDeductions: 500,
+    });
+    expect(r.verdict).toBe("LEGACY_DIFFERENCE");
   });
 });

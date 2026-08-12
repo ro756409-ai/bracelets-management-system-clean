@@ -4623,55 +4623,66 @@ export async function recordOrderCollection(
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [order] = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.id, orderId))
-    .limit(1);
-  if (!order) throw new Error("الأوردر غير موجود");
 
-  const expected = Number(order.totalAmount);
-  const previous =
-    order.collectedAmount != null ? Number(order.collectedAmount) : 0;
-  const status =
-    collectedAmount <= 0
-      ? "failed"
-      : collectedAmount < expected
-        ? "partial"
-        : "collected";
-  const when = collectedAt ?? new Date();
+  // تحصيل ذرّي: قفل صف الأوردر، قراءة المحصّل الحالي، حساب الفرق، تحديث الأوردر،
+  // وحركة الخزنة — كلهم في transaction واحدة.
+  //
+  // كانت القراءة والتحديث وحركة الخزنة تلات عمليات منفصلة بلا قفل. تحصيلين متزامنين
+  // لنفس الأوردر (المحصّل ٠) كانوا يقروا الاتنين ٠، يحسبوا فرق ٤٠٠، ويدخّلوا **٨٠٠**
+  // للخزنة والأوردر يقول ٤٠٠. القفل `for update` بيسلسلهم: الأول بيحصّل، والتاني بيقرا
+  // المحصّل الجديد (٤٠٠) فبيحسب فرق ٠ ومابيدخّلش تاني.
+  return db.transaction(async tx => {
+    const [order] = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!order) throw new Error("الأوردر غير موجود");
 
-  await db
-    .update(orders)
-    .set({
-      collectedAmount: collectedAmount.toFixed(2),
-      collectedAt: when,
-      collectionStatus: status as any,
-    })
-    .where(eq(orders.id, orderId));
+    const expected = Number(order.totalAmount);
+    const previous =
+      order.collectedAmount != null ? Number(order.collectedAmount) : 0;
+    const status =
+      collectedAmount <= 0
+        ? "failed"
+        : collectedAmount < expected
+          ? "partial"
+          : "collected";
+    const when = collectedAt ?? new Date();
 
-  // بنسجّل الفرق مش المبلغ كامل: لو التحصيل اتصحّح من ٤٠٠ لـ٤٥٠، اللي دخل الخزنة
-  // فعلاً هو ٥٠ — تسجيل ٤٥٠ تاني كان هيحسب الأوردر مرتين.
-  const delta = collectedAmount - previous;
-  if (delta !== 0) {
-    await addTreasuryTransaction({
-      businessId: order.businessId,
-      type: previous === 0 ? "collection" : "adjustment",
-      direction: delta > 0 ? "in" : "out",
-      amount: Math.abs(delta).toFixed(2),
-      description: `تحصيل أوردر ${order.orderNumber} — ${order.customerName}`,
-      notes:
-        previous === 0
-          ? undefined
-          : `تصحيح من ${previous.toFixed(2)} إلى ${collectedAmount.toFixed(2)}`,
-      referenceType: "order",
-      referenceId: orderId,
-      performedBy: actor.id,
-      performedByName: actor.name,
-      transactionDate: when,
-    } as any);
-  }
-  return { status, delta };
+    await tx
+      .update(orders)
+      .set({
+        collectedAmount: collectedAmount.toFixed(2),
+        collectedAt: when,
+        collectionStatus: status as any,
+      })
+      .where(eq(orders.id, orderId));
+
+    // بنسجّل الفرق مش المبلغ كامل: لو التحصيل اتصحّح من ٤٠٠ لـ٤٥٠، اللي دخل الخزنة
+    // فعلاً هو ٥٠. والفرق بيتحسب **جوّه القفل** فوق المحصّل المتحدّث، فمفيش ازدواج.
+    const delta = collectedAmount - previous;
+    if (delta !== 0) {
+      await addTreasuryTransactionInTransaction(tx, {
+        businessId: order.businessId,
+        type: previous === 0 ? "collection" : "adjustment",
+        direction: delta > 0 ? "in" : "out",
+        amount: Math.abs(delta).toFixed(2),
+        description: `تحصيل أوردر ${order.orderNumber} — ${order.customerName}`,
+        notes:
+          previous === 0
+            ? undefined
+            : `تصحيح من ${previous.toFixed(2)} إلى ${collectedAmount.toFixed(2)}`,
+        referenceType: "order",
+        referenceId: orderId,
+        performedBy: actor.id,
+        performedByName: actor.name,
+        transactionDate: when,
+      } as any);
+    }
+    return { status, delta };
+  });
 }
 
 // ==================== ACCOUNTING DASHBOARD ====================
@@ -4861,11 +4872,16 @@ export async function getAccountingDashboard(params: {
   const productCost = Number(cost?.amount ?? 0);
   const totalExpenses = Number(exp?.amount ?? 0);
   const totalReturns = Number(ret?.amount ?? 0);
-  // صافي الربح = المبيعات − (تكلفة المنتجات + الشحن + المصروفات + المرتجعات).
-  // مبني على المبيعات مش على المحصّل عن قصد: ده ربح محقّق دفتريًا، والفرق بينه وبين
-  // الكاش الفعلي هو "المعلّق" المعروض جنبه.
-  const netProfit =
-    totalSales - (productCost + shippingCost + totalExpenses + totalReturns);
+  // صافي الربح من **المحرّك الوحيد** `computeRealizedProfit` — نفس اللي بتقراه صفحة
+  // المحاسبة ومركز التحكّم بالظبط. مفيش معادلة ربح مستقلة هنا؛ الأرقام فوق
+  // (مبيعات/مصروفات إلخ) بتفضل تجميعات تشغيلية للعرض بس، مش تعريف تاني للربح.
+  // استيراد كسول لمنع دورة (accountingV2.service بيستورد من هنا).
+  const { computeRealizedProfit } = await import("./accountingV2.service");
+  const realized = await computeRealizedProfit({
+    businessIds,
+    dateFrom,
+    dateTo,
+  });
 
   return {
     totalSales,
@@ -4876,10 +4892,8 @@ export async function getAccountingDashboard(params: {
     totalReturns,
     pendingCollection: Number(pending?.amount ?? 0),
     treasuryBalance: await getTreasuryBalance(businessIds),
-    netProfit,
-    // هامش الربح كنسبة من المبيعات. القسمة محميّة: مفيش مبيعات معناها مفيش هامش (صفر)،
-    // مش Infinity ولا NaN — والواجهة بتعرضه كنسبة على طول.
-    profitMargin: totalSales > 0 ? (netProfit / totalSales) * 100 : 0,
+    netProfit: realized.netProfit,
+    profitMargin: realized.profitMargin,
     todaySales: Number(todayRow?.amount ?? 0),
     todayOrders: Number(todayRow?.count ?? 0),
     monthSales: Number(monthRow?.amount ?? 0),
@@ -5014,11 +5028,14 @@ export async function getTreasurySummary(
     // والمرتجع بيأثروا على الكاش برضه، وحصره في نوعين كان بيخلي الرقم مش مطابق للرصيد.
     todayNet: Number(today?.inflow ?? 0) - Number(today?.outflow ?? 0),
     // V2 callers pass the realized profit calculated from immutable Business Events.
-    // The legacy fallback remains readable only before a Business Accounting Go-Live.
+    // الحارس: لو مااتبعتش، بنقراها من **نفس المحرّك الوحيد** مباشرةً — مش معادلة تانية.
     monthProfit:
       realizedMonthProfit ??
-      (await getAccountingDashboard({ businessIds, dateFrom: monthStart }))
-        .netProfit,
+      (
+        await (
+          await import("./accountingV2.service")
+        ).computeRealizedProfit({ businessIds, dateFrom: monthStart })
+      ).netProfit,
     pendingCollection: Number(pending?.amount ?? 0),
     recentTransactions,
   };
@@ -5435,6 +5452,10 @@ export async function getAccountingControlCenter(input: {
     .from(inventoryBalances)
     .where(ids ? inArray(inventoryBalances.businessId, ids) : undefined);
 
+  // الربح من **المحرّك الوحيد** `computeRealizedProfit` — نفس اللي بتقراه صفحة المحاسبة
+  // وملخّص الخزنة بالظبط، فنفس الفترة بتدّي نفس الرقم في كل الشاشات. استيراد كسول عشان
+  // `accountingV2.service` بيستورد من الملف ده (منع دورة). مرتين بنطاقين (يوم/شهر).
+  const { computeRealizedProfit } = await import("./accountingV2.service");
   const [
     collections, buckets, received, due, stockValue, treasuryBalance, dayProfit, monthProfit,
   ] = await Promise.all([
@@ -5444,9 +5465,8 @@ export async function getAccountingControlCenter(input: {
     dueQuery.then(one),
     stockQuery.then(one),
     getTreasuryBalance(input.businessIds),
-    // الربح من نفس المحرك، مرتين بنطاقين. مفيش معادلة ربح تانية هنا ولا في الواجهة.
-    getAccountingDashboard({ businessIds: ids, dateFrom: from, dateTo: toExclusive }),
-    getAccountingDashboard({ businessIds: ids, dateFrom: monthFrom, dateTo: toExclusive }),
+    computeRealizedProfit({ businessIds: ids, dateFrom: from, dateTo: toExclusive }),
+    computeRealizedProfit({ businessIds: ids, dateFrom: monthFrom, dateTo: toExclusive }),
   ]);
 
   return {

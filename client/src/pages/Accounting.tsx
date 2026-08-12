@@ -192,11 +192,86 @@ export default function Accounting() {
 }
 
 /**
+ * تفصيل معادلة صافي الربح — بند بند، وبيفوت على نفس رقم `netProfit` القادم من السيرفر
+ * بالظبط. الواجهة **مابتحسبش** الربح؛ بتعرض البنود اللي المحرّك الواحد رجّعها بس، والجمع
+ * هنا للعرض فقط (لازم يساوي `netProfit`). كل بند بيتخصم مرة واحدة: الإعلانات والمرتبات
+ * سطر مستقل، والمصروفات التشغيلية من غيرهم.
+ */
+function ProfitEquation({
+  isLoading,
+  realized,
+}: {
+  isLoading: boolean;
+  realized?: {
+    revenue: number;
+    revenueReversals: number;
+    cogs: number;
+    shippingCost: number;
+    operatingExpenses: number;
+    advertising: number;
+    payrollCost: number;
+    scrapLoss: number;
+    netProfit: number;
+  };
+}) {
+  if (isLoading || !realized) {
+    return <LoadingSkeleton variant="form" rows={7} />;
+  }
+  const netSales = realized.revenue - realized.revenueReversals;
+  const rows: {
+    label: string;
+    value: number;
+    sign: "plus" | "minus";
+    icon: React.ReactNode;
+  }[] = [
+    { label: "المبيعات المحققة (بعد المرتجعات)", value: netSales, sign: "plus", icon: <TrendingUp className="h-4 w-4" /> },
+    { label: "تكلفة البضاعة المباعة", value: realized.cogs, sign: "minus", icon: <Package className="h-4 w-4" /> },
+    { label: "الشحن الفعلي", value: realized.shippingCost, sign: "minus", icon: <Truck className="h-4 w-4" /> },
+    { label: "المصروفات التشغيلية", value: realized.operatingExpenses, sign: "minus", icon: <Receipt className="h-4 w-4" /> },
+    { label: "الإعلانات", value: realized.advertising, sign: "minus", icon: <Megaphone className="h-4 w-4" /> },
+    { label: "المرتبات", value: realized.payrollCost, sign: "minus", icon: <Users className="h-4 w-4" /> },
+    { label: "المرتجعات / الخسائر", value: realized.scrapLoss, sign: "minus", icon: <RotateCcw className="h-4 w-4" /> },
+  ];
+  return (
+    <div className="divide-y divide-[var(--border)]">
+      {rows.map(r => (
+        <div key={r.label} className="flex items-center justify-between py-2">
+          <span className="flex items-center gap-2 text-[var(--muted-foreground)]">
+            {r.icon}
+            <span className="text-sm">{r.label}</span>
+          </span>
+          <span
+            className={`tabular-nums text-sm font-semibold ${
+              r.sign === "plus" ? "text-[var(--success)]" : "text-[var(--foreground)]"
+            }`}
+          >
+            {r.sign === "plus" ? "+" : "−"} {formatMoney(r.value)}
+          </span>
+        </div>
+      ))}
+      <div className="flex items-center justify-between pt-3">
+        <span className="flex items-center gap-2 font-bold">
+          <ArrowLeftRight className="h-4 w-4 text-[var(--primary)]" />
+          صافي الربح الفعلي
+        </span>
+        <span
+          className={`tabular-nums text-lg font-extrabold ${
+            realized.netProfit < 0 ? "text-[var(--danger)]" : "text-[var(--success)]"
+          }`}
+        >
+          {formatMoney(realized.netProfit)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * لوحة الأرباح.
  *
- * كل رقم محسوب على السيرفر من الجداول الموجودة (`accounting.dashboard`)، مفيش حساب مالي
- * في الواجهة: لو الصفحة حسبت صافي الربح بنفسها كانت هتبقى تعريف تاني للربح ينفع يختلف
- * عن أي تقرير تاني في النظام.
+ * كل رقم محسوب على السيرفر من المحرّك الواحد (`computeRealizedProfit` وراء
+ * `accountingV2.dashboard`)، مفيش حساب مالي في الواجهة: لو الصفحة حسبت صافي الربح بنفسها
+ * كانت هتبقى تعريف تاني للربح ينفع يختلف عن مركز التحكّم أو أي تقرير تاني.
  */
 function OverviewSection() {
   const [, navigate] = useLocation();
@@ -235,11 +310,11 @@ function OverviewSection() {
           icon={<TrendingUp className="h-5 w-5" />}
         />
         <StatCard
-          label="الربح المحاسبي المحقق"
+          label="صافي الربح الفعلي"
           tone={(data?.realized?.netProfit ?? 0) < 0 ? "danger" : "success"}
           loading={isLoading}
           value={formatMoney(data?.realized?.netProfit)}
-          hint="عن الفترة المختارة"
+          hint="عن الفترة المختارة — أساس الاستحقاق"
           icon={<ArrowLeftRight className="h-5 w-5" />}
         />
         <StatCard
@@ -304,40 +379,24 @@ function OverviewSection() {
           />
         </CardContent>
       </Card>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="تكلفة البضاعة المباعة"
-          tone="warning"
-          loading={isLoading}
-          value={formatMoneyCompact(data?.realized?.cogs)}
-          hint={data ? formatMoney(data.realized.cogs) : undefined}
-          icon={<Package className="h-5 w-5" />}
-        />
-        <StatCard
-          label="مصروف الشحن المستحق"
-          tone="info"
-          loading={isLoading}
-          value={formatMoneyCompact(data?.realized?.shippingCost)}
-          hint={data ? formatMoney(data.realized.shippingCost) : undefined}
-          icon={<Truck className="h-5 w-5" />}
-        />
-        <StatCard
-          label="المصروفات المستحقة"
-          tone="warning"
-          loading={isLoading}
-          value={formatMoneyCompact(data?.realized?.expenses)}
-          hint={data ? formatMoney(data.realized.expenses) : undefined}
-          icon={<Receipt className="h-5 w-5" />}
-        />
-        <StatCard
-          label="Scrap / Loss"
-          tone="danger"
-          loading={isLoading}
-          value={formatMoneyCompact(data?.realized?.scrapLoss)}
-          hint={data ? formatMoney(data.realized.scrapLoss) : undefined}
-          icon={<RotateCcw className="h-5 w-5" />}
-        />
-      </div>
+      {/* تفصيل صافي الربح الفعلي — بند بند، ونفس الرقم اللي فوق بالظبط. كل بند بيتخصم
+          مرة واحدة: الإعلانات والمرتبات لهم سطر مستقل، والمصروفات التشغيلية من غيرهم. */}
+      <Card className="shadow-[var(--shadow-card)]">
+        <CardHeader className="pb-2 pt-3">
+          <CardTitle className="type-subheading flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5">
+              <ArrowLeftRight className="h-4 w-4 text-[var(--primary)]" />
+              تفصيل صافي الربح الفعلي
+            </span>
+            <span className="type-caption font-normal text-[var(--muted-foreground)]">
+              أساس الاستحقاق — مش حركة الخزنة
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ProfitEquation isLoading={isLoading} realized={data?.realized} />
+        </CardContent>
+      </Card>
       <div className="grid gap-3 lg:grid-cols-3">
         <Card className="shadow-[var(--shadow-card)]">
           <CardHeader className="pb-2 pt-3">

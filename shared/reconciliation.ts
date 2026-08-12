@@ -84,6 +84,81 @@ export function reconcileTreasury(input: TreasuryInputs): Check {
   return check("رصيد الخزنة", expected, input.currentBalance);
 }
 
+/**
+ * تدقيق الخزنة **بالاتجاه** — كامل بالبناء.
+ *
+ * `reconcileTreasury` فوق بيعدّد أنواع بعينها (تحصيل/إيداع/مصروف/سحب)، فأي نوع تالت
+ * (مرتجع، تسوية، تحصيل شركة شحن) بيسقط من المعادلة وتبان الخزنة مش متوازنة بالغلط.
+ * الفحص ده مابيعدّدش أنواع خالص: كل حركة يا داخلة يا خارجة، فمجموع الداخل − مجموع
+ * الخارج + الافتتاحي لازم يساوي الرصيد الحالي مهما كانت الأنواع. مافيش نوع بيسقط.
+ */
+export type TreasuryDirectionInputs = {
+  openingBalance: number;
+  totalIn: number;
+  totalOut: number;
+  currentBalance: number;
+};
+
+export function reconcileTreasuryByDirection(
+  input: TreasuryDirectionInputs
+): Check {
+  const expected = input.openingBalance + input.totalIn - input.totalOut;
+  return check("رصيد الخزنة (كل الأنواع بالاتجاه)", expected, input.currentBalance);
+}
+
+/**
+ * تصنيف أنواع حركات الخزنة — للتشخيص، مش للحساب. الحساب بالاتجاه فوق (كامل)، والتصنيف
+ * ده بيقول للقارئ كل نوع بيعمل إيه:
+ *  • INFLOW: فلوس داخلة (تحصيل، إيداع، تحصيل شركة الشحن لو اتسجّل كتحصيل/إيداع).
+ *  • OUTFLOW: فلوس خارجة (مصروف، سحب، دفعة مصنع).
+ *  • REVERSAL_ADJUSTMENT: تصحيح/عكس (مرتجع، تسوية يدوية) — ممكن يكون داخل أو خارج.
+ *  • NON_CASH: مايحرّكش كاش (مفيش دلوقتي، لكن الخانة موجودة للتصنيف المستقبلي).
+ *
+ * الأنواع من enum الخزنة: collection, refund, expense, deposit, withdrawal, adjustment.
+ */
+export type TreasuryClass =
+  | "INFLOW"
+  | "OUTFLOW"
+  | "REVERSAL_ADJUSTMENT"
+  | "NON_CASH";
+
+export const TREASURY_TYPE_CLASS: Record<string, TreasuryClass> = {
+  collection: "INFLOW",
+  deposit: "INFLOW",
+  expense: "OUTFLOW",
+  withdrawal: "OUTFLOW",
+  refund: "REVERSAL_ADJUSTMENT",
+  adjustment: "REVERSAL_ADJUSTMENT",
+};
+
+export function classifyTreasuryType(type: string): TreasuryClass {
+  return TREASURY_TYPE_CLASS[type] ?? "REVERSAL_ADJUSTMENT";
+}
+
+// ───────────────────────── التحصيل ─────────────────────────
+
+export type CollectionInputs = {
+  /** صافي حركات الخزنة نوع «تحصيل» (داخل − خارج، عشان تصحيح التحصيل بيرجّع بالسالب). */
+  treasuryCollectionsNet: number;
+  /** مجموع `collectedAmount` على الأوردرات اللي خرجت للشحن. */
+  ordersCollected: number;
+};
+
+/**
+ * التحصيل في الخزنة = المحصّل على الأوردرات.
+ *
+ * كل تحصيل أوردر بيكتب حركة خزنة نوع «تحصيل» بالفرق، وبيحدّث `collectedAmount` على
+ * الأوردر بنفس الفرق — في نفس الترانزاكشن. فمجموع الاتنين لازم يتساوى. لو اختلفوا يبقى
+ * تحصيل اتسجّل في مكان من غير التاني.
+ */
+export function reconcileCollections(input: CollectionInputs): Check {
+  return check(
+    "التحصيل: الخزنة مقابل الأوردرات",
+    input.ordersCollected,
+    input.treasuryCollectionsNet
+  );
+}
+
 // ───────────────────────── المصنع ─────────────────────────
 
 export type SupplierInputs = {

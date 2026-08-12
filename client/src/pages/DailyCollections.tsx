@@ -633,6 +633,8 @@ function ManualCashCard({ businessId }: { businessId: number }) {
               amount: value,
               description: description.trim(),
               transactionDate: new Date(),
+              // معرّف عملية لكل ضغطة — retry بيرجّع نفسه، فمفيش حركة مزدوجة.
+              operationId: crypto.randomUUID(),
             });
           }}
         >

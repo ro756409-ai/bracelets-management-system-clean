@@ -1,11 +1,92 @@
 import { describe, it, expect } from "vitest";
 import {
   reconcileTreasury,
+  reconcileTreasuryByDirection,
+  reconcileCollections,
+  classifyTreasuryType,
   reconcileSupplier,
   reconcileOnce,
   buildReport,
   formatReport,
 } from "./reconciliation";
+
+describe("تدقيق الخزنة بالاتجاه — كامل مهما كانت الأنواع", () => {
+  it("الافتتاحي + الداخل − الخارج = الرصيد الحالي", () => {
+    const c = reconcileTreasuryByDirection({
+      openingBalance: 1000,
+      totalIn: 5000,
+      totalOut: 3200,
+      currentBalance: 2800,
+    });
+    expect(c.ok).toBe(true);
+    expect(c.difference).toBe(0);
+  });
+
+  it("بيمسك فرق لو حركة سقطت من الرصيد", () => {
+    const c = reconcileTreasuryByDirection({
+      openingBalance: 0,
+      totalIn: 1000,
+      totalOut: 300,
+      currentBalance: 650, // المفروض ٧٠٠
+    });
+    expect(c.ok).toBe(false);
+    expect(c.difference).toBe(-50);
+  });
+
+  it("المرتجع والتسوية بيدخلوا الحساب بالاتجاه — مش بيسقطوا", () => {
+    // مرتجع خارج ٢٠٠ + تسوية داخلة ٥٠ ضمن totalIn/totalOut، فالمعادلة بتفضل تقفل.
+    const c = reconcileTreasuryByDirection({
+      openingBalance: 100,
+      totalIn: 1000 + 50, // تحصيل + تسوية داخلة
+      totalOut: 400 + 200, // مصروف + مرتجع خارج
+      currentBalance: 550,
+    });
+    expect(c.ok).toBe(true);
+  });
+});
+
+describe("تصنيف أنواع الخزنة", () => {
+  it("بيصنّف الأنواع المعروفة صح", () => {
+    expect(classifyTreasuryType("collection")).toBe("INFLOW");
+    expect(classifyTreasuryType("deposit")).toBe("INFLOW");
+    expect(classifyTreasuryType("expense")).toBe("OUTFLOW");
+    expect(classifyTreasuryType("withdrawal")).toBe("OUTFLOW");
+    expect(classifyTreasuryType("refund")).toBe("REVERSAL_ADJUSTMENT");
+    expect(classifyTreasuryType("adjustment")).toBe("REVERSAL_ADJUSTMENT");
+  });
+
+  it("النوع المجهول بيتحطّ في تسوية مش بيتجاهل", () => {
+    expect(classifyTreasuryType("carrier_settlement")).toBe("REVERSAL_ADJUSTMENT");
+  });
+});
+
+describe("تدقيق التحصيل — الخزنة مقابل الأوردرات", () => {
+  it("بيتساوى لما التحصيل متطابق", () => {
+    const c = reconcileCollections({
+      treasuryCollectionsNet: 12500,
+      ordersCollected: 12500,
+    });
+    expect(c.ok).toBe(true);
+  });
+
+  it("بيمسك تحصيل اتسجّل في مكان من غير التاني", () => {
+    const c = reconcileCollections({
+      treasuryCollectionsNet: 12500,
+      ordersCollected: 12000,
+    });
+    expect(c.ok).toBe(false);
+    expect(c.difference).toBe(500);
+  });
+
+  it("تصحيح التحصيل بالسالب بيدخل الصافي صح", () => {
+    // تحصيل ٤٠٠ بعدين تصحيح −٥٠ = صافي ٣٥٠، والأوردر بيقول ٣٥٠.
+    const c = reconcileCollections({
+      treasuryCollectionsNet: 350,
+      ordersCollected: 350,
+    });
+    expect(c.ok).toBe(true);
+  });
+});
 
 /**
  * تدقيق الأرقام.
