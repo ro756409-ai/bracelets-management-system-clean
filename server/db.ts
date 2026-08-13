@@ -2025,7 +2025,11 @@ export async function getDailyOrdersChart(
 
   let businessFilter;
   if (businessIds && businessIds.length > 0) {
-    businessFilter = sql`AND businessId IN (${sql.raw(businessIds.join(","))})`;
+    // مُعامَلات مربوطة لكل id بدل `sql.raw(join)` — أأمن ومش هشّ لو دخل نوع غير رقم.
+    businessFilter = sql`AND businessId IN (${sql.join(
+      businessIds.map(id => sql`${id}`),
+      sql`, `
+    )})`;
   } else if (businessId) {
     businessFilter = sql`AND businessId = ${businessId}`;
   } else {
