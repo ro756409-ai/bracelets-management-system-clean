@@ -4708,10 +4708,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx.tenantId, "order", input.orderId);
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { orders } = await import("../drizzle/schema");
-        await db.delete(orders).where(eq(orders.id, input.orderId));
+        // المسار الوحيد للحذف — بيمسح الأصناف مع الأوردر (منع الـorphans).
+        await deleteOrder(input.orderId);
         return { success: true };
       }),
 
@@ -4747,10 +4745,15 @@ export const appRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { orders } = await import("../drizzle/schema");
-      const result = await db
-        .delete(orders)
+      // بنجيب المعرّفات الأول وبعدين نمرّها على نفس helper الحذف — عشان الأصناف تتمسح
+      // مع الأوردرات (مش db.delete(orders) خام اللي كان بيسيب أصناف يتيمة).
+      const dupRows = await db
+        .select({ id: orders.id })
+        .from(orders)
         .where(eq(orders.isDuplicate, true));
-      return { deleted: (result as any).affectedRows ?? 0 };
+      const ids = dupRows.map(r => r.id);
+      await deleteOrders(ids);
+      return { deleted: ids.length };
     }),
   }),
 
@@ -4977,7 +4980,8 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الأوردر غير موجود أو ليس من إدخالك",
           });
-        await db.delete(orders).where(eq(orders.id, input.orderId));
+        // نفس helper الحذف — بيمسح الأصناف مع الأوردر (منع الـorphans).
+        await deleteOrder(input.orderId);
         return { success: true };
       }),
 
