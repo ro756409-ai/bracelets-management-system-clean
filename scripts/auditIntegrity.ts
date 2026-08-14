@@ -40,8 +40,10 @@ type Relation = {
 };
 
 const RELATIONS: Relation[] = [
-  { label: "order_items → orders", childTable: "order_items", childRef: "orderId", parentTable: "orders", nullable: false, compareBusiness: true },
-  { label: "order_items → products", childTable: "order_items", childRef: "productId", parentTable: "products", nullable: true, compareBusiness: true },
+  // order_items مالوش عمود businessId — النطاق بيتورّث من الأوردر — فمفيش مقارنة business
+  // على مستوى السطر (WRONG_PARENT مش قابل للفحص هنا، بيتحسب 0).
+  { label: "order_items → orders", childTable: "order_items", childRef: "orderId", parentTable: "orders", nullable: false, compareBusiness: false },
+  { label: "order_items → products", childTable: "order_items", childRef: "productId", parentTable: "products", nullable: true, compareBusiness: false },
   { label: "order_items → product_variants", childTable: "order_items", childRef: "variantId", parentTable: "product_variants", nullable: true, compareBusiness: false },
   { label: "product_variants → products", childTable: "product_variants", childRef: "productId", parentTable: "products", nullable: false, compareBusiness: false },
   { label: "inventory_movements → products", childTable: "inventory_movements", childRef: "productId", parentTable: "products", nullable: false, compareBusiness: true },
