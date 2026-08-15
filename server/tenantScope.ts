@@ -123,15 +123,20 @@ export async function assertAllOwned(
   entity: ScopedEntity,
   ids: number[]
 ): Promise<void> {
-  if (ids.length === 0 || allowedBusinessIds == null) return;
+  // "كل الـids دي مملوكة" دلالته عن الـids **المميّزة** — التكرار مالوش لازمة. المنادي
+  // ممكن يبعت نفس الـid أكتر من مرة بشكل شرعي (أصناف facebook-entry اللي بتتفرّع من
+  // منتج أب واحد: نقوش الأساور). من غير التمييز، المقارنة `rows.length !== ids.length`
+  // كانت بترمي "غير موجود" غلط رغم إن المنتج موجود ومملوك.
+  const distinctIds = [...new Set(ids)];
+  if (distinctIds.length === 0 || allowedBusinessIds == null) return;
   const db = await getDb();
   if (!db) return;
   const { table, label } = ENTITIES[entity];
   const rows = await db
     .select({ id: (table as any).id, businessId: (table as any).businessId })
     .from(table as any)
-    .where(inArray((table as any).id, ids));
-  if (rows.length !== ids.length)
+    .where(inArray((table as any).id, distinctIds));
+  if (rows.length !== distinctIds.length)
     throw new RecordNotFoundError(`${label} غير موجود`);
   for (const row of rows as { businessId: number | null }[]) {
     if (row.businessId == null || !allowedBusinessIds.includes(row.businessId))
