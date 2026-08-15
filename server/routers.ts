@@ -441,6 +441,45 @@ async function scopeBusinessId(
 }
 
 /**
+ * النشاط اللي هيتبعله موظف جديد — **مايرجعش null أبدًا** (منع تكرار مشكلة
+ * `employees.businessId = NULL` اللي كسرت العزل).
+ *
+ * لو اتحدد نشاط: بيتأكد إنه تابع للتينانت (`scopeBusinessId`). لو مااتحددش (أو المدير
+ * اللي بيضيف businessId بتاعه فاضي): بيجيب أنشطة التينانت — واحد بيستخدمه، أكتر من
+ * واحد **لازم يتحدد** (مايخمّنش)، صفر بيرفض بوضوح. فمستحيل ينشأ موظف بلا نشاط.
+ */
+async function resolveEmployeeBusinessId(
+  tenantId: number,
+  requested?: number | null
+): Promise<number> {
+  if (requested != null) {
+    const scoped = await scopeBusinessId(tenantId, requested);
+    if (scoped == null)
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "النشاط ده مش تابع لحسابك",
+      });
+    return scoped;
+  }
+  const allowed = await getBusinessIdsForTenant(tenantId);
+  if (allowed == null)
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "تعذّر تحديد النشاط",
+    });
+  if (allowed.length === 1) return allowed[0];
+  if (allowed.length === 0)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "مفيش نشاط مرتبط بحسابك — أنشئ نشاطًا الأول",
+    });
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message: "حدّد النشاط اللي هيتبعله الموظف — عندك أكتر من نشاط",
+  });
+}
+
+/**
  * نفس `scopeBusinessId` لكن بيرجّع `number` مضمون.
  *
  * `scopeBusinessId` بيرجّع undefined في حالة واحدة بس: لما المدخل نفسه يكون null/undefined
@@ -2070,7 +2109,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await assertMayAssignOwnerRole(ctx, input.role, null);
-        const businessId = await scopeBusinessId(
+        // النشاط لازم يتحدّد — مايرجعش null (منع تكرار businessId=NULL).
+        const businessId = await resolveEmployeeBusinessId(
           ctx.tenantId,
           input.businessId
         );
@@ -4490,9 +4530,14 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
+        // نفس الحارس — لو نشاط المدير نفسه فاضي (legacy)، بيتحلّ لنشاط التينانت مش null.
+        const businessId = await resolveEmployeeBusinessId(
+          tenantId,
+          emp.businessId ?? undefined
+        );
         await createEmployee({
           ...input,
-          businessId: emp.businessId ?? undefined,
+          businessId,
           tenantId,
         });
         return { success: true };
@@ -4708,10 +4753,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx.tenantId, "order", input.orderId);
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { orders } = await import("../drizzle/schema");
-        await db.delete(orders).where(eq(orders.id, input.orderId));
+        // المسار الوحيد للحذف — بيمسح الأصناف مع الأوردر (منع الـorphans).
+        await deleteOrder(input.orderId);
         return { success: true };
       }),
 
@@ -4747,10 +4790,15 @@ export const appRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { orders } = await import("../drizzle/schema");
-      const result = await db
-        .delete(orders)
+      // بنجيب المعرّفات الأول وبعدين نمرّها على نفس helper الحذف — عشان الأصناف تتمسح
+      // مع الأوردرات (مش db.delete(orders) خام اللي كان بيسيب أصناف يتيمة).
+      const dupRows = await db
+        .select({ id: orders.id })
+        .from(orders)
         .where(eq(orders.isDuplicate, true));
-      return { deleted: (result as any).affectedRows ?? 0 };
+      const ids = dupRows.map(r => r.id);
+      await deleteOrders(ids);
+      return { deleted: ids.length };
     }),
   }),
 
@@ -4977,7 +5025,8 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الأوردر غير موجود أو ليس من إدخالك",
           });
-        await db.delete(orders).where(eq(orders.id, input.orderId));
+        // نفس helper الحذف — بيمسح الأصناف مع الأوردر (منع الـorphans).
+        await deleteOrder(input.orderId);
         return { success: true };
       }),
 

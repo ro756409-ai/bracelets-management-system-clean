@@ -1412,10 +1412,21 @@ export async function updateOrder(id: number, data: Partial<InsertOrder>) {
     .where(eq(orders.id, id));
 }
 
+/**
+ * حذف أوردر — **بيمسح أصنافه معاه في نفس الترانزاكشن**.
+ *
+ * مفيش FK/cascade على `order_items.orderId`، فلو مامسحناش الأصناف بإيدينا بتفضل
+ * يتيمة (ده كان سبب الـ20 orphan في تدقيق D5). الاتنين في transaction واحدة: يا
+ * يتمسحوا سوا يا مايتمسحش حاجة. ده هو المكان الوحيد اللي بيحذف أوردر — أي مسار تاني
+ * بينده عليه بدل ما يمسح `orders` مباشرة.
+ */
 export async function deleteOrder(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.delete(orders).where(eq(orders.id, id));
+  await db.transaction(async tx => {
+    await tx.delete(orderItems).where(eq(orderItems.orderId, id));
+    await tx.delete(orders).where(eq(orders.id, id));
+  });
 }
 
 // ==================== SCAN HELPERS ====================
@@ -1624,12 +1635,15 @@ export async function getScanLogs(filters: {
   return rows;
 }
 
+/** حذف مجموعة أوردرات — نفس منطق `deleteOrder`: الأصناف مع الأوردرات في ترانزاكشن واحدة. */
 export async function deleteOrders(ids: number[]) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  for (const id of ids) {
-    await db.delete(orders).where(eq(orders.id, id));
-  }
+  if (ids.length === 0) return;
+  await db.transaction(async tx => {
+    await tx.delete(orderItems).where(inArray(orderItems.orderId, ids));
+    await tx.delete(orders).where(inArray(orders.id, ids));
+  });
 }
 
 export async function markOrdersAsPrinted(ids: number[]) {
@@ -2025,7 +2039,11 @@ export async function getDailyOrdersChart(
 
   let businessFilter;
   if (businessIds && businessIds.length > 0) {
-    businessFilter = sql`AND businessId IN (${sql.raw(businessIds.join(","))})`;
+    // مُعامَلات مربوطة لكل id بدل `sql.raw(join)` — أأمن ومش هشّ لو دخل نوع غير رقم.
+    businessFilter = sql`AND businessId IN (${sql.join(
+      businessIds.map(id => sql`${id}`),
+      sql`, `
+    )})`;
   } else if (businessId) {
     businessFilter = sql`AND businessId = ${businessId}`;
   } else {

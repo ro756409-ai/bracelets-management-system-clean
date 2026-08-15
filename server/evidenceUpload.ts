@@ -92,12 +92,13 @@ export function registerEvidenceUploadRoutes(app: Express) {
             mimeType: req.file.mimetype,
           });
       } catch (error) {
+        const unauthorized =
+          error instanceof Error && error.message === "UNAUTHORIZED";
+        // نسجّل السبب الحقيقي في اللوج (مش للواجهة) عشان أي فشل تخزين يبقى قابل للتشخيص.
+        if (!unauthorized)
+          console.error("[evidence upload] فشل الرفع:", error);
         return res
-          .status(
-            error instanceof Error && error.message === "UNAUTHORIZED"
-              ? 401
-              : 500
-          )
+          .status(unauthorized ? 401 : 500)
           .json({ error: "تعذر رفع مستند الإثبات" });
       }
     }
