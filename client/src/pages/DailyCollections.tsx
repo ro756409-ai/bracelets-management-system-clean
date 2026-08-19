@@ -14,7 +14,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { EvidenceUpload } from "@/components/EvidenceUpload";
 import { DEFAULT_TREASURY_LABEL } from "@/components/accounting/PaymentSource";
 import { formatMoney } from "@/lib/money";
 import { Banknote, Receipt, Wallet } from "lucide-react";
@@ -384,12 +383,6 @@ function ExpenseCard({ businessId }: { businessId: number }) {
             onChange={event => setDescription(event.target.value)}
           />
         </div>
-
-        <EvidenceUpload
-          label="صورة الفاتورة (اختياري)"
-          value={attachmentUrl}
-          onChange={setAttachmentUrl}
-        />
 
         <div className="grid gap-2 sm:grid-cols-2">
           <Button

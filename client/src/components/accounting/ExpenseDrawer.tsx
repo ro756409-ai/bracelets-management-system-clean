@@ -12,7 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { EvidenceUpload } from "@/components/EvidenceUpload";
 import { DEFAULT_TREASURY_LABEL } from "@/components/accounting/PaymentSource";
 import { Receipt } from "lucide-react";
 
@@ -154,12 +153,6 @@ export function ExpenseDrawer({
               onChange={e => setDescription(e.target.value)}
             />
           </div>
-
-          <EvidenceUpload
-            label="صورة الفاتورة (اختياري)"
-            value={attachment}
-            onChange={setAttachment}
-          />
         </div>
 
         {/*

@@ -138,10 +138,132 @@ export default function SalaryProfiles() {
         مساحة واحدة: دورة الشهر فوق (اللي بتفتحها كل شهر)، والمرتبات الثابتة والسُلف
         تحتها. قبل كده كانوا تلات صفحات، والتاجر لازم يتنقّل بينهم عشان يقفل شهر واحد.
       */}
+      {selectedId != null && <NetSalarySummary businessId={selectedId} />}
       {selectedId != null && <PeriodWorkspace businessId={selectedId} />}
       {selectedId != null && <ProfilesSection businessId={selectedId} />}
       {selectedId != null && <AdvancesSection businessId={selectedId} />}
+      {selectedId != null && <BonusesSection businessId={selectedId} />}
     </div>
+  );
+}
+
+// ───────────────────────── ملخص صافي المرتب ─────────────────────────
+
+const MONTH_NAMES = [
+  "يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
+  "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر",
+];
+
+/**
+ * ملخص بسيط لكل موظف: الأساسي + البونص − السُلف = الصافي.
+ *
+ * الصافي محسوب على السيرفر بدالة واحدة (`computeNetSalary`) — الشاشة مابتحسبش، بتعرض.
+ * الفلتر بالشهر بيطبّق على البونص والسُلف؛ الأساسي من الملف الساري.
+ */
+function NetSalarySummary({ businessId }: { businessId: number }) {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1); // 0 = كل الفترات
+  const range = useMemo(() => {
+    if (month === 0) return { from: undefined, to: undefined };
+    return {
+      from: new Date(year, month - 1, 1),
+      to: new Date(year, month, 0, 23, 59, 59),
+    };
+  }, [year, month]);
+
+  const summary = trpc.payroll.salarySummary.useQuery(
+    { businessId, from: range.from, to: range.to },
+    { retry: false }
+  );
+  const rows = summary.data ?? [];
+  const totals = rows.reduce(
+    (s, r) => ({
+      base: s.base + r.baseSalary,
+      bonuses: s.bonuses + r.totalBonuses,
+      advances: s.advances + r.totalAdvances,
+      net: s.net + r.netSalary,
+    }),
+    { base: 0, bonuses: 0, advances: 0, net: 0 }
+  );
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Wallet className="h-5 w-5 text-emerald-700" />
+            صافي المرتب = الأساسي + البونص − السُلف
+          </CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={String(month)} onValueChange={v => setMonth(Number(v))}>
+              <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">كل الفترات</SelectItem>
+                {MONTH_NAMES.map((name, i) => (
+                  <SelectItem key={name} value={String(i + 1)}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={String(year)} onValueChange={v => setYear(Number(v))}>
+              <SelectTrigger className="h-9 w-24"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {[now.getFullYear(), now.getFullYear() - 1].map(y => (
+                  <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="rounded-md border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+            مفيش مرتبات في الفترة دي. سجّل مرتب أساسي للموظف تحت الأول.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-right text-xs text-muted-foreground">
+                  <th className="p-2">الموظف</th>
+                  <th className="p-2">الأساسي</th>
+                  <th className="p-2">البونص</th>
+                  <th className="p-2">السُلف</th>
+                  <th className="p-2">الصافي المستحق</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={r.employeeId} className="border-b last:border-0">
+                    <td className="p-2 font-medium">{r.employeeName}</td>
+                    <td className="p-2 tabular-nums">{formatMoney(r.baseSalary)}</td>
+                    <td className="p-2 tabular-nums text-emerald-700">
+                      {r.totalBonuses ? `+ ${formatMoney(r.totalBonuses)}` : "—"}
+                    </td>
+                    <td className="p-2 tabular-nums text-amber-700">
+                      {r.totalAdvances ? `− ${formatMoney(r.totalAdvances)}` : "—"}
+                    </td>
+                    <td className="p-2 text-base font-bold tabular-nums">
+                      {formatMoney(r.netSalary)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 font-bold">
+                  <td className="p-2">الإجمالي ({rows.length})</td>
+                  <td className="p-2 tabular-nums">{formatMoney(totals.base)}</td>
+                  <td className="p-2 tabular-nums">{formatMoney(totals.bonuses)}</td>
+                  <td className="p-2 tabular-nums">{formatMoney(totals.advances)}</td>
+                  <td className="p-2 tabular-nums">{formatMoney(totals.net)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -747,6 +869,201 @@ function AdvancesSection({ businessId }: { businessId: number }) {
                     }}
                   >
                     {give.isPending ? "جاري الصرف..." : "اصرف من الخزنة"}
+                  </Button>
+                  <Button variant="outline" onClick={() => setOpen(false)}>
+                    إلغاء
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ───────────────────────── البونص ─────────────────────────
+
+/**
+ * بونص الموظف — بيتضاف لصافي المرتب (عكس السُلفة).
+ *
+ * على عكس السُلفة، البونص **مابيلمسش الخزنة** لحظة تسجيله: هو مبلغ بيتحسب ضمن صافي
+ * المرتب اللي بيتدفع آخر الشهر. فمفيش حركة خزنة هنا — مجرد تسجيل. الصرف بيحصل وقت الدفع.
+ */
+function BonusesSection({ businessId }: { businessId: number }) {
+  const utils = trpc.useUtils();
+  const employees = trpc.employees.list.useQuery({ isActive: true });
+  const bonuses = trpc.payroll.bonusList.useQuery({ businessId });
+
+  const [employeeId, setEmployeeId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const give = trpc.payroll.bonusCreate.useMutation({
+    onSuccess: async () => {
+      toast.success("اتسجّل البونص");
+      setAmount("");
+      setReason("");
+      setEmployeeId("");
+      setOpen(false);
+      await Promise.all([
+        utils.payroll.bonusList.invalidate(),
+        utils.payroll.salarySummary.invalidate(),
+      ]);
+    },
+    onError: error => toast.error(error.message),
+  });
+  const remove = trpc.payroll.bonusDelete.useMutation({
+    onSuccess: async () => {
+      toast.success("اتشال");
+      await Promise.all([
+        utils.payroll.bonusList.invalidate(),
+        utils.payroll.salarySummary.invalidate(),
+      ]);
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  const rows: any[] = bonuses.data ?? [];
+  const staff: any[] = employees.data ?? [];
+  const total = rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Wallet className="h-5 w-5 text-emerald-600" />
+            البونص
+          </CardTitle>
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            + بونص
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rows.length === 0 ? (
+          <p className="rounded-md border bg-muted/40 p-4 text-center text-sm text-muted-foreground">
+            مفيش بونص متسجّل.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-right text-xs text-muted-foreground">
+                  <th className="p-2">الموظف</th>
+                  <th className="p-2">المبلغ</th>
+                  <th className="p-2">التاريخ</th>
+                  <th className="p-2">السبب</th>
+                  <th className="p-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(row => (
+                  <tr key={row.id} className="border-b last:border-0">
+                    <td className="p-2 font-medium">{row.employeeName}</td>
+                    <td className="p-2 tabular-nums">{formatMoney(Number(row.amount))}</td>
+                    <td className="p-2 text-muted-foreground">
+                      {new Date(row.bonusDate).toLocaleDateString("ar-EG")}
+                    </td>
+                    <td className="p-2 text-muted-foreground">{row.reason ?? "—"}</td>
+                    <td className="p-2 text-left">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive"
+                        disabled={remove.isPending}
+                        onClick={() => {
+                          if (!confirm(`تشيل بونص «${row.employeeName}»؟`)) return;
+                          remove.mutate({ businessId, bonusId: row.id });
+                        }}
+                      >
+                        <Trash2 className="ml-1 h-3.5 w-3.5" />
+                        حذف
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 font-bold">
+                  <td className="p-2">الإجمالي ({rows.length})</td>
+                  <td className="p-2 tabular-nums">{formatMoney(total)}</td>
+                  <td className="p-2" colSpan={3} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+
+        <p className="text-xs text-muted-foreground">
+          البونص بيتضاف لصافي المرتب، ومابيخرجش من الخزنة إلا وقت دفع المرتب.
+        </p>
+
+        {open && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setOpen(false)}
+          >
+            <Card className="w-full max-w-md" onClick={event => event.stopPropagation()}>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">تسجيل بونص</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div>
+                  <Label>الموظف *</Label>
+                  <Select value={employeeId} onValueChange={setEmployeeId}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="اختار الموظف" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {staff.map(row => (
+                        <SelectItem key={row.id} value={String(row.id)}>
+                          {row.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>المبلغ *</Label>
+                  <Input
+                    className="mt-1"
+                    dir="ltr"
+                    inputMode="decimal"
+                    value={amount}
+                    onChange={e => setAmount(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label>السبب</Label>
+                  <Input
+                    className="mt-1"
+                    placeholder="اختياري"
+                    value={reason}
+                    onChange={e => setReason(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1"
+                    disabled={give.isPending}
+                    onClick={() => {
+                      if (!employeeId) return toast.error("اختار الموظف");
+                      const value = Number(amount);
+                      if (!(value > 0)) return toast.error("المبلغ لازم يكون أكبر من صفر");
+                      give.mutate({
+                        businessId,
+                        employeeId: Number(employeeId),
+                        amount: String(value),
+                        bonusDate: new Date(),
+                        reason: reason.trim() || undefined,
+                      });
+                    }}
+                  >
+                    {give.isPending ? "جاري الحفظ..." : "سجّل البونص"}
                   </Button>
                   <Button variant="outline" onClick={() => setOpen(false)}>
                     إلغاء

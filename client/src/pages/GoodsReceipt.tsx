@@ -425,18 +425,10 @@ export default function GoodsReceipt({
           })}
         </div>
 
-        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <Label className="text-xs">ملاحظات</Label>
-            <Textarea className="mt-1" rows={2} value={notes} placeholder="أي تفاصيل..."
-              onChange={e => setNotes(e.target.value)} />
-          </div>
-          <div>
-            <Label className="text-xs">مرفق</Label>
-            <Input className="mt-1" value={attachmentUrl} placeholder="https://... (اختياري)" dir="ltr"
-              onChange={e => setAttachmentUrl(e.target.value)} />
-            <p className="mt-1 text-xs text-muted-foreground">اختياري دايمًا.</p>
-          </div>
+        <div className="mt-3">
+          <Label className="text-xs">ملاحظات (اختياري)</Label>
+          <Textarea className="mt-1" rows={2} value={notes} placeholder="أي تفاصيل..."
+            onChange={e => setNotes(e.target.value)} />
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t pt-3">

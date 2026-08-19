@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermission";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -60,7 +61,10 @@ import {
  * own role-based redirect. (The original audit listed these as simply "hidden from the
  * sidebar"; this is the corrected finding after tracing the two cookies.)
  */
-type MenuItem = { icon: typeof LayoutDashboard; label: string; path: string; adminOnly?: boolean };
+// `financial` بند مالي — بيظهر للمالك والمحاسب بس (اللي عندهم `accounting.view`)، ومخفي
+// عن المدير والمودريتور والتأكيدات وإدخال البيانات. الإخفاء ده مش أمان لوحده — البوابة
+// على السيرفر (`permissionProcedure`) هي الحارس الحقيقي؛ ده عشان مايشوفش قسم مايوصلوش.
+type MenuItem = { icon: typeof LayoutDashboard; label: string; path: string; adminOnly?: boolean; financial?: boolean };
 type MenuGroup = {
   label: string;
   icon: typeof LayoutDashboard;
@@ -126,7 +130,7 @@ const MENU_GROUPS: MenuGroup[] = [
     label: "الحسابات",
     icon: Wallet,
     items: [
-      { icon: Wallet, label: "الحسابات", path: "/accounting", adminOnly: true },
+      { icon: Wallet, label: "الحسابات", path: "/accounting", financial: true },
     ],
   },
   {
@@ -216,6 +220,7 @@ type DashboardLayoutContentProps = {
 
 function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
+  const { permissions } = usePermissions();
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar } = useSidebar();
   const isCollapsed = state === "collapsed";
@@ -231,10 +236,17 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   const lowStockCount = lowStockProducts?.length ?? 0;
 
   const isAdmin = user?.role === 'admin';
-  // Same visibility rule as before (isAdmin gate) — only which GROUP an item is displayed
-  // under is new, not who can see it.
+  // البنود المالية بتتحكم بصلاحية `accounting.view` مش بـisAdmin — عشان المحاسب (مش admin)
+  // يشوف الحسابات، والمدير (admin صناعي بس غير مالي) مايشوفهاش. القراءة من نفس مصدر
+  // السيرفر (`auth.myPermissions`) فمفيش تعريف تاني للأدوار في الواجهة.
+  const canAccessFinancials = permissions.includes("accounting.view");
   const visibleGroups = MENU_GROUPS
-    .map(group => ({ ...group, items: group.items.filter(item => !item.adminOnly || isAdmin) }))
+    .map(group => ({
+      ...group,
+      items: group.items.filter(item =>
+        item.financial ? canAccessFinancials : (!item.adminOnly || isAdmin)
+      ),
+    }))
     .filter(group => group.items.length > 0);
   const allMenuItems = visibleGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);

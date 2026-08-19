@@ -74,7 +74,11 @@ export const businesses = mysqlTable("businesses", {
     .default("Africa/Cairo")
     .notNull(),
   accountingGoLiveAt: timestamp("accountingGoLiveAt"),
+  // المخزن الرئيسي (المكتب) — مصدر/وجهة المخزون الافتراضي.
   defaultWarehouseId: int("defaultWarehouseId"),
+  // مخزن الورشة — بيتحدد مرة واحدة، وبعدها صفحة مرتجعات الورشة بتستخدمه تلقائيًا
+  // (المكتب = defaultWarehouseId، الورشة = ده) من غير اختيار مخزنين يدوي.
+  workshopWarehouseId: int("workshopWarehouseId"),
   isActive: boolean("isActive").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -267,6 +271,8 @@ export const employees = mysqlTable("employees", {
     "shipping",
     "accountant",
     "viewer",
+    // مودريتور — مشرف تشغيلي بدون أي صلاحية مالية (additive only)
+    "moderator",
   ])
     .default("agent")
     .notNull(),
@@ -1264,6 +1270,30 @@ export const employeeAdvances = mysqlTable("employee_advances", {
 
 export type EmployeeAdvance = typeof employeeAdvances.$inferSelect;
 export type InsertEmployeeAdvance = typeof employeeAdvances.$inferInsert;
+
+/**
+ * بونص الموظف — سجل بسيط بيتضاف لصافي المرتب (عكس السُلفة).
+ *
+ * منفصل عن `payroll_items.bonuses` عن قصد: ده تسجيل مباشر (تاريخ/مبلغ/ملاحظة) من غير
+ * ما التاجر يفتح دورة رواتب. البونص **مابيلمسش الخزنة** لحظة تسجيله — بيتحسب ضمن صافي
+ * المرتب اللي بيتدفع آخر الشهر. جدول موازي لـ`employee_advances` بنفس الشكل (additive).
+ */
+export const employeeBonuses = mysqlTable("employee_bonuses", {
+  id: int("id").autoincrement().primaryKey(),
+  businessId: int("businessId").notNull(),
+  employeeId: int("employeeId").notNull(),
+  employeeName: varchar("employeeName", { length: 100 }).notNull(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  bonusDate: timestamp("bonusDate").notNull(),
+  reason: text("reason"),
+  createdBy: int("createdBy").notNull(),
+  createdByName: varchar("createdByName", { length: 100 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type EmployeeBonus = typeof employeeBonuses.$inferSelect;
+export type InsertEmployeeBonus = typeof employeeBonuses.$inferInsert;
 
 // ==================== ACCOUNTING CLOSING V2 ====================
 // These tables are intentionally additive. Legacy accounting remains readable during cutover;

@@ -143,7 +143,7 @@ describe("🔑 نطاق النشاط", () => {
   it("🔑 القراءة مقيّدة بالنشاط بتاع المستخدم", () => {
     const endpoint = between(
       routers,
-      "profileListByBusiness: adminProcedure",
+      "profileListByBusiness: permissionProcedure",
       "profileCreate:"
     );
     expect(endpoint).toContain("requireScopedBusinessId(ctx.tenantId, input.businessId)");
@@ -232,17 +232,20 @@ describe("🔑 مفيش شاشتين لنفس الحركة", () => {
   const transfer = fs.readFileSync("client/src/pages/StockTransfer.tsx", "utf-8");
   const returns = fs.readFileSync("client/src/pages/WorkshopReturns.tsx", "utf-8");
 
-  it("🔑 «تحويل مخزون» و«مرتجعات الورشة» بينادوا نفس الـendpoint", () => {
-    for (const src of [transfer, returns]) {
-      expect(src).toContain("trpc.accountingV2.stockTransfer.useMutation");
-    }
+  it("🔑 «تحويل مخزون» و«مرتجعات الورشة» بينادوا نفس بريمِتيف المخزون", () => {
+    // تحويل المخزون بيندَه stockTransfer مباشرة.
+    expect(transfer).toContain("trpc.accountingV2.stockTransfer.useMutation");
+    // ومرتجعات الورشة بتغلّف نفس التحويل عبر workshopSend/workshopReceive
+    // (الاتنين بينادوا transferStock في السيرفر — مقفول في workshopReturns.test.ts).
+    expect(returns).toContain("trpc.accountingV2.workshopSend.useMutation");
+    expect(returns).toContain("trpc.accountingV2.workshopReceive.useMutation");
   });
 
   it("🔑 فاتشال من القايمة — ومرتجعات الورشة بتعمل نفس الحاجة وزيادة", () => {
     expect(sidebar).not.toContain('path: "/stock-transfer"');
     expect(sidebar).toContain('path: "/workshop-returns"');
     // الزيادة: بتوريك القطع اللي راحت ولسه مرجعتش
-    expect(returns).toContain("trpc.accountingV2.workshopReturns.useQuery");
+    expect(returns).toContain("trpc.accountingV2.workshopBatches.useQuery");
   });
 
   it("والمسار لسه شغّال لأي رابط قديم", () => {
@@ -358,8 +361,8 @@ describe("🔑 السُلفة فلوس خرجت من الدُرج", () => {
     expect(fn).toContain("resolveDefaultTreasuryAccountInTransaction(tx, input.businessId)");
     expect(fn).toContain("resolveEmployeeAdvancesAccountInTransaction(tx, input.businessId)");
     const routerBlock = routers.slice(
-      routers.indexOf("advanceCreate: adminProcedure"),
-      routers.indexOf("advanceCreate: adminProcedure") + 700
+      routers.indexOf("advanceCreate: permissionProcedure"),
+      routers.indexOf("advanceCreate: permissionProcedure") + 700
     );
     expect(routerBlock).toContain("sourceAccountId: z.number().optional()");
     expect(routerBlock).toContain("receivableAccountId: z.number().optional()");

@@ -30,6 +30,16 @@ const transferFn = serviceCode.slice(
   serviceCode.indexOf("export async function transferStock"),
   serviceCode.indexOf("export async function listWorkshopReturns")
 );
+// الإرسال والاستلام بقوا في السيرفر — الفرونت بيغلّفهم بس. المنطق (اتجاه التحويل،
+// ربط الإذن، اشتقاق رقم الرجوع) اتنقل هنا فالاختبارات بتقفله في مكانه الجديد.
+const sendFn = serviceCode.slice(
+  serviceCode.indexOf("export async function sendToWorkshop"),
+  serviceCode.indexOf("export async function receiveFromWorkshop")
+);
+const receiveFn = serviceCode.slice(
+  serviceCode.indexOf("export async function receiveFromWorkshop"),
+  serviceCode.indexOf("export async function listWorkshopBatches")
+);
 
 // ───────────────── اشتقاق الحالة ─────────────────
 
@@ -139,28 +149,39 @@ describe("🔑 تكلفة الإصلاح مابتعملش مصروف", () => {
 });
 
 describe("الإرسال والاستلام تحويلين", () => {
-  it("🔑 الاتنين بينادوا stockTransfer — مفيش مسار جديد", () => {
-    const mutations = [...page.matchAll(/trpc\.accountingV2\.(\w+)\.useMutation/g)].map(m => m[1]);
-    expect(mutations).toEqual(["stockTransfer"]);
+  it("🔑 الاتنين بينادوا transferStock — مفيش مسار مخزون جديد", () => {
+    // الفرونت بيغلّف بس (workshopSend/workshopReceive)؛ التحويل الحقيقي في السيرفر.
+    expect(sendFn).toContain("await transferStock({");
+    expect(receiveFn).toContain("await transferStock({");
+    // ومحدش فيهم بيكتب مخزون بإيده — كله ماشي على البريمِتيف الواحد.
+    for (const fn of [sendFn, receiveFn]) {
+      expect(fn).not.toContain(".insert(");
+      expect(fn).not.toContain(".update(");
+      expect(fn).not.toContain(".delete(");
+    }
   });
 
-  it("🔑 الاستلام بيعكس الاتجاه وبيربط بالإذن الأصلي", () => {
-    const fn = page.slice(page.indexOf("const receiveBack ="));
-    const body = fn.slice(0, fn.indexOf("\n  const showError"));
-    expect(body).toContain("fromWarehouseId: Number(workshopWarehouseId)");
-    expect(body).toContain("toWarehouseId: Number(officeWarehouseId)");
-    expect(body).toContain("linkedReference: batch.reference");
+  it("🔑 الإرسال مكتب←ورشة والاستلام بيعكس الاتجاه", () => {
+    expect(sendFn).toContain("fromWarehouseId: officeWarehouseId");
+    expect(sendFn).toContain("toWarehouseId: workshopWarehouseId");
+    expect(receiveFn).toContain("fromWarehouseId: workshopWarehouseId");
+    expect(receiveFn).toContain("toWarehouseId: officeWarehouseId");
+  });
+
+  it("🔑 الاستلام بيربط بإذن الإرسال ونفس البنود بترجع", () => {
+    expect(receiveFn).toContain("linkedReference: input.sendReference");
     // نفس البنود اللي راحت — مش كميات جديدة يكتبها المستخدم
-    expect(body).toContain("lines: batch.lines");
+    const rb = page.slice(page.indexOf("const receiveBack ="));
+    expect(rb.slice(0, rb.indexOf("\n  const showError"))).toContain("lines: batch.lines");
   });
 
   it("🔑 رقم إذن الرجوع مشتق من الأصلي فمابيتكررش", () => {
-    expect(page).toContain("`${batch.reference}-R`");
+    expect(receiveFn).toContain("${input.sendReference}-R");
   });
 
   it("زرار الاستلام بيظهر للمفتوح بس", () => {
     expect(page).toContain('b.status === "at_workshop" && (');
-    expect(page).toContain("استلام المرتجع");
+    expect(page).toContain("استلام من الورشة");
   });
 });
 
@@ -185,16 +206,17 @@ describe("الواجهة", () => {
   });
 
   it("الخطأ بيتقال بالعربي", () => {
-    expect(page).toContain("مش قادر أجيب دفعات المرتجع");
+    expect(page).toContain("مش قادر أجيب دفعات الورشة");
     expect(page).toContain("batches.error?.message");
   });
 
   it("التحقق كامل", () => {
     const v = page.slice(page.indexOf("const validate = ()"));
     const body = v.slice(0, v.indexOf("\n  };"));
-    expect(body).toContain("المخزنين لازم يكونوا مختلفين");
-    expect(body).toContain("رقم الإذن مطلوب");
-    expect(body).toContain("سبب المرتجع مطلوب");
+    // المخزن ورقم الإذن بقوا تلقائيين — فمفيش تحقق عليهم في الفرونت
+    expect(body).not.toContain("المخزنين لازم يكونوا مختلفين");
+    expect(body).not.toContain("رقم الإذن مطلوب");
+    expect(body).toContain("سبب الإرسال مطلوب");
     expect(body).toContain("الكمية لازم تكون رقم صحيح أكبر من صفر");
     expect(body).toContain("النوع ده مش تابع للصنف المختار");
   });

@@ -2,7 +2,7 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
-import { hasTenantPermission, type Permission } from "../permissions";
+import { hasTenantPermission, isFinancialPermission, type Permission } from "../permissions";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -45,6 +45,12 @@ export const authenticatedProcedure = t.procedure.use(requireAuthenticatedIdenti
 
 export function permissionProcedure(permission: Permission) {
   return authenticatedProcedure.use(async ({ ctx, next }) => {
+    // المدير تشغيلي بحت: بياخد جلسة admin صناعية عشان تشغيله يفضل شغّال، لكن **ممنوع**
+    // من أي بوابة مالية صراحةً هنا — بغضّ النظر عن خريطة الصلاحيات أو الـsynthetic-admin.
+    // المالك الحقيقي (super_admin/admin) والمحاسب بس بيعدّوا على المالي.
+    if (ctx.employee?.role === "manager" && isFinancialPermission(permission)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+    }
     const ownerOrAdmin = ctx.user?.role === "admin";
     if (!ownerOrAdmin && !await hasTenantPermission(ctx.tenantId, ctx.employee?.role, permission)) {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });

@@ -298,7 +298,7 @@ describe("الشاشة", () => {
     for (const label of ["التاريخ", "المبلغ", "التصنيف", "المصروف بيخص إيه"]) {
       expect(page, label).toContain(label);
     }
-    expect(page).toContain("صورة الفاتورة (اختياري)");
+    expect(page).not.toContain("صورة الفاتورة");
   });
 
   it("🔑 الزرارين: سجّل بس، وسجّل وادفع", () => {
@@ -573,7 +573,7 @@ describe("🔑 مصروف جديد في درج — مش فورم دايم", () =
     for (const field of ["التاريخ", "التصنيف", "المبلغ", "المصروف بيخص إيه"]) {
       expect(drawer, field).toContain(field);
     }
-    expect(drawer).toContain("صورة الفاتورة (اختياري)");
+    expect(drawer).not.toContain("صورة الفاتورة");
   });
 
   it("🔑 وإجرايين: سجّل بس · سجّل وادفع", () => {

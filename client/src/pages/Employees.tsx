@@ -22,12 +22,13 @@ import { useBusinessContext } from "@/contexts/BusinessContext";
 const EMPLOYEE_ROLES = [
   "agent", "warehouse", "manager", "facebook_entry", "scanner",
   "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
+  "moderator",
 ] as const;
 
 type EmployeeRoleValue = (typeof EMPLOYEE_ROLES)[number];
 
 const ROLE_LABELS: Record<EmployeeRoleValue, string> = {
-  agent: "موظف تأكيدات",
+  agent: "تأكيدات",
   warehouse: "موظف مخزن",
   manager: "مدير",
   facebook_entry: "إدخال فيسبوك",
@@ -42,6 +43,7 @@ const ROLE_LABELS: Record<EmployeeRoleValue, string> = {
   shipping: "شحن",
   accountant: "محاسب",
   viewer: "مشاهدة فقط",
+  moderator: "مودريتور",
 };
 
 const ROLE_COLORS: Record<EmployeeRoleValue, string> = {
@@ -57,7 +59,17 @@ const ROLE_COLORS: Record<EmployeeRoleValue, string> = {
   shipping: "bg-sky-100 text-sky-700",
   accountant: "bg-emerald-100 text-emerald-700",
   viewer: "bg-gray-100 text-gray-700",
+  moderator: "bg-violet-100 text-violet-700",
 };
+
+/**
+ * الأدوار الوظيفية الخمسة اللي المالك بيختار منها عند إنشاء/تعديل موظف (طلب المالك).
+ * باقي القيم في `EMPLOYEE_ROLES` قديمة — بتفضل صالحة وبتتعرض للموظفين القدام، بس مش
+ * بتتعرض كخيار جديد. لو الموظف اللي بتعدّله دوره قديم، بنضيفه للقايمة عشان مايتغيّرش بالغلط.
+ */
+const ASSIGNABLE_ROLES = [
+  "moderator", "agent", "data_entry", "accountant", "manager",
+] as const satisfies readonly EmployeeRoleValue[];
 
 const ALL_ROLES = EMPLOYEE_ROLES;
 
@@ -710,9 +722,11 @@ export default function Employees() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {ALL_ROLES.map(role => (
-                    <SelectItem key={role} value={role}>{ROLE_LABELS[role]}</SelectItem>
-                  ))}
+                  {/* الأدوار الخمسة القياسية — وبنضيف دور الموظف الحالي لو كان قديمًا عشان مايتغيّرش بالغلط */}
+                  {[...ASSIGNABLE_ROLES, ...(ASSIGNABLE_ROLES.includes(form.role as any) ? [] : [form.role])]
+                    .map(role => (
+                      <SelectItem key={role} value={role}>{ROLE_LABELS[role as EmployeeRoleValue]}</SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>

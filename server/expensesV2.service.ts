@@ -195,7 +195,8 @@ export async function payExpense(input: {
   sourceAccountId?: number;
   amount: string;
   paidAt: Date;
-  evidenceUrl: string;
+  /** اختياري — الدفع بيتسجّل من غير رابط فاتورة/دليل. */
+  evidenceUrl?: string;
   actor: Actor;
 }) {
   const db = await getDb();
@@ -231,7 +232,7 @@ export async function payExpense(input: {
       amount: fromMinorUnits(paymentMinor),
       currencyCode: expense.currencyCode,
       description: `Expense #${expense.id}: ${expense.description}`,
-      evidenceUrl: input.evidenceUrl,
+      evidenceUrl: input.evidenceUrl ?? "",
       occurredAt: input.paidAt,
       businessEventId: eventResult.event.id,
       actor: input.actor,

@@ -171,8 +171,8 @@ describe("🔑 الدفع بيرجع للخزنة الرئيسية لما ماا
     );
     expect(pay).toContain("sourceAccountId: z.number().optional()");
     const periodPay = routers.slice(
-      routers.indexOf("periodPay: adminProcedure"),
-      routers.indexOf("periodPay: adminProcedure") + 600
+      routers.indexOf("periodPay: permissionProcedure"),
+      routers.indexOf("periodPay: permissionProcedure") + 600
     );
     expect(periodPay).toContain("sourceAccountId: z.number().optional()");
   });

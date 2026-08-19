@@ -20,7 +20,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { EvidenceUpload } from "@/components/EvidenceUpload";
 import {
   PaymentSource,
   paymentSourceId,
@@ -734,11 +733,8 @@ function ExpenseFormDialog({
       toast.error("البيان مطلوب");
       return;
     }
+    // الدليل بقى اختياري تمامًا — التاجر بيسجّل المصروف مباشرة.
     const evidenceUrl = attachmentUrl.trim();
-    if (!isEdit && !evidenceUrl) {
-      toast.error("رابط الفاتورة أو دليل المصروف مطلوب");
-      return;
-    }
     const common = {
       amount: value,
       description: description.trim(),
@@ -906,18 +902,13 @@ function ExpenseFormDialog({
             </div>
           </div>
           <div>
-            <Label>المرجع / رقم الفاتورة</Label>
+            <Label>المرجع / رقم الفاتورة (اختياري)</Label>
             <Input
               value={reference}
               onChange={e => setReference(e.target.value)}
               className="mt-1"
             />
           </div>
-          <EvidenceUpload
-            label="الفاتورة / دليل المصروف"
-            value={attachmentUrl}
-            onChange={setAttachmentUrl}
-          />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
@@ -997,7 +988,6 @@ function ExpensePaymentDialog({
               onChange={event => setPaidAt(event.target.value)}
             />
           </div>
-          <EvidenceUpload value={evidenceUrl} onChange={setEvidenceUrl} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
@@ -1006,8 +996,8 @@ function ExpensePaymentDialog({
           <Button
             disabled={mutation.isPending}
             onClick={() => {
-              if (!businessId || !expense || !amount || !evidenceUrl.trim())
-                return toast.error("كل بيانات الدفع والدليل مطلوبة");
+              if (!businessId || !expense || !amount)
+                return toast.error("كل بيانات الدفع مطلوبة");
               if (paymentSourceMissing(accounts, accountId))
                 return toast.error("اختار الخزنة اللي هتخرج منها الفلوس");
               mutation.mutate({
@@ -1016,7 +1006,6 @@ function ExpensePaymentDialog({
                 sourceAccountId: paymentSourceId(accounts, accountId),
                 amount,
                 paidAt: new Date(`${paidAt}T12:00:00`),
-                evidenceUrl: evidenceUrl.trim(),
               });
             }}
           >
@@ -1271,10 +1260,6 @@ function AdSpendCard({
                 onChange={e => setForm({ ...form, reference: e.target.value })}
               />
             </div>
-            <EvidenceUpload
-              value={form.evidenceUrl}
-              onChange={evidenceUrl => setForm({ ...form, evidenceUrl })}
-            />
             <div className="space-y-2 md:col-span-2">
               <Label>المؤشرات اليدوية</Label>
               {metricRows.map((metric, index) => (
@@ -1360,10 +1345,9 @@ function AdSpendCard({
                     !form.accountName ||
                     !form.campaignId ||
                     !form.campaignName ||
-                    !form.description ||
-                    !form.evidenceUrl
+                    !form.description
                   )
-                    return toast.error("كل البيانات الأساسية والدليل مطلوبة");
+                    return toast.error("كل البيانات الأساسية مطلوبة");
                   mutation.mutate({
                     businessId,
                     categoryId: form.categoryId
