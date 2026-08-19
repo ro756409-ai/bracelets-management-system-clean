@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   businessEvents,
+  businesses,
   inventoryBalances,
   inventoryMovements,
   inventoryReservations,
@@ -14,10 +15,16 @@ import {
   returnInspectionItems,
   returnInspections,
   shipments,
+  warehouses,
 } from "../drizzle/schema";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import { applyStockIn, applyStockOut } from "../shared/inventoryCosting";
-import { getDb } from "./db";
+import {
+  createWarehouse,
+  getBusinessById,
+  getDb,
+  getWarehousesByBusiness,
+} from "./db";
 import { createBusinessEventInTransaction, type Actor } from "./accountingV2.service";
 
 export function makeInventoryKey(productId: number, variantId?: number | null): string {
@@ -1124,5 +1131,177 @@ export async function approveReturnInspection(input: {
       approvedAt: input.occurredAt,
     }).where(eq(returnInspections.id, inspection.id));
     return { eventId: eventResult.event.id, duplicate: false };
+  });
+}
+
+// ==================== مرتجعات الورشة — تحديد المخازن تلقائيًا ====================
+//
+// المكتب = businesses.defaultWarehouseId. الورشة = businesses.workshopWarehouseId.
+// الصفحة مابتخلّيش المستخدم يختار مخزنين — بتحلّهم من هنا. الإرسال/الاستلام بيمرّوا على
+// نفس `transferStock` (مفيش منطق مخزون مكرر)، ورقم الإذن بيتولّد تلقائيًا.
+
+/** توليد رقم إذن ورشة فريد — المستخدم مابيكتبوش. */
+function generateWorkshopReference(): string {
+  const rand = Math.floor(Math.random() * 1000)
+    .toString()
+    .padStart(3, "0");
+  return `WS-${Date.now()}-${rand}`;
+}
+
+export type WorkshopSetup = {
+  officeWarehouseId: number | null;
+  workshopWarehouseId: number | null;
+  /** محتاج تحديد مخزن الورشة (أو المكتب) قبل ما الصفحة تشتغل. */
+  needsSetup: boolean;
+  warehouses: Array<{ id: number; name: string; isActive: boolean }>;
+};
+
+/** إعداد الورشة للنشاط: المكتب + الورشة + قايمة المخازن، وهل محتاج تحديد. */
+export async function getWorkshopSetup(businessId: number): Promise<WorkshopSetup> {
+  const business = await getBusinessById(businessId);
+  const list = await getWarehousesByBusiness(businessId);
+  const officeWarehouseId = business?.defaultWarehouseId ?? null;
+  const workshopWarehouseId = (business as any)?.workshopWarehouseId ?? null;
+  const activeIds = new Set(list.filter(w => w.isActive).map(w => w.id));
+  // محتاج إعداد لو أي مخزن مش متحدّد، أو بيشاور على مخزن مش موجود/مؤرشف.
+  const needsSetup =
+    officeWarehouseId == null ||
+    workshopWarehouseId == null ||
+    !activeIds.has(officeWarehouseId) ||
+    !activeIds.has(workshopWarehouseId) ||
+    officeWarehouseId === workshopWarehouseId;
+  return {
+    officeWarehouseId,
+    workshopWarehouseId,
+    needsSetup,
+    warehouses: list.map(w => ({ id: w.id, name: w.name, isActive: w.isActive })),
+  };
+}
+
+/**
+ * تحديد مخزن الورشة — مرة واحدة. يا بياخد مخزن موجود، يا بينشئ واحد جديد باسم.
+ * لازم يكون غير مخزن المكتب. (المكتب نفسه بيتحدد من إعدادات النشاط زي ما هو.)
+ */
+export async function setWorkshopWarehouse(input: {
+  businessId: number;
+  /** مخزن موجود يتحدد كورشة. */
+  warehouseId?: number;
+  /** أو اسم مخزن ورشة جديد يتعمل. */
+  newWarehouseName?: string;
+}): Promise<{ workshopWarehouseId: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const business = await getBusinessById(input.businessId);
+  const officeWarehouseId = business?.defaultWarehouseId ?? null;
+
+  let workshopWarehouseId: number;
+  if (input.newWarehouseName && input.newWarehouseName.trim()) {
+    const created = await createWarehouse({
+      businessId: input.businessId,
+      name: input.newWarehouseName.trim(),
+    } as any);
+    workshopWarehouseId = (created as any).id ?? (created as any).insertId;
+    if (!workshopWarehouseId) throw new Error("تعذّر إنشاء مخزن الورشة");
+  } else if (input.warehouseId != null) {
+    const list = await getWarehousesByBusiness(input.businessId);
+    const target = list.find(w => w.id === input.warehouseId && w.isActive);
+    if (!target) throw new Error("المخزن مش تابع للنشاط أو مش نشط");
+    workshopWarehouseId = input.warehouseId;
+  } else {
+    throw new Error("حدّد مخزن ورشة موجود أو اسم لمخزن جديد");
+  }
+
+  if (officeWarehouseId != null && workshopWarehouseId === officeWarehouseId)
+    throw new Error("مخزن الورشة لازم يكون غير مخزن المكتب");
+
+  await db
+    .update(businesses)
+    .set({ workshopWarehouseId })
+    .where(eq(businesses.id, input.businessId));
+  return { workshopWarehouseId };
+}
+
+/** يحلّ المكتب + الورشة، ويرمي لو الإعداد ناقص. */
+async function resolveWorkshopWarehouses(
+  businessId: number
+): Promise<{ officeWarehouseId: number; workshopWarehouseId: number }> {
+  const setup = await getWorkshopSetup(businessId);
+  if (
+    setup.officeWarehouseId == null ||
+    setup.workshopWarehouseId == null ||
+    setup.needsSetup
+  )
+    throw new Error("لازم تحدّد مخزن الورشة الأول من إعداد الصفحة");
+  return {
+    officeWarehouseId: setup.officeWarehouseId,
+    workshopWarehouseId: setup.workshopWarehouseId,
+  };
+}
+
+/** إرسال قطع للورشة — تحويل من المكتب للورشة برقم إذن مولّد. */
+export async function sendToWorkshop(input: {
+  businessId: number;
+  reason: string;
+  occurredAt: Date;
+  repairCostPerPiece?: string;
+  lines: Array<{ productId: number; variantId?: number | null; quantity: number }>;
+  actor: Actor;
+}) {
+  const { officeWarehouseId, workshopWarehouseId } =
+    await resolveWorkshopWarehouses(input.businessId);
+  const reference = generateWorkshopReference();
+  const result = await transferStock({
+    businessId: input.businessId,
+    fromWarehouseId: officeWarehouseId,
+    toWarehouseId: workshopWarehouseId,
+    reference,
+    reason: input.reason,
+    occurredAt: input.occurredAt,
+    repairCostPerPiece: input.repairCostPerPiece,
+    lines: input.lines,
+    actor: input.actor,
+  });
+  return { ...result, reference };
+}
+
+/** استلام دفعة من الورشة — تحويل من الورشة للمكتب، مربوط بإذن الإرسال. */
+export async function receiveFromWorkshop(input: {
+  businessId: number;
+  /** رقم إذن الإرسال اللي بيتقفل. */
+  sendReference: string;
+  reason: string;
+  occurredAt: Date;
+  repairCostPerPiece?: string;
+  lines: Array<{ productId: number; variantId?: number | null; quantity: number }>;
+  actor: Actor;
+}) {
+  const { officeWarehouseId, workshopWarehouseId } =
+    await resolveWorkshopWarehouses(input.businessId);
+  const reference = `${input.sendReference}-R`;
+  const result = await transferStock({
+    businessId: input.businessId,
+    fromWarehouseId: workshopWarehouseId,
+    toWarehouseId: officeWarehouseId,
+    reference,
+    reason: input.reason || `استلام المشغول — ${input.sendReference}`,
+    occurredAt: input.occurredAt,
+    linkedReference: input.sendReference,
+    repairCostPerPiece: input.repairCostPerPiece,
+    lines: input.lines,
+    actor: input.actor,
+  });
+  return { ...result, reference };
+}
+
+/** دفعات الورشة — نفس listWorkshopReturns بس بيحلّ مخزن الورشة تلقائيًا. */
+export async function listWorkshopBatches(input: {
+  businessId: number;
+  limit?: number;
+}) {
+  const { workshopWarehouseId } = await resolveWorkshopWarehouses(input.businessId);
+  return listWorkshopReturns({
+    businessId: input.businessId,
+    workshopWarehouseId,
+    limit: input.limit,
   });
 }

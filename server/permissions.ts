@@ -83,10 +83,39 @@ export const ALL_PERMISSIONS = [
 
 export type Permission = (typeof ALL_PERMISSIONS)[number];
 
+/**
+ * الصلاحيات **المالية** — الأقسام اللي بتحرّك فلوس أو بتوريها: الحسابات، المصاريف،
+ * التحصيلات، المرتبات، مدفوعات الموردين، الخزنة، الإقفالات، الأرباح.
+ *
+ * ليه موجودة كـset منفصل: المدير (`manager`) دوره تشغيلي بحت — بيدير الأوردرات والموظفين
+ * والمخازن، لكن **مايشوفش ولا يلمس أي حاجة مالية**. المدير بياخد جلسة admin صناعية
+ * (context.ts) عشان تشغيله يفضل شغّال، فالحجب المالي بيتفرض هنا صراحةً في البوابة
+ * (`permissionProcedure`) مش من خريطة الصلاحيات. المالك الحقيقي والمحاسب بس بيوصلوا.
+ *
+ * ملاحظة: `inventory_costing.*` **مش** هنا عن قصد — استلام البضاعة كحركة مخزون
+ * ومرتجعات الورشة شغل «عدّ قطع» تشغيلي، والمدفوعات المالية للمورد متغطّية بـ`accounting.*`.
+ */
+export const FINANCIAL_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
+  "accounting.view", "accounting.manage", "accounting.create", "accounting.approve",
+  "closing.view", "closing.create", "closing.submit", "closing.approve",
+  "closing.adjust", "closing.lock", "closing.export",
+  "financial_accounts.view", "financial_accounts.manage",
+  "shipping_finance.view", "shipping_finance.manage", "shipping_finance.approve",
+  "ad_spend.view", "ad_spend.manage",
+  "treasury.transfer", "settlements.create", "reports.view_profit",
+  "payroll.view", "payroll.manage", "payroll.approve", "payroll.pay",
+]);
+
+export function isFinancialPermission(permission: Permission): boolean {
+  return FINANCIAL_PERMISSIONS.has(permission);
+}
+
 /** Every employees.role enum value (existing + new) — single source of truth for both the TS type and the runtime array (used by z.enum() in routers.ts). */
 export const EMPLOYEE_ROLE_VALUES = [
   "agent", "warehouse", "manager", "facebook_entry", "scanner",
   "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
+  // مودريتور — مشرف تشغيلي أوسع من التأكيدات (بيوزّع أوردرات ويتابع)، لكن بدون أي صلاحية مالية.
+  "moderator",
 ] as const;
 
 export type EmployeeRole = (typeof EMPLOYEE_ROLE_VALUES)[number];
@@ -139,6 +168,14 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     "accounting.create", "treasury.transfer", "settlements.create",
   ],
   viewer: ["dashboard.view", "orders.view"],
+  // مشرف تشغيلي: بيشوف ويشتغل على كل الأوردرات ويصدّر ويستورد ويتابع الموظفين والشحن —
+  // من غير أي صلاحية مالية (مفيش accounting/payroll/treasury/... خالص).
+  moderator: [
+    "dashboard.view",
+    "orders.view", "orders.create", "orders.update", "orders.edit_items",
+    "orders.confirm", "orders.cancel", "orders.export", "orders.import",
+    "employees.view", "audit.view",
+  ],
   order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items"],
   agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items"],
   data_entry: ["orders.view", "orders.create"],

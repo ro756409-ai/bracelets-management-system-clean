@@ -402,7 +402,8 @@ export async function getWarehouseById(id: number) {
 export async function createWarehouse(data: InsertWarehouse) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.insert(warehouses).values(data);
+  const result: any = await db.insert(warehouses).values(data);
+  return { id: Number(result?.insertId ?? result?.[0]?.insertId) };
 }
 
 export async function updateWarehouse(

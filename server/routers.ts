@@ -74,6 +74,7 @@ import {
   isAdminTierRole,
   isOwnerRole,
   hasPermission,
+  isFinancialPermission,
   EMPLOYEE_ROLE_VALUES,
   permissionsForRole,
   type Permission,
@@ -114,6 +115,11 @@ import {
   listWorkshopReturns,
   transferStock,
   voidPurchaseReceipt,
+  getWorkshopSetup,
+  setWorkshopWarehouse,
+  sendToWorkshop,
+  receiveFromWorkshop,
+  listWorkshopBatches,
 } from "./inventoryV2.service";
 import {
   createConfiguredShipment,
@@ -159,6 +165,12 @@ import {
   cancelEmployeeAdvance,
   issueEmployeeAdvance,
 } from "./advancesV2.service";
+import {
+  issueEmployeeBonus,
+  deleteEmployeeBonus,
+  listEmployeeBonuses,
+  getSalarySummaries,
+} from "./bonusesV2.service";
 import { confirmOrderPayment, refundOrderPayment } from "./paymentsV2.service";
 
 const EMP_JWT_SECRET = process.env.JWT_SECRET;
@@ -1254,7 +1266,8 @@ export const appRouter = router({
           sourceAccountId: z.number().optional(),
           amount: positiveMoneyString,
           paidAt: z.date(),
-          evidenceUrl: z.string().url(),
+          // الدليل بقى اختياري — التاجر بيسجّل الدفع مباشرة من غير رابط فاتورة.
+          evidenceUrl: z.string().url().optional(),
         })
       )
       .mutation(async ({ ctx, input }) =>
@@ -1503,6 +1516,109 @@ export const appRouter = router({
             ctx.tenantId,
             input.businessId
           ),
+        })
+      ),
+
+    // ── مرتجعات الورشة: المخازن تلقائيًا، رقم الإذن تلقائيًا، شاشة واحدة ──
+    workshopSetup: permissionProcedure("inventory_costing.view")
+      .input(z.object({ businessId: z.number() }))
+      .query(async ({ ctx, input }) =>
+        getWorkshopSetup(
+          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+        )
+      ),
+
+    workshopSetWarehouse: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          warehouseId: z.number().optional(),
+          newWarehouseName: z.string().min(1).max(100).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        setWorkshopWarehouse({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
+    workshopBatches: permissionProcedure("inventory_costing.view")
+      .input(
+        z.object({
+          businessId: z.number(),
+          limit: z.number().min(1).max(500).optional(),
+        })
+      )
+      .query(async ({ ctx, input }) =>
+        listWorkshopBatches({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
+    workshopSend: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          reason: z.string().min(1).max(500),
+          occurredAt: z.date(),
+          repairCostPerPiece: moneyString.optional(),
+          lines: z
+            .array(
+              z.object({
+                productId: z.number(),
+                variantId: z.number().nullish(),
+                quantity: z.number().int().positive(),
+              })
+            )
+            .min(1),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        sendToWorkshop({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    workshopReceive: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          sendReference: z.string().min(1).max(100),
+          reason: z.string().max(500).optional().default(""),
+          occurredAt: z.date(),
+          repairCostPerPiece: moneyString.optional(),
+          lines: z
+            .array(
+              z.object({
+                productId: z.number(),
+                variantId: z.number().nullish(),
+                quantity: z.number().int().positive(),
+              })
+            )
+            .min(1),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        receiveFromWorkshop({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
         })
       ),
 
@@ -2024,8 +2140,15 @@ export const appRouter = router({
      * والقايمة الفاضية معناها «مايقدرش يعمل حاجة»، وده الافتراض الصح.
      */
     myPermissions: publicProcedure.query(async ({ ctx }) => {
-      if (ctx.user?.role === "admin") return [...ALL_PERMISSIONS];
       const role = ctx.employee?.role;
+      if (ctx.user?.role === "admin") {
+        // المدير جلسته admin صناعية عشان تشغيله يفضل شغّال، لكنه **غير مالي** — فبنشيل
+        // الصلاحيات المالية من قايمته عشان الواجهة تخفي أقسام الحسابات عنه (زي ما البوابة
+        // بترفضها على السيرفر بالظبط).
+        if (role === "manager")
+          return ALL_PERMISSIONS.filter(p => !isFinancialPermission(p));
+        return [...ALL_PERMISSIONS];
+      }
       if (!role || ctx.tenantId == null) return [];
       const granted = await Promise.all(
         ALL_PERMISSIONS.map(async permission =>
@@ -3397,7 +3520,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emps = await getAllEmployees();
         const emp = emps.find((e: any) => e.userId === ctx.user.id);
-        const scannedBy = emp?.id ?? ctx.user.id;
+        const scannedBy = emp?.id ?? ctx.user!.id;
         const scannedByName = emp?.name ?? ctx.user.name ?? "موظف";
         const result = await scanOrderBySerial(
           input.serialNumber,
@@ -7307,13 +7430,13 @@ export const appRouter = router({
               ? { workHoursPerDay: workHoursPerDay.toFixed(2) }
               : {}),
           },
-          { id: actor.id ?? ctx.user.id, name: actor.name ?? "غير معروف" }
+          { id: actor.id ?? ctx.user!.id, name: actor.name ?? "غير معروف" }
         );
         await addActivityLog({
           action: "payroll_settings_update",
           entityType: "payroll_settings",
           description: "تعديل إعدادات الرواتب",
-          performedBy: actor.id ?? ctx.user.id,
+          performedBy: actor.id ?? ctx.user!.id,
           performedByName: actor.name ?? "غير معروف",
           performedByRole: "admin",
           businessId,
@@ -7322,7 +7445,7 @@ export const appRouter = router({
       }),
 
     // ---------- ملفات الرواتب ----------
-    profileList: adminProcedure
+    profileList: permissionProcedure("payroll.view")
       .input(z.object({ employeeId: z.number() }))
       .query(async ({ ctx, input }) => {
         await requireOwned(ctx.tenantId, "employee", input.employeeId);
@@ -7330,7 +7453,7 @@ export const appRouter = router({
       }),
 
     /** الساري لكل موظف في النشاط — للشاشة اللي المالك بيدير منها المرتبات. */
-    profileListByBusiness: adminProcedure
+    profileListByBusiness: permissionProcedure("payroll.view")
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         listBusinessSalaryProfiles(
@@ -7338,7 +7461,7 @@ export const appRouter = router({
         )
       ),
 
-    profileDelete: adminProcedure
+    profileDelete: permissionProcedure("payroll.manage")
       .input(z.object({ businessId: z.number(), profileId: z.number() }))
       .mutation(async ({ ctx, input }) =>
         deleteSalaryProfile({
@@ -7350,7 +7473,7 @@ export const appRouter = router({
         })
       ),
 
-    profileCreate: adminProcedure
+    profileCreate: permissionProcedure("payroll.manage")
       .input(
         z.object({
           businessId: z.number(),
@@ -7382,7 +7505,7 @@ export const appRouter = router({
           ...(commissionValue != null
             ? { commissionValue: commissionValue.toFixed(2) }
             : {}),
-          createdBy: actor.id ?? ctx.user.id,
+          createdBy: actor.id ?? ctx.user!.id,
           createdByName: actor.name ?? "غير معروف",
         } as any);
         await addActivityLog({
@@ -7394,7 +7517,7 @@ export const appRouter = router({
             salaryType: input.salaryType,
             effectiveFrom: input.effectiveFrom,
           },
-          performedBy: actor.id ?? ctx.user.id,
+          performedBy: actor.id ?? ctx.user!.id,
           performedByName: actor.name ?? "غير معروف",
           performedByRole: "admin",
           businessId,
@@ -7402,7 +7525,7 @@ export const appRouter = router({
         return result;
       }),
 
-    profileUpdate: adminProcedure
+    profileUpdate: permissionProcedure("payroll.manage")
       .input(
         z.object({
           id: z.number(),
@@ -7415,14 +7538,14 @@ export const appRouter = router({
         const { id, ...rest } = input;
         const actor = await resolveActingEmployeeIdAndName(ctx);
         await updateSalaryProfile(id, rest, {
-          id: actor.id ?? ctx.user.id,
+          id: actor.id ?? ctx.user!.id,
           name: actor.name ?? "غير معروف",
         });
         return { success: true };
       }),
 
     // ---------- السُلف ----------
-    advanceList: adminProcedure
+    advanceList: permissionProcedure("payroll.view")
       .input(
         z.object({
           employeeId: z.number().optional(),
@@ -7439,7 +7562,7 @@ export const appRouter = router({
         return getAdvances({ ...input, businessIds });
       }),
 
-    advanceCreate: adminProcedure
+    advanceCreate: permissionProcedure("payroll.manage")
       .input(
         z.object({
           businessId: z.number(),
@@ -7469,7 +7592,7 @@ export const appRouter = router({
           businessId,
           amount: input.amount.toFixed(4),
           actor: {
-            id: actor.id ?? ctx.user.id,
+            id: actor.id ?? ctx.user!.id,
             name: actor.name ?? "غير معروف",
           },
         });
@@ -7478,7 +7601,7 @@ export const appRouter = router({
           entityType: "employee_advance",
           entityId: result.id,
           description: `صرف سُلفة ${input.amount} لـ${employee.name}`,
-          performedBy: actor.id ?? ctx.user.id,
+          performedBy: actor.id ?? ctx.user!.id,
           performedByName: actor.name ?? "غير معروف",
           performedByRole: "admin",
           businessId,
@@ -7486,7 +7609,7 @@ export const appRouter = router({
         return result;
       }),
 
-    advanceCancel: adminProcedure
+    advanceCancel: permissionProcedure("payroll.manage")
       .input(
         z.object({
           id: z.number(),
@@ -7515,15 +7638,86 @@ export const appRouter = router({
           entityType: "employee_advance",
           entityId: input.id,
           description: `إلغاء سُلفة #${input.id}`,
-          performedBy: actor.id ?? ctx.user.id,
+          performedBy: actor.id ?? ctx.user!.id,
           performedByName: actor.name ?? "غير معروف",
           performedByRole: "admin",
         });
         return { success: true };
       }),
 
+    // ---------- البونص ----------
+    bonusList: permissionProcedure("payroll.view")
+      .input(
+        z.object({
+          businessId: z.number(),
+          employeeId: z.number().optional(),
+          from: z.date().optional(),
+          to: z.date().optional(),
+        })
+      )
+      .query(async ({ ctx, input }) =>
+        listEmployeeBonuses({
+          ...input,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+        })
+      ),
+
+    bonusCreate: permissionProcedure("payroll.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          employeeId: z.number(),
+          amount: moneyString,
+          bonusDate: z.date(),
+          reason: z.string().max(500).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
+        await requireOwned(ctx.tenantId, "employee", input.employeeId);
+        const actor = await requireActor(ctx);
+        const result = await issueEmployeeBonus({
+          businessId,
+          employeeId: input.employeeId,
+          amount: input.amount,
+          bonusDate: input.bonusDate,
+          reason: input.reason,
+          actor,
+        });
+        await addActivityLog({
+          action: "bonus_create",
+          entityType: "employee_bonus",
+          entityId: result.id,
+          description: `تسجيل بونص للموظف #${input.employeeId}`,
+          performedBy: actor.id ?? ctx.user!.id,
+          performedByName: actor.name ?? "غير معروف",
+          performedByRole: "admin",
+          businessId,
+        });
+        return result;
+      }),
+
+    bonusDelete: permissionProcedure("payroll.manage")
+      .input(z.object({ businessId: z.number(), bonusId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        deleteEmployeeBonus({
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          bonusId: input.bonusId,
+        })
+      ),
+
+    /** ملخص المرتبات: الأساسي + البونص − السُلف = الصافي، لكل موظف. */
+    salarySummary: permissionProcedure("payroll.view")
+      .input(z.object({ businessId: z.number(), from: z.date().optional(), to: z.date().optional() }))
+      .query(async ({ ctx, input }) =>
+        getSalarySummaries({
+          ...input,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+        })
+      ),
+
     // ---------- الدورات ----------
-    periodList: adminProcedure
+    periodList: permissionProcedure("payroll.view")
       .input(
         z.object({
           year: z.number().optional(),
@@ -7538,14 +7732,14 @@ export const appRouter = router({
         return getPayrollPeriods({ ...input, businessIds });
       }),
 
-    periodGet: adminProcedure
+    periodGet: permissionProcedure("payroll.view")
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
         await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         return getPayrollPeriod(input.id);
       }),
 
-    periodCreate: adminProcedure
+    periodCreate: permissionProcedure("payroll.manage")
       .input(
         z.object({
           businessId: z.number(),
@@ -7561,7 +7755,7 @@ export const appRouter = router({
         );
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
-          id: actor.id ?? ctx.user.id,
+          id: actor.id ?? ctx.user!.id,
           name: actor.name ?? "غير معروف",
         };
         const result = await createPayrollPeriod({
@@ -7582,13 +7776,13 @@ export const appRouter = router({
         return result;
       }),
 
-    periodRecalculate: adminProcedure
+    periodRecalculate: permissionProcedure("payroll.manage")
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         return recalculatePayrollPeriod(input.id, {
-          id: actor.id ?? ctx.user.id,
+          id: actor.id ?? ctx.user!.id,
           name: actor.name ?? "غير معروف",
         });
       }),
@@ -7630,19 +7824,19 @@ export const appRouter = router({
             DECIMALS.includes(k) && typeof v === "number" ? v.toFixed(2) : v;
         }
         await updatePayrollItem(id, data, {
-          id: actor.id ?? ctx.user.id,
+          id: actor.id ?? ctx.user!.id,
           name: actor.name ?? "غير معروف",
         });
         return { success: true };
       }),
 
-    periodApprove: adminProcedure
+    periodApprove: permissionProcedure("payroll.approve")
       .input(z.object({ id: z.number(), evidenceUrl: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
-          id: actor.id ?? ctx.user.id,
+          id: actor.id ?? ctx.user!.id,
           name: actor.name ?? "غير معروف",
         };
         const result = await approveAndAccruePayrollPeriod({
@@ -7663,7 +7857,7 @@ export const appRouter = router({
         return result;
       }),
 
-    periodPay: adminProcedure
+    periodPay: permissionProcedure("payroll.pay")
       .input(
         z.object({
           id: z.number(),
@@ -7677,7 +7871,7 @@ export const appRouter = router({
         await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
-          id: actor.id ?? ctx.user.id,
+          id: actor.id ?? ctx.user!.id,
           name: actor.name ?? "غير معروف",
         };
         const result = await payPayrollPeriodV2({
@@ -7703,7 +7897,7 @@ export const appRouter = router({
         return result;
       }),
 
-    periodCancel: adminProcedure
+    periodCancel: permissionProcedure("payroll.approve")
       .input(
         z.object({
           id: z.number(),
@@ -7714,7 +7908,7 @@ export const appRouter = router({
         await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
-          id: actor.id ?? ctx.user.id,
+          id: actor.id ?? ctx.user!.id,
           name: actor.name ?? "غير معروف",
         };
         await cancelPayrollPeriod(input.id, input.reason, who);
@@ -7730,7 +7924,7 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    periodDelete: adminProcedure
+    periodDelete: permissionProcedure("payroll.manage")
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
@@ -7741,7 +7935,7 @@ export const appRouter = router({
           entityType: "payroll_period",
           entityId: input.id,
           description: `حذف دورة رواتب مسودة #${input.id}`,
-          performedBy: actor.id ?? ctx.user.id,
+          performedBy: actor.id ?? ctx.user!.id,
           performedByName: actor.name ?? "غير معروف",
           performedByRole: "admin",
         });

@@ -130,8 +130,9 @@ describe("المستند مايوقفش المسودة", () => {
     expect(body).not.toContain("evidenceUrl");
   });
 
-  it("🔑 والشاشة بتقول إنه اختياري دايمًا", () => {
-    expect(page).toContain("اختياري دايمًا");
+  it("🔑 وحقل المرفق اتشال خالص من الشاشة — مفيش رابط دليل", () => {
+    expect(page).not.toContain("EvidenceUpload");
+    expect(page).not.toContain("مرفق");
   });
 
   it("الفاضي بيتبعت undefined مش نص فاضي", () => {
