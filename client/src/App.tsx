@@ -2,7 +2,7 @@ import { CommandPalette } from "@/components/shared/CommandPalette";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
@@ -46,6 +46,7 @@ import BostaOrders from "./pages/BostaOrders";
 import Accounting from "./pages/Accounting";
 import DashboardLayout from "./components/DashboardLayout";
 import { useAuth } from "./_core/hooks/useAuth";
+import { usePermissions } from "./hooks/usePermission";
 import { BusinessProvider } from "./contexts/BusinessContext";
 
 function ProtectedLayout({ children }: { children: React.ReactNode }) {
@@ -53,6 +54,58 @@ function ProtectedLayout({ children }: { children: React.ReactNode }) {
   if (loading) return null;
   if (!user) return <Home />;
   return <DashboardLayout>{children}</DashboardLayout>;
+}
+
+/** أنسب صفحة هبوط لجلسة حسب صلاحياتها — بيتستخدم لما نطرد حد من صفحة مالوش حق فيها. */
+function homeForPermissions(perms: string[]): string {
+  if (perms.includes("accounting.view")) return "/accounting";
+  if (perms.includes("dashboard.view")) return "/dashboard";
+  return "/employee-dashboard";
+}
+
+/**
+ * صفحة مالية: بتفتح للمالك، أو لأي موظف **عنده الصلاحية دي فعليًا** (المحاسب).
+ *
+ * مش زي `ProtectedLayout` اللي بيشترط جلسة مالك — عشان المحاسب (موظف غير إداري،
+ * `auth.me` بيرجّعله null) يقدر يفتح الحسابات. القايمة بتتقري من `usePermissions`
+ * (نفس مصدر السيرفر)، والبيانات نفسها جاية من `permissionProcedure` اللي بيصرّح له.
+ * ده توجيه واجهة فوق الحارس الحقيقي على الـendpoints — مش بديل عنه.
+ *
+ * المدير (صلاحياته من غير المالي) بيتحوّل بره الصفحات المالية بدل ما يشوف قشرة فاضية
+ * بأخطاء — وده أنضف من السلوك القديم.
+ */
+function FinancialRoute({
+  permission,
+  children,
+}: {
+  permission: string;
+  children: React.ReactNode;
+}) {
+  const { user, loading } = useAuth();
+  const { permissions, isLoading } = usePermissions();
+  if (loading || isLoading) return null;
+  const authed = Boolean(user) || permissions.length > 0;
+  if (!authed) return <Home />;
+  const allowed = user?.role === "admin" || permissions.includes(permission);
+  if (!allowed) return <Redirect to={homeForPermissions(permissions)} />;
+  return <DashboardLayout>{children}</DashboardLayout>;
+}
+
+/**
+ * حارس صفحات التشغيل (لوحات الموظفين): المحاسب هو الموظف الوحيد غير الإداري اللي معاه
+ * `accounting.view`، فلو وصل صفحة تشغيل أوردرات/تأكيدات بالـURL بيتحوّل للحسابات.
+ *
+ * الحجب مقصور عليه بالظبط: المالك (`admin`) بيعدّي، وباقي أدوار التشغيل (تأكيدات/إدخال/
+ * مخزن...) مالهاش `accounting.view` فمتأثرش. مش مجرد إخفاء من الـsidebar.
+ */
+function BlockFinancialUser({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const { permissions, isLoading } = usePermissions();
+  if (isLoading) return null;
+  if (user?.role !== "admin" && permissions.includes("accounting.view")) {
+    return <Redirect to="/accounting" />;
+  }
+  return <>{children}</>;
 }
 
 function Router() {
@@ -79,11 +132,23 @@ function Router() {
         <ProtectedLayout><Reports /></ProtectedLayout>
       </Route>
       <Route path={"/employee-login"} component={EmployeeLogin} />
-      <Route path={"/employee-dashboard"} component={EmployeeDashboard} />
-      <Route path={"/warehouse-dashboard"} component={WarehouseDashboard} />
-      <Route path={"/manager-dashboard"} component={ManagerDashboard} />
-      <Route path={"/today-shipments"} component={TodayShipments} />
-      <Route path={"/shipping-schedule"} component={ShippingSchedule} />
+      {/* لوحات التشغيل: المحاسب (الموظف الوحيد غير الإداري بصلاحية مالية) بيتحوّل عنها
+          للحسابات لو فتحها بالـURL — باقي أدوار التشغيل متأثرش. */}
+      <Route path={"/employee-dashboard"}>
+        <BlockFinancialUser><EmployeeDashboard /></BlockFinancialUser>
+      </Route>
+      <Route path={"/warehouse-dashboard"}>
+        <BlockFinancialUser><WarehouseDashboard /></BlockFinancialUser>
+      </Route>
+      <Route path={"/manager-dashboard"}>
+        <BlockFinancialUser><ManagerDashboard /></BlockFinancialUser>
+      </Route>
+      <Route path={"/today-shipments"}>
+        <BlockFinancialUser><TodayShipments /></BlockFinancialUser>
+      </Route>
+      <Route path={"/shipping-schedule"}>
+        <BlockFinancialUser><ShippingSchedule /></BlockFinancialUser>
+      </Route>
       <Route path={"/webhook-settings"}>
         <ProtectedLayout><WebhookSettings /></ProtectedLayout>
       </Route>
@@ -123,60 +188,63 @@ function Router() {
       <Route path="/bosta-orders">
         <ProtectedLayout><BostaOrders /></ProtectedLayout>
       </Route>
-      {/* الأربعة بيرندروا نفس الصفحة — التاب بيتحدد من المسار. المسارات القديمة
-          محفوظة عشان أي رابط قديم أو bookmark يفضل شغّال. */}
+      {/* صفحات الحسابات: التاب بيتحدد من المسار. كلها متحرسة بـFinancialRoute بصلاحية
+          الصفحة — فبتفتح للمالك والمحاسب، وبيتحوّل عنها مين مالوش الصلاحية (المدير مثلاً).
+          المسارات القديمة محفوظة عشان أي رابط قديم أو bookmark يفضل شغّال. */}
       <Route path="/accounting">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/treasury">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/expenses">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/collections">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/supplier-statements">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/salary-profiles">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="payroll.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/salary-preparation">
-        <ProtectedLayout><SalaryPreparation /></ProtectedLayout>
+        <FinancialRoute permission="payroll.view"><SalaryPreparation /></FinancialRoute>
       </Route>
       <Route path="/payroll">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="payroll.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/closings">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/daily-ledger">
-        <ProtectedLayout><DailyLedger /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><DailyLedger /></FinancialRoute>
       </Route>
       <Route path="/goods-receipt">
-        <ProtectedLayout><GoodsReceipt /></ProtectedLayout>
+        <FinancialRoute permission="inventory_costing.view"><GoodsReceipt /></FinancialRoute>
       </Route>
       <Route path="/stock-transfer">
-        <ProtectedLayout><StockTransfer /></ProtectedLayout>
+        <FinancialRoute permission="inventory_costing.view"><StockTransfer /></FinancialRoute>
       </Route>
       <Route path="/workshop-returns">
-        <ProtectedLayout><WorkshopReturns /></ProtectedLayout>
+        <FinancialRoute permission="inventory_costing.view"><WorkshopReturns /></FinancialRoute>
       </Route>
       <Route path="/daily-collections">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/advertising">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="ad_spend.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/accounting-settings">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path="/shipping-finance">
-        <ProtectedLayout><Accounting /></ProtectedLayout>
+        <FinancialRoute permission="shipping_finance.view"><Accounting /></FinancialRoute>
       </Route>
-      <Route path={"/facebook-entry"} component={FacebookEntry} />
+      <Route path={"/facebook-entry"}>
+        <BlockFinancialUser><FacebookEntry /></BlockFinancialUser>
+      </Route>
       <Route path={"/scan-orders"}>
         <ProtectedLayout><ScanOrders /></ProtectedLayout>
       </Route>

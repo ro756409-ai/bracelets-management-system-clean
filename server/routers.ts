@@ -5942,7 +5942,12 @@ export const appRouter = router({
       const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
       return getAllBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
     }),
-    activeList: protectedProcedure.query(async ({ ctx }) => {
+    // قايمة الأنشطة بتتقري في كل تحميل صفحة من `BusinessContext`، ولازم تشتغل لأي جلسة
+    // مصرّح لها (مالك أو موظف) — مش المالك بس. المحاسب موظف غير إداري (auth.me = null)،
+    // فلو فضلت protectedProcedure، بيوصل صفحات الحسابات لكن مايلاقيش نشاط يختاره فتبان
+    // فاضية. النطاق على `ctx.tenantId` (مش المستخدم)، فالعزل بين الشركات محفوظ زي ما هو —
+    // ودي أسماء أنشطة بس، مفيش أي بيانات مالية.
+    activeList: authenticatedProcedure.query(async ({ ctx }) => {
       const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
       return getActiveBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
     }),
@@ -5958,7 +5963,7 @@ export const appRouter = router({
       وتفضّي القايمة على الإنتاج الحالي. النشاط هو اللي بيحدد النطاق، والمجموعة بتبان
       لو فيها نشاط مسموح.
     */
-    groups: protectedProcedure.query(async ({ ctx }) => {
+    groups: authenticatedProcedure.query(async ({ ctx }) => {
       const allowed = await getBusinessIdsForTenant(ctx.tenantId);
       const groups = await getActiveBusinessGroups();
       if (allowed == null) return groups;
@@ -5969,7 +5974,7 @@ export const appRouter = router({
       );
       return groups.filter(group => mine.has(group.id));
     }),
-    groupsWithBusinesses: protectedProcedure.query(async ({ ctx }) => {
+    groupsWithBusinesses: authenticatedProcedure.query(async ({ ctx }) => {
       const allowed = await getBusinessIdsForTenant(ctx.tenantId);
       const groups = await getBusinessGroupsWithBusinesses();
       if (allowed == null) return groups;
@@ -5984,7 +5989,7 @@ export const appRouter = router({
         // المجموعة اللي مالهاش أي نشاط مسموح مابتظهرش أصلاً — اسمها لوحده معلومة.
         .filter(group => group.businesses.length > 0);
     }),
-    businessIdsByGroup: protectedProcedure
+    businessIdsByGroup: authenticatedProcedure
       .input(
         z.object({
           groupId: z.number(),
