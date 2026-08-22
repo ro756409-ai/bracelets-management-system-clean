@@ -6,6 +6,7 @@ import {
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
+import { usePermission } from "@/hooks/usePermission";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -97,6 +98,10 @@ export default function GoodsReceipt({
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState<Line[]>([newLine()]);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // الاعتماد والإلغاء بيحرّكوا المخزون → على inventory_costing.approve. المحاسب معاهوش
+  // الصلاحية دي (عنده manage للمسودة بس)، فالزراري تختفي عنه — والباك بيرفضها كمان.
+  const canApprove = usePermission("inventory_costing.approve");
 
   const warehouses = trpc.businesses.warehouses.useQuery(
     { businessId: bid! }, { enabled: Boolean(bid) }
@@ -487,13 +492,13 @@ export default function GoodsReceipt({
                             <Send className="h-3.5 w-3.5" /> إرسال للاعتماد
                           </Button>
                         )}
-                        {r.status === "pending_approval" && (
+                        {r.status === "pending_approval" && canApprove && (
                           <Button size="sm" className="h-7 gap-1 text-xs"
                             onClick={() => approveMutation.mutate({ businessId: bid!, receiptId: r.id })}>
                             <CheckCircle2 className="h-3.5 w-3.5" /> اعتماد وإضافة للمخزون
                           </Button>
                         )}
-                        {r.status !== "voided" && (
+                        {r.status !== "voided" && canApprove && (
                           <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive"
                             onClick={() => {
                               const reason = window.prompt("سبب الإلغاء؟");

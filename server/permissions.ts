@@ -158,7 +158,9 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     "closing.view", "closing.create", "closing.submit", "closing.adjust", "closing.export",
     "financial_accounts.view", "financial_accounts.manage",
     "shipping_finance.view", "shipping_finance.manage",
-    "inventory_costing.view",
+    // المحاسب بيسجّل مسودة استلام بضاعة (manage) — لكن **مش** بيعتمدها ولا بيحرّك المخزون:
+    // الاعتماد على `inventory_costing.approve` المنفصلة، واللي المحاسب مش واخدها. فاصل أمان.
+    "inventory_costing.view", "inventory_costing.manage",
     "ad_spend.view", "ad_spend.manage",
     // بيجهّز الدورة ويدفعها، لكن مش بيعتمدها — الاعتماد قرار إداري
     "payroll.view", "payroll.manage", "payroll.pay",

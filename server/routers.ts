@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabled } from "./bosta.service";
+import { getAccountantSummary } from "./accountantSummary.service";
 import {
   syncOrdersByDateRange,
   testChannelConnection,
@@ -810,6 +811,15 @@ export const appRouter = router({
           dateFrom: input?.dateFrom,
           dateTo: input?.dateTo,
         })
+      ),
+    /**
+     * ملخص لوحة المحاسب — تجميع قراءة فقط من دوال موجودة (شوف accountantSummary.service).
+     * محمي بـaccounting.view زي باقي شاشات الحسابات؛ النطاق على أنشطة الجلسة.
+     */
+    accountantSummary: permissionProcedure("accounting.view")
+      .input(z.object({ businessIds: z.array(z.number()).optional() }).optional())
+      .query(async ({ ctx, input }) =>
+        getAccountantSummary((await scopeBusinessIds(ctx.tenantId, input ?? {})) ?? [])
       ),
     businessSettings: permissionProcedure("settings.view")
       .input(z.object({ businessId: z.number() }))
