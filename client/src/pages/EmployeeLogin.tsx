@@ -48,6 +48,9 @@ export default function EmployeeLogin() {
       // Redirect based on role
       if (data.employee.role === 'manager') {
         setLocation("/dashboard");
+      } else if (data.employee.role === 'accountant') {
+        // المحاسب دوره مالي بحت — بيروح على الحسابات مباشرة مش على شاشة تشغيل الأوردرات.
+        setLocation("/accounting");
       } else if (data.employee.role === 'facebook_entry') {
         setLocation("/facebook-entry");
       } else if (data.employee.role === 'warehouse') {
