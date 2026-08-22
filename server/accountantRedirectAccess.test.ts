@@ -21,10 +21,10 @@ describe("🔑 توجيه المحاسب بعد الدخول", () => {
     const fn = login.slice(login.indexOf("Redirect based on role"));
     const body = fn.slice(0, fn.indexOf("} catch"));
     expect(body).toContain("data.employee.role === 'accountant'");
-    // السطر اللي بعد شرط المحاسب لازم يوجّهه للحسابات
+    // بعد P2-A: المحاسب بيروح مساحته المخصّصة /accountant (مش صفحة المالك /accounting).
     const branch = body.slice(body.indexOf("role === 'accountant'"));
     expect(branch.slice(0, branch.indexOf("else")))
-      .toContain('setLocation("/accounting")');
+      .toContain('setLocation("/accountant")');
   });
 
   it("المدير لسه بيروح على /dashboard (مغيّرناش سلوكه)", () => {
@@ -76,7 +76,8 @@ describe("🔑 المحاسب محجوب عن صفحات التشغيل", () => 
   it("🔑 BlockFinancialUser بيحوّل صاحب accounting.view غير المالك للحسابات", () => {
     const comp = app.slice(app.indexOf("function BlockFinancialUser"), app.indexOf("function Router"));
     expect(comp).toContain('user?.role !== "admin" && permissions.includes("accounting.view")');
-    expect(comp).toContain('Redirect to="/accounting"');
+    // بعد P2-A: التحويل بقى لمساحة المحاسب /accountant.
+    expect(comp).toContain('Redirect to="/accountant"');
   });
 
   it("🔑 لوحات الموظفين التشغيلية متغلّفة بالحارس", () => {

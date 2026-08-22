@@ -44,6 +44,7 @@ import PrintedOrders from "./pages/PrintedOrders";
 import ScanLogs from "./pages/ScanLogs";
 import BostaOrders from "./pages/BostaOrders";
 import Accounting from "./pages/Accounting";
+import AccountantWorkspace from "./pages/AccountantWorkspace";
 import DashboardLayout from "./components/DashboardLayout";
 import { useAuth } from "./_core/hooks/useAuth";
 import { usePermissions } from "./hooks/usePermission";
@@ -58,7 +59,9 @@ function ProtectedLayout({ children }: { children: React.ReactNode }) {
 
 /** أنسب صفحة هبوط لجلسة حسب صلاحياتها — بيتستخدم لما نطرد حد من صفحة مالوش حق فيها. */
 function homeForPermissions(perms: string[]): string {
-  if (perms.includes("accounting.view")) return "/accounting";
+  // صاحب accounting.view غير المالك هو المحاسب — بيروح مساحته المخصّصة، مش صفحة المالك.
+  // (المالك admin بيعدّي كل الحُرّاس فمابيوصلش هنا أصلاً.)
+  if (perms.includes("accounting.view")) return "/accountant";
   if (perms.includes("dashboard.view")) return "/dashboard";
   return "/employee-dashboard";
 }
@@ -77,9 +80,12 @@ function homeForPermissions(perms: string[]): string {
 function FinancialRoute({
   permission,
   children,
+  bare = false,
 }: {
   permission: string;
   children: React.ReactNode;
+  /** `bare`: الصفحة بترندر layout بتاعها بنفسها (مساحة المحاسب) — من غير DashboardLayout. */
+  bare?: boolean;
 }) {
   const { user, loading } = useAuth();
   const { permissions, isLoading } = usePermissions();
@@ -88,7 +94,7 @@ function FinancialRoute({
   if (!authed) return <Home />;
   const allowed = user?.role === "admin" || permissions.includes(permission);
   if (!allowed) return <Redirect to={homeForPermissions(permissions)} />;
-  return <DashboardLayout>{children}</DashboardLayout>;
+  return bare ? <>{children}</> : <DashboardLayout>{children}</DashboardLayout>;
 }
 
 /**
@@ -103,7 +109,7 @@ function BlockFinancialUser({ children }: { children: React.ReactNode }) {
   const { permissions, isLoading } = usePermissions();
   if (isLoading) return null;
   if (user?.role !== "admin" && permissions.includes("accounting.view")) {
-    return <Redirect to="/accounting" />;
+    return <Redirect to="/accountant" />;
   }
   return <>{children}</>;
 }
@@ -132,6 +138,10 @@ function Router() {
         <ProtectedLayout><Reports /></ProtectedLayout>
       </Route>
       <Route path={"/employee-login"} component={EmployeeLogin} />
+      {/* مساحة المحاسب المخصّصة — layout خاص بيها (bare)، مش DashboardLayout بتاع المالك. */}
+      <Route path={"/accountant"}>
+        <FinancialRoute permission="accounting.view" bare><AccountantWorkspace /></FinancialRoute>
+      </Route>
       {/* لوحات التشغيل: المحاسب (الموظف الوحيد غير الإداري بصلاحية مالية) بيتحوّل عنها
           للحسابات لو فتحها بالـURL — باقي أدوار التشغيل متأثرش. */}
       <Route path={"/employee-dashboard"}>
