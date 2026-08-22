@@ -48,6 +48,9 @@ export default function AgentWorkspace() {
   const [showPostponeDialog, setShowPostponeDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
+  // الصف الكامل اللي فُتح منه التعديل — بيتخزّن وقت الفتح عشان الهيدر ميعتمدش على إعادة
+  // البحث في `orders` (شوف editingOrder تحت). نفس إصلاح صفحة Orders.
+  const [editOrderData, setEditOrderData] = useState<any | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelNotes, setCancelNotes] = useState("");
   const [postponeDate, setPostponeDate] = useState("");
@@ -110,7 +113,9 @@ export default function AgentWorkspace() {
     { orderId: selectedOrderId ?? 0 },
     { enabled: showEditDialog && selectedOrderId != null, retry: false }
   );
-  const editingOrder = orders.find(o => o.id === selectedOrderId) ?? null;
+  // الكائن المخزّن أولاً؛ البحث في `orders` fallback بس (لأي فتح برمجي من غير كائن).
+  const editingOrder =
+    editOrderData ?? orders.find(o => o.id === selectedOrderId) ?? null;
 
   /** نفس ترتيب الحفظ اللي في صفحة الأوردرات: البنود الأول عشان الإجمالي يتحسب منها. */
   async function saveOrderEdit(payload: OrderEditSavePayload) {
@@ -356,6 +361,7 @@ export default function AgentWorkspace() {
                     size="sm"
                     className="h-7 text-xs border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10"
                     onClick={() => {
+                      setEditOrderData(order);
                       setSelectedOrderId(order.id);
                       setShowEditDialog(true);
                     }}
@@ -406,7 +412,7 @@ export default function AgentWorkspace() {
       {/* تعديل الأوردر — نفس محرر البنود المشترك اللي في صفحة الأوردرات */}
       <OrderEditDialog
         open={showEditDialog}
-        onOpenChange={open => { setShowEditDialog(open); if (!open) setSelectedOrderId(null); }}
+        onOpenChange={open => { setShowEditDialog(open); if (!open) { setSelectedOrderId(null); setEditOrderData(null); } }}
         order={editingOrder}
         items={editItemsData}
         itemsLoading={editItemsLoading}

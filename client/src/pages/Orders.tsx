@@ -286,6 +286,9 @@ export default function Orders() {
   // Edit order state — the dialog owns the form; the page owns which order is open.
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editOrderId, setEditOrderId] = useState<number | null>(null);
+  // الصف الكامل اللي فُتح منه التعديل — بيتخزّن وقت الفتح عشان الهيدر ميعتمدش على وجود
+  // الأوردر في `data.orders` (شوف editingOrder تحت).
+  const [editOrderData, setEditOrderData] = useState<any | null>(null);
 
   const [hideAssigned, setHideAssigned] = useState(true);
   // فلتر "الموظف المسؤول" — الـAPI كان بيدعم assignedEmployeeId من الأول، الناقص كان الواجهة.
@@ -470,9 +473,20 @@ export default function Orders() {
       { enabled: showEditDialog && editOrderId != null, retry: false }
     );
 
-  /** The order the dialog is open on, read from the list the page already has. */
+  /**
+   * الأوردر اللي الديالوج مفتوح عليه.
+   *
+   * بيتخزّن الصف اللي المستخدم دوس منه Edit (`editOrderData`) — مش بنعيد ندوّر عليه في
+   * `data.orders`. السبب: الجدول ممكن يكون معروض من مصدر تاني (تاب «مؤكدات اليوم» بيقرا
+   * من `todayConfirmedData`، أو الأوردر في صفحة تانية أو مفلتر بره القايمة الأساسية)،
+   * فالبحث في `data.orders` كان بيرجّع null والهيدر يفضل فاضي رغم إن التفاصيل فيها البيانات.
+   * كل صفوف الأوردرات بترجع أعمدة العميل والشحن كاملة، فالكائن المخزّن كافي لملء الهيدر.
+   * fallback على `data.orders` لأي فتح برمجي مستقبلي من غير كائن.
+   */
   const editingOrder =
-    (data?.orders ?? []).find((o: any) => o.id === editOrderId) ?? null;
+    editOrderData ??
+    (data?.orders ?? []).find((o: any) => o.id === editOrderId) ??
+    null;
 
   /**
    * Items first: it is the call that can be refused outright (stock already out) and the
@@ -593,6 +607,7 @@ export default function Orders() {
   const clearAllSelections = () => setSelectedOrderIds([]);
 
   const openEditFor = (order: any) => {
+    setEditOrderData(order);
     setEditOrderId(order.id);
     setShowEditDialog(true);
   };
@@ -1541,7 +1556,7 @@ export default function Orders() {
           وشاشة الموظف على employeePortal (كوكي + صلاحية + فحص ملكية الأوردر). */}
       <OrderEditDialog
         open={showEditDialog}
-        onOpenChange={open => { setShowEditDialog(open); if (!open) setEditOrderId(null); }}
+        onOpenChange={open => { setShowEditDialog(open); if (!open) { setEditOrderId(null); setEditOrderData(null); } }}
         order={editingOrder}
         items={editItemsData}
         itemsLoading={editItemsLoading}

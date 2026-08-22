@@ -142,7 +142,9 @@ export default function EmployeeDashboard() {
   const [selectedGroupId, setSelectedGroupId] = useState<number | undefined>(undefined);
 
   // Edit order state
-  const [editDialog, setEditDialog] = useState<{ open: boolean; orderId: number | null }>({ open: false, orderId: null });
+  // `data` = الصف الكامل اللي فُتح منه التعديل — بيتخزّن وقت الفتح عشان الهيدر ميعتمدش على
+  // إعادة البحث في `ordersData.orders` (شوف editingOrder تحت). نفس إصلاح صفحة Orders.
+  const [editDialog, setEditDialog] = useState<{ open: boolean; orderId: number | null; data: any | null }>({ open: false, orderId: null, data: null });
   const [showEditHistory, setShowEditHistory] = useState(false);
 
   // Tasks state
@@ -573,7 +575,7 @@ export default function EmployeeDashboard() {
   };
 
   function openEditDialogFor(order: any) {
-    setEditDialog({ open: true, orderId: order.id });
+    setEditDialog({ open: true, orderId: order.id, data: order });
     setShowEditHistory(false);
   }
 
@@ -680,7 +682,9 @@ export default function EmployeeDashboard() {
 
   /** The order the edit dialog is open on — the dialog reads its opening values from this. */
   const editingOrder =
-    (ordersData?.orders ?? []).find((o: any) => o.id === editDialog.orderId) ?? null;
+    editDialog.data ??
+    (ordersData?.orders ?? []).find((o: any) => o.id === editDialog.orderId) ??
+    null;
 
   const filteredOrders = (ordersData?.orders ?? []).filter((o: any) => {
     if (activeTab === "needs_review" && !o.needsReview) return false;
@@ -1707,7 +1711,7 @@ export default function EmployeeDashboard() {
           وشاشة المالك على orders (جلسة إدارية + نطاق النشاط). */}
       <OrderEditDialog
         open={editDialog.open}
-        onOpenChange={open => { if (!open) setEditDialog({ open: false, orderId: null }); }}
+        onOpenChange={open => { if (!open) setEditDialog({ open: false, orderId: null, data: null }); }}
         order={editingOrder}
         items={orderItemsData}
         itemsLoading={orderItemsLoading}

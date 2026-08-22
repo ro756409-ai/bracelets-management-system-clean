@@ -35,6 +35,27 @@ const BOSTA_UNCERTAIN = "uncertain";
 const UNCERTAIN_MESSAGE =
   "حالة إنشاء الشحنة غير مؤكدة — راجع بوسطة قبل إعادة المحاولة عشان ما تتعملش شحنة تانية";
 
+/**
+ * السبب الحقيقي لفشل نداء `fetch` بدل رسالة "fetch failed" العامة.
+ *
+ * `fetch` في Node بيرمي `TypeError: fetch failed` وبيحط السبب الفعلي (DNS/رفض اتصال/
+ * شهادة/timeout) في `err.cause` — من غيره مفيش طريقة نعرف هل المشكلة شبكة ولا توكن ولا
+ * payload. بنطلّع الرسالة + الكود اللي جوه `cause` عشان اللوج وواجهة الباتش يوضّحوا السبب.
+ */
+export function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && typeof cause === "object") {
+    const code = (cause as { code?: unknown }).code;
+    const causeMsg = (cause as { message?: unknown }).message;
+    const parts = [err.message];
+    if (code) parts.push(String(code));
+    if (causeMsg && causeMsg !== err.message) parts.push(String(causeMsg));
+    return parts.join(" · ");
+  }
+  return err.message;
+}
+
 // Clean up any accidental "KEY=value" format from env
 const BOSTA_BASE_URL = (process.env.BOSTA_BASE_URL || "https://app.bosta.co/api/v0")
   .replace(/^BOSTA_BASE_URL=/i, "").trim();
@@ -429,7 +450,12 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
 
       return { success: true, shipmentId, trackingNumber, warning: duplicatePhoneWarning };
     } else {
-      const errMsg = String((responseBody as Record<string, unknown>).message ?? JSON.stringify(responseBody));
+      // بوسطة ردّت بس رفضت — الرد وصل فمفيش شحنة اتعملت (retry آمن). بنطلّع الرسالة
+      // الحقيقية + كود الحالة عشان يتضح هل توكن (401/403) ولا payload/عنوان (400/422).
+      const bodyMsg = (responseBody as Record<string, unknown>).message
+        ?? (responseBody as Record<string, unknown>).error
+        ?? JSON.stringify(responseBody);
+      const errMsg = `HTTP ${response.status} — ${String(bodyMsg)}`;
       await db!.update(orders).set({
         bostaLastError: errMsg,
         bostaStatus: "failed",
@@ -437,16 +463,20 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
       return { success: false, error: errMsg };
     }
   } catch (err: unknown) {
-    // الحالة الأخطر: النداء وقع بعد ما بوسطة **ممكن** تكون أنشأت الشحنة (timeout بين
-    // C وD). "failed" هنا كان بيغري بـretry أعمى يعمل شحنة تانية — فبنحطّها "uncertain"
-    // بدلها. الطلب الجاي بيترفض لحد ما التاجر يراجع بوسطة يدويًا.
-    const errMsg = err instanceof Error ? err.message : String(err);
-    console.error("[Bosta] Error (uncertain):", errMsg);
+    // النداء نفسه رمى (شبكة/DNS/شهادة/timeout) — «fetch failed» العامة مش كافية للحكم.
+    // بنطلّع السبب الحقيقي من err.cause (ENOTFOUND/ECONNREFUSED/timeout...) في اللوج
+    // وفي الرسالة المرجّعة، مع إبقاء الحالة "uncertain": النداء ممكن يكون وصل بوسطة
+    // فعلاً (timeout بين الإرسال والرد)، فـ"failed" كان هيغري بـretry يعمل شحنة تانية.
+    // الطلب الجاي بيترفض لحد ما التاجر يراجع بوسطة يدويًا — من غير أي retry تلقائي.
+    const detail = describeFetchError(err);
+    console.error("[Bosta] Network/exception (uncertain):", detail, JSON.stringify({
+      orderId, url: `${BOSTA_BASE_URL}/deliveries`,
+    }));
     await db!.update(orders).set({
-      bostaLastError: `${UNCERTAIN_MESSAGE} — ${errMsg}`,
+      bostaLastError: `${UNCERTAIN_MESSAGE} — ${detail}`,
       bostaStatus: BOSTA_UNCERTAIN,
     }).where(eq(orders.id, orderId));
-    return { success: false, error: UNCERTAIN_MESSAGE };
+    return { success: false, error: `${UNCERTAIN_MESSAGE} — ${detail}` };
   }
 }
 
