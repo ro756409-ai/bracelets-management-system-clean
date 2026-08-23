@@ -132,6 +132,7 @@ import {
   importCarrierSettlement,
   listDailySettlements,
   recordDailySettlement,
+  voidDailySettlement,
 } from "./settlementsV2.service";
 import {
   configureBusinessShippingProvider,
@@ -2012,6 +2013,21 @@ export const appRouter = router({
         })
       ),
 
+    /**
+     * إلغاء تحصيل يومي — آمن بحركة عكسية (مش حذف)، بيتطلب سبب. الأصل بيفضل voided.
+     * التعديل من الواجهة = إلغاء آمن + تسجيل جديد (بيحافظ على الأثر).
+     */
+    dailySettlementVoid: permissionProcedure("shipping_finance.manage")
+      .input(z.object({ businessId: z.number(), settlementId: z.number(), reason: z.string().min(1).max(500) }))
+      .mutation(async ({ ctx, input }) =>
+        voidDailySettlement({
+          settlementId: input.settlementId,
+          reason: input.reason,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          actor: await requireActor(ctx),
+        })
+      ),
+
     // مصروف بخطوة واحدة: تاريخ ومبلغ وتصنيف ووصف. المسار الكامل (فترة خدمة، مركز
     // تكلفة، اعتماد منفصل) لسه موجود لمن يحتاجه.
     expenseRecordSimple: permissionProcedure("accounting.manage")
@@ -2188,7 +2204,9 @@ export const appRouter = router({
 
   // ==================== EMPLOYEES ====================
   employees: router({
-    list: protectedProcedure
+    // قراءة مقصورة على النطاق (ctx.tenantId) — متاحة لأي جلسة مصرّح لها عشان المحاسب
+    // (موظف، user=null) يقرا الموظفين في تابات المرتبات من غير UNAUTHORIZED. الكتابة تفضل admin.
+    list: authenticatedProcedure
       .input(
         z
           .object({
@@ -2442,7 +2460,8 @@ export const appRouter = router({
 
   // ==================== PRODUCTS ====================
   products: router({
-    list: protectedProcedure
+    // قراءة مقصورة على النطاق — متاحة للمحاسب (dropdown الأصناف في استلام البضاعة).
+    list: authenticatedProcedure
       .input(
         z
           .object({
@@ -6094,7 +6113,8 @@ export const appRouter = router({
         return { success: true };
       }),
     // المخازن
-    warehouses: protectedProcedure
+    // قراءة مقصورة على النطاق — متاحة للمحاسب (اختيار المخزن في استلام البضاعة).
+    warehouses: authenticatedProcedure
       .input(
         z.object({
           businessId: z.number(),
@@ -6438,7 +6458,8 @@ export const appRouter = router({
           includeInactive: input.includeInactive,
         });
       }),
-    all: protectedProcedure
+    // قراءة مقصورة على النطاق — متاحة للمحاسب (dropdown أنواع الحفر في استلام البضاعة).
+    all: authenticatedProcedure
       .input(
         z
           .object({

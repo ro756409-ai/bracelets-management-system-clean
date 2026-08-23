@@ -490,6 +490,113 @@ export async function recordDailySettlement(input: {
 }
 
 /**
+ * إلغاء تحصيل يومي — **آمن بحركة عكسية، مش حذف**.
+ *
+ * الصف الأصلي بيفضل زي ما هو (status → voided)، وبنسجّل عكس تأثيره بالظبط: قيد مالي
+ * معاكس (فلوس خارجة من نفس الخزنة) + حركة خزنة out بالصافي + business event للإلغاء.
+ * كده الدفترين (المالي والخزنة) يرجعوا صفر أثر، والتاريخ كله محفوظ للمراجعة. بيتطلب سبب.
+ *
+ * حارس ضد الإلغاء المزدوج: بس التحصيل اللي حالته approved ينفع يتلغي (قفل صف بـfor update).
+ */
+export async function voidDailySettlement(input: {
+  businessId: number;
+  settlementId: number;
+  reason: string;
+  actor: Actor;
+}) {
+  if (!input.reason.trim()) throw new Error("إلغاء التحصيل يتطلب سببًا موثقًا");
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  return db.transaction(async tx => {
+    const [settlement] = await tx
+      .select()
+      .from(carrierSettlements)
+      .where(
+        and(
+          eq(carrierSettlements.id, input.settlementId),
+          eq(carrierSettlements.businessId, input.businessId)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!settlement) throw new Error("التحصيل غير موجود");
+    if (settlement.status !== "approved")
+      throw new Error("التحصيل ده مش قابل للإلغاء (اتلغى قبل كده أو حالته مختلفة)");
+
+    const [provider] = await tx
+      .select()
+      .from(businessShippingProviders)
+      .where(eq(businessShippingProviders.id, settlement.businessShippingProviderId))
+      .limit(1);
+    const [business] = await tx
+      .select()
+      .from(businesses)
+      .where(eq(businesses.id, input.businessId))
+      .limit(1);
+    if (!business) throw new Error("Business not found");
+
+    const net = settlement.netTransferred;
+    const carrierName = provider?.displayName ?? "شركة الشحن";
+
+    const eventResult = await createBusinessEventInTransaction(tx, {
+      businessId: input.businessId,
+      eventType: "shipping.settlement_voided",
+      sourceType: "carrier_settlement",
+      sourceReference: String(settlement.id),
+      idempotencyKey: `carrier-settlement:${settlement.id}:voided`,
+      occurredAt: new Date(),
+      payload: {
+        settlementId: settlement.id,
+        netReversed: net,
+        reason: input.reason.trim(),
+      },
+      actor: input.actor,
+    });
+
+    // القيد المعاكس: فلوس خارجة من نفس الخزنة اللي دخلتها (sourceAccountId).
+    if (settlement.targetAccountId) {
+      await postFinancialTransactionInTransaction(tx, {
+        businessId: input.businessId,
+        transactionType: "carrier_settlement_reversal",
+        sourceAccountId: settlement.targetAccountId,
+        amount: net,
+        currencyCode: business.baseCurrency,
+        description: `إلغاء تحصيل ${carrierName} — ${input.reason.trim()}`,
+        evidenceUrl: "manual-daily-settlement-void",
+        externalCounterparty: carrierName,
+        occurredAt: new Date(),
+        businessEventId: eventResult.event.id,
+        actor: input.actor,
+      });
+    }
+
+    // حركة خزنة عكسية بالصافي — بترجّع الرصيد الجاري لما كان عليه.
+    const treasury = await addTreasuryTransactionInTransaction(tx, {
+      businessId: input.businessId,
+      type: "collection",
+      direction: "out",
+      amount: net,
+      description: `إلغاء تحصيل ${carrierName}`,
+      notes: input.reason.trim(),
+      referenceType: "manual",
+      referenceId: settlement.id,
+      performedBy: input.actor.id,
+      performedByName: input.actor.name,
+      transactionDate: new Date(),
+    });
+    if (!treasury) throw new Error("تعذر تسجيل حركة الخزنة العكسية — الإلغاء اترجع");
+
+    await tx
+      .update(carrierSettlements)
+      .set({ status: "voided" })
+      .where(eq(carrierSettlements.id, settlement.id));
+
+    return { settlementId: settlement.id, reversedTreasuryTransactionId: treasury.id };
+  });
+}
+
+/**
  * تحصيلات النشاط — أحدث أولًا، بعدد الأوردرات المقروء من سطر الملخّص.
  *
  * قراءة بحتة. عدد الأوردرات مش عمود، فبيتقرا من `rawLineJson` وبيرجع `null` لو السطر
