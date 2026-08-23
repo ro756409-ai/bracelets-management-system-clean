@@ -5877,6 +5877,52 @@ export async function createSalaryProfile(data: InsertEmployeeSalaryProfile) {
   }
 }
 
+/**
+ * إنشاء موظف رواتب (سجل + ملف راتب) في transaction واحدة — للمحاسب.
+ *
+ * موظف رواتب بحت: دور غير إداري ثابت (`viewer`)، **بدون username/passwordHash** (لا دخول)،
+ * والمرتب الأساسي بيتخزّن في employeeSalaryProfiles (الوظيفة في notes مؤقتًا، بدون عمود).
+ * لو إنشاء ملف الراتب فشل → الـtransaction بترجّع الموظف كله (مفيش سجل موظف يتيم).
+ */
+export async function createPayrollEmployee(input: {
+  tenantId: number;
+  businessId: number;
+  name: string;
+  phone?: string;
+  jobTitle?: string;
+  baseSalary: string;
+  effectiveFrom: Date;
+  actor: { id: number; name: string };
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const empResult: any = await tx.insert(employees).values({
+      name: input.name,
+      phone: input.phone ?? null,
+      // دور تشغيلي غير إداري ثابت — مفيش أي صلاحية إدارية، ومفيش بيانات دخول.
+      role: "viewer",
+      isActive: true,
+      tenantId: input.tenantId,
+      businessId: input.businessId,
+    });
+    const employeeId = Number(empResult?.insertId ?? empResult?.[0]?.insertId);
+    if (!employeeId) throw new Error("تعذر إنشاء الموظف");
+    await tx.insert(employeeSalaryProfiles).values({
+      businessId: input.businessId,
+      employeeId,
+      salaryType: "monthly",
+      baseSalary: input.baseSalary,
+      effectiveFrom: input.effectiveFrom,
+      notes: input.jobTitle?.trim() || null,
+      isActive: true,
+      createdBy: input.actor.id,
+      createdByName: input.actor.name,
+    });
+    return { employeeId };
+  });
+}
+
 export async function updateSalaryProfile(
   id: number,
   data: Partial<InsertEmployeeSalaryProfile>,

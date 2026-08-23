@@ -617,6 +617,7 @@ import {
   listBusinessSalaryProfiles,
   deleteSalaryProfile,
   createSalaryProfile,
+  createPayrollEmployee,
   updateSalaryProfile,
   getAdvances,
   createAdvance,
@@ -7611,6 +7612,53 @@ export const appRouter = router({
           performedBy: actor.id ?? ctx.user!.id,
           performedByName: actor.name ?? "غير معروف",
           performedByRole: "admin",
+          businessId,
+        });
+        return result;
+      }),
+
+    /**
+     * إنشاء موظف رواتب من مساحة المحاسب — endpoint محدود بديل عن employees.create الإداري.
+     * على payroll.manage (المحاسب معاه)، tenant-scoped، بينشئ موظف بدور غير إداري ثابت
+     * (viewer) **بدون** أي username/passwordHash (لا دخول)، + ملف راتب في نفس الـtransaction.
+     * مش بيمنح أي دور إداري ولا بيانات دخول — المالك يكمّلها لو حب. مفيش توسيع لـemployees.create.
+     */
+    payrollEmployeeCreate: permissionProcedure("payroll.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          name: z.string().min(2).max(100),
+          jobTitle: z.string().max(100).optional(),
+          baseSalary: z.number().min(0),
+          phone: z.string().max(20).optional(),
+          startDate: z.date(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(
+          ctx.tenantId,
+          input.businessId
+        );
+        const actor = await requireActor(ctx);
+        const result = await createPayrollEmployee({
+          tenantId: ctx.tenantId!,
+          businessId,
+          name: input.name.trim(),
+          phone: input.phone?.trim() || undefined,
+          jobTitle: input.jobTitle,
+          baseSalary: input.baseSalary.toFixed(2),
+          effectiveFrom: input.startDate,
+          actor,
+        });
+        await addActivityLog({
+          action: "payroll_employee_create",
+          entityType: "employee",
+          entityId: result.employeeId,
+          description: `إنشاء موظف رواتب: ${input.name.trim()}`,
+          metadata: { baseSalary: input.baseSalary, jobTitle: input.jobTitle ?? null },
+          performedBy: actor.id,
+          performedByName: actor.name,
+          performedByRole: "accountant",
           businessId,
         });
         return result;
