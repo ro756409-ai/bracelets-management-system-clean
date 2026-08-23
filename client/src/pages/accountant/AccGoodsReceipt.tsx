@@ -9,6 +9,9 @@ import {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+/** الاسم المعتمد لمورد الورشة — مُعرّف ثابت (مفيش flag «workshop» في نموذج الموردين). */
+const WORKSHOP_SUPPLIER = "الورشة";
+
 const STATUS: Record<string, { label: string; tone: "green" | "amber" | "rose" | "slate" }> = {
   draft: { label: "مسودة", tone: "slate" },
   pending_approval: { label: "بانتظار الاعتماد", tone: "amber" },
@@ -44,6 +47,15 @@ export default function AccGoodsReceipt({ businessId }: { businessId: number }) 
     if (!warehouseId && ws.length > 0) setWarehouseId(String(ws[0].id));
   }, [warehouses.data, warehouseId]);
 
+  // المورد بيتحدد بالاسم المعتمد «الورشة» — **مش** أول مورد نشط (عشان مايربطش الاستلام
+  // بمورد تاني بالخطأ لمجرد ترتيب القايمة). لو مش موجود أو inactive بنضمنه عند الحفظ.
+  const workshopSup: any = (suppliers.data ?? []).find((s: any) => s.name === WORKSHOP_SUPPLIER);
+  useEffect(() => {
+    if (editId == null && !supplierName) setSupplierName(WORKSHOP_SUPPLIER);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId]);
+  const effectiveSupplier = supplierName.trim() || WORKSHOP_SUPPLIER;
+
   const variantsFor = (pid: string) =>
     ((variants ?? []) as CatalogVariant[]).filter(v => v.productId === Number(pid));
 
@@ -68,6 +80,8 @@ export default function AccGoodsReceipt({ businessId }: { businessId: number }) 
   const submit = trpc.accountingV2.purchaseReceiptSubmit.useMutation();
   const update = trpc.accountingV2.purchaseReceiptDraftUpdate.useMutation();
   const del = trpc.accountingV2.purchaseReceiptDraftDelete.useMutation();
+  // لإنشاء ملف المورد «الورشة» مرة واحدة لو مفيش أي مورد — upsert بالمسار الحالي، مفيش duplicate.
+  const saveSupplier = trpc.suppliers.save.useMutation();
 
   const reset = () => {
     setSupplierName(""); setProductId(""); setVariantId(""); setQty(""); setUnitCost(""); setNotes("");
@@ -77,7 +91,6 @@ export default function AccGoodsReceipt({ businessId }: { businessId: number }) 
   const save = async (thenSubmit: boolean) => {
     const q = Number(qty), u = Number(unitCost);
     if (!warehouseId) return toast.error("اختار المخزن");
-    if (!supplierName.trim()) return toast.error("اختار المورد");
     if (!productId) return toast.error("اختار الصنف");
     if (!(q > 0) || !Number.isInteger(q)) return toast.error("الكمية لازم تكون رقم صحيح أكبر من صفر");
     if (!(u > 0)) return toast.error("سعر القطعة لازم يكون أكبر من صفر");
@@ -89,12 +102,17 @@ export default function AccGoodsReceipt({ businessId }: { businessId: number }) 
       unitCost: String(u),
     }];
     try {
+      // نضمن ملف «الورشة» موجود ونشط قبل الإيصال — ينشئه لو غايب، أو يعيد تنشيطه لو inactive.
+      // upsert بالاسم (مفتاح ثابت) فمفيش duplicate، وبيتعمل حتى لو فيه موردين آخرين نشطين.
+      if (effectiveSupplier === WORKSHOP_SUPPLIER && (!workshopSup || !workshopSup.isActive)) {
+        await saveSupplier.mutateAsync({ businessId, name: WORKSHOP_SUPPLIER, isActive: true });
+      }
       if (editId != null) {
         await update.mutateAsync({
           businessId,
           receiptId: editId,
           warehouseId: Number(warehouseId),
-          supplierName: supplierName.trim(),
+          supplierName: effectiveSupplier,
           receiptDate: new Date(date),
           reason: notes.trim() || undefined,
           items,
@@ -105,7 +123,7 @@ export default function AccGoodsReceipt({ businessId }: { businessId: number }) 
           businessId,
           warehouseId: Number(warehouseId),
           receiptType: "purchase",
-          supplierName: supplierName.trim(),
+          supplierName: effectiveSupplier,
           receiptDate: new Date(date),
           reason: notes.trim() || undefined,
           items,
@@ -149,7 +167,6 @@ export default function AccGoodsReceipt({ businessId }: { businessId: number }) 
   };
 
   const ws: any[] = (warehouses.data ?? []).filter((w: any) => w.isActive);
-  const sups: any[] = suppliers.data ?? [];
   const busy = create.isPending || submit.isPending || update.isPending;
 
   return (
@@ -170,11 +187,9 @@ export default function AccGoodsReceipt({ businessId }: { businessId: number }) 
               {ws.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </AccSelect>
           </AccField>
-          <AccField label="المورد" required>
-            <AccSelect value={supplierName} onChange={e => setSupplierName(e.target.value)}>
-              <option value="">— اختار —</option>
-              {sups.map(s => <option key={s.key} value={s.name}>{s.name}</option>)}
-            </AccSelect>
+          <AccField label="المورد">
+            {/* المورد بيتحدد تلقائيًا (أول مورد نشط، أو «الورشة») — المحاسب مابيختارش. */}
+            <AccInput value={effectiveSupplier} disabled />
           </AccField>
           <AccField label="التاريخ" required>
             <AccInput type="date" value={date} onChange={e => setDate(e.target.value)} />
