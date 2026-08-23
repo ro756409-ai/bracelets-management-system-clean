@@ -181,6 +181,94 @@ export async function submitPurchaseReceipt(input: { businessId: number; receipt
   return { success: Number((result as any)?.[0]?.affectedRows ?? (result as any)?.affectedRows ?? 0) === 1 };
 }
 
+/**
+ * تعديل مسودة استلام — **للمسودة فقط**. المسودة مابتحركش مخزون ولا فلوس، فالتعديل آمن.
+ * أي حالة غير `draft` بترفض. مابيغيّرش الحالة ولا بيلمس مخزون — بيحدّث الهيدر والبنود بس.
+ */
+export async function updatePurchaseReceiptDraft(input: {
+  businessId: number;
+  receiptId: number;
+  warehouseId?: number;
+  supplierName?: string;
+  reference?: string;
+  receiptDate?: Date;
+  reason?: string;
+  items: Array<{ productId: number; variantId?: number; quantity: number; unitCost: string }>;
+  actor: Actor;
+}) {
+  if (input.items.length === 0) throw new Error("Stock In requires at least one item");
+  if (input.items.some(item => !Number.isInteger(item.quantity) || item.quantity <= 0 || toMinorUnits(item.unitCost) < 0n)) {
+    throw new Error("Every Stock In item requires a positive quantity and an explicit non-negative cost");
+  }
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const [receipt] = await tx.select().from(purchaseReceipts).where(and(
+      eq(purchaseReceipts.id, input.receiptId), eq(purchaseReceipts.businessId, input.businessId),
+    )).limit(1).for("update");
+    if (!receipt) throw new Error("Purchase Receipt is outside this business");
+    if (receipt.status !== "draft")
+      throw new Error("مايتعدّلش إلا المسودة — الإذن المُرسل أو المعتمد للمالك");
+    const total = input.items.reduce(
+      (sum, item) => sum + toMinorUnits(item.unitCost) * BigInt(item.quantity),
+      0n,
+    );
+    await tx.update(purchaseReceipts).set({
+      warehouseId: input.warehouseId ?? receipt.warehouseId,
+      supplierName: input.supplierName ?? receipt.supplierName,
+      reference: input.reference ?? receipt.reference,
+      receiptDate: input.receiptDate ?? receipt.receiptDate,
+      reason: input.reason ?? receipt.reason,
+      totalAmount: fromMinorUnits(total),
+    }).where(and(
+      eq(purchaseReceipts.id, receipt.id),
+      eq(purchaseReceipts.businessId, input.businessId),
+      // حارس تاني: التحديث نفسه مشروط بالمسودة، فسباق حالة مايعدّيش على إذن اتعمد بينهم.
+      eq(purchaseReceipts.status, "draft"),
+    ));
+    // استبدال البنود بالكامل — البنود القديمة تتمسح والجديدة تتكتب داخل نفس الـtransaction.
+    await tx.delete(purchaseReceiptItems).where(eq(purchaseReceiptItems.receiptId, receipt.id));
+    for (const item of input.items) await tx.insert(purchaseReceiptItems).values({
+      receiptId: receipt.id,
+      businessId: input.businessId,
+      productId: item.productId,
+      variantId: item.variantId ?? null,
+      quantity: item.quantity,
+      unitCost: fromMinorUnits(toMinorUnits(item.unitCost)),
+      lineTotal: fromMinorUnits(toMinorUnits(item.unitCost) * BigInt(item.quantity)),
+    });
+    return { receiptId: receipt.id, totalAmount: fromMinorUnits(total) };
+  });
+}
+
+/**
+ * حذف مسودة استلام — **hard delete للمسودة فقط**. المسودة مالهاش أي أثر مخزون/مالي،
+ * فالحذف آمن. أي حالة غير `draft` بترفض. البنود بتتمسح مع الرأس في نفس الـtransaction.
+ */
+export async function deletePurchaseReceiptDraft(input: {
+  businessId: number;
+  receiptId: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.transaction(async tx => {
+    const [receipt] = await tx.select().from(purchaseReceipts).where(and(
+      eq(purchaseReceipts.id, input.receiptId), eq(purchaseReceipts.businessId, input.businessId),
+    )).limit(1).for("update");
+    if (!receipt) throw new Error("Purchase Receipt is outside this business");
+    if (receipt.status !== "draft")
+      throw new Error("مايتحذفش إلا المسودة — الإذن المُرسل أو المعتمد مايتحذفش (يُلغى من المالك)");
+    // البنود الأول (مفيش FK cascade في السكيمة)، بعدين الرأس — كله في transaction واحدة.
+    await tx.delete(purchaseReceiptItems).where(eq(purchaseReceiptItems.receiptId, receipt.id));
+    await tx.delete(purchaseReceipts).where(and(
+      eq(purchaseReceipts.id, receipt.id),
+      eq(purchaseReceipts.businessId, input.businessId),
+      eq(purchaseReceipts.status, "draft"),
+    ));
+    return { success: true, receiptId: receipt.id };
+  });
+}
+
 export async function recordOpeningInTransit(input: {
   businessId: number;
   orderId: number;

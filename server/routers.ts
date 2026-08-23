@@ -107,6 +107,8 @@ import {
   approvePurchaseReceipt,
   approveReturnInspection,
   createPurchaseReceiptDraft,
+  updatePurchaseReceiptDraft,
+  deletePurchaseReceiptDraft,
   dispatchOrderInventory,
   getInventoryControlData,
   recordOpeningInTransit,
@@ -1708,6 +1710,59 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) =>
         submitPurchaseReceipt({
           ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+        })
+      ),
+
+    /**
+     * تعديل مسودة استلام — للمسودة فقط، على inventory_costing.manage (المحاسب معاه).
+     * الخدمة بترفض أي حالة غير draft، ومابتحركش مخزون ولا بتعتمد. مش inventory_costing.approve.
+     */
+    purchaseReceiptDraftUpdate: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          receiptId: z.number(),
+          warehouseId: z.number().optional(),
+          supplierName: z.string().min(1).max(160).optional(),
+          reference: z.string().max(100).optional(),
+          receiptDate: z.date().optional(),
+          reason: z.string().optional(),
+          items: z
+            .array(
+              z.object({
+                productId: z.number(),
+                variantId: z.number().optional(),
+                quantity: z.number().int().positive(),
+                unitCost: moneyString,
+              })
+            )
+            .min(1),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        updatePurchaseReceiptDraft({
+          ...input,
+          businessId: await requireScopedBusinessId(
+            ctx.tenantId,
+            input.businessId
+          ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    /**
+     * حذف مسودة استلام — hard delete للمسودة فقط، على inventory_costing.manage.
+     * الخدمة بترفض أي حالة غير draft (اللي حرّك مخزون مايتحذفش). مش inventory_costing.approve.
+     */
+    purchaseReceiptDraftDelete: permissionProcedure("inventory_costing.manage")
+      .input(z.object({ businessId: z.number(), receiptId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        deletePurchaseReceiptDraft({
+          receiptId: input.receiptId,
           businessId: await requireScopedBusinessId(
             ctx.tenantId,
             input.businessId
