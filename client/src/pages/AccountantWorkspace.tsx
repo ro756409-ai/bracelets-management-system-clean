@@ -33,18 +33,15 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 export default function AccountantWorkspace() {
   const [, setLocation] = useLocation();
   const { logout } = useAuth();
-  const { businesses, currentBusinessIds } = useBusinessContext();
+  const { businesses } = useBusinessContext();
   const [tab, setTab] = useState<TabKey>("expenses");
 
-  // نشاط واحد فعّال للتابات — أول نشاط في نطاق الجلسة، مع منتقي لو أكتر من واحد.
-  const scopeIds = currentBusinessIds ?? [];
+  // مصدر الأنشطة = activeList المسطّحة (tenant-scoped)، مش قايمة الـgroup: نشاط مالوش
+  // group كانت قايمة الـgroup بتبقى فاضية فالشاشة تقفل كل التابات وتقول «مفيش نشاط».
+  // activeList بترجع أنشطة الـtenant سواء في group أو لأ.
+  const options = useMemo(() => businesses ?? [], [businesses]);
   const [picked, setPicked] = useState<number | null>(null);
-  const businessId = picked ?? scopeIds[0] ?? null;
-
-  const scopedBusinesses = useMemo(
-    () => (businesses ?? []).filter(b => scopeIds.includes(b.id)),
-    [businesses, scopeIds]
-  );
+  const businessId = picked ?? options[0]?.id ?? null;
 
   const doLogout = async () => {
     try { await logout(); } finally { setLocation("/employee-login"); }
@@ -57,13 +54,13 @@ export default function AccountantWorkspace() {
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3 px-4 py-3">
           <h1 className="text-lg font-bold text-slate-800">مساحة المحاسب</h1>
           <div className="mr-auto flex items-center gap-2">
-            {scopedBusinesses.length > 1 && (
+            {options.length > 1 && (
               <AccSelect
                 className="w-44 py-2"
                 value={businessId != null ? String(businessId) : ""}
                 onChange={e => setPicked(Number(e.target.value))}
               >
-                {scopedBusinesses.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                {options.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
               </AccSelect>
             )}
             <button

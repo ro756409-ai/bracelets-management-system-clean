@@ -162,3 +162,38 @@ describe("🔑 إصلاح الـlogout للمحاسب", () => {
     expect(routers).toMatch(/employees: router\(\{[\s\S]{0,260}list: authenticatedProcedure/);
   });
 });
+
+/**
+ * BUG: كل التابات كانت بتطلع فاضية + «مفيش نشاط متاح لحسابك» — لأن businessId كان
+ * بيتاخد من currentBusinessIds (المرتبطة بالـgroup)، واللي بتبقى undefined لو النشاط
+ * مالوش group. الإصلاح: المصدر بقى businesses (activeList المسطّحة، tenant-scoped).
+ */
+describe("🔑 اختيار النشاط في مساحة المحاسب من activeList مش الـgroup", () => {
+  const workspace = fs.readFileSync("client/src/pages/AccountantWorkspace.tsx", "utf-8");
+
+  it("🔑 businessId من businesses مش currentBusinessIds", () => {
+    expect(workspace).toContain("const businessId = picked ?? options[0]?.id ?? null");
+    expect(workspace).toContain("businesses ?? []");
+    // مابيعتمدش على الـgroup خالص
+    expect(workspace).not.toContain("currentBusinessIds");
+    expect(workspace).not.toContain("scopeIds");
+  });
+
+  it("🔑 لو الـgroup فاضي (currentBusinessIds=undefined) وفيه نشاط → businessId مش null والتابات بترندر", () => {
+    // نفس معادلة الحسم بالظبط، مستقلة عن أي group.
+    const resolve = (picked: number | null, opts: { id: number }[]) =>
+      picked ?? opts[0]?.id ?? null;
+    // currentBusinessIds=undefined مالهاش أي دخل — المصدر هو activeList:
+    expect(resolve(null, [{ id: 7 }])).toBe(7);   // نشاط متاح → يترندر
+    expect(resolve(null, [])).toBe(null);          // مفيش أي نشاط → الرسالة تظهر (صح)
+    expect(resolve(3, [{ id: 7 }])).toBe(3);        // اختيار المستخدم بيغلب
+    // والحارس بيقفل على businessId==null بس، مش على الـgroup
+    expect(workspace).toContain("businessId == null");
+  });
+
+  it("🔑 المنتقي بيعرض كل أنشطة الـtenant (options) مش المفلترة بالـgroup", () => {
+    expect(workspace).toContain("options.length > 1");
+    expect(workspace).toContain("options.map(b =>");
+    expect(workspace).not.toContain("scopedBusinesses");
+  });
+});
