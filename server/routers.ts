@@ -2204,7 +2204,9 @@ export const appRouter = router({
 
   // ==================== EMPLOYEES ====================
   employees: router({
-    list: protectedProcedure
+    // قراءة مقصورة على النطاق (ctx.tenantId) — متاحة لأي جلسة مصرّح لها عشان المحاسب
+    // (موظف، user=null) يقرا الموظفين في تابات المرتبات من غير UNAUTHORIZED. الكتابة تفضل admin.
+    list: authenticatedProcedure
       .input(
         z
           .object({
@@ -2458,7 +2460,8 @@ export const appRouter = router({
 
   // ==================== PRODUCTS ====================
   products: router({
-    list: protectedProcedure
+    // قراءة مقصورة على النطاق — متاحة للمحاسب (dropdown الأصناف في استلام البضاعة).
+    list: authenticatedProcedure
       .input(
         z
           .object({
@@ -6110,7 +6113,8 @@ export const appRouter = router({
         return { success: true };
       }),
     // المخازن
-    warehouses: protectedProcedure
+    // قراءة مقصورة على النطاق — متاحة للمحاسب (اختيار المخزن في استلام البضاعة).
+    warehouses: authenticatedProcedure
       .input(
         z.object({
           businessId: z.number(),
@@ -6454,7 +6458,8 @@ export const appRouter = router({
           includeInactive: input.includeInactive,
         });
       }),
-    all: protectedProcedure
+    // قراءة مقصورة على النطاق — متاحة للمحاسب (dropdown أنواع الحفر في استلام البضاعة).
+    all: authenticatedProcedure
       .input(
         z
           .object({

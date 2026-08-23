@@ -87,8 +87,12 @@ describe("🔑 بوابة الاستلام والملخص على السيرفر"
 const app = fs.readFileSync("client/src/App.tsx", "utf-8");
 const login = fs.readFileSync("client/src/pages/EmployeeLogin.tsx", "utf-8");
 const goods = fs.readFileSync("client/src/pages/GoodsReceipt.tsx", "utf-8");
-const workspace = fs.readFileSync("client/src/pages/AccountantWorkspace.tsx", "utf-8");
-const summarySvc = fs.readFileSync("server/accountantSummary.service.ts", "utf-8");
+const acc = (f: string) => fs.readFileSync(`client/src/pages/accountant/${f}`, "utf-8");
+const accExpenses = acc("AccExpenses.tsx");
+const accGoods = acc("AccGoodsReceipt.tsx");
+const accCollections = acc("AccCollections.tsx");
+const accWorkshop = acc("AccWorkshop.tsx");
+const accStocktake = acc("AccStocktake.tsx");
 
 describe("🔑 توجيه المحاسب لمساحته المخصّصة", () => {
   it("🔑 اللوجين بيوجّه accountant لـ/accountant", () => {
@@ -115,23 +119,46 @@ describe("🔑 حماية الاستلام في الواجهة + لا نظام �
     expect(goods).toContain('r.status === "pending_approval" && canApprove');
     expect(goods).toContain('r.status !== "voided" && canApprove');
   });
-  it("🔑 مساحة المحاسب بتعيد استخدام صفحات النظام — مفيش تكرار", () => {
-    expect(workspace).toContain('from "./Expenses"');
-    expect(workspace).toContain('from "./GoodsReceipt"');
-    expect(workspace).toContain('from "./SalaryProfiles"');
-    expect(workspace).toContain('from "./DailyCollections"');
+  it("🔑 تابات المحاسب بتنده endpoints النظام الموجودة — مفيش ledger/جدول موازي", () => {
+    // كل تاب بيعيد استخدام مسار موجود:
+    expect(accExpenses).toContain("trpc.accounting.expenseList");
+    expect(accExpenses).toContain("trpc.accountingV2.expenseRecordSimple");
+    expect(accGoods).toContain("trpc.accountingV2.purchaseReceiptCreate");
+    expect(accCollections).toContain("trpc.accountingV2.dailySettlementRecord");
+    expect(accWorkshop).toContain("trpc.suppliers.payment");
+    expect(accWorkshop).toContain("trpc.suppliers.statement");
+  });
+  it("🔑 حساب الورشة على supplierLedger الموجود — مفيش ledger جديد", () => {
+    // مفيش أي إنشاء جدول/كتابة خام؛ كله عبر suppliers.* + reverseMovement الآمن.
+    expect(accWorkshop).toContain("trpc.suppliers.reverseMovement");
+    expect(accWorkshop).not.toContain("mysqlTable");
+  });
+  it("🔑 الاستلام: المحاسب بينشئ ويرسل فقط — مفيش نداء approve/void", () => {
+    expect(accGoods).toContain("purchaseReceiptSubmit");
+    expect(accGoods).not.toContain("purchaseReceiptApprove");
+    expect(accGoods).not.toContain("purchaseReceiptVoid");
+  });
+  it("🔑 التحصيلات: إلغاء آمن (void) مش hard delete", () => {
+    expect(accCollections).toContain("trpc.accountingV2.dailySettlementVoid");
+    expect(accCollections).not.toContain(".delete");
   });
   it("تاب الجرد placeholder «قيد التجهيز» (P2-C)", () => {
-    expect(workspace).toContain("قيد التجهيز");
+    expect(accStocktake).toContain("قيد التجهيز");
   });
-  it("🔑 الملخص تجميع من دوال موجودة — مفيش منطق أرصدة جديد", () => {
-    expect(summarySvc).toContain("getTreasurySummary");
-    expect(summarySvc).toContain("getSupplierDashboardTotals");
-    expect(summarySvc).toContain("getFinancialAccounts");
-    expect(summarySvc).toContain("getPayrollPeriods");
-    // مفيش كتابة/تحريك أرصدة
-    expect(summarySvc).not.toContain(".insert(");
-    expect(summarySvc).not.toContain(".update(");
-    expect(summarySvc).not.toContain("addTreasuryTransaction");
+});
+
+describe("🔑 إصلاح الـlogout للمحاسب", () => {
+  const main = fs.readFileSync("client/src/main.tsx", "utf-8");
+  it("🔑 /accountant ضمن EMPLOYEE_PATHS — مايتحوّلش لـManus OAuth على UNAUTHORIZED", () => {
+    const list = main.slice(main.indexOf("EMPLOYEE_PATHS"), main.indexOf("]", main.indexOf("EMPLOYEE_PATHS")));
+    expect(list).toContain("/accountant");
+  });
+  it("🔑 القراءات اللي المحاسب محتاجها بقت authenticatedProcedure (tenant-scoped)", () => {
+    const routers = fs.readFileSync("server/routers.ts", "utf-8");
+    // products.list / variants.all / businesses.warehouses / employees.list
+    expect(routers).toMatch(/products: router\(\{[\s\S]{0,220}list: authenticatedProcedure/);
+    expect(routers).toContain("all: authenticatedProcedure");
+    expect(routers).toContain("warehouses: authenticatedProcedure");
+    expect(routers).toMatch(/employees: router\(\{[\s\S]{0,260}list: authenticatedProcedure/);
   });
 });

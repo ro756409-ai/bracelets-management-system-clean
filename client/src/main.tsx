@@ -19,6 +19,8 @@ const EMPLOYEE_PATHS = [
   '/facebook-entry',
   '/today-shipments',
   '/shipping-schedule',
+  // مساحة المحاسب جلسة موظف (user=null) — أي UNAUTHORIZED هنا مايوديهوش لـManus OAuth.
+  '/accountant',
 ];
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {
