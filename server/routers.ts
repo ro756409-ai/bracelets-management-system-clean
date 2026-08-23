@@ -132,6 +132,7 @@ import {
   importCarrierSettlement,
   listDailySettlements,
   recordDailySettlement,
+  voidDailySettlement,
 } from "./settlementsV2.service";
 import {
   configureBusinessShippingProvider,
@@ -2008,6 +2009,21 @@ export const appRouter = router({
             ctx.tenantId,
             input.businessId
           ),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    /**
+     * إلغاء تحصيل يومي — آمن بحركة عكسية (مش حذف)، بيتطلب سبب. الأصل بيفضل voided.
+     * التعديل من الواجهة = إلغاء آمن + تسجيل جديد (بيحافظ على الأثر).
+     */
+    dailySettlementVoid: permissionProcedure("shipping_finance.manage")
+      .input(z.object({ businessId: z.number(), settlementId: z.number(), reason: z.string().min(1).max(500) }))
+      .mutation(async ({ ctx, input }) =>
+        voidDailySettlement({
+          settlementId: input.settlementId,
+          reason: input.reason,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
           actor: await requireActor(ctx),
         })
       ),

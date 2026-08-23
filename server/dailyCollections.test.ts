@@ -32,7 +32,9 @@ const between = (src: string, start: string, end: string) => {
 const recordFn = between(
   settlements,
   "export async function recordDailySettlement",
-  "export async function listDailySettlements"
+  // ينتهي عند voidDailySettlement (اللي بعده مباشرة) — الإلغاء بيعمل حركة عكسية "out"
+  // مشروعة، فمالوش دخل بثابت «التحصيل يدخل الخزنة مرة واحدة بالصافي» الخاص بالتسجيل.
+  "export async function voidDailySettlement"
 );
 const listFn = settlements.slice(
   settlements.indexOf("export async function listDailySettlements")
