@@ -3,6 +3,13 @@ import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabled } from "./bosta.service";
 import { getAccountantSummary } from "./accountantSummary.service";
 import {
+  createStocktake,
+  listStocktakes,
+  getStocktake,
+  updateStocktakeLine,
+  submitStocktake,
+} from "./stocktake.service";
+import {
   syncOrdersByDateRange,
   testChannelConnection,
 } from "./easyorder.service";
@@ -1768,6 +1775,71 @@ export const appRouter = router({
             ctx.tenantId,
             input.businessId
           ),
+        })
+      ),
+
+    // ---------- الجرد (P2-C.1: جلسة/عد/إرسال فقط — مفيش اعتماد ولا حركة مخزون) ----------
+    /** إنشاء جلسة جرد لمخزن + لقطة كل الأصناف. tenant-scoped. */
+    stocktakeCreate: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          warehouseId: z.number(),
+          reference: z.string().max(100).optional(),
+          notes: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        createStocktake({
+          ...input,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    stocktakeList: permissionProcedure("inventory_costing.view")
+      .input(z.object({ businessId: z.number(), limit: z.number().max(200).optional() }))
+      .query(async ({ ctx, input }) =>
+        listStocktakes({
+          ...input,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+        })
+      ),
+
+    stocktakeGet: permissionProcedure("inventory_costing.view")
+      .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
+      .query(async ({ ctx, input }) =>
+        getStocktake({
+          stocktakeId: input.stocktakeId,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+        })
+      ),
+
+    /** إدخال العدد الفعلي لبند — للمسودة فقط (الخدمة بترفض أي حالة تانية). */
+    stocktakeLineUpdate: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          stocktakeId: z.number(),
+          lineId: z.number(),
+          countedQuantity: z.number().int().min(0),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        updateStocktakeLine({
+          ...input,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    /** إرسال الجرد للاعتماد (draft → pending_approval). الاعتماد الفعلي في P2-C.2. */
+    stocktakeSubmit: permissionProcedure("inventory_costing.manage")
+      .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        submitStocktake({
+          stocktakeId: input.stocktakeId,
+          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
         })
       ),
 

@@ -1657,6 +1657,78 @@ export const returnInspectionItems = mysqlTable("return_inspection_items", {
   reason: text("reason"),
 });
 
+// ==================== STOCKTAKE (الجرد) ====================
+// جلسة جرد لمخزن — لقطة للرصيد الدفتري + العدد الفعلي + الفرق. الاعتماد (اللي بيحرّك
+// المخزون ويسجّل الحدث المحاسبي) في مرحلة لاحقة؛ دلوقتي draft/pending_approval فقط.
+export const stocktakes = mysqlTable(
+  "stocktakes",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    warehouseId: int("warehouseId").notNull(),
+    status: mysqlEnum("status", [
+      "draft",
+      "pending_approval",
+      "approved",
+      "cancelled",
+    ])
+      .default("draft")
+      .notNull(),
+    reference: varchar("reference", { length: 100 }),
+    notes: text("notes"),
+    createdBy: int("createdBy").notNull(),
+    createdByName: varchar("createdByName", { length: 100 }).notNull(),
+    submittedAt: timestamp("submittedAt"),
+    approvedBy: int("approvedBy"),
+    approvedByName: varchar("approvedByName", { length: 100 }),
+    approvedAt: timestamp("approvedAt"),
+    cancelledBy: int("cancelledBy"),
+    cancelReason: text("cancelReason"),
+    // القيد المحاسبي/الحدث الناتج عن الاعتماد — بيتملى في P2-C.2 وقت التطبيق.
+    businessEventId: int("businessEventId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessIndex: index("stocktakes_business_idx").on(table.businessId),
+  })
+);
+
+export type Stocktake = typeof stocktakes.$inferSelect;
+export type InsertStocktake = typeof stocktakes.$inferInsert;
+
+// بند جرد — لقطة صنف واحد وقت بدء الجلسة، مع العدد الفعلي والفرق.
+export const stocktakeLines = mysqlTable(
+  "stocktake_lines",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    stocktakeId: int("stocktakeId").notNull(),
+    businessId: int("businessId").notNull(),
+    warehouseId: int("warehouseId").notNull(),
+    productId: int("productId").notNull(),
+    variantId: int("variantId"),
+    inventoryKey: varchar("inventoryKey", { length: 100 }).notNull(),
+    // لقطة الرصيد الدفتري وتكلفة الوحدة وقت بدء الجرد — بتفضل ثابتة حتى لو المخزون اتحرّك.
+    systemQuantity: int("systemQuantity").notNull(),
+    countedQuantity: int("countedQuantity").notNull(),
+    differenceQuantity: int("differenceQuantity").default(0).notNull(),
+    unitCostSnapshot: decimal("unitCostSnapshot", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    differenceValue: decimal("differenceValue", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    stocktakeIndex: index("stocktake_lines_stocktake_idx").on(table.stocktakeId),
+    businessIndex: index("stocktake_lines_business_idx").on(table.businessId),
+  })
+);
+
+export type StocktakeLine = typeof stocktakeLines.$inferSelect;
+export type InsertStocktakeLine = typeof stocktakeLines.$inferInsert;
+
 export const shippingProviders = mysqlTable("shipping_providers", {
   id: int("id").autoincrement().primaryKey(),
   code: varchar("code", { length: 50 }).notNull().unique(),
