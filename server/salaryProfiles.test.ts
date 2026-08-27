@@ -146,7 +146,8 @@ describe("🔑 نطاق النشاط", () => {
       "profileListByBusiness: permissionProcedure",
       "profileCreate:"
     );
-    expect(endpoint).toContain("requireScopedBusinessId(ctx.tenantId, input.businessId)");
+    // P0: النطاق بقى session-scoped (بيمرّر ctx) — بيقيّد الموظف بنشاطه.
+    expect(endpoint.replace(/\s+/g, " ")).toContain("requireScopedBusinessId( ctx, input.businessId )");
   });
 
   it("🔑 وقايمة الموظفين **مش** مفلترة على النشاط — وده مقصود", () => {

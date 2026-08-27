@@ -29,7 +29,8 @@ describe("🔑 P0 · التحويل بالجملة للأوردرات متقيّ
       const block = endpointBlock(name);
 
       it("🔑 بيجيب نطاق الأنشطة عبر scopeBusinessIds", () => {
-        expect(block).toContain("scopeBusinessIds(ctx.tenantId)");
+        // P0: النطاق بقى session-scoped (بيمرّر ctx) — بيقيّد الموظف بنشاطه.
+        expect(block).toContain("scopeBusinessIds(ctx)");
       });
 
       it("🔑 بيفلتر التحديث بـinArray على businessId", () => {
