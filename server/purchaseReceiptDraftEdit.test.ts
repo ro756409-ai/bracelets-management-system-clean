@@ -72,7 +72,8 @@ describe("🔑 الصلاحية: تعديل/حذف المسودة على manage 
     expect(routers).toContain('purchaseReceiptDraftDelete: permissionProcedure("inventory_costing.manage")');
   });
   it("🔑 مش على inventory_costing.approve", () => {
-    const block = routers.slice(routers.indexOf("purchaseReceiptDraftUpdate"), routers.indexOf("returnInspectionSubmit"));
+    // مقصور على endpointي المسودة بس — بعدهم بيبدأ بلوك الجرد اللي فيه approve شرعي.
+    const block = routers.slice(routers.indexOf("purchaseReceiptDraftUpdate"), routers.indexOf("stocktakeCreate"));
     expect(block).not.toContain('permissionProcedure("inventory_costing.approve")');
   });
 });

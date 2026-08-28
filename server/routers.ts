@@ -8,6 +8,7 @@ import {
   getStocktake,
   updateStocktakeLine,
   submitStocktake,
+  approveStocktake,
 } from "./stocktake.service";
 import {
   syncOrdersByDateRange,
@@ -1870,13 +1871,30 @@ export const appRouter = router({
         })
       ),
 
-    /** إرسال الجرد للاعتماد (draft → pending_approval). الاعتماد الفعلي في P2-C.2. */
+    /** إرسال الجرد للاعتماد (draft → pending_approval). */
     stocktakeSubmit: permissionProcedure("inventory_costing.manage")
       .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
       .mutation(async ({ ctx, input }) =>
         submitStocktake({
           stocktakeId: input.stocktakeId,
           businessId: await requireScopedBusinessId(ctx, input.businessId),
+        })
+      ),
+
+    /**
+     * اعتماد الجرد (pending_approval → approved) — بيحرّك المخزون ويسجّل الخسارة/الربح.
+     * على `inventory_costing.approve` بس (المحاسب مالوش الصلاحية دي — فاصل maker-checker).
+     * P0 محفوظ عبر requireScopedBusinessId(ctx). allowSelfApproval للمالك فقط.
+     */
+    stocktakeApprove: permissionProcedure("inventory_costing.approve")
+      .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        approveStocktake({
+          stocktakeId: input.stocktakeId,
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
+          actor: await requireActor(ctx),
+          // نفس منطق approvePurchaseReceipt: المالك بس يقدر يعتمد جرد عمله بنفسه.
+          allowSelfApproval: isOwnerRole(ctx.employee?.role),
         })
       ),
 
