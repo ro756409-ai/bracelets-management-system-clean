@@ -108,7 +108,8 @@ describe("الحماية على السيرفر فضلت منفصلة", () => {
       routers.indexOf("    orderItems: adminProcedure"),
       routers.indexOf("    // جلب سجل تعديلات أوردر")
     );
-    expect((owner.match(/requireScopedBusinessId\(ctx\.tenantId, order\.businessId\)/g) ?? []).length).toBe(2);
+    // P0: النطاق بقى session-scoped (بيمرّر ctx) — بيقيّد الموظف بنشاطه.
+    expect((owner.match(/requireScopedBusinessId\(ctx, order\.businessId\)/g) ?? []).length).toBe(2);
   });
 
   it("المسارين بينادوا نفس دوال قاعدة البيانات", () => {

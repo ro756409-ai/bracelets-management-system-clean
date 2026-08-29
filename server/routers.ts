@@ -3,6 +3,14 @@ import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabled } from "./bosta.service";
 import { getAccountantSummary } from "./accountantSummary.service";
 import {
+  createStocktake,
+  listStocktakes,
+  getStocktake,
+  updateStocktakeLine,
+  submitStocktake,
+  approveStocktake,
+} from "./stocktake.service";
+import {
   syncOrdersByDateRange,
   testChannelConnection,
 } from "./easyorder.service";
@@ -285,6 +293,16 @@ function requireTenantId(emp: { tenantId: number | null }): number {
 }
 
 /**
+ * يبني ScopeCtx من جلسة employeePortal (اللي بتستخدم `(ctx as any).employee`). بيحافظ
+ * على المدير (جلسة admin صناعية → كل الأنشطة) وبيقيّد الموظف العادي على نشاطه —
+ * نفس منطق `sessionBusinessIds` بالظبط.
+ */
+function empScope(ctx: any): ScopeCtx {
+  const emp = ctx.employee;
+  return { tenantId: requireTenantId(emp), user: ctx.user ?? null, employee: emp };
+}
+
+/**
  * الحارس الموحّد للوصول بالمعرّف.
  *
  * `adminProcedure` بتقول «إنت أدمن» — مابتقولش «أدمن على إيه». السطر ده هو اللي بيجاوب
@@ -294,11 +312,11 @@ function requireTenantId(emp: { tenantId: number | null }): number {
  * `scopeBusinessId` بتستخدمها — فمفيش قاعدة عزل تانية، وتغيير القاعدة بيتم في مكان واحد.
  */
 async function requireOwned(
-  tenantId: number,
+  ctx: ScopeCtx,
   entity: ScopedEntity | "variant",
   id: number
 ): Promise<void> {
-  const allowed = await getBusinessIdsForTenant(tenantId);
+  const allowed = await sessionBusinessIds(ctx);
   try {
     await assertOwned(allowed, entity, id);
   } catch (error) {
@@ -312,11 +330,11 @@ async function requireOwned(
 
 /** نفس الحارس لمجموعة معرّفات — الرفض على أول واحد برّه النطاق. */
 async function requireAllOwned(
-  tenantId: number,
+  ctx: ScopeCtx,
   entity: ScopedEntity,
   ids: number[]
 ): Promise<void> {
-  const allowed = await getBusinessIdsForTenant(tenantId);
+  const allowed = await sessionBusinessIds(ctx);
   try {
     await assertAllOwned(allowed, entity, ids);
   } catch (error) {
@@ -338,10 +356,10 @@ async function requireAllOwned(
  */
 async function assertEmployeeInScope<
   T extends { tenantId?: number | null; businessId?: number | null },
->(tenantId: number, target: T | null | undefined): Promise<T> {
+>(ctx: ScopeCtx, target: T | null | undefined): Promise<T> {
   if (!target)
     throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
-  if (target.tenantId != null && target.tenantId !== tenantId) {
+  if (target.tenantId != null && target.tenantId !== ctx.tenantId) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "الموظف ده تابع لحساب تاني",
@@ -349,7 +367,7 @@ async function assertEmployeeInScope<
   }
   // النشاط بيتفحص كمان: صف قديم من غير tenant، أو موظف اتنقل لنشاط برّه النطاق.
   if (target.businessId != null) {
-    await scopeBusinessId(tenantId, target.businessId);
+    await scopeBusinessId(ctx, target.businessId);
   }
   return target;
 }
@@ -368,7 +386,7 @@ async function assertEmployeeInScope<
  * جلسة نطاقها محدد قرار مالوش أساس.
  */
 async function assertRecordInScope(
-  tenantId: number,
+  ctx: ScopeCtx,
   record: { businessId?: number | null } | null | undefined,
   notFoundMessage: string
 ): Promise<void> {
@@ -379,7 +397,7 @@ async function assertRecordInScope(
       message: "السجل ده مش مربوط بنشاط — مش مسموح تعديله من هنا",
     });
   }
-  await scopeBusinessId(tenantId, record.businessId);
+  await scopeBusinessId(ctx, record.businessId);
 }
 
 /**
@@ -415,11 +433,38 @@ function denyWhenEmpty(allowed: number[]): number[] {
   return allowed.length > 0 ? allowed : [NO_BUSINESS];
 }
 
+/** الشكل اللي دوال النطاق محتاجاه من الـcontext — بيقبل أي ctx أوسع (structural). */
+type ScopeCtx = {
+  tenantId: number | null;
+  user?: { role?: string | null } | null;
+  employee?: { businessId?: number | null } | null;
+};
+
+/**
+ * أنشطة الجلسة المسموحة — **نقطة العزل الوحيدة** (P0: تقييد الموظف بنشاطه).
+ *
+ *   • المالك/المدير (جلسة admin: `ctx.user.role === "admin"`) → كل أنشطة الـtenant.
+ *   • الموظف غير الإداري (`ctx.user = null`) → نشاطه بس `[employee.businessId]`.
+ *   • موظف بلا نشاط (`businessId = null`) → `[]` (يُمنع من كل بيانات النشاط).
+ *
+ * `null` لسه معناها «الداتابيز مش متاحة» (زي getBusinessIdsForTenant) — بنقيّد الموظف
+ * على نشاطه حتى ساعتها بدل ما نفتح.
+ */
+async function sessionBusinessIds(ctx: ScopeCtx): Promise<number[] | null> {
+  // tenantId مفقود = جلسة بلا تينانت — نتعامل معاها زي «مش قادر أتحقق» (null).
+  const all = ctx.tenantId == null ? null : await getBusinessIdsForTenant(ctx.tenantId);
+  if (ctx.user?.role === "admin") return all; // مالك/مدير: كل الأنشطة
+  const bid = ctx.employee?.businessId ?? null;
+  if (bid == null) return []; // موظف بلا نشاط → deny
+  if (all == null) return [bid]; // DB مش متاحة → نثق في قيد الموظف
+  return all.includes(bid) ? [bid] : []; // لازم يكون تابع للـtenant
+}
+
 async function scopeBusinessIds(
-  tenantId: number,
+  ctx: ScopeCtx,
   requested?: { businessId?: number | null; businessIds?: number[] | null }
 ): Promise<number[] | undefined> {
-  const allowed = await getBusinessIdsForTenant(tenantId);
+  const allowed = await sessionBusinessIds(ctx);
   const requestedIds =
     requested?.businessIds && requested.businessIds.length > 0
       ? requested.businessIds
@@ -441,11 +486,11 @@ async function scopeBusinessIds(
  * unreachable.
  */
 async function scopeBusinessId(
-  tenantId: number,
+  ctx: ScopeCtx,
   businessId?: number | null
 ): Promise<number | undefined> {
   if (businessId == null) return undefined;
-  const allowed = await getBusinessIdsForTenant(tenantId);
+  const allowed = await sessionBusinessIds(ctx);
   if (allowed == null) return businessId;
   if (!allowed.includes(businessId)) {
     throw new TRPCError({
@@ -465,11 +510,11 @@ async function scopeBusinessId(
  * واحد **لازم يتحدد** (مايخمّنش)، صفر بيرفض بوضوح. فمستحيل ينشأ موظف بلا نشاط.
  */
 async function resolveEmployeeBusinessId(
-  tenantId: number,
+  ctx: ScopeCtx,
   requested?: number | null
 ): Promise<number> {
   if (requested != null) {
-    const scoped = await scopeBusinessId(tenantId, requested);
+    const scoped = await scopeBusinessId(ctx, requested);
     if (scoped == null)
       throw new TRPCError({
         code: "FORBIDDEN",
@@ -477,7 +522,7 @@ async function resolveEmployeeBusinessId(
       });
     return scoped;
   }
-  const allowed = await getBusinessIdsForTenant(tenantId);
+  const allowed = await sessionBusinessIds(ctx);
   if (allowed == null)
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
@@ -504,10 +549,10 @@ async function resolveEmployeeBusinessId(
  * بدل non-null assertion مبهم في كل سطر.
  */
 async function requireScopedBusinessId(
-  tenantId: number,
+  ctx: ScopeCtx,
   businessId: number
 ): Promise<number> {
-  const scoped = await scopeBusinessId(tenantId, businessId);
+  const scoped = await scopeBusinessId(ctx, businessId);
   if (scoped == null) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -811,7 +856,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) =>
         getBusinessEventDashboard({
           businessIds:
-            (await scopeBusinessIds(ctx.tenantId, input ?? {})) ?? [],
+            (await scopeBusinessIds(ctx, input ?? {})) ?? [],
           dateFrom: input?.dateFrom,
           dateTo: input?.dateTo,
         })
@@ -823,13 +868,13 @@ export const appRouter = router({
     accountantSummary: permissionProcedure("accounting.view")
       .input(z.object({ businessIds: z.array(z.number()).optional() }).optional())
       .query(async ({ ctx, input }) =>
-        getAccountantSummary((await scopeBusinessIds(ctx.tenantId, input ?? {})) ?? [])
+        getAccountantSummary((await scopeBusinessIds(ctx, input ?? {})) ?? [])
       ),
     businessSettings: permissionProcedure("settings.view")
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const db = await getDb();
@@ -867,7 +912,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         if (!isValidIanaTimeZone(input.timezone))
@@ -919,7 +964,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const db = await getDb();
@@ -950,7 +995,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = (await scopeBusinessIds(ctx.tenantId, input)) ?? [];
+        const businessIds = (await scopeBusinessIds(ctx, input)) ?? [];
         const db = await getDb();
         if (!db || businessIds.length === 0) return [];
         const rows = await db
@@ -985,7 +1030,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await requireActor(ctx);
@@ -1026,7 +1071,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const db = await getDb();
@@ -1049,7 +1094,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const db = await getDb();
@@ -1120,7 +1165,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         getFinancialAccounts(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -1141,7 +1186,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         if (
@@ -1183,7 +1228,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await requireActor(ctx);
@@ -1211,7 +1256,7 @@ export const appRouter = router({
         confirmOrderPayment({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1235,7 +1280,7 @@ export const appRouter = router({
         refundOrderPayment({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1248,7 +1293,7 @@ export const appRouter = router({
         submitExpense({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1261,7 +1306,7 @@ export const appRouter = router({
         approveExpense({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           // الحاجز يفضل قايم لكل الموظفين. المالك هو الطرفين أصلاً.
@@ -1288,7 +1333,7 @@ export const appRouter = router({
         payExpense({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1327,7 +1372,7 @@ export const appRouter = router({
           ...input,
           currencyCode: input.currencyCode?.toUpperCase(),
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1341,7 +1386,7 @@ export const appRouter = router({
         deleteAdSpendDraft({
           adSpendId: input.adSpendId,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -1363,7 +1408,7 @@ export const appRouter = router({
         updateAdSpendDraft({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1383,7 +1428,7 @@ export const appRouter = router({
         reserveOrderInventory({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1394,7 +1439,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         getInventoryControlData(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -1409,7 +1454,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         if (input.ownerNegativeOverrideReason && ctx.employee)
@@ -1449,7 +1494,7 @@ export const appRouter = router({
         recordOpeningInTransit({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1467,7 +1512,7 @@ export const appRouter = router({
         approvePurchaseReceipt({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1507,7 +1552,7 @@ export const appRouter = router({
         transferStock({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1527,7 +1572,7 @@ export const appRouter = router({
         listWorkshopReturns({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -1538,7 +1583,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         getWorkshopSetup(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -1554,7 +1599,7 @@ export const appRouter = router({
         setWorkshopWarehouse({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -1571,7 +1616,7 @@ export const appRouter = router({
         listWorkshopBatches({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -1599,7 +1644,7 @@ export const appRouter = router({
         sendToWorkshop({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1629,7 +1674,7 @@ export const appRouter = router({
         receiveFromWorkshop({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1648,7 +1693,7 @@ export const appRouter = router({
         voidPurchaseReceipt({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1694,7 +1739,7 @@ export const appRouter = router({
         return createPurchaseReceiptDraft({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1712,7 +1757,7 @@ export const appRouter = router({
         submitPurchaseReceipt({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -1748,7 +1793,7 @@ export const appRouter = router({
         updatePurchaseReceiptDraft({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1765,9 +1810,91 @@ export const appRouter = router({
         deletePurchaseReceiptDraft({
           receiptId: input.receiptId,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
+        })
+      ),
+
+    // ---------- الجرد (P2-C.1: جلسة/عد/إرسال فقط — مفيش اعتماد ولا حركة مخزون) ----------
+    /** إنشاء جلسة جرد لمخزن + لقطة كل الأصناف. tenant-scoped. */
+    stocktakeCreate: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          warehouseId: z.number(),
+          reference: z.string().max(100).optional(),
+          notes: z.string().max(1000).optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        createStocktake({
+          ...input,
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    stocktakeList: permissionProcedure("inventory_costing.view")
+      .input(z.object({ businessId: z.number(), limit: z.number().max(200).optional() }))
+      .query(async ({ ctx, input }) =>
+        listStocktakes({
+          ...input,
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
+        })
+      ),
+
+    stocktakeGet: permissionProcedure("inventory_costing.view")
+      .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
+      .query(async ({ ctx, input }) =>
+        getStocktake({
+          stocktakeId: input.stocktakeId,
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
+        })
+      ),
+
+    /** إدخال العدد الفعلي لبند — للمسودة فقط (الخدمة بترفض أي حالة تانية). */
+    stocktakeLineUpdate: permissionProcedure("inventory_costing.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          stocktakeId: z.number(),
+          lineId: z.number(),
+          countedQuantity: z.number().int().min(0),
+        })
+      )
+      .mutation(async ({ ctx, input }) =>
+        updateStocktakeLine({
+          ...input,
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
+          actor: await requireActor(ctx),
+        })
+      ),
+
+    /** إرسال الجرد للاعتماد (draft → pending_approval). */
+    stocktakeSubmit: permissionProcedure("inventory_costing.manage")
+      .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        submitStocktake({
+          stocktakeId: input.stocktakeId,
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
+        })
+      ),
+
+    /**
+     * اعتماد الجرد (pending_approval → approved) — بيحرّك المخزون ويسجّل الخسارة/الربح.
+     * على `inventory_costing.approve` بس (المحاسب مالوش الصلاحية دي — فاصل maker-checker).
+     * P0 محفوظ عبر requireScopedBusinessId(ctx). allowSelfApproval للمالك فقط.
+     */
+    stocktakeApprove: permissionProcedure("inventory_costing.approve")
+      .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
+      .mutation(async ({ ctx, input }) =>
+        approveStocktake({
+          stocktakeId: input.stocktakeId,
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
+          actor: await requireActor(ctx),
+          // نفس منطق approvePurchaseReceipt: المالك بس يقدر يعتمد جرد عمله بنفسه.
+          allowSelfApproval: isOwnerRole(ctx.employee?.role),
         })
       ),
 
@@ -1794,7 +1921,7 @@ export const appRouter = router({
         submitReturnInspection({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1814,7 +1941,7 @@ export const appRouter = router({
         approveReturnInspection({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1839,7 +1966,7 @@ export const appRouter = router({
         createConfiguredShipment({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1850,7 +1977,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         listShippingConfiguration(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -1869,7 +1996,7 @@ export const appRouter = router({
         configureBusinessShippingProvider({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -1886,7 +2013,7 @@ export const appRouter = router({
         deactivateBusinessShippingProvider({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -1923,7 +2050,7 @@ export const appRouter = router({
         createShippingRateVersion({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -1955,7 +2082,7 @@ export const appRouter = router({
         recordShipmentEvent({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           payload: {
@@ -1996,7 +2123,7 @@ export const appRouter = router({
         importCarrierSettlement({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2007,7 +2134,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         getShippingFinanceData(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -2023,7 +2150,7 @@ export const appRouter = router({
         approveCarrierSettlement({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2038,7 +2165,7 @@ export const appRouter = router({
         listDailySettlements({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -2062,7 +2189,7 @@ export const appRouter = router({
         recordDailySettlement({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2079,7 +2206,7 @@ export const appRouter = router({
         voidDailySettlement({
           settlementId: input.settlementId,
           reason: input.reason,
-          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
           actor: await requireActor(ctx),
         })
       ),
@@ -2102,7 +2229,7 @@ export const appRouter = router({
         recordSimpleExpense({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2113,7 +2240,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         listClosings(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -2121,7 +2248,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number(), closingId: z.number() }))
       .query(async ({ ctx, input }) =>
         getClosingDetail(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          await requireScopedBusinessId(ctx, input.businessId),
           input.closingId
         )
       ),
@@ -2138,7 +2265,7 @@ export const appRouter = router({
         createClosingDraft({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2151,7 +2278,7 @@ export const appRouter = router({
         submitClosing({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2164,7 +2291,7 @@ export const appRouter = router({
         approveClosing({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2188,7 +2315,7 @@ export const appRouter = router({
         addClosingAdjustment({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2201,7 +2328,7 @@ export const appRouter = router({
         lockClosing({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -2275,7 +2402,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input?.businessId
         );
         return searchEmployees({ ...(input ?? {}), businessId });
@@ -2290,7 +2417,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input?.businessId
         );
         return getActiveEmployees(businessId);
@@ -2300,7 +2427,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         // كان بيرجّع أي موظف في النظام بالـid — بيانات موظف شركة تانية بالاسم والتليفون.
         return assertEmployeeInScope(
-          ctx.tenantId,
+          ctx,
           await getEmployeeById(input.id)
         );
       }),
@@ -2318,7 +2445,7 @@ export const appRouter = router({
         await assertMayAssignOwnerRole(ctx, input.role, null);
         // النشاط لازم يتحدّد — مايرجعش null (منع تكرار businessId=NULL).
         const businessId = await resolveEmployeeBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         await createEmployee({ ...input, businessId, tenantId: ctx.tenantId });
@@ -2343,13 +2470,13 @@ export const appRouter = router({
         // من غيره، أدمن شركة أ كان يقدر يعطّل موظفين شركة ب، أو يغيّر أدوارهم، أو
         // **ينقلهم لشركته** — الـ`businessId` جاي من العميل.
         const target = await assertEmployeeInScope(
-          ctx.tenantId,
+          ctx,
           await getEmployeeById(id)
         );
 
         // والنشاط الجديد كمان لازم يكون في نطاقي — النقل بيمشي في الاتجاهين.
         if (data.businessId !== undefined) {
-          data.businessId = await scopeBusinessId(ctx.tenantId, data.businessId);
+          data.businessId = await scopeBusinessId(ctx, data.businessId);
         }
 
         await assertMayAssignOwnerRole(ctx, data.role, target.role);
@@ -2386,7 +2513,7 @@ export const appRouter = router({
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "employee", input.id);
+        await requireOwned(ctx, "employee", input.id);
         const target = await getEmployeeById(input.id);
         if (!target)
           throw new TRPCError({
@@ -2423,7 +2550,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "employee", input.id);
+        await requireOwned(ctx, "employee", input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         // Check username uniqueness
@@ -2455,7 +2582,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         // كتابة `passwordHash` على موظف شركة تانية = دخول بهويته. الحارس هنا أهم
         // حارس في الملف كله.
-        await requireOwned(ctx.tenantId, "employee", input.id);
+        await requireOwned(ctx, "employee", input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
@@ -2474,7 +2601,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "employee", input.employeeId);
+        await requireOwned(ctx, "employee", input.employeeId);
         return getEmployeeInventory(input.employeeId);
       }),
 
@@ -2505,7 +2632,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "employee", input.employeeId);
+        await requireOwned(ctx, "employee", input.employeeId);
         const result = await reclaimEmployeeOrders(
           input.employeeId,
           input.statuses
@@ -2528,7 +2655,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getAllProducts(undefined, businessIds, {
           includeInactive: input?.includeInactive,
         });
@@ -2536,7 +2663,7 @@ export const appRouter = router({
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "product", input.id);
+        await requireOwned(ctx, "product", input.id);
         return getProductById(input.id);
       }),
     create: adminProcedure
@@ -2555,7 +2682,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        const scopedBusinessIds = await scopeBusinessIds(ctx.tenantId, {
+        const scopedBusinessIds = await scopeBusinessIds(ctx, {
           businessId: input.businessId,
         });
         if (scopedBusinessIds?.length !== 1)
@@ -2596,7 +2723,7 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "المنتج غير موجود",
           });
-        await requireScopedBusinessId(ctx.tenantId, product.businessId);
+        await requireScopedBusinessId(ctx, product.businessId);
         if (data.currentStock !== undefined)
           await assertLegacyInventoryMutationAllowed(product.businessId);
         if (
@@ -2621,7 +2748,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getLowStockProducts(undefined, businessIds);
       }),
     addMovement: adminProcedure
@@ -2642,7 +2769,7 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "المنتج غير موجود",
           });
-        await requireScopedBusinessId(ctx.tenantId, product.businessId);
+        await requireScopedBusinessId(ctx, product.businessId);
         await assertLegacyInventoryMutationAllowed(product.businessId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await addInventoryMovement({
@@ -2662,7 +2789,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getInventoryMovements(
           input.productId,
           input.limit,
@@ -2699,7 +2826,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         // Agents can only see their own orders
         if (ctx.user.role !== "admin") {
           const emps = await getAllEmployees();
@@ -2721,7 +2848,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         const order = await getOrderById(input.id);
         if (!order) return order;
-        await requireScopedBusinessId(ctx.tenantId, order.businessId);
+        await requireScopedBusinessId(ctx, order.businessId);
         const items = await getOrderItems(input.id);
         // الشاشة لازم تعرف إن اللي بتوريه اتغيّر بعد ما بوسطة أخدت نسختها — من غير
         // كده الأوردر بيبان مظبوط جوّه، وبوسطة عندها حاجة تانية، ومحدش يعرف.
@@ -2738,7 +2865,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getOrderStatusCounts(businessIds);
       }),
 
@@ -2768,7 +2895,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getBostaOrders({ ...input, businessIds });
       }),
 
@@ -2781,7 +2908,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getBostaOrdersSummary(businessIds);
       }),
 
@@ -2810,7 +2937,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         // سياسة القراءة بالمعرّفات: نرجّع المملوك بس (زي فلاتر businessIds التانية) —
         // مش نرفض الطلب كله. كده مفيش تسريب حتى عن **وجود** معرّف تابع لشركة تانية.
-        const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+        const allowed = await sessionBusinessIds(ctx);
         const rows = await getOrdersByIds(input.ids);
         if (allowed == null) return rows;
         const allowedSet = new Set(allowed);
@@ -2846,7 +2973,7 @@ export const appRouter = router({
         const orderNumber = await generateOrderNumber();
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const orderId = await createOrderWithItems(
@@ -2899,7 +3026,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
-        await requireOwned(ctx.tenantId, "order", id);
+        await requireOwned(ctx, "order", id);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await updateOrder(id, { ...data, lastUpdatedBy: actingEmpId });
         return { success: true };
@@ -2913,7 +3040,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await assignOrderToEmployee(
           input.orderId,
@@ -2932,8 +3059,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         // كل أوردر في القايمة، مش أول واحد بس.
-        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
-        await requireOwned(ctx.tenantId, "employee", input.employeeId);
+        await requireAllOwned(ctx, "order", input.orderIds);
+        await requireOwned(ctx, "employee", input.employeeId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await bulkAssignOrders(
           input.orderIds,
@@ -2959,7 +3086,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const { id: actingEmpId, name: actingEmpName } =
           await resolveActingEmployeeIdAndName(ctx);
         await confirmOrder(input.orderId, actingEmpId ?? 0, actingEmpName);
@@ -2999,7 +3126,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const order = await getOrderById(input.orderId);
         if (!order)
           throw new TRPCError({
@@ -3034,7 +3161,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         if (!isBostaEnabled())
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -3060,7 +3187,7 @@ export const appRouter = router({
             message: "Bosta غير مفعل",
           });
         // كل أوردر في القايمة لازم يكون في النطاق — الرفض قبل أي شحنة تتعمل.
-        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
+        await requireAllOwned(ctx, "order", input.orderIds);
         const results = await Promise.allSettled(
           input.orderIds.map(id =>
             createBostaShipment(id, {
@@ -3098,7 +3225,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await postponeOrder(
           input.orderId,
@@ -3118,7 +3245,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await cancelOrder(
           input.orderId,
@@ -3149,7 +3276,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await updateOrder(input.orderId, {
           status: "no_answer",
@@ -3184,7 +3311,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const { orderId, ...updates } = input;
         const result = await editOrderFull(orderId, updates, {
@@ -3209,7 +3336,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         const order = await getOrderById(input.orderId);
         if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
-        await requireScopedBusinessId(ctx.tenantId, order.businessId);
+        await requireScopedBusinessId(ctx, order.businessId);
         const items = await getOrderItems(input.orderId);
         // An order created before order_items was populated has none. Rather than showing
         // an empty basket — which the user would "fix" by adding lines, silently doubling
@@ -3290,7 +3417,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const order = await getOrderById(input.orderId);
         if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
-        await requireScopedBusinessId(ctx.tenantId, order.businessId);
+        await requireScopedBusinessId(ctx, order.businessId);
         const editor = resolveOrderEditor(ctx);
         const result = await replaceOrderItemsFromEditor(
           input.orderId,
@@ -3332,7 +3459,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         return getOrderEditLogs(input.orderId);
       }),
 
@@ -3343,7 +3470,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         await deleteOrder(input.orderId);
         await addActivityLog({
           action: "delete_order",
@@ -3365,7 +3492,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         // حذف جماعي — الرفض قبل أي مسح لو أي أوردر برّه النطاق.
-        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
+        await requireAllOwned(ctx, "order", input.orderIds);
         await deleteOrders(input.orderIds);
         await addActivityLog({
           action: "bulk_delete_orders",
@@ -3387,7 +3514,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const originalOrder = await getOrderById(input.orderId);
         if (!originalOrder)
           throw new TRPCError({
@@ -3474,7 +3601,7 @@ export const appRouter = router({
       // العزل: التحويل بالجملة لازم يتقيّد بأنشطة الـtenant بتاعه. من غير الفلتر ده كان
       // أدمن شركة بيقلب حالة أوردرات كل الشركات. `scopeBusinessIds` بترجع أنشطة الـtenant
       // (أو [-1] لو فاضي = يمنع الكل)، و`undefined` للمالك على مستوى المنصة (مفيش فلتر).
-      const scoped = await scopeBusinessIds(ctx.tenantId);
+      const scoped = await scopeBusinessIds(ctx);
       const conds = [eq(ordersTable.status, "no_answer" as any)];
       if (scoped) conds.push(inArray(ordersTable.businessId, scoped));
       const result: any = await db
@@ -3506,7 +3633,7 @@ export const appRouter = router({
           message: "DB error",
         });
       // نفس العزل زي convertNoAnswerToNew — التحويل بالجملة على أنشطة الـtenant بس.
-      const scoped = await scopeBusinessIds(ctx.tenantId);
+      const scoped = await scopeBusinessIds(ctx);
       const conds = [eq(ordersTable.status, "postponed" as any)];
       if (scoped) conds.push(inArray(ordersTable.businessId, scoped));
       const result: any = await db
@@ -3537,7 +3664,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "employee", input.employeeId);
+        await requireOwned(ctx, "employee", input.employeeId);
         const db = await getDb();
         if (!db)
           throw new TRPCError({
@@ -3627,7 +3754,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         // الفلتر اختياري — بيتفحص لما يتبعت بس. من غيره القايمة مقصوصة أصلاً تحت.
         if (input.orderId != null)
-          await requireOwned(ctx.tenantId, "order", input.orderId);
+          await requireOwned(ctx, "order", input.orderId);
         return getScanLogs(input);
       }),
 
@@ -3656,7 +3783,7 @@ export const appRouter = router({
             eq(ordersTable.assignedEmployeeId, input.confirmedByEmployeeId)
           );
         }
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         if (businessIds)
           conditions.push(inArray(ordersTable.businessId, businessIds));
         const rows = await db
@@ -3699,7 +3826,7 @@ export const appRouter = router({
         // الموظف يشوف كل الأوردرات الموزعة عليه بغض النظر عن الـ business
         // لكن لو اختار مجموعة معينة نفلتر بيها (بعد التأكد إنها تبع نفس الـ tenant)
         const tenantId = requireTenantId(emp);
-        const filterBusinessIds = await scopeBusinessIds(tenantId, input);
+        const filterBusinessIds = await scopeBusinessIds(empScope(ctx), input);
         // إذا كان فيه فلتر تاريخ مخصص، نستخدمه مباشرة
         if (input.dateFrom || input.dateTo) {
           return getOrders({
@@ -3851,7 +3978,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
-        await requireOwned(requireTenantId(emp), "order", input.orderId);
+        await requireOwned(empScope(ctx), "order", input.orderId);
         const order = await getOrderById(input.orderId);
         if (!order)
           throw new TRPCError({
@@ -3986,7 +4113,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
-        const businessIds = await scopeBusinessIds(tenantId, input);
+        const businessIds = await scopeBusinessIds(empScope(ctx), input);
         return getAllProducts(undefined, businessIds);
       }),
 
@@ -4002,7 +4129,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
-        const businessIds = await scopeBusinessIds(tenantId, input);
+        const businessIds = await scopeBusinessIds(empScope(ctx), input);
         return getAllVariantsWithProduct(undefined, businessIds);
       }),
 
@@ -4017,7 +4144,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
-        const filterBusinessIds = await scopeBusinessIds(tenantId, input);
+        const filterBusinessIds = await scopeBusinessIds(empScope(ctx), input);
         // تفلتر بتاريخ التوزيع اليوم بتوقيت القاهرة
         const cairoOffset = 2 * 60 * 60 * 1000;
         const cairoNow = new Date(Date.now() + cairoOffset);
@@ -4242,7 +4369,7 @@ export const appRouter = router({
       async ({ ctx }) => {
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
-        const businessIds = (await scopeBusinessIds(tenantId, {})) ?? [];
+        const businessIds = (await scopeBusinessIds(empScope(ctx), {})) ?? [];
         const db = await getDb();
         if (!db || businessIds.length === 0) return [];
         const rows = await db
@@ -4284,7 +4411,7 @@ export const appRouter = router({
 
         // Fetch confirmed orders (no date filter — we want all confirmed orders ready for shipping)
         const businessIds =
-          (await getBusinessIdsForTenant(ctx.tenantId!)) ?? [];
+          (await sessionBusinessIds(ctx)) ?? [];
         const result = await getOrders({
           status: "confirmed",
           limit: 10000,
@@ -4418,7 +4545,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
-        const businessIds = await scopeBusinessIds(tenantId, input);
+        const businessIds = await scopeBusinessIds(empScope(ctx), input);
         return getDashboardStats(
           input.dateFrom,
           input.dateTo,
@@ -4448,7 +4575,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
-        const effectiveBusinessIds = await scopeBusinessIds(tenantId, input);
+        const effectiveBusinessIds = await scopeBusinessIds(empScope(ctx), input);
         return getOrders({
           ...input,
           businessId: undefined,
@@ -4466,7 +4593,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
-        await requireOwned(requireTenantId(emp), "order", input.orderId);
+        await requireOwned(empScope(ctx), "order", input.orderId);
         await assignOrderToEmployee(input.orderId, input.employeeId, emp.id);
         return { success: true };
       }),
@@ -4482,8 +4609,8 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
-        await requireAllOwned(tenantId, "order", input.orderIds);
-        await requireOwned(tenantId, "employee", input.employeeId);
+        await requireAllOwned(empScope(ctx), "order", input.orderIds);
+        await requireOwned(empScope(ctx), "employee", input.employeeId);
         await bulkAssignOrders(input.orderIds, input.employeeId, emp.id);
         return { success: true };
       }),
@@ -4523,7 +4650,7 @@ export const appRouter = router({
         const tenantId = requireTenantId(emp);
         const effectiveBusinessId =
           input.businessId != null
-            ? await scopeBusinessId(tenantId, input.businessId)
+            ? await scopeBusinessId(empScope(ctx), input.businessId)
             : (emp.businessId ?? undefined);
         // تجهيز البنود؛ لو مفيش selectedProducts نستخدم المنتج المفرد
         const items =
@@ -4609,7 +4736,7 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         // الربط بأوردر اختياري — بيتفحص لما يتبعت بس.
         if (input.orderId != null)
-          await requireOwned(requireTenantId(emp), "order", input.orderId);
+          await requireOwned(empScope(ctx), "order", input.orderId);
         if (emp.role !== "manager" && emp.role !== "warehouse")
           throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
         await addInventoryMovement({
@@ -4631,7 +4758,7 @@ export const appRouter = router({
         if (emp.role !== "manager" && emp.role !== "warehouse")
           throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
         if (input.productId != null)
-          await requireOwned(requireTenantId(emp), "product", input.productId);
+          await requireOwned(empScope(ctx), "product", input.productId);
         return getInventoryMovements(
           input.productId,
           input.limit,
@@ -4740,7 +4867,7 @@ export const appRouter = router({
         const tenantId = requireTenantId(emp);
         // نفس الحارس — لو نشاط المدير نفسه فاضي (legacy)، بيتحلّ لنشاط التينانت مش null.
         const businessId = await resolveEmployeeBusinessId(
-          tenantId,
+          empScope(ctx),
           emp.businessId ?? undefined
         );
         await createEmployee({
@@ -4772,7 +4899,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(requireTenantId((ctx as any).employee), "employee", input.id);
+        await requireOwned(empScope(ctx), "employee", input.id);
         const { id, ...data } = input;
         await updateEmployee(id, data);
         return { success: true };
@@ -4782,7 +4909,7 @@ export const appRouter = router({
     deleteEmployee: managerPortalProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(requireTenantId((ctx as any).employee), "employee", input.id);
+        await requireOwned(empScope(ctx), "employee", input.id);
         await deleteEmployee(input.id);
         return { success: true };
       }),
@@ -4797,7 +4924,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(requireTenantId((ctx as any).employee), "employee", input.id);
+        await requireOwned(empScope(ctx), "employee", input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const existing = await db
@@ -4828,7 +4955,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(requireTenantId((ctx as any).employee), "employee", input.id);
+        await requireOwned(empScope(ctx), "employee", input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
@@ -4895,7 +5022,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
-        await requireOwned(requireTenantId(emp), "order", input.orderId);
+        await requireOwned(empScope(ctx), "order", input.orderId);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -4919,7 +5046,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(
-          requireTenantId((ctx as any).employee),
+          empScope(ctx),
           "order",
           input.orderId
         );
@@ -4960,7 +5087,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         // المسار الوحيد للحذف — بيمسح الأصناف مع الأوردر (منع الـorphans).
         await deleteOrder(input.orderId);
         return { success: true };
@@ -4975,7 +5102,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(
-          requireTenantId((ctx as any).employee),
+          empScope(ctx),
           "order",
           input.orderId
         );
@@ -5064,7 +5191,7 @@ export const appRouter = router({
         // عدد القطع لكل بند (افتراضي 1 لو غير محدد)
         // كل منتج مختار لازم يكون في نطاق الموظف — الإنشاء بيربط الأوردر بيهم.
         await requireAllOwned(
-          requireTenantId((ctx as any).employee),
+          empScope(ctx),
           "product",
           input.selectedProducts
             .map(p => p.productId)
@@ -5209,7 +5336,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(
-          requireTenantId((ctx as any).employee),
+          empScope(ctx),
           "order",
           input.orderId
         );
@@ -5272,7 +5399,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(
-          requireTenantId((ctx as any).employee),
+          empScope(ctx),
           "order",
           input.orderId
         );
@@ -5399,7 +5526,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         await requireOwned(
-          requireTenantId((ctx as any).employee),
+          empScope(ctx),
           "product",
           input.productId
         );
@@ -5554,7 +5681,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getDashboardStats(
           input.dateFrom,
           input.dateTo,
@@ -5573,9 +5700,9 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const [perf, emps] = await Promise.all([
@@ -5619,7 +5746,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getCancellationReasons(
           input.dateFrom,
           input.dateTo,
@@ -5637,7 +5764,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getDailyOrdersChart(input.days, undefined, businessIds);
       }),
 
@@ -5761,7 +5888,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const userId = ctx.user?.id ?? 0;
         return markOrderAsReturned(
           input.orderId,
@@ -5787,7 +5914,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         return getReturnsList({ ...input, businessId });
@@ -5804,7 +5931,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         return getReturnsStats(input.dateFrom, input.dateTo, businessId);
@@ -5867,7 +5994,7 @@ export const appRouter = router({
       )
       .query(async ({ input, ctx }) => {
         if (input.employeeId != null)
-          await requireOwned(ctx.tenantId, "employee", input.employeeId);
+          await requireOwned(ctx, "employee", input.employeeId);
         const db = await getDb();
         if (!db) return [];
         const { tasks } = await import("../drizzle/schema");
@@ -5902,7 +6029,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "task", input.taskId);
+        await requireOwned(ctx, "task", input.taskId);
         const db = await getDb();
         if (!db) throw new Error("قاعدة البيانات غير متاحة");
         const { tasks } = await import("../drizzle/schema");
@@ -5917,7 +6044,7 @@ export const appRouter = router({
     delete: protectedProcedure
       .input(z.object({ taskId: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "task", input.taskId);
+        await requireOwned(ctx, "task", input.taskId);
         const db = await getDb();
         if (!db) throw new Error("قاعدة البيانات غير متاحة");
         const { tasks } = await import("../drizzle/schema");
@@ -5937,7 +6064,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireAllOwned(ctx.tenantId, "order", input.orderIds);
+        await requireAllOwned(ctx, "order", input.orderIds);
         const result = await createPrintLog({
           type: input.type,
           orderIds: input.orderIds,
@@ -5959,7 +6086,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input?.businessId
         );
         const logs = await getPrintLogs(input?.limit ?? 50, businessId);
@@ -5973,7 +6100,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "printLog", input.id);
+        await requireOwned(ctx, "printLog", input.id);
         const log = await getPrintLogById(input.id);
         if (!log)
           throw new TRPCError({
@@ -6004,7 +6131,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input?.businessId
         );
         return getActivityLogs({
@@ -6024,7 +6151,7 @@ export const appRouter = router({
   // ==================== الأنشطة (Businesses) ====================
   businesses: router({
     list: protectedProcedure.query(async ({ ctx }) => {
-      const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
+      const businessIds = await sessionBusinessIds(ctx);
       return getAllBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
     }),
     // قايمة الأنشطة بتتقري في كل تحميل صفحة من `BusinessContext`، ولازم تشتغل لأي جلسة
@@ -6033,7 +6160,7 @@ export const appRouter = router({
     // فاضية. النطاق على `ctx.tenantId` (مش المستخدم)، فالعزل بين الشركات محفوظ زي ما هو —
     // ودي أسماء أنشطة بس، مفيش أي بيانات مالية.
     activeList: authenticatedProcedure.query(async ({ ctx }) => {
-      const businessIds = await getBusinessIdsForTenant(ctx.tenantId);
+      const businessIds = await sessionBusinessIds(ctx);
       return getActiveBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
     }),
     /*
@@ -6049,7 +6176,7 @@ export const appRouter = router({
       لو فيها نشاط مسموح.
     */
     groups: authenticatedProcedure.query(async ({ ctx }) => {
-      const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+      const allowed = await sessionBusinessIds(ctx);
       const groups = await getActiveBusinessGroups();
       if (allowed == null) return groups;
       const mine = new Set(
@@ -6060,7 +6187,7 @@ export const appRouter = router({
       return groups.filter(group => mine.has(group.id));
     }),
     groupsWithBusinesses: authenticatedProcedure.query(async ({ ctx }) => {
-      const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+      const allowed = await sessionBusinessIds(ctx);
       const groups = await getBusinessGroupsWithBusinesses();
       if (allowed == null) return groups;
       const allowedSet = new Set(denyWhenEmpty(allowed));
@@ -6082,7 +6209,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const ids = await getBusinessIdsByGroupId(input.groupId);
-        const allowed = await getBusinessIdsForTenant(ctx.tenantId);
+        const allowed = await sessionBusinessIds(ctx);
         if (allowed == null) return ids;
         const allowedSet = new Set(allowed);
         return ids.filter(id => allowedSet.has(id));
@@ -6090,7 +6217,7 @@ export const appRouter = router({
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        const id = await scopeBusinessId(ctx.tenantId, input.id);
+        const id = await scopeBusinessId(ctx, input.id);
         return id != null ? getBusinessById(id) : undefined;
       }),
     create: adminProcedure
@@ -6117,7 +6244,7 @@ export const appRouter = router({
         const { id, ...data } = input;
         // من غير السطر ده، أدمن شركة أ يقدر يبعت `isActive: false` على نشاط شركة ب
         // ويوقّفها. النشاط نفسه هو وحدة النطاق، فبيتفحص مباشرة.
-        await scopeBusinessId(ctx.tenantId, id);
+        await scopeBusinessId(ctx, id);
         await updateBusiness(id, data);
         return { success: true };
       }),
@@ -6130,7 +6257,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         return getCategoriesByBusiness(businessId!);
@@ -6144,7 +6271,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         await createCategory({ ...input, businessId });
@@ -6161,7 +6288,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const { id, ...data } = input;
         await assertRecordInScope(
-          ctx.tenantId,
+          ctx,
           await getCategoryById(id),
           "التصنيف غير موجود"
         );
@@ -6178,7 +6305,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         return getWarehousesByBusiness(businessId!);
@@ -6192,7 +6319,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         await createWarehouse({ ...input, businessId });
@@ -6210,7 +6337,7 @@ export const appRouter = router({
         const { id, ...data } = input;
         // تعطيل مخزن شركة تانية بيوقّف استلام البضاعة عندها.
         await assertRecordInScope(
-          ctx.tenantId,
+          ctx,
           await getWarehouseById(id),
           "المخزن غير موجود"
         );
@@ -6236,7 +6363,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input?.businessId
         );
         return getAllSalesChannels(businessId, {
@@ -6253,7 +6380,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input?.businessId
         );
         return getActiveSalesChannels(businessId);
@@ -6261,7 +6388,7 @@ export const appRouter = router({
     get: adminProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "salesChannel", input.id);
+        await requireOwned(ctx, "salesChannel", input.id);
         return getSalesChannelById(input.id);
       }),
     create: adminProcedure
@@ -6303,7 +6430,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         input.businessId = (await scopeBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         ))!;
         if (await isSalesChannelNameTaken(input.businessId, input.name)) {
@@ -6366,7 +6493,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "salesChannel", input.id);
+        await requireOwned(ctx, "salesChannel", input.id);
         const { id, ...data } = input;
         const current = await getSalesChannelById(id);
         if (!current)
@@ -6410,21 +6537,21 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "salesChannel", input.id);
+        await requireOwned(ctx, "salesChannel", input.id);
         await clearSalesChannelSecret(input.id, input.field);
         return { success: true };
       }),
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "salesChannel", input.id);
+        await requireOwned(ctx, "salesChannel", input.id);
         await deleteSalesChannel(input.id);
         return { success: true };
       }),
     reactivate: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "salesChannel", input.id);
+        await requireOwned(ctx, "salesChannel", input.id);
         await reactivateSalesChannel(input.id);
         return { success: true };
       }),
@@ -6432,7 +6559,7 @@ export const appRouter = router({
     testConnection: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "salesChannel", input.id);
+        await requireOwned(ctx, "salesChannel", input.id);
         return testChannelConnection(input.id);
       }),
     /** Manual "Sync Now" — pulls orders for a date range and upserts them idempotently. */
@@ -6451,7 +6578,7 @@ export const appRouter = router({
             message: "تاريخ البداية يجب أن يكون قبل تاريخ النهاية",
           });
         }
-        await requireOwned(ctx.tenantId, "salesChannel", input.id);
+        await requireOwned(ctx, "salesChannel", input.id);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         return syncOrdersByDateRange({
           channelId: input.id,
@@ -6470,7 +6597,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "salesChannel", input.id);
+        await requireOwned(ctx, "salesChannel", input.id);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         return syncOrdersByDateRange({
           channelId: input.id,
@@ -6491,7 +6618,7 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         if (input?.channelId != null)
-          await requireOwned(ctx.tenantId, "salesChannel", input.channelId);
+          await requireOwned(ctx, "salesChannel", input.channelId);
         return getSyncLogs({
           channelId: input?.channelId,
           limit: input?.limit ?? 50,
@@ -6509,7 +6636,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "product", input.productId);
+        await requireOwned(ctx, "product", input.productId);
         return getVariantsByProduct(input.productId, {
           includeInactive: input.includeInactive,
         });
@@ -6526,7 +6653,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getAllVariantsWithProduct(undefined, businessIds, {
           includeInactive: input?.includeInactive,
         });
@@ -6534,7 +6661,7 @@ export const appRouter = router({
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "variant", input.id);
+        await requireOwned(ctx, "variant", input.id);
         return getVariantById(input.id);
       }),
     create: adminProcedure
@@ -6560,7 +6687,7 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "المنتج غير موجود",
           });
-        await requireScopedBusinessId(ctx.tenantId, product.businessId);
+        await requireScopedBusinessId(ctx, product.businessId);
         if (rest.currentStock !== 0)
           await assertLegacyInventoryMutationAllowed(product.businessId);
         if (await isVariantNameTaken(rest.productId, rest.name)) {
@@ -6598,7 +6725,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const { id, price, costPrice, ...rest } = input;
-        await requireOwned(ctx.tenantId, "variant", id);
+        await requireOwned(ctx, "variant", id);
         if (rest.name?.trim()) {
           const current = await getVariantById(id);
           const productId = current?.productId;
@@ -6645,7 +6772,7 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الصنف غير موجود",
           });
-        await requireScopedBusinessId(ctx.tenantId, product.businessId);
+        await requireScopedBusinessId(ctx, product.businessId);
         await assertLegacyInventoryMutationAllowed(product.businessId);
         await updateVariantStock(input.variantId, input.delta);
         return { success: true };
@@ -6671,7 +6798,7 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الصنف غير موجود",
           });
-        await requireScopedBusinessId(ctx.tenantId, product.businessId);
+        await requireScopedBusinessId(ctx, product.businessId);
         await assertLegacyInventoryMutationAllowed(product.businessId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await addVariantInventoryMovement({
@@ -6683,7 +6810,7 @@ export const appRouter = router({
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "variant", input.id);
+        await requireOwned(ctx, "variant", input.id);
         await deleteVariant(input.id);
         return { success: true };
       }),
@@ -6710,7 +6837,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
         return getAccountingDashboard({
           businessIds,
           dateFrom: input?.dateFrom,
@@ -6744,7 +6871,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getTreasuryTransactions({ ...input, businessIds });
       }),
 
@@ -6772,7 +6899,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getAccountingControlCenter({ ...input, businessIds });
       }),
 
@@ -6787,7 +6914,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getTreasuryHistoryWithBalances({ ...input, businessIds });
       }),
 
@@ -6801,7 +6928,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return listAdCampaigns({ ...input, businessIds });
       }),
 
@@ -6810,7 +6937,7 @@ export const appRouter = router({
       .input(z.object({ businessIds: z.array(z.number()).optional() }).optional())
       .query(async ({ ctx, input }) =>
         getAccountingActionItems({
-          businessIds: await scopeBusinessIds(ctx.tenantId, input ?? {}),
+          businessIds: await scopeBusinessIds(ctx, input ?? {}),
         })
       ),
 
@@ -6828,7 +6955,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
         return getDailyLedgerSummary({ businessIds, dateKey: input?.dateKey });
       }),
 
@@ -6841,7 +6968,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
         const cairoMonthStart = businessDayRange(
           `${businessDateKey(new Date(), "Africa/Cairo").slice(0, 7)}-01`,
           "Africa/Cairo"
@@ -6862,7 +6989,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
         return { balance: await getTreasuryBalance(businessIds) };
       }),
 
@@ -6888,7 +7015,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await resolveActingEmployeeIdAndName(ctx);
@@ -6923,7 +7050,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
         return getExpenseCategories(
           businessIds,
           input?.includeInactive ?? false
@@ -6940,7 +7067,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         try {
@@ -6967,7 +7094,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "expenseCategory", input.id);
+        await requireOwned(ctx, "expenseCategory", input.id);
         const { id, ...rest } = input;
         await updateExpenseCategory(id, rest);
         return { success: true };
@@ -6976,7 +7103,7 @@ export const appRouter = router({
     expenseCategoryArchive: permissionProcedure("accounting.manage")
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "expenseCategory", input.id);
+        await requireOwned(ctx, "expenseCategory", input.id);
         await archiveExpenseCategory(input.id);
         return { success: true };
       }),
@@ -6995,7 +7122,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getExpenses({ ...input, businessIds });
       }),
 
@@ -7028,7 +7155,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const dateKey = input.expenseDate.toISOString().slice(0, 10);
@@ -7069,7 +7196,7 @@ export const appRouter = router({
             code: "INTERNAL_SERVER_ERROR",
             message: "قاعدة البيانات غير متاحة",
           });
-        const allowed = await scopeBusinessIds(ctx.tenantId);
+        const allowed = await scopeBusinessIds(ctx);
         const [expense] = await db
           .select({ businessId: expensesTable.businessId })
           .from(expensesTable)
@@ -7105,7 +7232,7 @@ export const appRouter = router({
             code: "INTERNAL_SERVER_ERROR",
             message: "قاعدة البيانات غير متاحة",
           });
-        const allowed = await scopeBusinessIds(ctx.tenantId);
+        const allowed = await scopeBusinessIds(ctx);
         const [expense] = await db
           .select({ businessId: expensesTable.businessId })
           .from(expensesTable)
@@ -7147,7 +7274,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getCollections({ ...input, businessIds });
       }),
 
@@ -7155,7 +7282,7 @@ export const appRouter = router({
     collectionHistory: permissionProcedure("accounting.view")
       .input(z.object({ orderId: z.number() }))
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         return getOrderCollectionHistory(input.orderId);
       }),
 
@@ -7168,7 +7295,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "order", input.orderId);
+        await requireOwned(ctx, "order", input.orderId);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         return recordOrderCollection(
           input.orderId,
@@ -7192,14 +7319,14 @@ export const appRouter = router({
     list: permissionProcedure("accounting.view")
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
-        listSuppliers(await requireScopedBusinessId(ctx.tenantId, input.businessId))
+        listSuppliers(await requireScopedBusinessId(ctx, input.businessId))
       ),
 
     summaries: permissionProcedure("accounting.view")
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         getSupplierSummaries(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -7207,7 +7334,7 @@ export const appRouter = router({
       .input(z.object({ businessIds: z.array(z.number()).optional() }).optional())
       .query(async ({ ctx, input }) =>
         getSupplierDashboardTotals(
-          (await scopeBusinessIds(ctx.tenantId, input ?? {})) ?? null
+          (await scopeBusinessIds(ctx, input ?? {})) ?? null
         )
       ),
 
@@ -7236,7 +7363,7 @@ export const appRouter = router({
         getSupplierStatement({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -7258,7 +7385,7 @@ export const appRouter = router({
         saveSupplier({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -7270,7 +7397,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         listHistoricalSupplierNames(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -7286,7 +7413,7 @@ export const appRouter = router({
         mapHistoricalSupplierName({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -7309,7 +7436,7 @@ export const appRouter = router({
         recordSupplierPayment({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -7331,7 +7458,7 @@ export const appRouter = router({
         recordSupplierReturnCredit({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -7353,7 +7480,7 @@ export const appRouter = router({
         recordReworkFee({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -7375,7 +7502,7 @@ export const appRouter = router({
         recordOpeningBalance({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -7397,7 +7524,7 @@ export const appRouter = router({
         recordSupplierAdjustment({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -7416,7 +7543,7 @@ export const appRouter = router({
         listSupplierReceipts({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -7442,7 +7569,7 @@ export const appRouter = router({
         reverseSupplierMovement({
           ...input,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
@@ -7460,7 +7587,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input ?? {});
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
         return getPayrollSummary(businessIds);
       }),
 
@@ -7469,7 +7596,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         return getPayrollSettings(businessId);
@@ -7501,7 +7628,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await resolveActingEmployeeIdAndName(ctx);
@@ -7540,7 +7667,7 @@ export const appRouter = router({
     profileList: permissionProcedure("payroll.view")
       .input(z.object({ employeeId: z.number() }))
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "employee", input.employeeId);
+        await requireOwned(ctx, "employee", input.employeeId);
         return getSalaryProfiles(input.employeeId);
       }),
 
@@ -7549,7 +7676,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) =>
         listBusinessSalaryProfiles(
-          await requireScopedBusinessId(ctx.tenantId, input.businessId)
+          await requireScopedBusinessId(ctx, input.businessId)
         )
       ),
 
@@ -7559,7 +7686,7 @@ export const appRouter = router({
         deleteSalaryProfile({
           profileId: input.profileId,
           businessId: await requireScopedBusinessId(
-            ctx.tenantId,
+            ctx,
             input.businessId
           ),
         })
@@ -7584,7 +7711,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await resolveActingEmployeeIdAndName(ctx);
@@ -7636,7 +7763,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await requireActor(ctx);
@@ -7673,7 +7800,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "salaryProfile", input.id);
+        await requireOwned(ctx, "salaryProfile", input.id);
         const { id, ...rest } = input;
         const actor = await resolveActingEmployeeIdAndName(ctx);
         await updateSalaryProfile(id, rest, {
@@ -7697,7 +7824,7 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getAdvances({ ...input, businessIds });
       }),
 
@@ -7716,7 +7843,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await resolveActingEmployeeIdAndName(ctx);
@@ -7760,7 +7887,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await requireActor(ctx);
@@ -7797,7 +7924,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) =>
         listEmployeeBonuses({
           ...input,
-          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
         })
       ),
 
@@ -7812,8 +7939,8 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        const businessId = await requireScopedBusinessId(ctx.tenantId, input.businessId);
-        await requireOwned(ctx.tenantId, "employee", input.employeeId);
+        const businessId = await requireScopedBusinessId(ctx, input.businessId);
+        await requireOwned(ctx, "employee", input.employeeId);
         const actor = await requireActor(ctx);
         const result = await issueEmployeeBonus({
           businessId,
@@ -7840,7 +7967,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number(), bonusId: z.number() }))
       .mutation(async ({ ctx, input }) =>
         deleteEmployeeBonus({
-          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
           bonusId: input.bonusId,
         })
       ),
@@ -7851,7 +7978,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) =>
         getSalarySummaries({
           ...input,
-          businessId: await requireScopedBusinessId(ctx.tenantId, input.businessId),
+          businessId: await requireScopedBusinessId(ctx, input.businessId),
         })
       ),
 
@@ -7867,14 +7994,14 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessIds = await scopeBusinessIds(ctx.tenantId, input);
+        const businessIds = await scopeBusinessIds(ctx, input);
         return getPayrollPeriods({ ...input, businessIds });
       }),
 
     periodGet: permissionProcedure("payroll.view")
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
+        await requireOwned(ctx, "payrollPeriod", input.id);
         return getPayrollPeriod(input.id);
       }),
 
@@ -7889,7 +8016,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(
-          ctx.tenantId,
+          ctx,
           input.businessId
         );
         const actor = await resolveActingEmployeeIdAndName(ctx);
@@ -7918,7 +8045,7 @@ export const appRouter = router({
     periodRecalculate: permissionProcedure("payroll.manage")
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
+        await requireOwned(ctx, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         return recalculatePayrollPeriod(input.id, {
           id: actor.id ?? ctx.user!.id,
@@ -7943,7 +8070,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "payrollItem", input.id);
+        await requireOwned(ctx, "payrollItem", input.id);
         const { id, ...rest } = input;
         const actor = await resolveActingEmployeeIdAndName(ctx);
         // decimal في drizzle نص — الأرقام بتتحول قبل الحفظ عشان الدقة تفضل ثابتة
@@ -7972,7 +8099,7 @@ export const appRouter = router({
     periodApprove: permissionProcedure("payroll.approve")
       .input(z.object({ id: z.number(), evidenceUrl: z.string().min(1) }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
+        await requireOwned(ctx, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
           id: actor.id ?? ctx.user!.id,
@@ -8007,7 +8134,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
+        await requireOwned(ctx, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
           id: actor.id ?? ctx.user!.id,
@@ -8044,7 +8171,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
+        await requireOwned(ctx, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         const who = {
           id: actor.id ?? ctx.user!.id,
@@ -8066,7 +8193,7 @@ export const appRouter = router({
     periodDelete: permissionProcedure("payroll.manage")
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx.tenantId, "payrollPeriod", input.id);
+        await requireOwned(ctx, "payrollPeriod", input.id);
         const actor = await resolveActingEmployeeIdAndName(ctx);
         await deletePayrollPeriod(input.id);
         await addActivityLog({

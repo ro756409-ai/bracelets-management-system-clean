@@ -142,8 +142,11 @@ describe("🔑 حماية الاستلام في الواجهة + لا نظام �
     expect(accCollections).toContain("trpc.accountingV2.dailySettlementVoid");
     expect(accCollections).not.toContain(".delete");
   });
-  it("تاب الجرد placeholder «قيد التجهيز» (P2-C)", () => {
-    expect(accStocktake).toContain("قيد التجهيز");
+  it("تاب الجرد (P2-C.1): جلسة/عدّ/إرسال — بدون اعتماد ولا حركة مخزون", () => {
+    expect(accStocktake).toContain("stocktakeCreate");
+    expect(accStocktake).toContain("stocktakeSubmit");
+    // الاعتماد وتحريك المخزون لسه مش هنا (P2-C.2)
+    expect(accStocktake).not.toContain("stocktakeApprove");
   });
 });
 

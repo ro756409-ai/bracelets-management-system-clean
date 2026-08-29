@@ -72,6 +72,22 @@ function eventLines(eventType: string, payload: Record<string, unknown>): Snapsh
         }, 0n);
       return loss === 0n ? [] : [{ lineType: "inventory_loss", amount: fromMinorUnits(loss), snapshot: payload }];
     }
+    case "inventory.stocktake_approved": {
+      // كل بند بيحمل valueDelta موقّع: سالب عجز (خسارة)، موجب زيادة (ربح). بنفصلهم لسطرين
+      // عشان صافي الربح يطرح الخسارة ويضيف الربح — نفس المبلغ اللي اتحرك في المخزون بالظبط.
+      const lines = Array.isArray(payload.lines) ? payload.lines as Array<Record<string, unknown>> : [];
+      let loss = 0n;
+      let gain = 0n;
+      for (const line of lines) {
+        const value = toMinorUnits(String(line.valueDelta ?? "0"));
+        if (value < 0n) loss += -value;
+        else gain += value;
+      }
+      const out: SnapshotLine[] = [];
+      if (loss !== 0n) out.push({ lineType: "inventory_loss", amount: fromMinorUnits(loss), snapshot: payload });
+      if (gain !== 0n) out.push({ lineType: "inventory_gain", amount: fromMinorUnits(gain), snapshot: payload });
+      return out;
+    }
     default:
       return [];
   }
@@ -154,6 +170,7 @@ async function buildSnapshot(tx: any, closing: typeof accountingClosings.$inferS
     shippingExpense: 0n,
     operatingExpense: 0n,
     inventoryLoss: 0n,
+    inventoryGain: 0n,
     carrierReceivable: 0n,
     returnsPendingInspection: 0n,
     postClosingAdjustments: 0,
@@ -184,6 +201,7 @@ async function buildSnapshot(tx: any, closing: typeof accountingClosings.$inferS
       if (line.lineType === "shipping_expense" || line.lineType === "shipping_adjustment") totals.shippingExpense = add(totals.shippingExpense, line.amount);
       if (line.lineType === "operating_expense") totals.operatingExpense = add(totals.operatingExpense, line.amount);
       if (line.lineType === "inventory_loss") totals.inventoryLoss = add(totals.inventoryLoss, line.amount);
+      if (line.lineType === "inventory_gain") totals.inventoryGain = add(totals.inventoryGain, line.amount);
       if (line.lineType === "carrier_receivable") totals.carrierReceivable = add(totals.carrierReceivable, line.amount);
       if (line.lineType === "returns_pending_inspection") totals.returnsPendingInspection = add(totals.returnsPendingInspection, line.amount);
     }
@@ -191,7 +209,7 @@ async function buildSnapshot(tx: any, closing: typeof accountingClosings.$inferS
   }
   const netSales = totals.revenue - totals.revenueReturns;
   const grossProfit = netSales - totals.cogs;
-  const netProfit = grossProfit - totals.shippingExpense - totals.operatingExpense - totals.inventoryLoss;
+  const netProfit = grossProfit - totals.shippingExpense - totals.operatingExpense - totals.inventoryLoss + totals.inventoryGain;
 
   const [cashFlowRow] = await tx.select({
     amount: sql<string>`COALESCE(SUM(CASE WHEN ${financialTransactionEntries.direction} = 'in' THEN ${financialTransactionEntries.amount} ELSE -${financialTransactionEntries.amount} END), 0)`,
@@ -228,6 +246,7 @@ async function buildSnapshot(tx: any, closing: typeof accountingClosings.$inferS
     shippingExpense: fromMinorUnits(totals.shippingExpense),
     operatingExpense: fromMinorUnits(totals.operatingExpense),
     inventoryLoss: fromMinorUnits(totals.inventoryLoss),
+    inventoryGain: fromMinorUnits(totals.inventoryGain),
     netProfit: fromMinorUnits(netProfit),
     cashFlow: fromMinorUnits(toMinorUnits(cashFlowRow?.amount ?? "0")),
     carrierReceivable: fromMinorUnits(totals.carrierReceivable),

@@ -387,6 +387,7 @@ export type RealizedProfitBreakdown = {
   advertising: number;
   payrollCost: number;
   scrapLoss: number;
+  inventoryGain: number;
   netProfit: number;
   profitMargin: number;
 };
@@ -411,6 +412,7 @@ export async function computeRealizedProfit(input: {
     advertising: 0,
     payrollCost: 0,
     scrapLoss: 0,
+    inventoryGain: 0,
     netProfit: 0,
     profitMargin: 0,
   };
@@ -442,6 +444,7 @@ export async function computeRealizedProfit(input: {
   let cogs = 0n;
   let shippingCost = 0n;
   let scrapLoss = 0n;
+  let inventoryGain = 0n;
   // أحداث المصروفات غير-المرتبات: بنجمّعها بالـexpenseId عشان نفرز الإعلان عن التشغيلي
   // بعد ما نعرف مين مربوط بحملة. المرتبات (payroll_period) مستبعدة تمامًا من هنا.
   const expenseAccrualByExpenseId = new Map<number, bigint>();
@@ -485,6 +488,16 @@ export async function computeRealizedProfit(input: {
             toMinorUnits(String(item.unitCostSnapshot ?? "0")) *
             BigInt(Number(item.quantity ?? 0));
         }
+      }
+    } else if (
+      event.eventType === "inventory.stocktake_approved" &&
+      Array.isArray(payload.lines)
+    ) {
+      // كل بند valueDelta موقّع: سالب عجز (خسارة) → scrapLoss، موجب زيادة (ربح) → inventoryGain.
+      for (const line of payload.lines) {
+        const value = toMinorUnits(String(line.valueDelta ?? "0"));
+        if (value < 0n) scrapLoss += -value;
+        else inventoryGain += value;
       }
     }
   }
@@ -544,7 +557,8 @@ export async function computeRealizedProfit(input: {
     operatingExpenses -
     advertising -
     payrollCost -
-    scrapLoss;
+    scrapLoss +
+    inventoryGain;
   const netRevenue = Number(fromMinorUnits(netRevenueMinor));
   const netProfit = Number(fromMinorUnits(netProfitMinor));
   return {
@@ -557,6 +571,7 @@ export async function computeRealizedProfit(input: {
     advertising: Number(fromMinorUnits(advertising)),
     payrollCost: Number(fromMinorUnits(payrollCost)),
     scrapLoss: Number(fromMinorUnits(scrapLoss)),
+    inventoryGain: Number(fromMinorUnits(inventoryGain)),
     netProfit,
     profitMargin:
       netRevenueMinor > 0n
@@ -583,6 +598,7 @@ export async function getBusinessEventDashboard(input: {
       payrollCost: 0,
       expenses: 0,
       scrapLoss: 0,
+      inventoryGain: 0,
       netProfit: 0,
       profitMargin: 0,
     },

@@ -99,12 +99,14 @@ describe("🔑 قايمة الأنشطة اتفتحت للموظف (tenant-scope
     expect(routers).toContain("businessIdsByGroup: authenticatedProcedure");
   });
 
-  it("🔑 النطاق على ctx.tenantId مش ctx.user — فالعزل محفوظ", () => {
+  it("🔑 النطاق على نطاق الجلسة (sessionBusinessIds) — فالموظف بيشوف نشاطه بس", () => {
+    // P0: الـswitcher بقى بيمرّ من sessionBusinessIds — للمالك كل الأنشطة، للموظف نشاطه.
     const fn = routers.slice(
       routers.indexOf("activeList: authenticatedProcedure"),
       routers.indexOf("groups: authenticatedProcedure")
     );
-    expect(fn).toContain("getBusinessIdsForTenant(ctx.tenantId)");
+    expect(fn).toContain("sessionBusinessIds(ctx)");
+    expect(fn).not.toContain("getBusinessIdsForTenant(ctx.tenantId)");
     expect(fn).not.toContain("ctx.user");
   });
 

@@ -51,7 +51,7 @@ export function makeInventoryKey(productId: number, variantId?: number | null): 
  * of its own (see getLowStockProducts), so a variant line moves the variant counter and
  * never the parent's.
  */
-async function mirrorLegacyStock(
+export async function mirrorLegacyStock(
   tx: any,
   input: {
     businessId: number;

@@ -106,7 +106,7 @@ export default function AccountantWorkspace() {
             {tab === "goods" && <AccGoodsReceipt businessId={businessId} />}
             {tab === "payroll" && <AccPayroll businessId={businessId} />}
             {tab === "collections" && <AccCollections businessId={businessId} />}
-            {tab === "stocktake" && <AccStocktake />}
+            {tab === "stocktake" && <AccStocktake businessId={businessId} />}
             {tab === "workshop" && <AccWorkshop businessId={businessId} />}
           </>
         )}
