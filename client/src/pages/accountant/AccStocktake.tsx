@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Plus, ArrowRight, Send, ClipboardCheck } from "lucide-react";
+import { Plus, ArrowRight, Send, ClipboardCheck, CheckCircle2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { usePermission } from "@/hooks/usePermission";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
 import {
   AccCard, AccSectionTitle, AccField, AccInput, AccSelect, AccButton, AccTable, accMoney, AccStatus,
@@ -15,8 +16,11 @@ const STATUS: Record<string, { label: string; tone: "green" | "amber" | "rose" |
 };
 
 /**
- * الجرد — P2-C.1: بدء جلسة + عدّ + إرسال للاعتماد. **مفيش اعتماد ولا حركة مخزون هنا**
- * (دي في P2-C.2). المحاسب بيعدّ ويرسل؛ الاعتماد للمالك لاحقًا.
+ * الجرد — بدء جلسة + عدّ + إرسال للاعتماد (المحاسب)، والاعتماد (المالك/المدير).
+ *
+ * المحاسب بيعدّ ويرسل (draft → pending_approval). الاعتماد بيحرّك المخزون ويسجّل العجز
+ * كخسارة والزيادة كربح — بيظهر لصاحب `inventory_costing.approve` فقط، وللجلسة المرسَلة
+ * للاعتماد فقط. بعد الاعتماد الجلسة read-only.
  */
 export default function AccStocktake({ businessId }: { businessId: number }) {
   const utils = trpc.useUtils();
@@ -136,9 +140,24 @@ function StocktakeSession({
     onError: (e: any) => toast.error(e.message),
   });
 
+  // الاعتماد بيحرّك المخزون → على inventory_costing.approve. المحاسب معاهوش الصلاحية دي،
+  // فالزر يختفي عنه — والباك بيرفضها كمان (مفيش اعتماد على إخفاء الواجهة).
+  const canApprove = usePermission("inventory_costing.approve");
+  const approve = trpc.accountingV2.stocktakeApprove.useMutation({
+    onSuccess: async () => {
+      toast.success("تم الاعتماد — العجز اتسجّل خسارة مخزون والزيادة ربح مخزون، والمخزون اتحرّك.");
+      await Promise.all([
+        utils.accountingV2.stocktakeGet.invalidate({ businessId, stocktakeId }),
+        utils.accountingV2.stocktakeList.invalidate(),
+      ]);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const data = session.data;
   const lines: any[] = data?.lines ?? [];
   const isDraft = data?.status === "draft";
+  const isPendingApproval = data?.status === "pending_approval";
 
   const totals = useMemo(() => lines.reduce((s, l) => {
     const v = Number(l.differenceValue);
@@ -181,6 +200,14 @@ function StocktakeSession({
                 submit.mutate({ businessId, stocktakeId });
               }}>
                 <Send className="h-4 w-4" /> {submit.isPending ? "جاري الإرسال..." : "إرسال للاعتماد"}
+              </AccButton>
+            )}
+            {isPendingApproval && canApprove && (
+              <AccButton disabled={approve.isPending} onClick={() => {
+                if (!confirm("اعتماد الجرد؟ هيحرّك المخزون ويسجّل العجز كخسارة والزيادة كربح، ومايتراجعش.")) return;
+                approve.mutate({ businessId, stocktakeId });
+              }}>
+                <CheckCircle2 className="h-4 w-4" /> {approve.isPending ? "جاري الاعتماد..." : "اعتماد وتحريك المخزون"}
               </AccButton>
             )}
           </div>
@@ -233,8 +260,10 @@ function StocktakeSession({
           ))}
         </AccTable>
         <p className="mt-3 text-xs text-slate-400">
-          الأرقام لقطة وقت بدء الجرد. الاعتماد وتحريك المخزون (وتسجيل العجز/الزيادة في
-          الحسابات) بيتمّوا من المالك في خطوة لاحقة — دلوقتي عدّ وإرسال بس.
+          الأرقام لقطة وقت بدء الجرد. عند الاعتماد بيتحرّك المخزون بفرق كل صنف على رصيده
+          الحالي: العجز بيتسجّل <span className="text-rose-600">خسارة مخزون</span> والزيادة
+          <span className="text-emerald-600"> ربح مخزون</span> في الحسابات. بعد الاعتماد
+          الجلسة بتبقى للعرض فقط.
         </p>
       </AccCard>
     </div>

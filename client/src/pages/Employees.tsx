@@ -17,6 +17,7 @@ import { Plus, Edit, Trash2, Users, UserCheck, UserX, KeyRound, Eye, EyeOff, Cop
 import { PageHeader } from "@/components/shared";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { useBrandOptions } from "@/hooks/useBrandOptions";
 
 // يجب أن تطابق EMPLOYEE_ROLE_VALUES في server/permissions.ts
 const EMPLOYEE_ROLES = [
@@ -78,10 +79,12 @@ type EmployeeForm = {
   phone: string;
   email: string;
   role: EmployeeRoleValue;
+  /** النشاط اللي هيتبعله الموظف — إجباري لما يكون فيه أكتر من نشاط (P0). */
+  businessId: number | null;
 };
 
 const defaultForm: EmployeeForm = {
-  name: "", phone: "", email: "", role: "agent",
+  name: "", phone: "", email: "", role: "agent", businessId: null,
 };
 
 function formatLastLogin(value: unknown): string {
@@ -96,6 +99,10 @@ export default function Employees() {
   const utils = trpc.useUtils();
   const isAdmin = user?.role === 'admin';
   const { currentBusinessId } = useBusinessContext();
+  // مصدر البراند الواحد (useBrandOptions): بيختار النشاط لوحده لو واحد، وبيدّي قائمة لو
+  // أكتر — مفيش اشتقاق يدوي هنا. `singleActiveBrandId` = النشاط النشط الوحيد (أو undefined).
+  const { brands, selectedId: singleActiveBrandId } = useBrandOptions();
+  const multiBusiness = brands.length > 1;
 
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -219,6 +226,7 @@ export default function Employees() {
       phone: emp.phone ?? "",
       email: emp.email ?? "",
       role: emp.role,
+      businessId: emp.businessId ?? null,
     });
     setShowDialog(true);
   };
@@ -241,10 +249,23 @@ export default function Employees() {
 
   const handleSubmit = () => {
     if (!form.name.trim()) { toast.error("اسم الموظف مطلوب"); return; }
+    // بنبعت businessId **صراحةً دايمًا** لما يكون فيه نشاط نشط واحد على الأقل — عشان الباك
+    // (resolveEmployeeBusinessId) ياخد فرع "requested != null" ويتخطّى فحص التعدّد. مهم:
+    // قايمة activeList نشطة بس، بينما الباك بيعدّ كل الأنشطة (حتى المعطّلة) — فلو فيه نشاط
+    // نشط واحد + نشاط معطّل، الباك بيشوف "أكتر من نشاط" ويرفض لو مابعتناش الـid صراحةً.
+    const resolvedBusinessId = form.businessId ?? singleActiveBrandId ?? null;
+    if (multiBusiness && resolvedBusinessId == null) {
+      toast.error("اختر النشاط اللي هيتبعله الموظف");
+      return;
+    }
+    const payload = {
+      name: form.name, phone: form.phone, email: form.email, role: form.role,
+      businessId: resolvedBusinessId ?? undefined,
+    };
     if (editingId) {
-      updateMutation.mutate({ id: editingId, ...form });
+      updateMutation.mutate({ id: editingId, ...payload });
     } else {
-      createMutation.mutate(form);
+      createMutation.mutate(payload);
     }
   };
 
@@ -730,6 +751,26 @@ export default function Employees() {
                 </SelectContent>
               </Select>
             </div>
+            {/* النشاط — بيظهر بس لما يكون فيه أكتر من نشاط (نشاط واحد بيتحدّد تلقائيًا).
+                إجباري ساعتها عشان الموظف يتقيّد بنشاط واحد (P0 business isolation). */}
+            {multiBusiness && (
+              <div>
+                <Label>النشاط <span className="text-destructive">*</span></Label>
+                <Select
+                  value={form.businessId != null ? String(form.businessId) : ""}
+                  onValueChange={v => setForm(f => ({ ...f, businessId: Number(v) }))}
+                >
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="اختر النشاط اللي هيتبعله الموظف" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {brands.map(b => (
+                      <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setShowDialog(false); setEditingId(null); setForm(defaultForm); }}>

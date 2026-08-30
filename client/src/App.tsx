@@ -45,6 +45,7 @@ import ScanLogs from "./pages/ScanLogs";
 import BostaOrders from "./pages/BostaOrders";
 import Accounting from "./pages/Accounting";
 import AccountantWorkspace from "./pages/AccountantWorkspace";
+import Stocktake from "./pages/Stocktake";
 import DashboardLayout from "./components/DashboardLayout";
 import { useAuth } from "./_core/hooks/useAuth";
 import { usePermissions } from "./hooks/usePermission";
@@ -233,6 +234,11 @@ function Router() {
       </Route>
       <Route path="/goods-receipt">
         <FinancialRoute permission="inventory_costing.view"><GoodsReceipt /></FinancialRoute>
+      </Route>
+      {/* الجرد — صفحة مستقلة للمالك/المدير تحت DashboardLayout، بتعيد استخدام AccStocktake.
+          نفس حارس /goods-receipt (inventory_costing.view، غير مالي) فالمدير بيوصلها. */}
+      <Route path="/stocktake">
+        <FinancialRoute permission="inventory_costing.view"><Stocktake /></FinancialRoute>
       </Route>
       <Route path="/stock-transfer">
         <FinancialRoute permission="inventory_costing.view"><StockTransfer /></FinancialRoute>

@@ -142,11 +142,14 @@ describe("🔑 حماية الاستلام في الواجهة + لا نظام �
     expect(accCollections).toContain("trpc.accountingV2.dailySettlementVoid");
     expect(accCollections).not.toContain(".delete");
   });
-  it("تاب الجرد (P2-C.1): جلسة/عدّ/إرسال — بدون اعتماد ولا حركة مخزون", () => {
+  it("تاب الجرد: جلسة/عدّ/إرسال + اعتماد (P2-C.2) مربوط بصلاحية approve", () => {
     expect(accStocktake).toContain("stocktakeCreate");
     expect(accStocktake).toContain("stocktakeSubmit");
-    // الاعتماد وتحريك المخزون لسه مش هنا (P2-C.2)
-    expect(accStocktake).not.toContain("stocktakeApprove");
+    // P2-C.2: الاعتماد موجود لكن مربوط بـinventory_costing.approve + حالة pending_approval،
+    // فالمحاسب (مالوش approve) مايشوفش الزر — الإخفاء واجهة، والرفض على السيرفر كمان.
+    expect(accStocktake).toContain("stocktakeApprove");
+    expect(accStocktake).toContain('usePermission("inventory_costing.approve")');
+    expect(accStocktake).toContain("isPendingApproval && canApprove");
   });
 });
 
