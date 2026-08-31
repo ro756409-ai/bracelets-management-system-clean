@@ -6,22 +6,33 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 /**
- * مبدّل الأنشطة (Business/Section Switcher) — ثابت في الشل.
+ * مبدّل الأنشطة (Business Switcher) — ثابت في الشل.
  *
- * **بيستهلك المصدر المعتمد الوحيد** (`BusinessContext`): نطاق الجلسة multi-business بيتحدد
- * بالمجموعة الحالية (`currentGroupId` → `currentBusinessIds`)، ومفيش مصدر جديد ولا
- * hand-derive. تغيير الاختيار بيغيّر نطاق كل الصفحات — نفس السلوك الحالي، بس واضح ومبرز.
+ * **Business هو وحدة النطاق** (Sprint 2): «كل الأنشطة» أو نشاط واحد محدد. المصدر المعتمد
+ * الوحيد `BusinessContext.businesses` (من `businesses.activeList`، tenant-scoped) — بيكبر
+ * تلقائيًا لأي نشاط جديد بدون كود خاص. تغيير الاختيار بيغيّر نطاق كل الشاشات عبر
+ * `currentBusinessId → currentBusinessIds`.
  *
- * ملاحظة: النطاق group-based زي ما هو في الـbackend — Phase 1 مابتغيّرش business scoping.
+ * المجموعات (Groups) طبقة **تنظيم بصري اختيارية** فقط — بتظهر كعناوين تجمّع الأنشطة، لكن
+ * **اختيار مجموعة مايغيّرش النطاق** ولا فيه multi-select. عزل الموظف بيفضل على السيرفر
+ * (`sessionBusinessIds`) — الاختيار هنا مايوسّعش وصول أبدًا، والسيرفر بيقصّ أي نطاق مُرسل.
  */
 export function BusinessSwitcher() {
-  const { groups, currentGroupId, setCurrentGroupId } = useBusinessContext();
+  const { businesses, groups, currentBusinessId, setCurrentBusinessId } = useBusinessContext();
 
-  // نشاط/قسم واحد أو أقل → مفيش داعي لمبدّل (multi-business ready لكن مانزحمش الواجهة).
-  if (!groups || groups.length === 0) return null;
+  // نشاط واحد أو أقل → مفيش داعي لمبدّل (multi-business ready، لكن مانزحمش الواجهة).
+  if (!businesses || businesses.length <= 1) return null;
 
-  const current = currentGroupId != null ? groups.find(g => g.id === currentGroupId) : undefined;
+  const current = currentBusinessId != null ? businesses.find(b => b.id === currentBusinessId) : undefined;
   const label = current?.name ?? "كل الأنشطة";
+
+  // ترتيب الأنشطة حسب المجموعة (عناوين بصرية اختيارية)، والأنشطة بلا مجموعة في الآخر.
+  const groupName = (gid: number | null) => (gid != null ? groups.find(g => g.id === gid)?.name : undefined);
+  const sorted = [...businesses].sort((a, b) => {
+    const ga = groupName(a.groupId) ?? "￿"; // بلا مجموعة → آخر القائمة
+    const gb = groupName(b.groupId) ?? "￿";
+    return ga === gb ? a.name.localeCompare(b.name, "ar") : ga.localeCompare(gb, "ar");
+  });
 
   return (
     <DropdownMenu>
@@ -35,23 +46,30 @@ export function BusinessSwitcher() {
           <ChevronDown className="h-4 w-4 text-muted-foreground" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuLabel>النشاط الحالي</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => setCurrentGroupId(undefined)} className="cursor-pointer justify-between">
+      <DropdownMenuContent align="start" className="max-h-[70vh] w-60 overflow-y-auto">
+        <DropdownMenuItem onClick={() => setCurrentBusinessId(undefined)} className="cursor-pointer justify-between font-medium">
           <span>كل الأنشطة</span>
-          {currentGroupId == null && <Check className="h-4 w-4 text-primary" />}
+          {currentBusinessId == null && <Check className="h-4 w-4 text-primary" />}
         </DropdownMenuItem>
-        {groups.map(g => (
-          <DropdownMenuItem
-            key={g.id}
-            onClick={() => setCurrentGroupId(g.id)}
-            className="cursor-pointer justify-between"
-          >
-            <span className="truncate">{g.name}</span>
-            {currentGroupId === g.id && <Check className="h-4 w-4 text-primary" />}
-          </DropdownMenuItem>
-        ))}
+        <DropdownMenuSeparator />
+        {sorted.map((b, i) => {
+          const gName = groupName(b.groupId);
+          const prevGName = i > 0 ? groupName(sorted[i - 1].groupId) : undefined;
+          // عنوان المجموعة بيظهر أول ما تتغيّر المجموعة (تنظيم بصري فقط).
+          const showHeader = gName != null && gName !== prevGName;
+          return (
+            <div key={b.id}>
+              {showHeader && <DropdownMenuLabel className="text-xs text-muted-foreground">{gName}</DropdownMenuLabel>}
+              <DropdownMenuItem
+                onClick={() => setCurrentBusinessId(b.id)}
+                className="cursor-pointer justify-between"
+              >
+                <span className="truncate">{b.name}</span>
+                {currentBusinessId === b.id && <Check className="h-4 w-4 text-primary" />}
+              </DropdownMenuItem>
+            </div>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
