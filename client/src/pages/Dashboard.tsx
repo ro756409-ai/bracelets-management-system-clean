@@ -15,6 +15,7 @@ import DateRangePicker, { DateRange as PickerRange } from "@/components/DateRang
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { NeedsAttention } from "@/components/dashboard/NeedsAttention";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
@@ -171,133 +172,36 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">لوحة التحكم</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            أهلاً {user?.name}، هذا ملخص أداء اليوم
+      {/* V2 Header — تحية + سياق اليوم. الإجراءات هادية (نطاق زمني + تحديث). */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold text-foreground">أهلاً {user?.name} 👋</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+            {' — '}ملخص اليوم وأهم ما يحتاج تدخّلك
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <DateRangePicker
-            value={pickerRange}
-            onChange={setPickerRange}
-            placeholder="اختر نطاق زمني"
-          />
+        <div className="flex flex-wrap items-center gap-2">
+          <DateRangePicker value={pickerRange} onChange={setPickerRange} placeholder="اختر نطاق زمني" />
           <Button variant="outline" size="sm" onClick={() => refetch()}>
-            <RefreshCw className="h-4 w-4 ml-1" />
+            <RefreshCw className="ml-1 h-4 w-4" />
             تحديث
           </Button>
-          {user?.role === 'admin' && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => seedMutation.mutate()}
-              disabled={seedMutation.isPending}
-            >
-              تهيئة البيانات
-            </Button>
-          )}
         </div>
       </div>
 
-      {/* Merge Alert */}
-      {mergeAlert?.hasAlert && (
-        <div className="bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-xl p-4 flex items-center gap-3">
-          <GitMerge className="h-5 w-5 text-[var(--warning)] shrink-0" />
-          <div className="flex-1">
-            <p className="font-semibold text-[var(--warning)] text-sm">
-              تم دمج {mergeAlert.count} أوردر مكرر تلقائياً في آخر 24 ساعة
-            </p>
-            <p className="text-xs text-[var(--warning)]/80 mt-0.5">
-              إجمالي الكميات المدمجة: {mergeAlert.totalMergedQty} وحدة
-            </p>
-          </div>
-          <Button variant="outline" size="sm" className="border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/15" onClick={() => setLocation("/merge-logs")}>
-            عرض التقرير
-          </Button>
-        </div>
-      )}
-
-      {/* Low Stock Alert */}
-      {lowStock && lowStock.length > 0 && (
-        <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 flex items-center gap-3">
-          <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
-          <div className="flex-1">
-            <p className="font-semibold text-destructive text-sm">تنبيه: مخزون منخفض</p>
-            <p className="text-xs text-destructive/80 mt-0.5">
-              {lowStock.map(p => p.name).join(" • ")}
-            </p>
-          </div>
-          <Button variant="destructive" size="sm" onClick={() => setLocation("/inventory")}>
-            عرض المخزون
-          </Button>
-        </div>
-      )}
-
-      {/* Broadcast Message Section */}
+      {/* V2 — يحتاج انتباهك: أول حاجة، actionable. بيجمّع (تأكيد/مخزون/مكررات) بدل ٣ بانرات
+          منفصلة كانت بتزحم أعلى الصفحة — نفس البيانات، مكان واحد يوديك للإجراء. */}
       {isAdmin && (
-        <Card className="border-[var(--warning)]/30">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <span className="text-lg">📢</span>
-              إرسال رسالة لجميع الموظفين
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {activeBroadcast && (
-              <div className="bg-[var(--warning)]/10 border border-[var(--warning)]/40 rounded-lg p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1">
-                    <p className="text-xs text-[var(--warning)] font-medium mb-1">الرسالة الحالية:</p>
-                    <p className="text-sm text-foreground">{activeBroadcast.message}</p>
-                    <p className="text-xs text-muted-foreground mt-1">بواسطة: {activeBroadcast.sentByName} • {new Date(activeBroadcast.createdAt).toLocaleString('ar-EG')}</p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="text-destructive border-destructive/30 hover:bg-destructive/10 shrink-0"
-                    onClick={() => clearBroadcastMutation.mutate()}
-                    disabled={clearBroadcastMutation.isPending}
-                  >
-                    حذف
-                  </Button>
-                </div>
-              </div>
-            )}
-            <div className="flex gap-2">
-              <Input
-                value={broadcastMsg}
-                onChange={e => setBroadcastMsg(e.target.value)}
-                placeholder="اكتب رسالة لجميع الموظفين..."
-                className="flex-1"
-                maxLength={500}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && broadcastMsg.trim()) {
-                    sendBroadcastMutation.mutate({ message: broadcastMsg.trim() });
-                  }
-                }}
-              />
-              <Button
-                onClick={() => {
-                  if (broadcastMsg.trim()) {
-                    sendBroadcastMutation.mutate({ message: broadcastMsg.trim() });
-                  }
-                }}
-                disabled={!broadcastMsg.trim() || sendBroadcastMutation.isPending}
-                className="bg-[var(--warning)] hover:bg-[var(--warning)] text-white shrink-0"
-              >
-                {sendBroadcastMutation.isPending ? 'جاري...' : 'إرسال'}
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">ستظهر الرسالة لجميع الموظفين في لوحة تحكمهم فوراً</p>
-          </CardContent>
-        </Card>
+        <NeedsAttention
+          needsConfirmation={Number(newCount) || 0}
+          lowStock={lowStock?.length ?? 0}
+          duplicates={mergeAlert?.hasAlert ? Number(mergeAlert.count) || 0 : 0}
+        />
       )}
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      {/* KPIs — ٤ أرقام تشغيلية أساسية بس (بدل ٥ + كروت متفرقة). */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
           title="إجمالي الأوردرات"
           value={totalOrders}
@@ -306,25 +210,11 @@ export default function Dashboard() {
           loading={isLoading}
         />
         <StatCard
-          title="مؤكدة (لم تُطبع)"
-          value={confirmedOnlyCount}
+          title="تم التأكيد"
+          value={Number(confirmedCount)}
           icon={<CheckCircle className="h-5 w-5" />}
           color="green"
           subtitle={`${confirmRate}% نسبة التأكيد`}
-          loading={isLoading}
-        />
-        <StatCard
-          title="مطبوعة"
-          value={printedCount}
-          icon={<Printer className="h-5 w-5" />}
-          color="purple"
-          loading={isLoading}
-        />
-        <StatCard
-          title="ملغية"
-          value={Number(cancelledCount)}
-          icon={<XCircle className="h-5 w-5" />}
-          color="red"
           loading={isLoading}
         />
         <StatCard
@@ -334,46 +224,19 @@ export default function Dashboard() {
           color="orange"
           loading={isLoading}
         />
+        <StatCard
+          title="مؤكدات اليوم"
+          value={todayConfirmedCount}
+          icon={<CheckCircle2 className="h-5 w-5" />}
+          color="green"
+          subtitle={`${todayTotalRevenue.toLocaleString('ar-EG')} ج.م`}
+          loading={todayLoading}
+        />
       </div>
 
-      {/* Revenue & Extra Stats */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-1">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">الإيرادات (مُسلَّم)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold text-foreground">
-              {stats?.totalRevenue ? `${Number(stats.totalRevenue).toLocaleString('ar-EG')} ج.م` : '0 ج.م'}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">من الأوردرات المُسلَّمة</p>
-          </CardContent>
-        </Card>
-
+      {/* اتجاه ١٤ يوم + أكثر المحافظات — صفّ واحد هادي (بدون pie مكرر). */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">مصادر الأوردرات</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-3">
-              {stats?.sourceStats.map(s => (
-                <div key={s.source} className="flex items-center gap-2 bg-muted rounded-lg px-3 py-2">
-                  <span className="text-sm font-semibold text-foreground">{Number(s.count)}</span>
-                  <span className="text-xs text-muted-foreground">{SOURCE_LABELS[s.source] ?? s.source}</span>
-                </div>
-              ))}
-              {(!stats?.sourceStats || stats.sourceStats.length === 0) && (
-                <p className="text-sm text-muted-foreground">لا توجد بيانات</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Bar Chart - Daily Orders */}
-        <Card>
           <CardHeader>
             <CardTitle className="text-base">أوردرات آخر 14 يوم</CardTitle>
           </CardHeader>
@@ -394,81 +257,43 @@ export default function Dashboard() {
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div className="h-[220px] flex items-center justify-center text-muted-foreground text-sm">
+              <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
                 لا توجد بيانات كافية
               </div>
             )}
           </CardContent>
         </Card>
 
-        {/* Pie Chart - Status Distribution */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">توزيع حالات الأوردرات</CardTitle>
+            <CardTitle className="text-base">أكثر المحافظات طلبًا</CardTitle>
           </CardHeader>
           <CardContent>
-            {pieData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={90}
-                    paddingAngle={3}
-                    dataKey="value"
-                  >
-                    {pieData.map((entry, index) => (
-                      <Cell key={index} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px' }}
-                  />
-                  <Legend
-                    formatter={(value) => <span style={{ fontSize: '12px', color: 'var(--foreground)' }}>{value}</span>}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+            {stats?.governorateStats && stats.governorateStats.length > 0 ? (
+              <div className="space-y-2">
+                {stats.governorateStats.slice(0, 5).map((g, i) => {
+                  const maxCount = Number(stats.governorateStats[0]?.count ?? 1);
+                  const pct = Math.round((Number(g.count) / maxCount) * 100);
+                  return (
+                    <div key={g.governorate} className="flex items-center gap-3">
+                      <span className="w-5 text-xs font-bold text-muted-foreground">{i + 1}</span>
+                      <span className="w-24 shrink-0 truncate text-sm font-medium text-foreground">{g.governorate}</span>
+                      <div className="h-2 flex-1 rounded-full bg-muted">
+                        <div className="h-2 rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="w-8 text-left text-sm font-bold text-foreground">{Number(g.count)}</span>
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
-              <div className="h-[220px] flex items-center justify-center text-muted-foreground text-sm">
+              <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
                 لا توجد بيانات كافية
               </div>
             )}
           </CardContent>
         </Card>
       </div>
-
-      {/* Top Governorates */}
-      {stats?.governorateStats && stats.governorateStats.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">أكثر المحافظات طلباً</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {stats.governorateStats.slice(0, 5).map((g, i) => {
-                const maxCount = Number(stats.governorateStats[0]?.count ?? 1);
-                const pct = Math.round((Number(g.count) / maxCount) * 100);
-                return (
-                  <div key={g.governorate} className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-muted-foreground w-5">{i + 1}</span>
-                    <span className="text-sm font-medium text-foreground w-28 shrink-0">{g.governorate}</span>
-                    <div className="flex-1 bg-muted rounded-full h-2">
-                      <div
-                        className="h-2 rounded-full bg-primary transition-all"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <span className="text-sm font-bold text-foreground w-10 text-left">{Number(g.count)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* مؤكدات اليوم */}
       <Card>
@@ -584,6 +409,70 @@ export default function Dashboard() {
           <span className="text-xs">الموظفين</span>
         </Button>
       </div>
+
+      {/* أدوات المالك (هادية، تحت) — رسالة للفريق + تهيئة البيانات. اتنقلت من أعلى الصفحة
+          لتقليل الزحام؛ نفس الوظائف بالظبط، مكان أقل بروزًا. */}
+      {isAdmin && (
+        <details className="rounded-[var(--radius-brand-lg)] border border-border bg-card">
+          <summary className="cursor-pointer list-none px-5 py-3 text-sm font-semibold text-foreground">
+            <span className="inline-flex items-center gap-2">
+              <span className="text-base">📢</span> رسالة للفريق وأدوات
+            </span>
+          </summary>
+          <div className="space-y-3 border-t border-border p-5">
+            {activeBroadcast && (
+              <div className="rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">
+                    <p className="mb-1 text-xs font-medium text-[var(--warning)]">الرسالة الحالية:</p>
+                    <p className="text-sm text-foreground">{activeBroadcast.message}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">بواسطة: {activeBroadcast.sentByName} • {new Date(activeBroadcast.createdAt).toLocaleString('ar-EG')}</p>
+                  </div>
+                  <Button
+                    size="sm" variant="outline"
+                    className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10"
+                    onClick={() => clearBroadcastMutation.mutate()}
+                    disabled={clearBroadcastMutation.isPending}
+                  >
+                    حذف
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input
+                value={broadcastMsg}
+                onChange={e => setBroadcastMsg(e.target.value)}
+                placeholder="اكتب رسالة لجميع الموظفين..."
+                className="flex-1"
+                maxLength={500}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && broadcastMsg.trim()) {
+                    sendBroadcastMutation.mutate({ message: broadcastMsg.trim() });
+                  }
+                }}
+              />
+              <Button
+                onClick={() => { if (broadcastMsg.trim()) sendBroadcastMutation.mutate({ message: broadcastMsg.trim() }); }}
+                disabled={!broadcastMsg.trim() || sendBroadcastMutation.isPending}
+                className="shrink-0"
+              >
+                {sendBroadcastMutation.isPending ? 'جاري...' : 'إرسال'}
+              </Button>
+            </div>
+            <div className="flex items-center justify-between pt-1">
+              <p className="text-xs text-muted-foreground">ستظهر الرسالة لجميع الموظفين في لوحة تحكمهم فورًا.</p>
+              <Button
+                variant="ghost" size="sm" className="text-xs text-muted-foreground"
+                onClick={() => seedMutation.mutate()}
+                disabled={seedMutation.isPending}
+              >
+                تهيئة البيانات
+              </Button>
+            </div>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

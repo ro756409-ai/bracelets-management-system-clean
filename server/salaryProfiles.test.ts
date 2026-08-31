@@ -199,26 +199,22 @@ describe("🔑 حذف سطر المرتب", () => {
 });
 
 describe("🔑 الحسابات بند واحد في القايمة", () => {
-  const sidebar = fs.readFileSync(
-    "client/src/components/DashboardLayout.tsx",
-    "utf-8"
-  );
-  const group = sidebar.slice(
-    sidebar.indexOf('label: "الحسابات"'),
-    sidebar.indexOf('label: "التقارير"')
-  );
+  // V2: مصدر التنقّل بقى config/navigation.ts (مش DashboardLayout مباشرة).
+  const nav = fs.readFileSync("client/src/config/navigation.ts", "utf-8");
 
   it("🔑 وجهة واحدة — مش تمن بنود تحت بعض", () => {
-    // التاجر كان بيدوّر في القايمة بدل ما يدوّر جوه الحسابات.
-    const paths = [...group.matchAll(/path: "([^"]+)"/g)].map(m => m[1]);
-    expect(paths).toEqual(["/accounting"]);
+    // الحسابات LEGACY: رابط واحد هادي (/accounting) في «المزيد» — مش تمن شاشات في القايمة.
+    expect(nav).toContain('path: "/accounting"');
+    for (const legacy of ["/treasury", "/expenses", "/collections", "/payroll", "/closings", "/daily-ledger", "/advertising", "/shipping-finance"]) {
+      expect(nav, legacy).not.toContain(`path: "${legacy}"`);
+    }
   });
 
   it("🔑 وشغل المخزون رجع للمخزون", () => {
-    // استلام البضاعة ومرتجعات الورشة شغل عدّ قطع، مش شغل فلوس.
-    const inventory = sidebar.slice(
-      sidebar.indexOf('label: "المخزون"'),
-      sidebar.indexOf('label: "الموظفون"')
+    // استلام البضاعة ومرتجعات الورشة شغل عدّ قطع، مش شغل فلوس — تحت وجهة المخزون.
+    const inventory = nav.slice(
+      nav.indexOf('key: "inventory"'),
+      nav.indexOf('key: "team"')
     );
     expect(inventory).toContain('path: "/goods-receipt"');
     expect(inventory).toContain('path: "/workshop-returns"');
@@ -227,7 +223,7 @@ describe("🔑 الحسابات بند واحد في القايمة", () => {
 
 describe("🔑 مفيش شاشتين لنفس الحركة", () => {
   const sidebar = fs.readFileSync(
-    "client/src/components/DashboardLayout.tsx",
+    "client/src/config/navigation.ts",
     "utf-8"
   );
   const transfer = fs.readFileSync("client/src/pages/StockTransfer.tsx", "utf-8");
