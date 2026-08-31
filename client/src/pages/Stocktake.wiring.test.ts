@@ -12,7 +12,7 @@ import fs from "fs";
  */
 
 const app = fs.readFileSync("client/src/App.tsx", "utf-8");
-const layout = fs.readFileSync("client/src/components/DashboardLayout.tsx", "utf-8");
+const nav = fs.readFileSync("client/src/config/navigation.ts", "utf-8");
 const page = fs.readFileSync("client/src/pages/Stocktake.tsx", "utf-8");
 const acc = fs.readFileSync("client/src/pages/accountant/AccStocktake.tsx", "utf-8");
 
@@ -28,12 +28,15 @@ describe("🔑 route /stocktake محمي", () => {
   });
 });
 
-describe("🔑 بند التنقّل للجرد", () => {
-  it("🔑 بند الجرد في القائمة → /stocktake وadminOnly", () => {
-    expect(layout).toContain('label: "الجرد", path: "/stocktake", adminOnly: true');
+describe("🔑 بند التنقّل للجرد (config/navigation)", () => {
+  const inv = nav.slice(nav.indexOf('key: "inventory"'), nav.indexOf('key: "team"'));
+  it("🔑 بند الجرد → /stocktake ومقيّد بصلاحية inventory_costing.view", () => {
+    expect(inv).toContain('path: "/stocktake"');
+    // مش مكشوف للكل — نفس صلاحية الـroute (مش adminOnly، عشان المدير كمان يوصله).
+    const line = inv.slice(inv.indexOf('path: "/stocktake"') - 60, inv.indexOf('path: "/stocktake"') + 90);
+    expect(line).toContain('inventory_costing.view');
   });
-  it("🔑 البند جوّه مجموعة المخزون (جنب إذن الاستلام)", () => {
-    const inv = layout.slice(layout.indexOf('label: "المخزون"'), layout.indexOf('label: "الموظفون"'));
+  it("🔑 البند جوّه وجهة المخزون (جنب إذن الاستلام)", () => {
     expect(inv).toContain('path: "/stocktake"');
     expect(inv).toContain('path: "/goods-receipt"');
   });

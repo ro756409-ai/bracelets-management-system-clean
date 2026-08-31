@@ -31,7 +31,13 @@ import {
   Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus, ArrowLeftRight, RotateCcw as ReturnIcon, Megaphone, ClipboardCheck,
   ChevronDown,
 } from "lucide-react";
-import { CSSProperties, useEffect, useRef, useState } from "react";
+import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import {
+  MORE_ICON, activeDestinationKey, visibleChildren, visibleDestinations, visibleToolsLinks,
+} from "@/config/navigation";
+import { BusinessSwitcher } from "@/components/shell/BusinessSwitcher";
+import { MobileBottomNav } from "@/components/shell/MobileBottomNav";
+import { WorkspaceTabs } from "@/components/shell/WorkspaceTabs";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { BrandLogo } from './BrandLogo';
@@ -73,89 +79,6 @@ type MenuGroup = {
   collapsible?: boolean;
 };
 
-const MENU_GROUPS: MenuGroup[] = [
-  {
-    label: "الرئيسية",
-    icon: Home,
-    items: [
-      { icon: LayoutDashboard, label: "لوحة التحكم", path: "/dashboard" },
-      { icon: Briefcase, label: "مساحة العمل", path: "/workspace" },
-    ],
-  },
-  {
-    label: "الطلبات",
-    icon: ShoppingCart,
-    items: [
-      { icon: ShoppingCart, label: "الأوردرات", path: "/orders" },
-      { icon: Truck, label: "طلبات بوسطة", path: "/bosta-orders" },
-      { icon: RotateCcw, label: "المرتجعات", path: "/returns", adminOnly: true },
-      { icon: AlertTriangle, label: "المكررات", path: "/duplicates", adminOnly: true },
-    ],
-  },
-  {
-    label: "التشغيل",
-    icon: PackageCheck,
-    items: [
-      { icon: PackageCheck, label: "التجهيز", path: "/preparation" },
-      { icon: Printer, label: "المطبوعات", path: "/printed-orders" },
-      { icon: Clock, label: "سجل الطباعات", path: "/print-logs" },
-      { icon: QrCode, label: "مسح QR الأوردرات", path: "/scan-orders" },
-      { icon: QrCode, label: "سجل المسحات", path: "/scan-logs" },
-      { icon: Activity, label: "سجل الأنشطة", path: "/activity-log" },
-    ],
-  },
-  {
-    label: "المخزون",
-    icon: Boxes,
-    // استلام البضاعة ومرتجعات الورشة **شغل مخزون** مش شغل حسابات — التاجر بيفتحهم
-    // عشان يعدّ قطع، مش عشان يشوف فلوس. أثرهم المالي بيظهر لوحده في الحسابات.
-    items: [
-      { icon: Package, label: "المخزون", path: "/inventory" },
-      { icon: PackagePlus, label: "إذن استلام بضاعة", path: "/goods-receipt", adminOnly: true },
-      { icon: ClipboardCheck, label: "الجرد", path: "/stocktake", adminOnly: true },
-      { icon: ReturnIcon, label: "مرتجعات الورشة", path: "/workshop-returns", adminOnly: true },
-    ],
-  },
-  {
-    label: "الموظفون",
-    icon: UserCog,
-    items: [{ icon: Users, label: "الموظفين", path: "/employees", adminOnly: true }],
-  },
-  {
-    // **بند واحد.** الحسابات كانت تمن بنود تحت بعض في القايمة، وكل واحد بيفتح شاشة
-    // مستقلة — فالتاجر بيدوّر في القايمة بدل ما يدوّر جوه الحسابات.
-    //
-    // دلوقتي الحسابات وجهة واحدة، وجوّاها سبع تابات هي النموذج الذهني كله:
-    // اللوحة · التحصيلات · المصروفات · المصانع · الإعلانات · المرتبات · الخزنة.
-    // كل الشاشات القديمة مساراتها لسه شغّالة — اللي اتغيّر هو الطريق ليها.
-    label: "الحسابات",
-    icon: Wallet,
-    items: [
-      { icon: Wallet, label: "الحسابات", path: "/accounting", financial: true },
-    ],
-  },
-  {
-    label: "التقارير",
-    icon: LineChart,
-    items: [
-      { icon: BarChart3, label: "التقارير", path: "/reports" },
-      { icon: GitMerge, label: "تقرير الدمج", path: "/merge-logs", adminOnly: true },
-    ],
-  },
-  {
-    label: "التكاملات",
-    icon: Plug,
-    items: [
-      { icon: Globe, label: "قنوات البيع", path: "/sales-channels", adminOnly: true },
-      { icon: Zap, label: "Easy Order ربط", path: "/webhook-settings", adminOnly: true },
-    ],
-  },
-  {
-    label: "الإعدادات",
-    icon: Settings,
-    items: [{ icon: Building2, label: "إدارة الأنشطة", path: "/businesses", adminOnly: true }],
-  },
-];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
 const DEFAULT_WIDTH = 260;
@@ -230,27 +153,52 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   const sidebarRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
 
-  const { groups, currentGroupId, setCurrentGroupId, currentBusinessIds } = useBusinessContext();
+  // النطاق multi-business (currentBusinessIds) لسه بيتقرا هنا لتنبيه المخزون؛ مبدّل الأنشطة
+  // نفسه بقى في BusinessSwitcher (نفس المصدر BusinessContext).
+  const { currentBusinessIds } = useBusinessContext();
   const { data: lowStockProducts } = trpc.products.lowStock.useQuery(
     currentBusinessIds && currentBusinessIds.length > 0 ? { businessIds: currentBusinessIds } : undefined
   );
   const lowStockCount = lowStockProducts?.length ?? 0;
 
   const isAdmin = user?.role === 'admin';
-  // البنود المالية بتتحكم بصلاحية `accounting.view` مش بـisAdmin — عشان المحاسب (مش admin)
-  // يشوف الحسابات، والمدير (admin صناعي بس غير مالي) مايشوفهاش. القراءة من نفس مصدر
-  // السيرفر (`auth.myPermissions`) فمفيش تعريف تاني للأدوار في الواجهة.
-  const canAccessFinancials = permissions.includes("accounting.view");
-  const visibleGroups = MENU_GROUPS
-    .map(group => ({
-      ...group,
-      items: group.items.filter(item =>
-        item.financial ? canAccessFinancials : (!item.adminOnly || isAdmin)
-      ),
-    }))
-    .filter(group => group.items.length > 0);
+  // التنقّل V2 كله بيتبني من المصدر الواحد (config/navigation): ٧ وجهات أساسية (قابلة للطي
+  // فالسايدبار تفضل مختصرة) + مجموعة «المزيد» للأدوات والسجلّات والحسابات القديمة. الفلترة
+  // بالصلاحيات من نفس مصدر السيرفر (myPermissions) عبر canSeeNav — تعريف واحد، مش مبعتر.
+  const navDestinations = useMemo(
+    () => visibleDestinations(isAdmin, permissions),
+    [isAdmin, permissions]
+  );
+  const visibleGroups: MenuGroup[] = useMemo(() => {
+    const groups: MenuGroup[] = navDestinations.map(dest => ({
+      label: dest.label,
+      icon: dest.icon,
+      items: visibleChildren(dest, isAdmin, permissions).map(c => ({
+        icon: c.icon, label: c.label, path: c.path,
+      })),
+      // الوجهة متعددة الأبناء بتتطوي وتفضل مختصرة؛ اللي فيها بند واحد بيظهر مباشرة.
+      collapsible: true,
+    }));
+    const tools = visibleToolsLinks(isAdmin, permissions);
+    if (tools.length > 0) {
+      groups.push({
+        label: "المزيد",
+        icon: MORE_ICON,
+        items: tools.map(l => ({ icon: l.icon, label: l.label, path: l.path })),
+        collapsible: true,
+      });
+    }
+    return groups;
+  }, [navDestinations, isAdmin, permissions]);
   const allMenuItems = visibleGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
+
+  // تبويبات الـWorkspace للوجهة الحالية (التنقّل الثانوي) — من نفس NavConfig.
+  const activeKey = activeDestinationKey(location);
+  const activeDest = navDestinations.find(d => d.key === activeKey);
+  const workspaceTabs = activeDest
+    ? visibleChildren(activeDest, isAdmin, permissions)
+    : [];
 
   useEffect(() => {
     if (isCollapsed) setIsResizing(false);
@@ -302,25 +250,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
           </SidebarHeader>
 
           <SidebarContent className="gap-0 py-2">
-            {/* Business Group Switcher */}
-            {!isCollapsed && groups.length > 0 && (
-              <div className="px-3 pb-3 pt-1">
-                <Select
-                  value={currentGroupId !== undefined ? String(currentGroupId) : 'all'}
-                  onValueChange={(val) => setCurrentGroupId(val === 'all' ? undefined : Number(val))}
-                >
-                  <SelectTrigger className="w-full h-9 text-xs bg-sidebar-accent/30 border-sidebar-border">
-                    <SelectValue placeholder="اختر القسم" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">كل الأقسام</SelectItem>
-                    {groups.map(g => (
-                      <SelectItem key={g.id} value={String(g.id)}>{g.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            {/* مبدّل الأنشطة اتنقل للـTopbar (BusinessSwitcher) — مصدر واحد، من غير تكرار. */}
             {visibleGroups.map(group => {
               const holdsCurrent = group.items.some(
                 item =>
@@ -434,22 +364,32 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
       </div>
 
       <SidebarInset>
-        {isMobile && (
-          <div className="flex border-b h-14 items-center justify-between bg-background/95 px-4 backdrop-blur sticky top-0 z-40">
-            <div className="flex items-center gap-3">
-              <SidebarTrigger className="h-9 w-9 rounded-lg" />
-              <span className="font-semibold text-foreground">{activeMenuItem?.label ?? "القائمة"}</span>
-            </div>
-            {lowStockCount > 0 && (
-              <div className="flex items-center gap-1 text-destructive text-xs">
-                <AlertTriangle className="h-3 w-3" />
-                <span>{lowStockCount} منتج ينفد</span>
-              </div>
+        {/* Topbar موحّد: مبدّل الأنشطة (المصدر المعتمد) + عنوان الصفحة على الموبايل +
+            مؤشّر المخزون المنخفض. البروفايل بيفضل في تذييل السايدبار — مفيش تكرار. */}
+        <header className="sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-border bg-background/95 px-4 backdrop-blur">
+          <div className="flex min-w-0 items-center gap-3">
+            {isMobile && <SidebarTrigger className="h-9 w-9 rounded-lg" />}
+            {isMobile && (
+              <span className="truncate font-semibold text-foreground">{activeMenuItem?.label ?? "القائمة"}</span>
             )}
+            <BusinessSwitcher />
           </div>
-        )}
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+          {lowStockCount > 0 && (
+            <button
+              onClick={() => setLocation("/inventory")}
+              className="flex items-center gap-1 text-xs text-destructive"
+            >
+              <AlertTriangle className="h-3.5 w-3.5" />
+              <span>{lowStockCount} منتج ينفد</span>
+            </button>
+          )}
+        </header>
+        {/* تبويبات القسم (secondary nav) — الوجهة بتبقى workspace بتفاصيلها فوق المحتوى. */}
+        <WorkspaceTabs tabs={workspaceTabs} />
+        {/* مساحة سفلية على الموبايل عشان المحتوى ما يتغطّاش وراء الـbottom nav. */}
+        <main className="flex-1 p-4 pb-24 md:p-6 md:pb-6">{children}</main>
       </SidebarInset>
+      <MobileBottomNav destinations={navDestinations} />
     </>
   );
 }
