@@ -170,15 +170,20 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
     [isAdmin, permissions]
   );
   const visibleGroups: MenuGroup[] = useMemo(() => {
-    const groups: MenuGroup[] = navDestinations.map(dest => ({
-      label: dest.label,
-      icon: dest.icon,
-      items: visibleChildren(dest, isAdmin, permissions).map(c => ({
+    const groups: MenuGroup[] = navDestinations.map(dest => {
+      const items = visibleChildren(dest, isAdmin, permissions).map(c => ({
         icon: c.icon, label: c.label, path: c.path,
-      })),
-      // الوجهة متعددة الأبناء بتتطوي وتفضل مختصرة؛ اللي فيها بند واحد بيظهر مباشرة.
-      collapsible: true,
-    }));
+      }));
+      return {
+        label: dest.label,
+        icon: dest.icon,
+        items,
+        // الوجهة متعددة الأبناء بتتطوي وتفضل مختصرة. الوجهة ذات البند الواحد **لا** تتطوي:
+        // العنوان القابل للنقر بيظهر فقط لو items>1، فلو خلّيناها collapsible وهي بند واحد
+        // بتختفي تمامًا (لا عنوان يفتحها ولا محتوى) — ده اللي كان بيخفي «الموظفين» و«التقارير».
+        collapsible: items.length > 1,
+      };
+    });
     const tools = visibleToolsLinks(isAdmin, permissions);
     if (tools.length > 0) {
       groups.push({

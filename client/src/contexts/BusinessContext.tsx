@@ -33,6 +33,7 @@ interface BusinessContextType {
 const BusinessContext = createContext<BusinessContextType | undefined>(undefined);
 
 const GROUP_STORAGE_KEY = 'selected_business_group_id';
+const BUSINESS_STORAGE_KEY = 'selected_business_id';
 
 export function BusinessProvider({ children }: { children: ReactNode }) {
   const [currentGroupId, setCurrentGroupIdState] = useState<number | undefined>(() => {
@@ -72,35 +73,50 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
 
   const currentGroup = groupsData.find(g => g.id === currentGroupId) as BusinessGroup | undefined;
 
-  // Compute businessIds for the selected group
-  const currentBusinessIds = useMemo(() => {
-    if (!currentGroupId || !currentGroup) return undefined;
-    return currentGroup.businesses.map(b => b.id);
-  }, [currentGroupId, currentGroup]);
-
-  // All businesses flat list
   /**
    * Every brand the user may act on, whether or not it sits in a group.
    *
-   * This used to be `groupsData.flatMap(g => g.businesses)`, which looks equivalent and is
-   * not: getBusinessGroupsWithBusinesses attaches a brand to a group with
-   * `b.groupId === g.id`, so a brand whose groupId is null appears in no group and vanished
-   * from this list too. Screens that ask "which brands can I use" then saw none and locked
-   * themselves — the goods receipt form kept its warehouse select disabled behind "choose
-   * the brand first", with no brand to choose.
-   *
-   * `businesses.activeList` is scoped by tenant on the server and does not care about
-   * groups, so it answers that question directly. Grouping stays with currentGroup, which is
-   * what the header switcher is actually for.
+   * `businesses.activeList` is scoped by tenant on the server and does not care about groups,
+   * so it lists exactly the businesses this session may use (and, for an employee, only the
+   * ones they are allowed) — the canonical source the switcher picks from. It grows on its
+   * own for a 2nd/3rd/4th business with no code change.
    */
   const { data: allBusinesses = [] } = trpc.businesses.activeList.useQuery();
   const businesses = useMemo(() => allBusinesses as Business[], [allBusinesses]);
 
-  // Legacy backward compat: currentBusinessId is undefined (we use businessIds array now)
-  const currentBusinessId = undefined;
-  const setCurrentBusinessId = (_id: number | undefined) => {
-    // No-op, kept for backward compat
+  /**
+   * Sprint 2 — Business is the unit of scope: "all businesses" (undefined) or one specific
+   * business. Groups (currentGroupId/currentGroup) stay for backward compatibility
+   * (useBrandOptions form pickers) but **no longer change the scope**. Employee isolation
+   * stays enforced on the server (sessionBusinessIds) — this selection never widens access;
+   * the server clamps any businessIds it receives.
+   */
+  const [currentBusinessId, setCurrentBusinessIdState] = useState<number | undefined>(() => {
+    const stored = localStorage.getItem(BUSINESS_STORAGE_KEY);
+    return stored ? Number(stored) : undefined; // undefined = كل الأنشطة
+  });
+
+  const setCurrentBusinessId = (id: number | undefined) => {
+    setCurrentBusinessIdState(id);
+    if (id != null) localStorage.setItem(BUSINESS_STORAGE_KEY, String(id));
+    else localStorage.removeItem(BUSINESS_STORAGE_KEY);
   };
+
+  // نشاط اتأرشف/اتشال أو مش من نطاق الجلسة → رجوع آمن لـ«كل الأنشطة» (مايفضلش اختيار شبح).
+  useEffect(() => {
+    if (currentBusinessId == null || businesses.length === 0) return;
+    if (!businesses.some(b => b.id === currentBusinessId)) {
+      setCurrentBusinessIdState(undefined);
+      localStorage.removeItem(BUSINESS_STORAGE_KEY);
+    }
+  }, [businesses, currentBusinessId]);
+
+  // النطاق الفعلي اللي بتستهلكه كل الشاشات — نفس العقد (number[] | undefined).
+  // نشاط محدد → [id]، كل الأنشطة → undefined (كل أنشطة الـtenant، بيقصّها السيرفر للمسموح).
+  const currentBusinessIds = useMemo(
+    () => (currentBusinessId != null ? [currentBusinessId] : undefined),
+    [currentBusinessId]
+  );
 
   return (
     <BusinessContext.Provider value={{

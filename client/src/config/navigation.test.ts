@@ -111,6 +111,28 @@ describe("🔑 Business Switcher من المصدر المعتمد", () => {
   });
 });
 
+describe("🔑 Sprint 2 — Business-first scope (النشاط وحدة النطاق، مش المجموعة)", () => {
+  const ctx = fs.readFileSync("client/src/contexts/BusinessContext.tsx", "utf-8");
+  const sw = fs.readFileSync("client/src/components/shell/BusinessSwitcher.tsx", "utf-8");
+  it("🔑 currentBusinessIds مشتقّ من currentBusinessId (نشاط محدد → [id]، كل الأنشطة → undefined)", () => {
+    expect(ctx).toContain("currentBusinessId != null ? [currentBusinessId] : undefined");
+    // مش مشتقّ من المجموعة بعد كده.
+    expect(ctx).not.toContain("currentGroup.businesses.map(b => b.id)");
+  });
+  it("🔑 currentBusinessId بقى state حقيقي بيتخزّن (مش no-op)", () => {
+    expect(ctx).toContain("BUSINESS_STORAGE_KEY");
+    expect(ctx).toContain("setCurrentBusinessIdState");
+  });
+  it("🔑 المجموعات تفضل للتوافق (currentGroupId موجود) لكن مش بتقود النطاق", () => {
+    expect(ctx).toContain("currentGroupId"); // طبقة تجميع اختيارية باقية
+  });
+  it("🔑 المبدّل يقود اختيار النشاط (كل الأنشطة أو نشاط واحد) — مفيش اختيار مجموعة يغيّر النطاق", () => {
+    expect(sw).toContain("setCurrentBusinessId(undefined)"); // كل الأنشطة
+    expect(sw).toContain("setCurrentBusinessId(b.id)");      // نشاط واحد
+    expect(sw).not.toContain("setCurrentGroupId");           // المجموعة مابتغيّرش النطاق
+  });
+});
+
 describe("🔑 backward compatibility — الروابط القديمة لسه موجودة", () => {
   const app = fs.readFileSync("client/src/App.tsx", "utf-8");
   it("🔑 كل الـroutes القديمة المهمة لسه في App.tsx", () => {
@@ -138,5 +160,26 @@ describe("🔑 الشل بيستهلك المصدر الواحد", () => {
   });
   it("🔑 فيه mobile bottom nav", () => {
     expect(layout).toContain("MobileBottomNav");
+  });
+});
+
+describe("🔑 regression Sprint 2 — الوجهة ذات البند الواحد ماتختفيش (الفريق/التقارير)", () => {
+  const layout = fs.readFileSync("client/src/components/DashboardLayout.tsx", "utf-8");
+  it("🔑 collapsible مشروط بعدد الأبناء — الوجهة ذات البند الواحد تظهر مباشرة", () => {
+    // الباج القديم: كل الوجهات collapsible:true، والعنوان بيظهر فقط لو items>1 —
+    // فالفريق/التقارير (بند واحد) كانت تختفي (لا عنوان يفتحها ولا محتوى).
+    expect(layout).toContain("collapsible: items.length > 1");
+    // بلوك بناء الوجهات مايخليش كلها collapsible ثابتة.
+    const builder = layout.slice(
+      layout.indexOf("navDestinations.map"),
+      layout.indexOf('label: "المزيد"')
+    );
+    expect(builder).not.toContain("collapsible: true");
+  });
+  it("🔑 الفريق والتقارير وجهات ذات بند واحد فعلًا (فتبان مباشرة)", () => {
+    for (const key of ["team", "reports"]) {
+      const dest = PRIMARY_DESTINATIONS.find(d => d.key === key)!;
+      expect(dest.children?.length ?? 0, key).toBeLessThanOrEqual(1);
+    }
   });
 });
