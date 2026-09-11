@@ -53,7 +53,9 @@ import {
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
-import { usePermission } from "@/hooks/usePermission";
+import { usePermission, usePermissions } from "@/hooks/usePermission";
+import { WorkspaceTabs, StatusFilterChips, DataToolbar, type StatusChipItem } from "@/components/workspace";
+import { PRIMARY_DESTINATIONS, visibleChildren } from "@/config/navigation";
 import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
@@ -184,7 +186,14 @@ export default function Orders() {
   const utils = trpc.useUtils();
   const [, navigate] = useLocation();
   const isAdmin = user?.role === 'admin';
+  const { permissions } = usePermissions();
   const { currentBusinessIds } = useBusinessContext();
+  // تبويبات Workspace الطلبات — من نفس مصدر التنقّل (NavConfig)، مفلترة بصلاحيات الجلسة.
+  // بتفتح الصفحات الموجودة (bosta/returns/…) — الـroutes القديمة كما هي (backward compatible).
+  const ordersTabs = useMemo(() => {
+    const dest = PRIMARY_DESTINATIONS.find(d => d.key === "orders");
+    return dest ? visibleChildren(dest, isAdmin, permissions) : [];
+  }, [isAdmin, permissions]);
   // Same shared source as every other screen. The edit dialog falls back on its own,
   // but the two governorate FILTERS on this page read this list directly and were
   // rendering empty for exactly the same reason.
@@ -623,6 +632,9 @@ export default function Orders() {
   };
   const filterChips = buildFilterChips(filtersSnapshot, FILTER_DESCRIPTORS);
   const activeFilterCount = countActiveFilters(filtersSnapshot, FILTER_DESCRIPTORS);
+  // الفلاتر اللي هتروح Drawer «المتقدمة» — العدّ مشتقّ من نفس chips الموجودة (مفيش منطق جديد).
+  const ADVANCED_FILTER_KEYS = new Set(["website", "governorates", "adName", "employee", "hideAssigned"]);
+  const advancedActiveCount = filterChips.filter(c => ADVANCED_FILTER_KEYS.has(c.key)).length;
   const clearOneFilter = (key: string) => {
     setPage(1);
     if (key === "status") setStatusFilter("all");
@@ -1017,91 +1029,60 @@ export default function Orders() {
             </DropdownMenuContent>
           </DropdownMenu>
         }
-      >
-        {/* Design System V2 — بطاقات إحصائيات: أيقونة في مربع ملوّن + رقم كبير، وكل بطاقة
-            تعمل كفلتر سريع للحالة. الحالات المختارة هي الأكثر استخدامًا فعليًا في هذا النشاط
-            (جديد/مؤكد/لم يرد/ملغي هي الأرقام الكبيرة)، وباقي الحالات متاحة من شريط التبويبات.
-            ملاحظة: التصميم يعرض مؤشر اتجاه ("من أمس") — لا توجد بيانات مقارنة في الـAPI الحالي
-            ولم أختلق أرقامًا؛ الـStatCard يدعم `trend` ويظهر تلقائيًا فور توفّر البيانات. */}
-        {/* موبايل: شريط أفقي قابل للتمرير — الشبكة الرأسية كانت بتحط ٧ كروت فوق بعض، يعني
-            تمرير طويل قبل ما توصل لأول أوردر. من lg وطالع بيرجع شبكة عادية (الديسكتوب ما اتغيرش).
-            -mx-* + px-* عشان أول وآخر كارت يلمسوا حافة الشاشة بدل ما يتقصّوا. */}
-        <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-7 lg:overflow-visible [&>*]:min-w-[152px] [&>*]:snap-start lg:[&>*]:min-w-0">
-          {([
-            { key: 'all', label: 'كل الأوردرات', value: statusCounts?.total, tone: 'default', icon: <Package className="h-5 w-5" /> },
-            { key: 'new', label: 'جديد', value: statusCounts?.byStatus?.new, tone: 'info', icon: <FileText className="h-5 w-5" /> },
-            { key: 'confirmed', label: 'مؤكد', value: statusCounts?.byStatus?.confirmed, tone: 'success', icon: <CheckCircle className="h-5 w-5" /> },
-            { key: 'no_answer', label: 'لم يرد', value: statusCounts?.byStatus?.no_answer, tone: 'warning', icon: <PhoneOff className="h-5 w-5" /> },
-            { key: 'shipped', label: 'تم الشحن', value: statusCounts?.byStatus?.shipped, tone: 'info', icon: <Truck className="h-5 w-5" /> },
-            { key: 'cancelled', label: 'ملغي', value: statusCounts?.byStatus?.cancelled, tone: 'danger', icon: <XCircle className="h-5 w-5" /> },
-          ] as const).map(c => (
-            <StatCard
-              key={c.key}
-              label={c.label}
-              value={(c.value ?? 0).toLocaleString('ar-EG')}
-              tone={c.tone}
-              icon={c.icon}
-              active={activeTab === 'all' && statusFilter === c.key}
-              onClick={() => { setActiveTab('all'); setStatusFilter(c.key); setPage(1); }}
-            />
-          ))}
-          {/* غير قابلة للنقر: "يحتاج مراجعة" علامة على الأوردر وليست حالة، فمفيش فلتر مقابل لها */}
-          <StatCard
-            label="يحتاج مراجعة"
-            value={(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')}
-            tone="warning"
-            icon={<AlertTriangle className="h-5 w-5" />}
-          />
-        </div>
-      </PageHeader>
+      />
+
+      {/* تنقّل Workspace الطلبات — نفس مصدر NavConfig (bosta/returns/duplicates/printed/QR).
+          الـroutes القديمة كما هي؛ ده تنظيم وصول مش نقل منطق. */}
+      <WorkspaceTabs tabs={ordersTabs} />
 
       {/* شريط التبويبات الموحّد — الحالات كلها + تبويب "مؤكدات اليوم" المميز في صف واحد،
           بدل صفين تبويبات فوق بعض (الزرار القديم اتشال). */}
-      <div className="overflow-x-auto border-b border-border px-3">
-        <div className="flex w-max items-center gap-0.5">
-          {(["all", "new", "confirmed", "no_answer", "postponed", "printed", "preparing", "shipped", "delivered", "cancelled", "returned"] as const).map(v => {
-            const active = activeTab === 'all' && statusFilter === v;
-            const count = v === 'all' ? statusCounts?.total : statusCounts?.byStatus?.[v];
-            return (
-              <button
-                key={v}
-                onClick={() => { setActiveTab('all'); setStatusFilter(v); setPage(1); }}
-                className={`relative flex items-center gap-2 whitespace-nowrap px-3.5 py-3 text-sm transition-colors duration-[var(--duration-fast)] ${
-                  active ? 'font-bold text-primary' : 'font-medium text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {v === 'all' ? 'كل الأوردرات' : STATUS_LABEL(v)}
-                {count != null && count > 0 && (
-                  <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
-                    active ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground'
-                  }`}>
-                    {Number(count).toLocaleString('ar-EG')}
-                  </span>
-                )}
-                {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />}
-              </button>
-            );
-          })}
-          <span className="mx-1 h-5 w-px shrink-0 bg-border" />
-          <button
-            onClick={() => setActiveTab('today_confirmed')}
-            className={`relative flex items-center gap-2 whitespace-nowrap px-3.5 py-3 text-sm transition-colors duration-[var(--duration-fast)] ${
-              activeTab === 'today_confirmed' ? 'font-bold text-[var(--success)]' : 'font-medium text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            ✔ مؤكدات اليوم
-            {/* الحارس على `total` نفسه مش على الكائن: لو الاستجابة رجعت من غير العدّاد كان
-                Number(undefined) بيطبع "ليس رقمًا" جوه الشارة قدام المستخدم. */}
-            {todayConfirmedData?.total != null && (
-              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums ${
-                activeTab === 'today_confirmed' ? 'bg-[var(--success)]/15 text-[var(--success)]' : 'bg-muted text-muted-foreground'
-              }`}>
-                {Number(todayConfirmedData.total).toLocaleString('ar-EG')}
-              </span>
-            )}
-            {activeTab === 'today_confirmed' && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-[var(--success)]" />}
-          </button>
-        </div>
+      {/* شريط حالة موحّد (StatusFilterChips) — بديل صف الـKPI cards المكرّر + شريط التبويبات
+          القديم في آنٍ واحد. عدّاد كل حالة في مكان **واحد** بس. + زر «مؤكدات اليوم» (وضع منفصل)
+          + شارة «يحتاج مراجعة». نفس الحالات والعدّادات والمنطق — عرض موحّد بس. */}
+      <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
+        <StatusFilterChips
+          chips={([
+            { key: "new", tone: "info" },
+            { key: "confirmed", tone: "success" },
+            { key: "no_answer", tone: "warning" },
+            { key: "postponed", tone: "amber" },
+            { key: "printed", tone: "neutral" },
+            { key: "preparing", tone: "neutral" },
+            { key: "shipped", tone: "cyan" },
+            { key: "delivered", tone: "delivered" },
+            { key: "cancelled", tone: "danger" },
+            { key: "returned", tone: "orange" },
+          ] as const).map((c): StatusChipItem => ({
+            key: c.key,
+            label: STATUS_LABEL(c.key),
+            count: statusCounts?.byStatus?.[c.key],
+            tone: c.tone,
+          }))}
+          totalCount={statusCounts?.total}
+          value={activeTab === 'today_confirmed' ? '__today__' : (statusFilter === 'all' ? null : statusFilter)}
+          onChange={(key) => { setActiveTab('all'); setStatusFilter(key ?? 'all'); setPage(1); }}
+        />
+        <button
+          onClick={() => setActiveTab('today_confirmed')}
+          className={`inline-flex items-center gap-1.5 rounded-[var(--radius-brand-pill)] border px-3 py-1.5 text-sm font-medium transition-colors ${
+            activeTab === 'today_confirmed'
+              ? 'border-[var(--success)] bg-[var(--success)] text-[var(--success-foreground)]'
+              : 'border-border bg-card text-muted-foreground hover:bg-muted'
+          }`}
+        >
+          ✔ مؤكدات اليوم
+          {todayConfirmedData?.total != null && (
+            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-black/10 px-1 text-xs font-bold tabular-nums">
+              {Number(todayConfirmedData.total).toLocaleString('ar-EG')}
+            </span>
+          )}
+        </button>
+        {(statusCounts?.needsReview ?? 0) > 0 && (
+          <span className="ms-auto inline-flex items-center gap-1.5 rounded-[var(--radius-brand-pill)] border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-3 py-1.5 text-sm font-medium text-[var(--warning)]">
+            <AlertTriangle className="h-4 w-4" /> يحتاج مراجعة: {(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')}
+          </span>
+        )}
       </div>
 
       {/* Today-confirmed panel */}
@@ -1182,109 +1163,128 @@ export default function Orders() {
       {activeTab === 'all' && (
         <Card className="shadow-[var(--shadow-card)]">
           <CardContent className="p-3">
-            <FilterBar
-              search={
-                <SearchInput
-                  value={search}
-                  onChange={(v) => { setSearch(v); setPage(1); }}
-                  placeholder="بحث بالاسم أو الهاتف أو رقم الأوردر..."
-                />
-              }
+            {/* DataToolbar الموحّد: بحث + الفلاتر الأكثر استخدامًا ظاهرة (المصدر/التاريخ) +
+                باقي الفلاتر في Drawer «فلاتر متقدمة». chips + مسح الكل محفوظين كما هم. الحالة
+                ممثّلة في StatusFilterChips فوق — فمفيش Status Select مكرّر هنا. نفس الـstate
+                ونفس الـhandlers ونفس منطق الفلترة/الـquery بالظبط — إعادة تنظيم UI فقط. */}
+            <DataToolbar
+              search={search}
+              onSearch={(v) => { setSearch(v); setPage(1); }}
+              searchPlaceholder="بحث بالاسم أو الهاتف أو رقم الأوردر..."
               chips={filterChips}
               onClearChip={clearOneFilter}
               onReset={resetAllFilters}
-              activeCount={activeFilterCount}
-            >
-              {statusFilter === 'printed' && (
-                <div className="flex items-center gap-1.5 bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-lg px-2 py-1">
-                  <span className="text-xs text-[var(--info)] font-medium whitespace-nowrap">مطبوع:</span>
-                  {(['today', 'yesterday', 'all', 'custom'] as const).map(f => (
-                    <button key={f} onClick={() => { setPrintedDateFilter(f); setPage(1); }}
-                      className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                        printedDateFilter === f ? 'bg-[var(--info)] text-white' : 'bg-card text-[var(--info)] hover:bg-[var(--info)]/10'
-                      }`}>
-                      {f === 'today' ? 'اليوم' : f === 'yesterday' ? 'أمس' : f === 'all' ? 'الكل' : 'مخصص'}
-                    </button>
-                  ))}
-                  {printedDateFilter === 'custom' && (
-                    <input type="date" value={printedCustomDate} onChange={e => { setPrintedCustomDate(e.target.value); setPage(1); }}
-                      className="text-xs border border-border rounded px-1.5 py-0.5 w-32 bg-card" />
+              advancedActiveCount={advancedActiveCount}
+              filters={
+                <>
+                  {statusFilter === 'printed' && (
+                    <div className="flex items-center gap-1.5 bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-lg px-2 py-1">
+                      <span className="text-xs text-[var(--info)] font-medium whitespace-nowrap">مطبوع:</span>
+                      {(['today', 'yesterday', 'all', 'custom'] as const).map(f => (
+                        <button key={f} onClick={() => { setPrintedDateFilter(f); setPage(1); }}
+                          className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                            printedDateFilter === f ? 'bg-[var(--info)] text-white' : 'bg-card text-[var(--info)] hover:bg-[var(--info)]/10'
+                          }`}>
+                          {f === 'today' ? 'اليوم' : f === 'yesterday' ? 'أمس' : f === 'all' ? 'الكل' : 'مخصص'}
+                        </button>
+                      ))}
+                      {printedDateFilter === 'custom' && (
+                        <input type="date" value={printedCustomDate} onChange={e => { setPrintedCustomDate(e.target.value); setPage(1); }}
+                          className="text-xs border border-border rounded px-1.5 py-0.5 w-32 bg-card" />
+                      )}
+                    </div>
                   )}
-                </div>
-              )}
 
-              <Select value={sourceFilter} onValueChange={v => { setSourceFilter(v); setPage(1); }}>
-                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="المصدر" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل المصادر</SelectItem>
-                  {sourceOptions.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
+                  <Select value={sourceFilter} onValueChange={v => { setSourceFilter(v); setPage(1); }}>
+                    <SelectTrigger className="h-9 w-40"><SelectValue placeholder="المصدر" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">كل المصادر</SelectItem>
+                      {sourceOptions.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
 
-              <Select value={websiteFilter} onValueChange={v => { setWebsiteFilter(v); setPage(1); }}>
-                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="الموقع" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل المواقع</SelectItem>
-                  {salesChannels?.map((ch: any) => <SelectItem key={ch.id} value={String(ch.id)}>{ch.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+                  <div className="flex items-center gap-1.5">
+                    <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                    <DateRangePicker value={dateRange} onChange={(range) => { setDateRange(range); setPage(1); }} />
+                  </div>
 
-              <MultiSelect
-                options={GOVERNORATES.map(g => ({ value: g, label: g }))}
-                selected={governorateFilter}
-                onChange={(vals) => { setGovernorateFilter(vals); setPage(1); }}
-                placeholder="كل المحافظات"
-                countLabel={(n) => `${n} محافظات`}
-                className="w-40"
-              />
+                  {/* زر الأعمدة — بيفتح/يقفل الأعمدة الإضافية (seq/website). وظيفة أعمدة مش فلتر،
+                      فاتسمّى «الأعمدة» عشان مايتلخبطش مع «فلاتر متقدمة» الجديدة. نفس المنطق. */}
+                  <Button
+                    variant="outline" size="sm" className="h-9 gap-1.5"
+                    aria-expanded={hiddenColumns.size === 0}
+                    onClick={() => setHiddenColumns(prev => prev.size > 0 ? new Set() : new Set(['seq', 'website']))}
+                  >
+                    <SlidersHorizontal className="h-4 w-4" />
+                    {hiddenColumns.size > 0 ? 'إظهار كل الأعمدة' : 'إخفاء أعمدة إضافية'}
+                  </Button>
+                </>
+              }
+              advancedFilters={
+                <>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-foreground">الموقع</label>
+                    <Select value={websiteFilter} onValueChange={v => { setWebsiteFilter(v); setPage(1); }}>
+                      <SelectTrigger className="h-9 w-full"><SelectValue placeholder="الموقع" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">كل المواقع</SelectItem>
+                        {salesChannels?.map((ch: any) => <SelectItem key={ch.id} value={String(ch.id)}>{ch.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-              <Select value={adNameFilter} onValueChange={v => { setAdNameFilter(v); setPage(1); }}>
-                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="فلترة حسب اسم البيدج" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل البيدجات</SelectItem>
-                  {(adNames ?? []).map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-foreground">المحافظات</label>
+                    <MultiSelect
+                      options={GOVERNORATES.map(g => ({ value: g, label: g }))}
+                      selected={governorateFilter}
+                      onChange={(vals) => { setGovernorateFilter(vals); setPage(1); }}
+                      placeholder="كل المحافظات"
+                      countLabel={(n) => `${n} محافظات`}
+                      className="w-full"
+                    />
+                  </div>
 
-              <Select value={employeeFilter} onValueChange={v => { setEmployeeFilter(v); setPage(1); }}>
-                <SelectTrigger className="h-9 w-40"><SelectValue placeholder="الموظف المسؤول" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل الموظفين</SelectItem>
-                  {(employees ?? []).map((emp: any) => (
-                    <SelectItem key={emp.id} value={String(emp.id)}>{emp.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-foreground">اسم البيدج</label>
+                    <Select value={adNameFilter} onValueChange={v => { setAdNameFilter(v); setPage(1); }}>
+                      <SelectTrigger className="h-9 w-full"><SelectValue placeholder="فلترة حسب اسم البيدج" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">كل البيدجات</SelectItem>
+                        {(adNames ?? []).map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-              <Button
-                variant={hideAssigned ? "default" : "outline"}
-                size="sm"
-                className="h-9"
-                // متعطّل وقت اختيار موظف: الزرار وقتها مالوش أثر (بنسقط unassignedOnly)،
-                // وزرار شكله فعّال ومش بيعمل حاجة أسوأ من زرار متعطّل بسبب واضح.
-                disabled={employeeFilter !== "all"}
-                title={employeeFilter !== "all" ? "غير متاح أثناء الفلترة بموظف محدد" : undefined}
-                onClick={() => { setHideAssigned(v => !v); setPage(1); }}
-              >
-                {hideAssigned ? "غير الموزعة فقط" : "كل الأوردرات"}
-              </Button>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-foreground">الموظف المسؤول</label>
+                    <Select value={employeeFilter} onValueChange={v => { setEmployeeFilter(v); setPage(1); }}>
+                      <SelectTrigger className="h-9 w-full"><SelectValue placeholder="الموظف المسؤول" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">كل الموظفين</SelectItem>
+                        {(employees ?? []).map((emp: any) => (
+                          <SelectItem key={emp.id} value={String(emp.id)}>{emp.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-              <div className="flex items-center gap-1.5">
-                <CalendarDays className="h-4 w-4 text-muted-foreground" />
-                <DateRangePicker value={dateRange} onChange={(range) => { setDateRange(range); setPage(1); }} />
-              </div>
-
-              {/* "فلاتر متقدمة" — يفتح/يقفل الأعمدة الإضافية المخفية (seq/website) بدل ما تبقى
-                  مدفونة في قائمة الأعمدة. لا فلاتر جديدة، ولا تغيير في منطق أي فلتر قائم. */}
-              <Button
-                variant="outline" size="sm" className="h-9 gap-1.5"
-                aria-expanded={hiddenColumns.size === 0}
-                onClick={() => setHiddenColumns(prev => prev.size > 0 ? new Set() : new Set(['seq', 'website']))}
-              >
-                <SlidersHorizontal className="h-4 w-4" />
-                {hiddenColumns.size > 0 ? 'فلاتر متقدمة' : 'إخفاء المتقدمة'}
-              </Button>
-            </FilterBar>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-foreground">التوزيع</label>
+                    <Button
+                      variant={hideAssigned ? "default" : "outline"}
+                      size="sm"
+                      className="h-9 w-full"
+                      disabled={employeeFilter !== "all"}
+                      title={employeeFilter !== "all" ? "غير متاح أثناء الفلترة بموظف محدد" : undefined}
+                      onClick={() => { setHideAssigned(v => !v); setPage(1); }}
+                    >
+                      {hideAssigned ? "غير الموزعة فقط" : "كل الأوردرات"}
+                    </Button>
+                  </div>
+                </>
+              }
+            />
             {/* إجراءات التحديد الجماعي انتقلت لشريط الجدول نفسه (bulkActions) — كانت هنا فوق
                 الجدول وبتدفعه لتحت أول ما تحدد صف. */}
           </CardContent>
