@@ -24,7 +24,7 @@ import {
   Plus, Search, CheckCircle, XCircle, Clock, UserPlus, Eye, FileSpreadsheet, Download, Truck,
   Trash2, Printer, PhoneCall, PhoneOff, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
   MoreHorizontal, MoreVertical, ListChecks, LayoutGrid, Rows3,
-  Package, FileText, AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal,
+  Package, AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import ImportExcelDialog from "@/components/ImportExcelDialog";
@@ -34,10 +34,7 @@ import { useBusinessContext } from "@/contexts/BusinessContext";
 import { cairoDateKey, cairoDayRange, previousDateKey } from "@/lib/cairoDate";
 import {
   PageHeader,
-  StatCard,
   StatusBadge,
-  FilterBar,
-  SearchInput,
   MultiSelect,
   ResponsiveDataTable,
   type Column,
@@ -48,7 +45,6 @@ import {
   WhatsAppButton,
   toast,
   buildFilterChips,
-  countActiveFilters,
   type FilterDescriptor,
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
@@ -631,7 +627,6 @@ export default function Orders() {
       : employeeNameById.get(Number(employeeFilter)) ?? `#${employeeFilter}`,
   };
   const filterChips = buildFilterChips(filtersSnapshot, FILTER_DESCRIPTORS);
-  const activeFilterCount = countActiveFilters(filtersSnapshot, FILTER_DESCRIPTORS);
   // الفلاتر اللي هتروح Drawer «المتقدمة» — العدّ مشتقّ من نفس chips الموجودة (مفيش منطق جديد).
   const ADVANCED_FILTER_KEYS = new Set(["website", "governorates", "adName", "employee", "hideAssigned"]);
   const advancedActiveCount = filterChips.filter(c => ADVANCED_FILTER_KEYS.has(c.key)).length;
