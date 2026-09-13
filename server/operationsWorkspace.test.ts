@@ -149,12 +149,15 @@ describe("🔑 مصدر منطق واحد — البوابة ماتغيرتش", 
     expect(ops).not.toContain(".mutation(");
   });
 
-  it("🔑 البوابة بحارسها القديم ونطاقها القديم، ومفوّضة للـservice", () => {
+  it("🔑 البوابة بحارسها القديم ونطاقها fail-closed، ومفوّضة للـservice", () => {
     expect(compact).toContain('todayShipments: requireEmployeePermission("shipping_ops.view")');
     expect(compact).toContain('shippingRoutes: requireEmployeePermission("shipping_ops.view")');
     const portal = routers.slice(routers.indexOf("// ==================== SHIPMENTS TODAY"), routers.indexOf("// مسح QR للموظف"));
-    expect(portal).toContain("(await sessionBusinessIds(ctx)) ?? []");
-    expect(portal).toContain("(await scopeBusinessIds(empScope(ctx), {})) ?? []");
+    // security: النطاق بقى fail-closed — scopeBusinessIds (denyWhenEmpty) + [NO_BUSINESS]،
+    // مش الأنماط القديمة اللي فاضيها كان بيتحوّل لكل الأوردرات.
+    expect((portal.match(/\(await scopeBusinessIds\(empScope\(ctx\), \{\}\)\) \?\? \[NO_BUSINESS\]/g) ?? []).length).toBe(2);
+    expect(portal).not.toContain("sessionBusinessIds(ctx)) ?? []");
+    expect(portal).not.toContain("?? [];");
     expect(portal).toContain("buildTodayShipments(businessIds, input.date)");
     expect(portal).toContain("loadShippingRouteRows(businessIds)");
     // المنطق مابقاش متكرر جوه routers.ts.

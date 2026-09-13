@@ -1647,17 +1647,31 @@ export async function deleteOrders(ids: number[]) {
   });
 }
 
-export async function markOrdersAsPrinted(ids: number[]) {
+export async function markOrdersAsPrinted(
+  ids: number[],
+  /**
+   * دفاع عميق: أنشطة المستخدم المسموح بها. لو اتحدّدت (مصفوفة)، مايتحدّثش أي أوردر برّه
+   * نطاقه — حتى لو اتبعت id لأوردر تينانت تاني. `null`/`undefined` = مفيش قيد نطاق (مالك
+   * منصة/سياق داخلي موثوق). المصفوفة الفاضية → `[-1]` = صفر صفوف (fail-closed، مش الكل).
+   */
+  allowedBusinessIds?: number[] | null
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (ids.length === 0) return;
+  const conditions = [inArray(orders.id, ids), eq(orders.status, "confirmed")];
+  if (allowedBusinessIds != null) {
+    conditions.push(
+      inArray(orders.businessId, allowedBusinessIds.length ? allowedBusinessIds : [-1])
+    );
+  }
   await db
     .update(orders)
     .set({
       status: "printed",
       printedAt: new Date(),
     })
-    .where(and(inArray(orders.id, ids), eq(orders.status, "confirmed")));
+    .where(and(...conditions));
 }
 
 export async function assignOrderToEmployee(

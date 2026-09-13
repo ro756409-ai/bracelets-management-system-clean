@@ -1,9 +1,40 @@
 import { Request, Response, Express } from "express";
-import { requireAdminOrManager } from "./authMiddleware";
+import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import XLSX from "xlsx-js-style";
 import QRCode from "qrcode";
-import { getOrders, getAllEmployees, getAllProducts, markOrdersAsPrinted, getAllBusinesses, getBusinessIdsByGroupId, getOrderItemsForOrders } from "./db";
+import { getOrders, getAllEmployees, getAllProducts, markOrdersAsPrinted, getAllBusinesses, getBusinessIdsByGroupId, getBusinessIdsForTenant, getOrderItemsForOrders } from "./db";
 import { listShippingConfiguration } from "./shippingConfigV2.service";
+
+
+// ==================== TENANT / BUSINESS SCOPE ====================
+// كل export/طباعة هنا بتقرا/تكتب أوردرات — لازم تتقيّد بأنشطة تينانت المستخدم على السيرفر،
+// مش بالـIDs/الفلاتر الجاية من العميل. القاعدة: نطاق فاضي **مايعنيش أبدًا** الكل.
+
+/** مُعرّف مستحيل — أي فلتر عليه بيطابق صفر صفوف (fail-closed). */
+export const NO_BUSINESS = -1;
+
+/**
+ * أنشطة الجلسة المسموح بها. `null` = مالك منصة (tenantId فاضي) بيشوف الكل — أي تينانت
+ * عادي بيرجّع أنشطته فقط (أو مصفوفة فاضية لو مالوش أنشطة).
+ */
+async function allowedBusinessIdsForReq(req: Request): Promise<number[] | null> {
+  const auth = (req as RequestWithAuth).authInfo;
+  if (!auth || auth.tenantId == null) return null;
+  return await getBusinessIdsForTenant(auth.tenantId);
+}
+
+/**
+ * يقصّ نطاقًا مطلوبًا (من فلتر العميل) على المسموح. النتيجة **دايمًا آمنة**:
+ *   • مالك منصة (allowed=null): يحترم فلتر العميل أو الكل.
+ *   • تينانت: تقاطع المطلوب مع المسموح؛ لو فاضي → `[NO_BUSINESS]` (صفر، مش الكل).
+ * بترجع `undefined` فقط لمالك المنصة بلا فلتر (= الكل مشروع).
+ */
+export function scopeToAllowed(allowed: number[] | null, requested?: number[]): number[] | undefined {
+  if (allowed == null) return requested;
+  const set = new Set(allowed);
+  const scoped = requested ? requested.filter(id => set.has(id)) : allowed;
+  return scoped.length > 0 ? scoped : [NO_BUSINESS];
+}
 
 
 // ==================== SHARED HELPERS ====================
@@ -79,11 +110,14 @@ async function getFilteredOrders(req: Request) {
     statuses = [String(status)];
   }
 
-  // Determine businessIds from group
-  let businessIds: number[] | undefined;
+  // Determine businessIds from group (client filter) — لكن **مقيّد بأنشطة التينانت**.
+  // من غير القيد ده، أدمن تينانت A كان يقدر يبعت group بتاع تينانت B (أو يسيبها فيرجع الكل).
+  const allowed = await allowedBusinessIdsForReq(req);
+  let requestedFromGroup: number[] | undefined;
   if (businessGroupId && String(businessGroupId) !== "all") {
-    businessIds = await getBusinessIdsByGroupId(Number(businessGroupId));
+    requestedFromGroup = await getBusinessIdsByGroupId(Number(businessGroupId));
   }
+  const businessIds = scopeToAllowed(allowed, requestedFromGroup);
 
   // Date range
   let from: Date | undefined;
@@ -654,20 +688,32 @@ async function exportPrintLabels(req: Request, res: Response) {
       return res.status(400).json({ error: "لم يتم تحديد أوردرات صالحة" });
     }
 
-    const result = await getOrders({ limit: 100000 });
-    const orders = result.orders.filter((o: any) => ids.includes(o.id));
+    // ── عزل التينانت: بنجيب الأوردرات المملوكة لأنشطة المستخدم فقط، مش كل الأوردرات ──
+    const allowed = await allowedBusinessIdsForReq(req);
+    const scopedBusinessIds =
+      allowed == null ? undefined : allowed.length ? allowed : [NO_BUSINESS];
+    const result = await getOrders({ businessIds: scopedBusinessIds, limit: 100000 });
+    const owned = result.orders.filter((o: any) => ids.includes(o.id));
 
-    if (orders.length === 0) {
+    if (owned.length === 0) {
       return res.status(404).json({ error: "لم يتم العثور على الأوردرات المحددة" });
     }
+    // fail-closed: أي id مطلوب مش ضمن أنشطة المستخدم (تينانت تاني أو غير موجود) → رفض كامل،
+    // مش طباعة/تعليم جزئي.
+    if (owned.length !== ids.length) {
+      return res.status(403).json({ error: "بعض الأوردرات خارج نطاق حسابك" });
+    }
+    const orders = owned;
+    const ownedIds = orders.map((o: any) => o.id);
 
     // إرفاق بنود كل أوردر (order_items) لإظهار التفصيل في اللابل
-    const itemsMap = await getOrderItemsForOrders(ids);
+    const itemsMap = await getOrderItemsForOrders(ownedIds);
     for (const o of orders) {
       (o as any).items = itemsMap.get(o.id) || [];
     }
 
-    await markOrdersAsPrinted(ids);
+    // تعليم كـمطبوع — مقيّد بأنشطة المستخدم كمان (دفاع عميق على مستوى الـUPDATE).
+    await markOrdersAsPrinted(ownedIds, allowed);
 
     const labelsHTML = (await Promise.all(orders.map((order: any) => buildLabelHTML(order)))).join("");
 

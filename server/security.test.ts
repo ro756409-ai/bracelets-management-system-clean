@@ -62,8 +62,9 @@ describe("Fix 1: Express import/export routes protection", () => {
   it("exportExcel.ts imports requireAdminOrManager middleware", async () => {
     const fs = await import("fs");
     const content = fs.readFileSync("server/exportExcel.ts", "utf-8");
-    expect(content).toContain(
-      'import { requireAdminOrManager } from "./authMiddleware"'
+    // بيستورد الميدل‑وير من authMiddleware (الاستيراد بقى بيجيب معاه type RequestWithAuth كمان).
+    expect(content).toMatch(
+      /import \{ requireAdminOrManager[^}]*\} from "\.\/authMiddleware"/
     );
   });
 

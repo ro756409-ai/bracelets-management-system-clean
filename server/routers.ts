@@ -4406,7 +4406,8 @@ export const appRouter = router({
       async ({ ctx }) => {
         const emp = (ctx as any).employee;
         requireTenantId(emp);
-        const businessIds = (await scopeBusinessIds(empScope(ctx), {})) ?? [];
+        // fail-closed: نطاق فاضي/غير محدد → [NO_BUSINESS] (صفر) مش الكل — متّسق مع todayShipments.
+        const businessIds = (await scopeBusinessIds(empScope(ctx), {})) ?? [NO_BUSINESS];
         return loadShippingRouteRows(businessIds);
       }
     ),
@@ -4418,8 +4419,11 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
+        // fail-closed: scopeBusinessIds بيطبّق denyWhenEmpty فموظف بلا نشاط (أو نطاق فاضي)
+        // بيرجّع [NO_BUSINESS] = صفر أوردرات — **مايتحوّلش أبدًا لكل الأوردرات**. الـ`?? [NO_BUSINESS]`
+        // بيغطّي حالة مالك المنصة (allowed=null) برضه بأمان.
         const businessIds =
-          (await sessionBusinessIds(ctx)) ?? [];
+          (await scopeBusinessIds(empScope(ctx), {})) ?? [NO_BUSINESS];
         return buildTodayShipments(businessIds, input.date);
       }),
 
