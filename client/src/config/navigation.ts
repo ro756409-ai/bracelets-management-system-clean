@@ -77,8 +77,10 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
     path: "/preparation",
     children: [
       { label: "التجهيز", path: "/preparation", icon: PackageCheck },
-      { label: "شحنات اليوم", path: "/today-shipments", icon: Truck },
-      { label: "جدول الشحن", path: "/shipping-schedule", icon: Clock },
+      // شحنات اليوم / جدول الشحن: نفس صلاحية endpoints القراءة (operations.* على السيرفر).
+      // الـroute بيعرضهم كتبويب داخل الداشبورد لجلسة المالك/المدير (OperationsRoute في App).
+      { label: "شحنات اليوم", path: "/today-shipments", icon: Truck, permission: "shipping_ops.view" },
+      { label: "جدول الشحن", path: "/shipping-schedule", icon: Clock, permission: "shipping_ops.view" },
     ],
   },
   {

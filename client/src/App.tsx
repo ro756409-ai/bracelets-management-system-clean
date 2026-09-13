@@ -27,6 +27,8 @@ import EmployeeDashboard from "./pages/EmployeeDashboard";
 import ManagerDashboard from "./pages/ManagerDashboard";
 import TodayShipments from "./pages/TodayShipments";
 import ShippingSchedule from "./pages/ShippingSchedule";
+import TodayShipmentsWorkspace from "./pages/operations/TodayShipmentsWorkspace";
+import ShippingScheduleWorkspace from "./pages/operations/ShippingScheduleWorkspace";
 import WebhookSettings from "./pages/WebhookSettings";
 import MergeLogs from "./pages/MergeLogs";
 import Returns from "./pages/Returns";
@@ -115,6 +117,20 @@ function BlockFinancialUser({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * شاشات الشحن (شحنات اليوم / جدول الشحن) ليها جمهورين على **نفس الـroute**:
+ *   • جلسة الداشبورد (المالك/المدير — `auth.me` فيه user): تبويب داخل Operations workspace
+ *     تحت DashboardLayout، بيقرا من `operations.*` (مش محتاج كوكي employee_token).
+ *   • غير كده (موظف الشحن من /employee-login): صفحة البوابة زي ما هي بالظبط.
+ * قبل كده التبويب كان بيفتح صفحة البوابة للمالك فتطرده لـ/employee-login.
+ */
+function OperationsRoute({ workspace, portal }: { workspace: React.ReactNode; portal: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (user) return <DashboardLayout>{workspace}</DashboardLayout>;
+  return <>{portal}</>;
+}
+
 function Router() {
   return (
     <Switch>
@@ -155,10 +171,10 @@ function Router() {
         <BlockFinancialUser><ManagerDashboard /></BlockFinancialUser>
       </Route>
       <Route path={"/today-shipments"}>
-        <BlockFinancialUser><TodayShipments /></BlockFinancialUser>
+        <BlockFinancialUser><OperationsRoute workspace={<TodayShipmentsWorkspace />} portal={<TodayShipments />} /></BlockFinancialUser>
       </Route>
       <Route path={"/shipping-schedule"}>
-        <BlockFinancialUser><ShippingSchedule /></BlockFinancialUser>
+        <BlockFinancialUser><OperationsRoute workspace={<ShippingScheduleWorkspace />} portal={<ShippingSchedule />} /></BlockFinancialUser>
       </Route>
       <Route path={"/webhook-settings"}>
         <ProtectedLayout><WebhookSettings /></ProtectedLayout>

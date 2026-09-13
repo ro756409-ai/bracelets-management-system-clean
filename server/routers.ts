@@ -561,12 +561,7 @@ async function requireScopedBusinessId(
   }
   return scoped;
 }
-import {
-  groupOrdersByAgent,
-  getTodaySchedule,
-  DAY_NAMES_AR,
-  type ShippingRouteRule,
-} from "./shippingSchedules";
+import { loadShippingRouteRows, buildTodayShipments } from "./shippingOperations.service";
 import {
   getAllEmployees,
   getActiveEmployees,
@@ -3795,6 +3790,46 @@ export const appRouter = router({
       }),
   }),
 
+  // ==================== OPERATIONS WORKSPACE (Matjarak V2) ====================
+  // شحنات اليوم + جدول الشحن داخل Operations workspace لجلسة الداشبورد (المالك/المدير).
+  // `employeePortal.*` بتقرا كوكي employee_token بس، فالمالك اللي داخل من /login كان
+  // بيترفض ويتحوّل لـ/employee-login. قراءة بس (read-only)، ونفس صلاحية شاشات الشحن.
+  // النطاق من scopeBusinessIds (مبدّل الأنشطة، متقيّد بأنشطة الجلسة)؛ ولو النطاق مش
+  // متحدد لأي سبب بنقفل على NO_BUSINESS — مصفوفة فاضية معناها «من غير فلتر» في getOrders.
+  operations: router({
+    todayShipments: permissionProcedure("shipping_ops.view")
+      .input(
+        z.object({
+          date: z
+            .string()
+            .regex(/^\d{4}-\d{2}-\d{2}$/)
+            .optional(), // YYYY-MM-DD
+          businessIds: z.array(z.number()).optional(),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = (await scopeBusinessIds(ctx, input)) ?? [
+          NO_BUSINESS,
+        ];
+        return buildTodayShipments(businessIds, input.date);
+      }),
+
+    shippingRoutes: permissionProcedure("shipping_ops.view")
+      .input(
+        z
+          .object({
+            businessIds: z.array(z.number()).optional(),
+          })
+          .optional()
+      )
+      .query(async ({ ctx, input }) => {
+        const businessIds = (await scopeBusinessIds(ctx, input)) ?? [
+          NO_BUSINESS,
+        ];
+        return loadShippingRouteRows(businessIds);
+      }),
+  }),
+
   // ==================== EMPLOYEE PORTAL ====================
   employeePortal: router({
     me: employeePortalProcedure.query(async ({ ctx }) => {
@@ -4365,28 +4400,14 @@ export const appRouter = router({
     // The shipping-schedule page read these through accountingV2.configurationListForBusinesses,
     // which is authenticatedProcedure — any employee at all. Same data, behind the same
     // permission the rest of the shipping screens use.
+    // المنطق نفسه في shippingOperations.service.ts — مشترك مع `operations.*` (Operations
+    // workspace بتاع المالك). البوابة هنا بتحسب النطاق زي ما كانت بالظبط.
     shippingRoutes: requireEmployeePermission("shipping_ops.view").query(
       async ({ ctx }) => {
         const emp = (ctx as any).employee;
-        const tenantId = requireTenantId(emp);
+        requireTenantId(emp);
         const businessIds = (await scopeBusinessIds(empScope(ctx), {})) ?? [];
-        const db = await getDb();
-        if (!db || businessIds.length === 0) return [];
-        const rows = await db
-          .select()
-          .from(businessConfigurationValues)
-          .where(
-            and(
-              inArray(businessConfigurationValues.businessId, businessIds),
-              eq(businessConfigurationValues.namespace, "shipping_schedule_route"),
-              eq(businessConfigurationValues.isActive, true)
-            )
-          )
-          .orderBy(
-            businessConfigurationValues.sortOrder,
-            businessConfigurationValues.displayName
-          );
-        return rows;
+        return loadShippingRouteRows(businessIds);
       }
     ),
 
@@ -4397,118 +4418,9 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        // Determine target date
-        const targetDate = input.date
-          ? new Date(input.date + "T00:00:00")
-          : new Date();
-        const dayOfWeek = targetDate.getDay(); // 0=Sun, 6=Sat
-
-        // Get start/end of that day for filtering
-        const dayStart = new Date(targetDate);
-        dayStart.setHours(0, 0, 0, 0);
-        const dayEnd = new Date(targetDate);
-        dayEnd.setHours(23, 59, 59, 999);
-
-        // Fetch confirmed orders (no date filter — we want all confirmed orders ready for shipping)
         const businessIds =
           (await sessionBusinessIds(ctx)) ?? [];
-        const result = await getOrders({
-          status: "confirmed",
-          limit: 10000,
-          businessIds,
-        });
-        const allConfirmed = result.orders;
-
-        const db = await getDb();
-        const routeRows =
-          db && businessIds.length
-            ? await db
-                .select()
-                .from(businessConfigurationValues)
-                .where(
-                  and(
-                    inArray(
-                      businessConfigurationValues.businessId,
-                      businessIds
-                    ),
-                    eq(
-                      businessConfigurationValues.namespace,
-                      "shipping_schedule_route"
-                    ),
-                    eq(businessConfigurationValues.isActive, true)
-                  )
-                )
-            : [];
-        const routes = routeRows.flatMap(row => {
-          try {
-            const value = JSON.parse(
-              row.valueJson ?? "{}"
-            ) as ShippingRouteRule;
-            return value.providerName &&
-              Number.isInteger(value.dayOfWeek) &&
-              Array.isArray(value.governorates)
-              ? [value]
-              : [];
-          } catch {
-            return [];
-          }
-        });
-
-        // Group by shipping agent based on governorate + day schedule
-        const grouped = groupOrdersByAgent(allConfirmed, dayOfWeek, routes);
-
-        // Get today's schedule
-        const schedule = getTodaySchedule(dayOfWeek, routes);
-
-        // Build response with agent info
-        const agents = Object.entries(grouped).map(
-          ([agentName, agentOrders]) => {
-            const totalAmount = agentOrders.reduce(
-              (sum, o) => sum + Number(o.totalAmount || 0),
-              0
-            );
-            return {
-              agentName,
-              governorates: schedule[agentName] || [],
-              orders: agentOrders.map(o => ({
-                id: o.id,
-                orderNumber: o.orderNumber,
-                customerName: o.customerName,
-                customerPhone: o.customerPhone,
-                customerAddress: o.customerAddress,
-                governorate: o.governorate,
-                productName: o.productName,
-                quantity: o.quantity,
-                totalAmount: o.totalAmount,
-                notes: o.notes,
-                confirmedAt: o.confirmedAt,
-              })),
-              orderCount: agentOrders.length,
-              totalAmount,
-            };
-          }
-        );
-
-        // Also include agents from schedule that have 0 orders
-        for (const agentName of Object.keys(schedule)) {
-          if (!grouped[agentName]) {
-            agents.push({
-              agentName,
-              governorates: schedule[agentName],
-              orders: [],
-              orderCount: 0,
-              totalAmount: 0,
-            });
-          }
-        }
-
-        return {
-          date: targetDate.toISOString().split("T")[0],
-          dayName: DAY_NAMES_AR[dayOfWeek] || "",
-          dayOfWeek,
-          agents,
-          totalOrders: allConfirmed.length,
-        };
+        return buildTodayShipments(businessIds, input.date);
       }),
 
     // مسح QR للموظف - تجهيز الأوردر

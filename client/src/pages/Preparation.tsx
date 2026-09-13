@@ -1,29 +1,32 @@
 import { useState, useMemo, useCallback } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Printer, FileSpreadsheet, CheckSquare, Square, RefreshCw,
-  Search, Package, MapPin, Phone, User, AlertCircle, Clock,
-  ChevronLeft, ChevronRight, Filter, X
+  Package, MapPin, Phone, User, X
 } from "lucide-react";
 import { toast } from "sonner";
-import { useAuth } from "@/_core/hooks/useAuth";
 import { useBusinessContext } from "@/contexts/BusinessContext";
-
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  confirmed: { label: "مؤكد", color: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/20" },
-  printed: { label: "مطبوع", color: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/20" },
-};
+import {
+  WorkspaceShell, StatusFilterChips, DataToolbar, StatusBadge, ORDER_STATUS,
+  EmptyState, LoadingSkeleton, Pagination, type StatusChipItem,
+} from "@/components/workspace";
+import type { FilterChip } from "@/components/shared";
 
 const ITEMS_PER_PAGE = 50;
 
+/**
+ * Operations workspace — التجهيز والطباعة (Stage D).
+ *
+ * مبني على toolkit المرحلة A (عرض بس): رأس موحّد + شرائح حالة (مصدر واحد للحالة والعدّادات)
+ * + DataToolbar (بحث + محافظة + chips + reset). تبويبات التشغيل (التجهيز/شحنات اليوم/جدول
+ * الشحن) بيعرضها الشل من NavConfig — مفيش شريط تبويبات تاني جوه الصفحة.
+ *
+ * التحديد والطباعة وشيت الشحن وسجل الطباعة زي ما هم. النطاق currentBusinessIds (قراءة).
+ */
 export default function Preparation() {
-  const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
   const { currentBusinessIds } = useBusinessContext();
 
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -47,9 +50,17 @@ export default function Preparation() {
     { refetchInterval: 30000 }
   );
 
+  // عدّادات الحالات من السيرفر (نفس مصدر Orders workspace، متقيّدة بالنشاط) — كانت
+  // بتتعدّ من صفحة الـ50 أوردر الحالية فبتبان أقل من الحقيقة.
+  const { data: statusCounts, refetch: refetchCounts } = trpc.orders.statusCounts.useQuery(
+    { businessIds: currentBusinessIds },
+    { refetchInterval: 30000 }
+  );
+  const confirmedTotal = statusCounts?.byStatus?.confirmed ?? 0;
+  const printedTotal = statusCounts?.byStatus?.printed ?? 0;
+
   const orders = data?.orders ?? [];
   const totalCount = data?.total ?? 0;
-  const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
 
   // المحافظات المتاحة
   const governorates = useMemo(() => {
@@ -57,9 +68,28 @@ export default function Preparation() {
     return Array.from(govs).sort() as string[];
   }, [orders]);
 
-  // إحصائيات
-  const confirmedCount = orders.filter((o: any) => o.status === "confirmed").length;
-  const printedCount = orders.filter((o: any) => o.status === "printed").length;
+  // المؤكدة في الصفحة الحالية — ده اللي «تحديد كل المؤكدة» بيحدده فعلًا.
+  const pageConfirmedCount = orders.filter((o: any) => o.status === "confirmed").length;
+
+  const statusChips: StatusChipItem[] = [
+    { key: "confirmed", label: ORDER_STATUS.confirmed.label, count: confirmedTotal, tone: ORDER_STATUS.confirmed.tone },
+    { key: "printed", label: ORDER_STATUS.printed.label, count: printedTotal, tone: ORDER_STATUS.printed.tone },
+  ];
+
+  const filterChips: FilterChip[] = [
+    ...(search ? [{ key: "search", label: "بحث", value: search }] : []),
+    ...(filterGovernorate !== "all" ? [{ key: "governorate", label: "المحافظة", value: filterGovernorate }] : []),
+  ];
+
+  const clearFilterChip = (key: string) => {
+    if (key === "search") setSearch("");
+    if (key === "governorate") setFilterGovernorate("all");
+    setPage(1);
+  };
+
+  const resetFilters = () => {
+    setSearch(""); setFilterStatus("all"); setFilterGovernorate("all"); setPage(1);
+  };
 
   // تحديد الكل في الصفحة الحالية
   const currentPageIds = orders.map((o: any) => o.id);
@@ -116,6 +146,8 @@ export default function Preparation() {
     toast.success(`جاري طباعة ${selectedIds.length} أوردر...`);
     setTimeout(() => {
       utils.orders.list.invalidate();
+      // الطباعة بتحوّل المؤكد لمطبوع — العدّادات لازم تتحدّث معاها.
+      utils.orders.statusCounts.invalidate();
       setSelectedIds([]);
     }, 2500);
   };
@@ -148,98 +180,58 @@ export default function Preparation() {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b bg-background">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
-            <Package className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold">التجهيز والطباعة</h1>
-            <p className="text-xs text-muted-foreground">الأوردرات المؤكدة الجاهزة للشحن</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5">
-            <RefreshCw className="w-3.5 h-3.5" />
-            تحديث
-          </Button>
-        </div>
-      </div>
+    <WorkspaceShell
+      title="التجهيز والطباعة"
+      description="الأوردرات المؤكدة الجاهزة للشحن — حدّد، اطبع البوالص، وصدّر شيت الشحن."
+      icon={<Package className="h-5 w-5" />}
+      actions={
+        <Button variant="outline" size="sm" onClick={() => { refetch(); refetchCounts(); }} className="gap-1.5">
+          <RefreshCw className="w-3.5 h-3.5" />
+          تحديث
+        </Button>
+      }
+    >
+      {/* الحالة — مصدر واحد: الفلترة + العدّادات (بدل شريط الإحصائيات + Select الحالة). */}
+      <StatusFilterChips
+        chips={statusChips}
+        value={filterStatus === "all" ? null : filterStatus}
+        onChange={(key) => { setFilterStatus((key ?? "all") as typeof filterStatus); setPage(1); }}
+        totalCount={statusCounts ? confirmedTotal + printedTotal : undefined}
+      />
 
-      {/* Stats Bar */}
-      <div className="grid grid-cols-3 gap-3 px-6 py-3 border-b bg-muted/30">
-        <div className="flex items-center gap-2 bg-background rounded-lg px-3 py-2 border">
-          <div className="w-2 h-2 rounded-full bg-[var(--success)]" />
-          <span className="text-sm text-muted-foreground">مؤكد</span>
-          <span className="text-sm font-bold text-[var(--success)] mr-auto">{confirmedCount}</span>
-        </div>
-        <div className="flex items-center gap-2 bg-background rounded-lg px-3 py-2 border">
-          <div className="w-2 h-2 rounded-full bg-[var(--info)]" />
-          <span className="text-sm text-muted-foreground">مطبوع</span>
-          <span className="text-sm font-bold text-[var(--info)] mr-auto">{printedCount}</span>
-        </div>
-        <div className="flex items-center gap-2 bg-background rounded-lg px-3 py-2 border">
-          <div className="w-2 h-2 rounded-full bg-primary" />
-          <span className="text-sm text-muted-foreground">الإجمالي</span>
-          <span className="text-sm font-bold mr-auto">{totalCount}</span>
-        </div>
-      </div>
+      <DataToolbar
+        search={search}
+        onSearch={(value) => { setSearch(value); setPage(1); }}
+        searchPlaceholder="بحث باسم العميل أو التليفون..."
+        filters={
+          <Select value={filterGovernorate} onValueChange={(v) => { setFilterGovernorate(v); setPage(1); }}>
+            <SelectTrigger className="w-40 h-9 text-sm">
+              <SelectValue placeholder="المحافظة" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">كل المحافظات</SelectItem>
+              {governorates.map(g => (
+                <SelectItem key={g} value={g}>{g}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+        chips={filterChips}
+        onClearChip={clearFilterChip}
+        onReset={resetFilters}
+      />
 
-      {/* Filters */}
-      <div className="flex items-center gap-3 px-6 py-3 border-b bg-background flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            placeholder="بحث باسم العميل أو التليفون..."
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }}
-            className="pr-9 h-9 text-sm"
-          />
-        </div>
-        <Select value={filterStatus} onValueChange={(v: any) => { setFilterStatus(v); setPage(1); }}>
-          <SelectTrigger className="w-36 h-9 text-sm">
-            <SelectValue placeholder="الحالة" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">كل الحالات</SelectItem>
-            <SelectItem value="confirmed">مؤكد فقط</SelectItem>
-            <SelectItem value="printed">مطبوع فقط</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={filterGovernorate} onValueChange={(v) => { setFilterGovernorate(v); setPage(1); }}>
-          <SelectTrigger className="w-40 h-9 text-sm">
-            <SelectValue placeholder="المحافظة" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">كل المحافظات</SelectItem>
-            {governorates.map(g => (
-              <SelectItem key={g} value={g}>{g}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {(search || filterStatus !== "all" || filterGovernorate !== "all") && (
-          <Button variant="ghost" size="sm" className="h-9 gap-1 text-muted-foreground" onClick={() => {
-            setSearch(""); setFilterStatus("all"); setFilterGovernorate("all"); setPage(1);
-          }}>
-            <X className="w-3.5 h-3.5" />
-            مسح الفلاتر
-          </Button>
-        )}
-      </div>
-
-      {/* Quick Actions Bar */}
-      <div className="flex items-center gap-2 px-6 py-2 border-b bg-muted/20 flex-wrap">
-        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={toggleSelectAll}>
+      {/* التحديد السريع */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="ghost" size="sm" className="h-8 text-xs gap-1" onClick={toggleSelectAll}>
           {allCurrentSelected
             ? <><CheckSquare className="w-3.5 h-3.5" /> إلغاء تحديد الصفحة</>
             : <><Square className="w-3.5 h-3.5" /> تحديد الصفحة</>
           }
         </Button>
-        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-[var(--success)]" onClick={selectAllConfirmed}>
+        <Button variant="ghost" size="sm" className="h-8 text-xs gap-1 text-[var(--success)]" onClick={selectAllConfirmed}>
           <CheckSquare className="w-3.5 h-3.5" />
-          تحديد كل المؤكدة ({confirmedCount})
+          تحديد كل المؤكدة ({pageConfirmedCount})
         </Button>
         {selectedIds.length > 0 && (
           <>
@@ -247,7 +239,7 @@ export default function Preparation() {
             <span className="text-xs font-medium text-primary">
               {selectedIds.length} محدد
             </span>
-            <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={clearSelection}>
+            <Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground" onClick={clearSelection}>
               <X className="w-3 h-3 ml-1" />
               إلغاء
             </Button>
@@ -256,19 +248,16 @@ export default function Preparation() {
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto">
-        {isLoading ? (
-          <div className="flex items-center justify-center h-40 text-muted-foreground">
-            <RefreshCw className="w-5 h-5 animate-spin ml-2" />
-            جاري التحميل...
-          </div>
-        ) : orders.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-40 gap-2 text-muted-foreground">
-            <Package className="w-10 h-10 opacity-30" />
-            <p className="text-sm">لا توجد أوردرات مؤكدة حالياً</p>
-            <p className="text-xs">الأوردرات المؤكدة ستظهر هنا تلقائياً</p>
-          </div>
-        ) : (
+      {isLoading ? (
+        <LoadingSkeleton variant="table" rows={8} />
+      ) : orders.length === 0 ? (
+        <EmptyState
+          icon={<Package className="h-6 w-6" />}
+          title="لا توجد أوردرات مؤكدة حالياً"
+          description="الأوردرات المؤكدة ستظهر هنا تلقائياً"
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-[var(--radius-brand-md)] border border-border bg-card">
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm z-10">
               <tr className="border-b">
@@ -294,9 +283,8 @@ export default function Preparation() {
               </tr>
             </thead>
             <tbody>
-              {orders.map((order: any, idx: number) => {
+              {orders.map((order: any) => {
                 const isSelected = selectedIds.includes(order.id);
-                const statusInfo = STATUS_LABELS[order.status] ?? { label: order.status, color: "bg-muted text-muted-foreground" };
                 const confirmedAt = order.confirmedAt ? new Date(order.confirmedAt) : null;
                 const isNew = order.status === "confirmed";
 
@@ -351,9 +339,7 @@ export default function Preparation() {
                       {order.totalAmount ? `${Number(order.totalAmount).toLocaleString()} ج` : "—"}
                     </td>
                     <td className="p-3 text-center">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusInfo.color}`}>
-                        {statusInfo.label}
-                      </span>
+                      <StatusBadge status={order.status} size="sm" />
                     </td>
                     <td className="p-3 text-center">
                       {confirmedAt ? (
@@ -372,24 +358,12 @@ export default function Preparation() {
               })}
             </tbody>
           </table>
-        )}
-      </div>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between px-6 py-3 border-t bg-background">
-          <span className="text-sm text-muted-foreground">
-            صفحة {page} من {totalPages} — إجمالي {totalCount} أوردر
-          </span>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-            <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-          </div>
         </div>
+      )}
+
+      {/* الترقيم — بيوضّح كمان إجمالي النتائج بعد الفلترة. */}
+      {totalCount > 0 && (
+        <Pagination page={page} pageSize={ITEMS_PER_PAGE} total={totalCount} onPageChange={setPage} />
       )}
 
       {/* Floating Action Bar */}
@@ -432,6 +406,6 @@ export default function Preparation() {
           </div>
         </div>
       )}
-    </div>
+    </WorkspaceShell>
   );
 }
