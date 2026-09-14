@@ -18,10 +18,10 @@
 | `/printed-orders` | MERGE | تبويب |
 | `/scan-orders` | KEEP | إجراء تشغيلي (QR) |
 
-## التشغيل (Operations)
-| `/preparation` | REDESIGN | قلب Operations |
-| `/today-shipments` | MERGE | تبويب |
-| `/shipping-schedule` | MERGE | تبويب |
+## التشغيل (Operations) — ✅ Stage D
+| `/preparation` | REDESIGN | قلب Operations (workspace) |
+| `/today-shipments` | MERGE | تبويب (shipping_ops.view). نفس الـroute: جلسة الداشبورد → داخل الشل (`operations.todayShipments`)، موظف الشحن → البوابة كما هي |
+| `/shipping-schedule` | MERGE | تبويب (shipping_ops.view). نفس النمط (`operations.shippingRoutes`) |
 
 ## المخزون (Inventory)
 | `/inventory` | REDESIGN | قلب Inventory |

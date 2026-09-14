@@ -1,13 +1,16 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import {
   Upload, FileSpreadsheet, CheckCircle, XCircle, AlertTriangle,
-  ChevronDown, ChevronUp, X
+  ChevronDown, ChevronUp, X, Store
 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 
@@ -49,9 +52,34 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [step, setStep] = useState<"upload" | "preview" | "done">("upload");
-  const { currentBusinessIds, currentGroup, businesses } = useBusinessContext();
+  // الاستيراد **عملية كتابة** — لازم نشاط واحد صريح، مش «كل الأنشطة». المصدر المعتمد
+  // `businesses` (activeList: أنشطة نشطة مقيّدة بالـtenant/الصلاحيات على السيرفر). النطاق
+  // العام (currentBusinessIds) بيُستخدم للـpreselect فقط — مش كوجهة كتابة.
+  const { currentBusinessIds, businesses } = useBusinessContext();
+  const activeBusinesses = businesses;
 
-  const businessLabel = currentGroup?.name || "كل الأقسام";
+  // النشاط اللي هتتسجّل تحته الأوردرات — null = لسه لازم يتحدد (زر الاستيراد يفضل معطّل).
+  const [selectedBusinessId, setSelectedBusinessId] = useState<number | null>(null);
+  // اتلمس بإيد المستخدم؟ عشان تغيير الـswitcher وهو مفتوح مايدوسش على اختيار صريح.
+  const userPickedRef = useRef(false);
+
+  useEffect(() => {
+    // إعادة الضبط عند الإغلاق — النافذة الجاية تبدأ نظيفة.
+    if (!open) { userPickedRef.current = false; return; }
+    setSelectedBusinessId(prev => {
+      // اختيار صريح صالح → احترمه (بس اتأكد إنه لسه ضمن المتاح، وإلا امسحه).
+      if (userPickedRef.current) {
+        return prev != null && activeBusinesses.some(b => b.id === prev) ? prev : null;
+      }
+      // preselect تلقائي: نشاط الـswitcher الواحد، أو النشاط المتاح الوحيد، غير كده إجبار الاختيار.
+      if (currentBusinessIds && currentBusinessIds.length === 1) return currentBusinessIds[0];
+      if (activeBusinesses.length === 1) return activeBusinesses[0].id;
+      return null;
+    });
+  }, [open, currentBusinessIds, activeBusinesses]);
+
+  const selectedBusinessName =
+    activeBusinesses.find(b => b.id === selectedBusinessId)?.name ?? null;
 
   const reset = () => {
     setFile(null);
@@ -101,13 +129,17 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
 
   const handleImport = async () => {
     if (!file) return;
+    // كتابة بلا نشاط ممنوعة — نفس قاعدة الباك (fail-closed). الزر معطّل أصلًا لكن حارس مزدوج.
+    if (selectedBusinessId == null) {
+      toast.error("لازم تحدد النشاط اللي هتستورد فيه");
+      return;
+    }
     setLoading(true);
     try {
       const formData = new FormData();
       formData.append("file", file);
-      if (currentBusinessIds && currentBusinessIds.length === 1) {
-        formData.append("businessId", String(currentBusinessIds[0]));
-      }
+      // businessId صريح **دائمًا** — مش مشروط بعدد الأنشطة في الـswitcher.
+      formData.append("businessId", String(selectedBusinessId));
       const res = await fetch("/api/import/execute", {
         method: "POST",
         body: formData,
@@ -139,17 +171,19 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
         {/* Step: Upload */}
         {step === "upload" && (
           <div className="space-y-4">
-            {/* Business Info */}
+            {/* Business Info — الاختيار الفعلي للنشاط بيتم في خطوة المعاينة (Select إلزامي). */}
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-xl">
                 🏢
               </div>
               <div>
                 <p className="text-sm font-bold text-amber-800">
-                  الأوردرات ستُسجَّل تحت: <Badge variant="outline" className="text-amber-700 border-amber-300">{businessLabel}</Badge>
+                  {selectedBusinessName
+                    ? <>الأوردرات ستُسجَّل تحت: <Badge variant="outline" className="text-amber-700 border-amber-300">{selectedBusinessName}</Badge></>
+                    : "هتحدد النشاط اللي هتستورد فيه بعد رفع الملف"}
                 </p>
                 <p className="text-xs text-amber-600 mt-0.5">
-                  {"لتغيير القسم، غيّر الفلتر من أعلى الصفحة"}
+                  {"الاستيراد بيتسجّل تحت نشاط واحد محدد — مش «كل الأنشطة»."}
                 </p>
               </div>
             </div>
@@ -216,13 +250,30 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
         {/* Step: Preview */}
         {step === "preview" && previewData && (
           <div className="space-y-4">
-            {/* Business Badge */}
-            <div className="flex items-center gap-2 rounded-lg px-4 py-2 border-2 border-amber-400 bg-amber-50 text-amber-800">
-              <span className="text-lg">🏢</span>
-              <div>
-                <p className="text-sm font-bold">{businessLabel}</p>
-                <p className="text-xs opacity-70">الأوردرات ستُسجَّل تحت هذا النشاط</p>
-              </div>
+            {/* اختيار النشاط — إلزامي (عملية كتابة). مفيش خيار «كل الأنشطة» هنا إطلاقًا. */}
+            <div className="rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-3">
+              <label className="mb-1.5 flex items-center gap-2 text-sm font-bold text-amber-800">
+                <Store className="h-4 w-4" />
+                النشاط الذي سيتم استيراد الأوردرات إليه
+              </label>
+              <Select
+                value={selectedBusinessId != null ? String(selectedBusinessId) : ""}
+                onValueChange={(v) => { userPickedRef.current = true; setSelectedBusinessId(Number(v)); }}
+              >
+                <SelectTrigger className="w-full bg-card">
+                  <SelectValue placeholder="اختر النشاط أولًا…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {activeBusinesses.map(b => (
+                    <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedBusinessId == null && (
+                <p className="mt-1.5 text-xs font-medium text-amber-700">
+                  لازم تحدد نشاطًا واحدًا — الاستيراد لا يُسجَّل تحت «كل الأنشطة».
+                </p>
+              )}
             </div>
 
             {/* Summary */}
@@ -322,7 +373,7 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
                 {result.imported > 0 ? "تم الاستيراد بنجاح!" : "لم يتم استيراد أي أوردر"}
               </h3>
               <p className="text-sm text-muted-foreground">
-                تم الاستيراد تحت: <Badge variant="outline">{businessLabel}</Badge>
+                تم الاستيراد تحت: <Badge variant="outline">{selectedBusinessName ?? "—"}</Badge>
               </p>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -351,7 +402,11 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
 
         <DialogFooter className="gap-2">
           {step === "preview" && (
-            <Button onClick={handleImport} disabled={loading || !previewData?.length}>
+            <Button
+              onClick={handleImport}
+              // معطّل حتى يتحدد النشاط — الكتابة تحت «كل الأنشطة» ممنوعة.
+              disabled={loading || !previewData?.length || selectedBusinessId == null}
+            >
               {loading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin ml-2" />
@@ -360,7 +415,7 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
               ) : (
                 <>
                   <Upload className="h-4 w-4 ml-2" />
-                  استيراد {previewData?.length} أوردر
+                  {selectedBusinessId == null ? "اختر النشاط أولًا" : `استيراد ${previewData?.length} أوردر`}
                 </>
               )}
             </Button>

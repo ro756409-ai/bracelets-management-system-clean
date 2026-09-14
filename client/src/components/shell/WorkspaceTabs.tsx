@@ -9,14 +9,19 @@ import type { NavLink } from "@/config/navigation";
  * فمفيش تعريف تنقّل تاني. بيظهر على الديسكتوب بس — الموبايل عنده bottom nav + سايدبار.
  *
  * بيظهر بس لما الوجهة فيها أكتر من تبويب مرئي (وجهة ببند واحد مالهاش داعي لشريط تبويبات).
+ * responsive: على الموبايل بيلتف أفقيًا (scroll) بدل ما يختفي — عشان تبويبات الـWorkspace
+ * تفضل متاحة على كل المقاسات.
  */
 export function WorkspaceTabs({ tabs }: { tabs: NavLink[] }) {
   const [location, setLocation] = useLocation();
   if (tabs.length < 2) return null;
 
   return (
-    <div className="hidden border-b border-border bg-background md:block" dir="rtl">
-      <nav className="flex items-stretch gap-1 overflow-x-auto px-4" aria-label="تبويبات القسم">
+    <div className="border-b border-border bg-background" dir="rtl">
+      <nav
+        className="flex items-stretch gap-1 overflow-x-auto px-1 [scrollbar-width:none] sm:px-4 [&::-webkit-scrollbar]:hidden"
+        aria-label="تبويبات القسم"
+      >
         {tabs.map(tab => {
           const active = location === tab.path || location.startsWith(tab.path + "/");
           return (

@@ -44,6 +44,11 @@ import {
   Eye,
 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermission";
+import { PageHeader } from "@/components/shared";
+import { WorkspaceTabs, StatusFilterChips, DataToolbar } from "@/components/workspace";
+import { PRIMARY_DESTINATIONS, visibleChildren } from "@/config/navigation";
 import {
   getStockStatus,
   computeVariantTotals,
@@ -79,7 +84,16 @@ function variantLabel(v: any): string {
 
 export default function Inventory() {
   const utils = trpc.useUtils();
-  const { currentBusinessIds, currentGroup } = useBusinessContext();
+  const { currentBusinessIds } = useBusinessContext();
+  const { user } = useAuth();
+  const { permissions } = usePermissions();
+  const isAdmin = user?.role === "admin";
+  // تبويبات Workspace المخزون — من نفس مصدر التنقّل (NavConfig)، مفلترة بصلاحيات الجلسة.
+  // بتفتح الصفحات الموجودة (استلام/جرد/مرتجعات الورشة) — الـroutes القديمة كما هي.
+  const inventoryTabs = useMemo(() => {
+    const dest = PRIMARY_DESTINATIONS.find(d => d.key === "inventory");
+    return dest ? visibleChildren(dest, isAdmin, permissions) : [];
+  }, [isAdmin, permissions]);
   const inventoryInReasons = useOperationalOptions(
     "inventory_in_reason"
   ).options;
@@ -763,56 +777,51 @@ export default function Inventory() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">المخزن والجرد</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            {currentGroup
-              ? `جرد قسم: ${currentGroup.name}`
-              : "إدارة المخزون والجرد لكل الأنشطة"}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant={activeTab === "products" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setActiveTab("products")}
-          >
-            <Package className="h-4 w-4 ml-1" />
-            الأصناف
-          </Button>
-          <Button
-            variant={activeTab === "daily" ? "default" : "outline"}
-            size="sm"
-            onClick={() => {
-              setActiveTab("daily");
-              setHistoryProductId(null);
-            }}
-          >
-            <ClipboardList className="h-4 w-4 ml-1" />
-            الجرد اليومي
-          </Button>
-          <Button
-            variant={activeTab === "accounting" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setActiveTab("accounting")}
-          >
-            <PackageCheck className="h-4 w-4 ml-1" />
-            التكلفة والاستلام
-          </Button>
-          {activeTab === "products" && (
-            <Button
-              size="sm"
-              className="bg-primary hover:bg-primary/90"
-              onClick={openCreateProduct}
-            >
+      {/* V2 Header موحّد + تبويبات Workspace المخزون (routes). التبويبات الداخلية (أصناف/
+          حركات/تكلفة) بقت إجراءات ثانوية هادية. «الجرد اليومي» اتسمّى «الحركات» عشان
+          مايتلخبطش مع «الجرد» (stocktake) الحقيقي في تبويبات الـWorkspace. */}
+      <PageHeader
+        title="المخزن والجرد"
+        description="إدارة المخزون والحركات والاستلام والجرد — لكل نشاط."
+        icon={<Package className="h-5 w-5" />}
+        primaryAction={
+          activeTab === "products" ? (
+            <Button onClick={openCreateProduct}>
               <Plus className="h-4 w-4 ml-1" />
               إضافة منتج
             </Button>
-          )}
-        </div>
-      </div>
+          ) : undefined
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              variant={activeTab === "products" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setActiveTab("products")}
+            >
+              <Package className="h-4 w-4 ml-1" />
+              الأصناف
+            </Button>
+            <Button
+              variant={activeTab === "daily" ? "default" : "outline"}
+              size="sm"
+              onClick={() => { setActiveTab("daily"); setHistoryProductId(null); }}
+            >
+              <ClipboardList className="h-4 w-4 ml-1" />
+              الحركات
+            </Button>
+            <Button
+              variant={activeTab === "accounting" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setActiveTab("accounting")}
+            >
+              <PackageCheck className="h-4 w-4 ml-1" />
+              التكلفة والاستلام
+            </Button>
+          </div>
+        }
+      />
+      <WorkspaceTabs tabs={inventoryTabs} />
 
       {/* Stats Row */}
       {activeTab !== "accounting" && (
@@ -884,86 +893,75 @@ export default function Inventory() {
       {/* ===== TAB: PRODUCTS (with nested variants) ===== */}
       {activeTab === "products" && (
         <>
-          {/* Page controls: search / status filter / archived toggle / sort */}
-          <Card>
-            <CardContent className="p-3 flex flex-wrap items-center gap-2">
-              <div className="relative flex-1 min-w-[200px]">
-                <Search className="h-4 w-4 text-muted-foreground absolute right-3 top-1/2 -translate-y-1/2" />
-                <Input
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="بحث بالمنتج، النوع، أو SKU..."
-                  className="pr-9 h-9"
-                />
-              </div>
-              <Select
-                value={stockStatusFilter}
-                onValueChange={v =>
-                  setStockStatusFilter(v as typeof stockStatusFilter)
-                }
-              >
-                <SelectTrigger className="w-40 h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل الحالات</SelectItem>
-                  <SelectItem value="available">متوفر</SelectItem>
-                  <SelectItem value="low">منخفض</SelectItem>
-                  <SelectItem value="out">نفد المخزون</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select
-                value={sortBy}
-                onValueChange={v => setSortBy(v as typeof sortBy)}
-              >
-                <SelectTrigger className="w-36 h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="name">ترتيب بالاسم</SelectItem>
-                  <SelectItem value="stock">ترتيب بالمخزون</SelectItem>
-                  <SelectItem value="price">ترتيب بالسعر</SelectItem>
-                  <SelectItem value="updated">ترتيب بآخر تحديث</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-9 w-9 p-0"
-                onClick={() => setSortDir(d => (d === "asc" ? "desc" : "asc"))}
-                title={sortDir === "asc" ? "تصاعدي" : "تنازلي"}
-              >
-                <ArrowUpDown className="h-4 w-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant={showArchived ? "default" : "outline"}
-                className="h-9"
-                onClick={() => setShowArchived(s => !s)}
-              >
-                {showArchived ? (
-                  <Eye className="h-3.5 w-3.5 ml-1" />
-                ) : (
-                  <EyeOff className="h-3.5 w-3.5 ml-1" />
-                )}
-                {showArchived ? "إخفاء المؤرشف" : "إظهار المؤرشف"}
-              </Button>
-              {hasActiveFilters && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-9 text-xs text-muted-foreground"
-                  onClick={() => {
-                    setSearch("");
-                    setStockStatusFilter("all");
-                    setShowArchived(false);
-                  }}
-                >
-                  مسح الفلاتر
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+          {/* فلترة حالة المخزون — المصدر الوحيد (single source) عبر StatusFilterChips. */}
+          <StatusFilterChips
+            chips={[
+              { key: "available", label: "متوفر", tone: "success" },
+              { key: "low", label: "منخفض", tone: "warning" },
+              { key: "out", label: "نفد المخزون", tone: "danger" },
+            ]}
+            value={stockStatusFilter === "all" ? null : stockStatusFilter}
+            onChange={(key) =>
+              setStockStatusFilter((key ?? "all") as typeof stockStatusFilter)
+            }
+          />
+
+          {/* شريط أدوات موحّد: بحث ظاهر + الترتيب/المؤرشفة في «فلاتر متقدمة» + chips + مسح.
+              نفس الـstate والمنطق — إعادة تنظيم UI فقط، ومفيش تكرار للحالة (فوق في الشرائح). */}
+          <DataToolbar
+            search={search}
+            onSearch={(v) => setSearch(v)}
+            searchPlaceholder="بحث بالمنتج، النوع، أو SKU..."
+            chips={[
+              ...(search ? [{ key: "search", label: "بحث", value: search }] : []),
+              ...(showArchived ? [{ key: "archived", label: "المؤرشفة", value: "ظاهرة" }] : []),
+            ]}
+            onClearChip={(k) => {
+              if (k === "search") setSearch("");
+              if (k === "archived") setShowArchived(false);
+            }}
+            onReset={
+              hasActiveFilters
+                ? () => { setSearch(""); setStockStatusFilter("all"); setShowArchived(false); }
+                : undefined
+            }
+            advancedActiveCount={showArchived ? 1 : 0}
+            advancedFilters={
+              <>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-foreground">الترتيب</label>
+                  <div className="flex gap-2">
+                    <Select value={sortBy} onValueChange={v => setSortBy(v as typeof sortBy)}>
+                      <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="name">ترتيب بالاسم</SelectItem>
+                        <SelectItem value="stock">ترتيب بالمخزون</SelectItem>
+                        <SelectItem value="price">ترتيب بالسعر</SelectItem>
+                        <SelectItem value="updated">ترتيب بآخر تحديث</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      size="sm" variant="outline" className="h-9 w-9 shrink-0 p-0"
+                      onClick={() => setSortDir(d => (d === "asc" ? "desc" : "asc"))}
+                      title={sortDir === "asc" ? "تصاعدي" : "تنازلي"}
+                    >
+                      <ArrowUpDown className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-foreground">المؤرشفة</label>
+                  <Button
+                    size="sm" variant={showArchived ? "default" : "outline"} className="h-9 w-full"
+                    onClick={() => setShowArchived(s => !s)}
+                  >
+                    {showArchived ? <Eye className="h-3.5 w-3.5 ml-1" /> : <EyeOff className="h-3.5 w-3.5 ml-1" />}
+                    {showArchived ? "إخفاء المؤرشف" : "إظهار المؤرشف"}
+                  </Button>
+                </div>
+              </>
+            }
+          />
 
           {isLoading || variantsLoading ? (
             <div className="space-y-4">
