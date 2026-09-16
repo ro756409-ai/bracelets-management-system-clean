@@ -24,13 +24,13 @@ async function allowedBusinessIdsForReq(req: Request): Promise<number[] | null> 
 }
 
 /**
- * يقصّ نطاقًا مطلوبًا (من فلتر العميل) على المسموح. النتيجة **دايمًا آمنة**:
- *   • مالك منصة (allowed=null): يحترم فلتر العميل أو الكل.
+ * يقصّ نطاقًا مطلوبًا (من فلتر العميل) على المسموح. النتيجة **دايمًا آمنة (fail-closed)**:
+ *   • تعذّر تحديد المسموح (allowed=null: DB مش متاحة / جلسة بلا tenant) → `[NO_BUSINESS]`
+ *     (صفر صفوف). مفيش «مالك منصة يشوف الكل» عبر REST — ده كيان منفصل بره المسار ده.
  *   • تينانت: تقاطع المطلوب مع المسموح؛ لو فاضي → `[NO_BUSINESS]` (صفر، مش الكل).
- * بترجع `undefined` فقط لمالك المنصة بلا فلتر (= الكل مشروع).
  */
-export function scopeToAllowed(allowed: number[] | null, requested?: number[]): number[] | undefined {
-  if (allowed == null) return requested;
+export function scopeToAllowed(allowed: number[] | null, requested?: number[]): number[] {
+  if (allowed == null) return [NO_BUSINESS];
   const set = new Set(allowed);
   const scoped = requested ? requested.filter(id => set.has(id)) : allowed;
   return scoped.length > 0 ? scoped : [NO_BUSINESS];
@@ -689,9 +689,9 @@ async function exportPrintLabels(req: Request, res: Response) {
     }
 
     // ── عزل التينانت: بنجيب الأوردرات المملوكة لأنشطة المستخدم فقط، مش كل الأوردرات ──
+    // fail-closed: تعذّر تحديد المسموح → [NO_BUSINESS] = صفر صفوف (مش الكل).
     const allowed = await allowedBusinessIdsForReq(req);
-    const scopedBusinessIds =
-      allowed == null ? undefined : allowed.length ? allowed : [NO_BUSINESS];
+    const scopedBusinessIds = scopeToAllowed(allowed);
     const result = await getOrders({ businessIds: scopedBusinessIds, limit: 100000 });
     const owned = result.orders.filter((o: any) => ids.includes(o.id));
 
@@ -712,8 +712,9 @@ async function exportPrintLabels(req: Request, res: Response) {
       (o as any).items = itemsMap.get(o.id) || [];
     }
 
-    // تعليم كـمطبوع — مقيّد بأنشطة المستخدم كمان (دفاع عميق على مستوى الـUPDATE).
-    await markOrdersAsPrinted(ownedIds, allowed);
+    // تعليم كـمطبوع — مقيّد بأنشطة المستخدم كمان (دفاع عميق على مستوى الـUPDATE). fail-closed:
+    // allowed=null → [NO_BUSINESS] فمفيش تحديث بلا نطاق.
+    await markOrdersAsPrinted(ownedIds, scopeToAllowed(allowed));
 
     const labelsHTML = (await Promise.all(orders.map((order: any) => buildLabelHTML(order)))).join("");
 

@@ -38,7 +38,7 @@
 import { Request, Response, Express } from "express";
 import { getDb, getSalesChannelByWebhookSecret, getOrderByExternalId, updateOrder } from "./db";
 import { webhookLogs } from "../drizzle/schema";
-import { desc } from "drizzle-orm";
+import { desc, inArray } from "drizzle-orm";
 import { upsertEasyOrder, fetchEasyOrderById, type EasyOrderPayload } from "./easyorder.service";
 import { recordIntegrationOrderEvent } from "./shippingV2.service";
 
@@ -79,6 +79,9 @@ const EXTERNAL_STATUS_MAP: Record<string, string> = {
 type WebhookLogInsert = {
   eventType: string;
   status: "success" | "duplicate" | "error" | "status_update";
+  /** نشاط القناة اللي وصلها الويبهوك — يُختم على السجل للعزل. غير معروف (فشل auth قبل تحديد
+   * القناة) → يُترك للـdefault فمايتنسبش لتينانت بعينه. */
+  businessId?: number;
   externalOrderId?: string;
   customerName?: string;
   customerPhone?: string;
@@ -97,6 +100,9 @@ async function addLog(entry: WebhookLogInsert): Promise<void> {
     await drizzle.insert(webhookLogs).values({
       eventType: entry.eventType,
       status: entry.status,
+      // نختم businessId لما يكون معروف (بعد تحديد القناة). لو مش معروف نسيبه للـdefault
+      // بدل ما ننسبه غلط لتينانت.
+      ...(entry.businessId != null ? { businessId: entry.businessId } : {}),
       externalOrderId: entry.externalOrderId ?? null,
       customerName: entry.customerName ?? null,
       customerPhone: entry.customerPhone ?? null,
@@ -112,11 +118,21 @@ async function addLog(entry: WebhookLogInsert): Promise<void> {
   }
 }
 
-export async function getWebhookLog(limit = 200) {
+/**
+ * سجلات الويبهوك مقيّدة بأنشطة التينانت (فيها PII). `businessIds` **إلزامية** ولازم تكون
+ * مقصوصة server-side؛ نطاق فاضي → لا صفوف (fail-closed).
+ */
+export async function getWebhookLog(businessIds: number[], limit = 200) {
   try {
     const drizzle = await getDb();
     if (!drizzle) return [];
-    return await drizzle.select().from(webhookLogs).orderBy(desc(webhookLogs.receivedAt)).limit(limit);
+    const scope = businessIds.length ? businessIds : [-1];
+    return await drizzle
+      .select()
+      .from(webhookLogs)
+      .where(inArray(webhookLogs.businessId, scope))
+      .orderBy(desc(webhookLogs.receivedAt))
+      .limit(limit);
   } catch (err) {
     console.error("[Webhook] Failed to get log:", err);
     return [];
@@ -142,12 +158,17 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     let channel = receivedSecret ? await getSalesChannelByWebhookSecret(receivedSecret) : undefined;
     const authenticated = Boolean(channel);
 
+    // كل سجلات الويبهوك تُختم بنشاط القناة للعزل. قبل تحديد القناة (فشل auth) بيفضل
+    // businessId غير معروف → addLog بيسيبه للـdefault فمايتنسبش لتينانت بعينه.
+    const logWebhook = (entry: Omit<WebhookLogInsert, "businessId">) =>
+      addLog({ ...entry, businessId: channel?.businessId });
+
     if (!authenticated) {
       const detail = receivedSecret
         ? `سر غير معروف (${receivedSecret.slice(0, 6)}…)`
         : "لم يُرسَل أي سر";
       if (mode === "enforce") {
-        await addLog({
+        await logWebhook({
           eventType: "auth",
           status: "error",
           message: `❌ طلب webhook مرفوض — ${detail}`,
@@ -155,7 +176,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
         return res.status(401).json({ error: "Unauthorized" });
       }
       // log_only: record what WOULD have been rejected, then continue.
-      await addLog({
+      await logWebhook({
         eventType: "auth",
         status: "error",
         message: `⚠️ [log_only] كان سيُرفض هذا الطلب — ${detail}. فعّل EASYORDER_WEBHOOK_ENFORCE_SECRET=enforce بعد التأكد.`,
@@ -165,7 +186,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     // Resolve the channel before branching: the status-update path needs its API token to
     // recover an unknown order, not just the create path.
     if (!channel) {
-      await addLog({ eventType: "auth", status: "error", message: "تعذر تحديد قناة البيع والـ Business من Secret صالح" });
+      await logWebhook({ eventType: "auth", status: "error", message: "تعذر تحديد قناة البيع والـ Business من Secret صالح" });
       return res.status(401).json({ error: "A configured channel secret is required" });
     }
 
@@ -190,7 +211,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
         if ((accountingEvent as any).reason === "accounting_not_active") {
           await updateOrder(existing.id, { status: mapped as any });
         }
-        await addLog({
+        await logWebhook({
           eventType: "order-status-update",
           status: "status_update",
           externalOrderId: payload.order_id,
@@ -201,7 +222,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
 
       // Unknown status on a known order: nothing safe to do, never guess a mapping.
       if (existing) {
-        await addLog({
+        await logWebhook({
           eventType: "order-status-update",
           status: "error",
           externalOrderId: payload.order_id,
@@ -219,7 +240,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       });
 
       if (!backfill.order) {
-        await addLog({
+        await logWebhook({
           eventType: "order-status-update",
           status: "error",
           externalOrderId: payload.order_id,
@@ -236,7 +257,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       });
 
       if (backfilled.outcome === "failed") {
-        await addLog({
+        await logWebhook({
           eventType: "order-status-update",
           status: "error",
           externalOrderId: payload.order_id,
@@ -260,7 +281,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
         if ((accountingEvent as any).reason === "accounting_not_active") await updateOrder(restored.id, { status: mapped as any });
       }
 
-      await addLog({
+      await logWebhook({
         eventType: "order-status-update",
         status: "success",
         externalOrderId: payload.order_id,
@@ -276,7 +297,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     // ---- New / updated order ----
     const payload = body as EasyOrderPayload;
     if (!payload?.id || !payload?.full_name || !payload?.cart_items?.length) {
-      await addLog({
+      await logWebhook({
         eventType: "order",
         status: "error",
         rawPayload: JSON.stringify(body ?? {}).slice(0, 4000),
@@ -302,7 +323,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       payloadSource = "api";
     } else if (channel?.apiToken) {
       // Only worth logging when a token existed and the read still failed.
-      await addLog({
+      await logWebhook({
         eventType: "order",
         status: "error",
         externalOrderId: payload.id,
@@ -317,7 +338,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     });
 
     if (result.outcome === "failed") {
-      await addLog({
+      await logWebhook({
         eventType: "order",
         status: "error",
         externalOrderId: payload.id,
@@ -329,7 +350,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     }
 
     if (result.outcome === "duplicate_unchanged") {
-      await addLog({
+      await logWebhook({
         eventType: "order",
         status: "duplicate",
         externalOrderId: payload.id,
@@ -342,7 +363,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     const reviewNote = result.needsReview ? " ⚠️ يحتاج مراجعة يدوية للمنتجات" : "";
     // Record which copy was stored, so a data question later can be traced to its source.
     const sourceNote = payloadSource === "api" ? " (بيانات مؤكَّدة من API)" : " (بيانات الـ webhook)";
-    await addLog({
+    await logWebhook({
       eventType: "order",
       status: "success",
       externalOrderId: String(effectivePayload.id).slice(0, 100),
@@ -366,6 +387,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("[EasyOrder Webhook] Error:", err);
+    // خطأ عام خارج نطاق القناة — بلا businessId (يُترك للـdefault).
     await addLog({ eventType: "unknown", status: "error", message: `خطأ داخلي: ${err.message}` });
     return res.status(500).json({ error: "Internal server error" });
   }
@@ -375,10 +397,8 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
 export function registerWebhookRoutes(app: Express) {
   app.post("/api/webhooks/easyorder", handleEasyOrderWebhook);
 
-  app.get("/api/webhooks/easyorder/log", async (_req: Request, res: Response) => {
-    const log = await getWebhookLog();
-    res.json({ log });
-  });
+  // ملاحظة: مسار REST القديم `GET /api/webhooks/easyorder/log` اتشال — كان بلا auth وبيسرّب
+  // PII كل التينانتات. القراءة الوحيدة دلوقتي عبر tRPC `webhook.log` (adminProcedure + scope).
 
   // Reports the current enforcement mode so the admin UI can warn while still in log_only.
   app.get("/api/webhooks/easyorder/health", (_req: Request, res: Response) => {

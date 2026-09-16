@@ -31,9 +31,10 @@ describe("🔑 scopeToAllowed — fail-closed (نطاق فاضي = صفر، مش
     expect(scopeToAllowed([], undefined)).toEqual([NO_BUSINESS]);
     expect(scopeToAllowed([], [5])).toEqual([NO_BUSINESS]);
   });
-  it("🔑 مالك المنصة (allowed=null) → يحترم الفلتر أو الكل (undefined)", () => {
-    expect(scopeToAllowed(null, undefined)).toBeUndefined();
-    expect(scopeToAllowed(null, [7])).toEqual([7]);
+  it("🔑 🚨 تعذّر تحديد المسموح (allowed=null: DB down / بلا tenant) → [NO_BUSINESS] (fail-closed)، **مش** الكل", () => {
+    // Phase 0.5: اتشال «مالك المنصة يشوف الكل» عبر REST — أي null بقى fail-closed.
+    expect(scopeToAllowed(null, undefined)).toEqual([NO_BUSINESS]);
+    expect(scopeToAllowed(null, [7])).toEqual([NO_BUSINESS]);
   });
   it("🔑 NO_BUSINESS مُعرّف مستحيل (سالب)", () => {
     expect(NO_BUSINESS).toBeLessThan(0);
@@ -63,8 +64,8 @@ describe("🔑 export routes — عزل التينانت server-side (source gua
     expect(fn).toContain("status(403)");
     // مفيش تحميل كل الأوردرات بدون نطاق.
     expect(fn).not.toContain("getOrders({ limit: 100000 })");
-    // التعليم كمطبوع مقيّد بالنطاق (دفاع عميق).
-    expect(fn).toContain("markOrdersAsPrinted(ownedIds, allowed)");
+    // التعليم كمطبوع مقيّد بالنطاق (دفاع عميق)، fail-closed عبر scopeToAllowed.
+    expect(fn).toContain("markOrdersAsPrinted(ownedIds, scopeToAllowed(allowed))");
   });
 });
 

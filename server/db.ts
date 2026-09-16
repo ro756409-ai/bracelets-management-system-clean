@@ -8,6 +8,7 @@ import {
   lt,
   lte,
   sql,
+  like,
   inArray,
   isNull,
   isNotNull,
@@ -92,6 +93,11 @@ import {
   businessShippingProviders,
   purchaseReceipts,
   adSpendEntries,
+  financialAccounts,
+  financialTransactions,
+  shipmentEvents,
+  carrierSettlements,
+  accountingClosingAdjustments,
 } from "../drizzle/schema";
 import {
   calcPayrollLine,
@@ -272,6 +278,33 @@ export async function getBusinessIdsForTenant(
     .from(businesses)
     .where(eq(businesses.tenantId, tenantId));
   return rows.map(r => r.id);
+}
+
+/**
+ * عزل ملفات الإثبات القديمة (اللي اترفعت قبل بادئة الـtenant في الاسم): بيدوّر على اسم الملف
+ * في **كل** أعمدة الإثبات المعروفة ويرجّع أنشطتها المالكة (distinct). المتصل بيتأكد إن أي منها
+ * ضمن نطاق المستخدم قبل تسليم الملف. fail-closed: لو مالقاش مالك → [] → المتصل يرفض (404).
+ * (الملفات الجديدة اسمها بيحمل الـtenant، فمابتمرّش من هنا أصلًا.)
+ */
+export async function findEvidenceOwnerBusinessIds(
+  filename: string
+): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const needle = `%${filename}`; // الرابط المخزّن = /api/evidence/files/<filename>
+  const results = await Promise.all([
+    db.select({ b: expenses.businessId }).from(expenses).where(like(expenses.attachmentUrl, needle)),
+    db.select({ b: employeeAdvances.businessId }).from(employeeAdvances).where(like(employeeAdvances.evidenceUrl, needle)),
+    db.select({ b: financialAccounts.businessId }).from(financialAccounts).where(like(financialAccounts.openingEvidenceUrl, needle)),
+    db.select({ b: financialTransactions.businessId }).from(financialTransactions).where(like(financialTransactions.evidenceUrl, needle)),
+    db.select({ b: purchaseReceipts.businessId }).from(purchaseReceipts).where(like(purchaseReceipts.evidenceUrl, needle)),
+    db.select({ b: shipmentEvents.businessId }).from(shipmentEvents).where(like(shipmentEvents.evidenceUrl, needle)),
+    db.select({ b: carrierSettlements.businessId }).from(carrierSettlements).where(like(carrierSettlements.evidenceUrl, needle)),
+    db.select({ b: accountingClosingAdjustments.businessId }).from(accountingClosingAdjustments).where(like(accountingClosingAdjustments.evidenceUrl, needle)),
+  ]);
+  const ids = new Set<number>();
+  for (const rows of results) for (const r of rows) if (r.b != null) ids.add(r.b);
+  return [...ids];
 }
 
 /**

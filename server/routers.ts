@@ -471,7 +471,9 @@ async function scopeBusinessIds(
       : requested?.businessId != null
         ? [requested.businessId]
         : undefined;
-  if (allowed == null) return requestedIds;
+  // fail-closed: تعذّر تحديد الأنشطة المسموحة (DB مش متاحة / جلسة بلا تينانت) = صفر صفوف،
+  // **مش** ثقة في الـids الجاية من العميل. النطاق الفاضي أو الفشل = رفض، مش سماح.
+  if (allowed == null) return [NO_BUSINESS];
   if (!requestedIds) return denyWhenEmpty(allowed);
   const allowedSet = new Set(allowed);
   // الترشيح ممكن يطلّع مصفوفة فاضية كمان — نفس الفخ بالظبط.
@@ -481,9 +483,9 @@ async function scopeBusinessIds(
 /**
  * Same idea for procedures that only accept a single businessId (categories, warehouses,
  * sales channels, print logs, returns stats, activity log). Validates the id belongs to the
- * tenant instead of silently trusting any id; `undefined` (no filter) is left untouched. Skips
- * the check (same "couldn't verify" reasoning as scopeBusinessIds above) when the database is
- * unreachable.
+ * tenant instead of silently trusting any id; `undefined` (no filter) is left untouched.
+ * fail-closed: لو تعذّر تحديد الأنشطة المسموحة (DB مش متاحة / بلا تينانت) نرفض بدل ما نثق
+ * في الـid الجاي من العميل.
  */
 async function scopeBusinessId(
   ctx: ScopeCtx,
@@ -491,7 +493,14 @@ async function scopeBusinessId(
 ): Promise<number | undefined> {
   if (businessId == null) return undefined;
   const allowed = await sessionBusinessIds(ctx);
-  if (allowed == null) return businessId;
+  // fail-closed: تعذّر تحديد الأنشطة المسموحة (DB مش متاحة / بلا tenant) = رفض، مش ثقة في
+  // الـid الجاي من العميل. رسالة مميّزة عن رفض الـIDOR عشان تتفرّق عن «الوصول ممنوع».
+  if (allowed == null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "تعذّر تحديد نطاق النشاط",
+    });
+  }
   if (!allowed.includes(businessId)) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -5566,14 +5575,18 @@ export const appRouter = router({
 
   // ==================== WEBHOOK ====================
   webhook: router({
-    log: adminProcedure.query(async () => {
+    log: adminProcedure.query(async ({ ctx }) => {
+      // عزل التينانت: سجلات الويبهوك فيها PII (اسم/تليفون/محافظة) — نقصّها على أنشطة
+      // التينانت فقط. fail-closed: نطاق فاضي → [NO_BUSINESS] = صفر صفوف.
+      const businessIds = (await scopeBusinessIds(ctx, {})) ?? [NO_BUSINESS];
       const { getWebhookLog } = await import("./easyorderWebhook");
-      const log = await getWebhookLog();
+      const log = await getWebhookLog(businessIds);
       return { log };
     }),
-    stats: adminProcedure.query(async () => {
+    stats: adminProcedure.query(async ({ ctx }) => {
+      const businessIds = (await scopeBusinessIds(ctx, {})) ?? [NO_BUSINESS];
       const { getWebhookLog } = await import("./easyorderWebhook");
-      const log = await getWebhookLog(1000);
+      const log = await getWebhookLog(businessIds, 1000);
       const total = log.length;
       const success = log.filter((e: any) => e.status === "success").length;
       const duplicate = log.filter((e: any) => e.status === "duplicate").length;

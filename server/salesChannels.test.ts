@@ -64,7 +64,13 @@ function createNoUserContext(): TrpcContext {
 
 /** Skips the rest of a test gracefully in environments with no live DATABASE_URL. */
 function isNoDbError(err: unknown): boolean {
-  return String((err as any)?.message ?? err).includes("Database not available");
+  const message = String((err as any)?.message ?? err);
+  // بدون DB، sessionBusinessIds مايقدرش يتحقق فبيرفض النطاق (fail-closed) قبل ما يوصل لطبقة
+  // الـDB — ده نفس عَرَض «مفيش DB» في هذه البيئة، فنتخطّى زيّه.
+  return (
+    message.includes("Database not available") ||
+    message.includes("تعذّر تحديد نطاق النشاط")
+  );
 }
 
 describe("salesChannels — access control", () => {
