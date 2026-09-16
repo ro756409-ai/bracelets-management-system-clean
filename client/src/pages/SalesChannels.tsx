@@ -24,6 +24,8 @@ import {
   Plus, Edit, Trash2, Globe, ExternalLink, Power, PowerOff, KeyRound, Eye, EyeOff, X,
   RefreshCw, CheckCircle2, AlertCircle, Clock, PlugZap, History,
 } from "lucide-react";
+import { SetupJourney } from "@/components/SetupJourney";
+import { IntegrationsMarketplace } from "@/components/IntegrationsMarketplace";
 import { toast } from "sonner";
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -250,12 +252,24 @@ export default function SalesChannels() {
     onError: (err) => toast.error(err.message),
   });
 
-  const handleOpenCreate = () => {
+  const handleOpenCreate = (platform?: string) => {
     setEditingId(null);
-    setForm({ ...emptyForm, businessId: currentBusinessIds && currentBusinessIds.length === 1 ? currentBusinessIds[0] : null });
+    setForm({
+      ...emptyForm,
+      platform: platform ?? emptyForm.platform,
+      businessId: currentBusinessIds && currentBusinessIds.length === 1 ? currentBusinessIds[0] : null,
+    });
     setEditingSecrets({ hasApiToken: false, hasWebhookSecret: false });
     setDialogOpen(true);
   };
+
+  // ربط منصة من السوق: بيفتح نموذج الإضافة بالمنصة محددة مسبقًا (المدعوم فعليًا فقط).
+  const handleConnectPlatform = (platform: string) => handleOpenCreate(platform);
+
+  // المنصات اللي عندها قناة نشطة بالفعل — عشان السوق يعرض "مربوط".
+  const connectedPlatforms = new Set<string>(
+    (channels ?? []).filter((c: any) => c.isActive).map((c: any) => c.platform)
+  );
 
   const handleOpenEdit = (channel: any) => {
     setEditingId(channel.id);
@@ -344,9 +358,10 @@ export default function SalesChannels() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">قنوات البيع / المواقع</h1>
+          <h1 className="text-2xl font-bold">قنوات البيع والتكاملات</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            إدارة المواقع وقنوات البيع المرتبطة بأنشطتك
+            اربط متاجرك ومواقعك بالنشاط الصحيح عشان أوردراتها توصل للسيستم أوتوماتيك. اختر منصة
+            من السوق بالأسفل، أو أضِف قناة يدويًا.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -359,11 +374,28 @@ export default function SalesChannels() {
             {showArchived ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
             {showArchived ? "إخفاء المؤرشف" : "إظهار المؤرشف"}
           </Button>
-          <Button onClick={handleOpenCreate} className="gap-2">
+          <Button onClick={() => handleOpenCreate()} className="gap-2">
             <Plus className="h-4 w-4" />
             إضافة قناة بيع
           </Button>
         </div>
+      </div>
+
+      <SetupJourney current="channel" />
+
+      {/* سوق التكاملات (Frontend فقط) */}
+      <div className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold">سوق التكاملات</h2>
+          <p className="text-sm text-muted-foreground">اكتشف المنصات والخدمات اللي تقدر تربطها بأنشطتك.</p>
+        </div>
+        <IntegrationsMarketplace connectedPlatforms={connectedPlatforms} onConnect={handleConnectPlatform} />
+      </div>
+
+      {/* قنوات البيع المربوطة */}
+      <div>
+        <h2 className="text-lg font-semibold">قنواتك المربوطة</h2>
+        <p className="text-sm text-muted-foreground">القنوات اللي أضفتها بالفعل وحالتها.</p>
       </div>
 
       {/* Channels Grid */}
@@ -379,7 +411,7 @@ export default function SalesChannels() {
                 ? 'اضغط "إظهار المؤرشف" لعرضها وإعادة تفعيلها'
                 : "أضف أول قناة بيع لربط مواقعك ومنصاتك بالسيستم"}
             </p>
-            <Button onClick={handleOpenCreate} variant="outline" className="gap-2">
+            <Button onClick={() => handleOpenCreate()} variant="outline" className="gap-2">
               <Plus className="h-4 w-4" />
               إضافة قناة بيع
             </Button>

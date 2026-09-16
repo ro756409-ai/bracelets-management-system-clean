@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { Calendar, ChevronRight, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -181,17 +182,51 @@ export default function DateRangePicker({ value, onChange, placeholder = "اخت
   const rightYear = leftMonth === 11 ? leftYear + 1 : leftYear;
   const rightMonth = leftMonth === 11 ? 0 : leftMonth + 1;
 
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
+  // إغلاق عند الضغط برّه (الزر أو اللوحة اللي في الـportal)
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // تموضع واعٍ بحدود الشاشة (RTL + collision): اللوحة تفضل **كاملة داخل الـviewport** على أي
+  // مقاس — بنحاذي حافتها اليمنى مع يمين الزر ثم نقصّها داخل الشاشة، ونقلبها لأعلى لو مفيش مكان
+  // تحت. المحتوى العريض بيتمرّر داخليًا على الموبايل (اللوحة نفسها ما بتخرجش برّه).
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); return; }
+    function compute() {
+      const t = triggerRef.current?.getBoundingClientRect();
+      if (!t) return;
+      const margin = 8;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const width = panelRef.current?.offsetWidth ?? Math.min(580, vw - margin * 2);
+      const height = panelRef.current?.offsetHeight ?? 360;
+      let left = t.right - width;
+      if (left + width > vw - margin) left = vw - margin - width;
+      if (left < margin) left = margin;
+      let top = t.bottom + 8;
+      if (top + height > vh - margin && t.top - 8 - height > margin) top = t.top - 8 - height;
+      if (top < margin) top = margin;
+      setPos({ top, left });
+    }
+    compute();
+    window.addEventListener("resize", compute);
+    window.addEventListener("scroll", compute, true);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("scroll", compute, true);
+    };
+  }, [open]);
 
   // Sync selecting with value when opening
   useEffect(() => {
@@ -259,8 +294,9 @@ export default function DateRangePicker({ value, onChange, placeholder = "اخت
   }
 
   return (
-    <div className="relative" ref={ref} dir="rtl">
+    <div dir="rtl">
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen(!open)}
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-background hover:bg-muted transition-colors text-sm text-foreground min-w-[200px] justify-between"
@@ -271,9 +307,17 @@ export default function DateRangePicker({ value, onChange, placeholder = "اخت
         </span>
       </button>
 
-      {open && (
-        <div className="absolute top-full mt-2 right-0 z-50 bg-popover border rounded-xl shadow-xl p-4 flex gap-4"
-          style={{ minWidth: 580 }}
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          dir="rtl"
+          className="fixed z-50 bg-popover border rounded-xl shadow-xl p-4 flex gap-4 overflow-x-auto"
+          style={{
+            top: pos?.top ?? 0,
+            left: pos?.left ?? 0,
+            maxWidth: "calc(100vw - 16px)",
+            visibility: pos ? "visible" : "hidden",
+          }}
         >
           {/* Presets */}
           <div className="flex flex-col gap-1 min-w-[130px] border-l pl-4">
@@ -349,7 +393,8 @@ export default function DateRangePicker({ value, onChange, placeholder = "اخت
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
