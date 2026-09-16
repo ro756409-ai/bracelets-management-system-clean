@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import {
   getDb,
   getBusinessIdsForTenant,
@@ -129,17 +129,21 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
       a = await createCoreTestFixture("gate-a");
       b = await createCoreTestFixture("gate-b");
 
+      // insertId في drizzle/mysql2 بيرجع كـ[ResultSetHeader] (مصفوفة) — نفس نمط testFixtures.
+      const insertedId = (r: unknown): number =>
+        Number((Array.isArray(r) ? r[0] : (r as any))?.insertId ?? 0);
+
       // سجل ويبهوك لكل تينانت
-      logAId = Number(
-        (await db.insert(webhookLogs).values({ businessId: a.businessId, eventType: "order", status: "success", message: "A" }) as any).insertId ?? 0
+      logAId = insertedId(
+        await db.insert(webhookLogs).values({ businessId: a.businessId, eventType: "order", status: "success", message: "A" })
       );
-      logBId = Number(
-        (await db.insert(webhookLogs).values({ businessId: b.businessId, eventType: "order", status: "success", message: "B" }) as any).insertId ?? 0
+      logBId = insertedId(
+        await db.insert(webhookLogs).values({ businessId: b.businessId, eventType: "order", status: "success", message: "B" })
       );
 
       // مصروف في تينانت B بمرفق إثبات legacy (بلا بادئة tenant في الاسم)
-      expBId = Number(
-        (await db.insert(expenses).values({
+      expBId = insertedId(
+        await db.insert(expenses).values({
           businessId: b.businessId,
           amount: "10",
           description: "gate B",
@@ -147,7 +151,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
           createdBy: 1,
           createdByName: "tester",
           attachmentUrl: `/api/evidence/files/${fileB}`,
-        }) as any).insertId ?? 0
+        })
       );
 
       // أوردر مؤكّد في تينانت B (لاختبار IDOR على AWB/export)
@@ -170,9 +174,12 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
     afterAll(async () => {
       const db = await getDb();
       if (!db) return;
-      if (logAId) await db.delete(webhookLogs).where(eq(webhookLogs.id, logAId));
-      if (logBId) await db.delete(webhookLogs).where(eq(webhookLogs.id, logBId));
-      if (expBId) await db.delete(expenses).where(eq(expenses.id, expBId));
+      // تنظيف بالـbusinessId (فريد لكل تشغيل) — مستقل عن استخراج الـid، وقبل حذف الأنشطة.
+      const bizIds = [a?.businessId, b?.businessId].filter((x): x is number => x != null);
+      if (bizIds.length) {
+        await db.delete(webhookLogs).where(inArray(webhookLogs.businessId, bizIds));
+        await db.delete(expenses).where(inArray(expenses.businessId, bizIds));
+      }
       if (bOrderId) {
         await db.delete(orderItems).where(eq(orderItems.orderId, bOrderId));
         await db.delete(orders).where(eq(orders.id, bOrderId));
