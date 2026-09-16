@@ -67,6 +67,7 @@ export async function requireAdminOrManager(
   // 1. Local owner/admin session (from /api/auth/login)
   const owner = await resolveActiveManager(req, COOKIE_NAME);
   if (owner) {
+    if (owner.tenantId == null) return rejectUnresolvedTenant(res);
     attachAuth(req, owner);
     return next();
   }
@@ -80,6 +81,15 @@ export async function requireAdminOrManager(
     }
     return res.status(403).json({ error: "هذا الإجراء متاح للمديرين فقط" });
   }
+  if (emp.tenantId == null) return rejectUnresolvedTenant(res);
   attachAuth(req, emp);
   return next();
+}
+
+/**
+ * جلسة بلا tenant مؤكّد = رفض (نظير `rejectUnresolvedTenant` في tRPC). fail-closed: من غير ده
+ * كان مدير بلا tenantId يقدر يصدّر/يطبع أوردرات كل التينانتات عبر مسارات REST.
+ */
+function rejectUnresolvedTenant(res: Response) {
+  return res.status(403).json({ error: "الحساب غير مرتبط بمؤسسة صالحة" });
 }

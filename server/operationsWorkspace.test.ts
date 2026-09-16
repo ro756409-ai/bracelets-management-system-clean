@@ -117,12 +117,15 @@ describe("🔑 الصلاحية على السيرفر — مش مجرد إخفا
 });
 
 describe("🔑 multi-business — النطاق عمره ما بيوصل فاضي", () => {
-  it("🔑 مبدّل الأنشطة (نشاط محدد) بيتمرّر للـservice", async () => {
+  it("🔑 نشاط محدد بدون DB يتحقق منه → fail-closed [NO_BUSINESS] (مش ثقة عمياء في id العميل)", async () => {
+    // Phase 0.5: النطاق بقى fail-closed بالكامل. من غير DB، sessionBusinessIds مايقدرش يتأكد
+    // إن نشاط 7 تابع للتينانت فبيرجّع null → scopeBusinessIds يرفض [-1] بدل ما يمرّر [7] بثقة
+    // العميل. (تمرير نشاط صحيح فعليًا متحقّق في اختبارات cross-tenant على DB.)
     const caller = appRouter.createCaller(dashboardContext("super_admin"));
     await caller.operations.todayShipments({ businessIds: [7] });
     await caller.operations.shippingRoutes({ businessIds: [7] });
-    expect(calls.today.at(-1)?.businessIds).toEqual([7]);
-    expect(calls.routes.at(-1)).toEqual([7]);
+    expect(calls.today.at(-1)?.businessIds).toEqual([-1]);
+    expect(calls.routes.at(-1)).toEqual([-1]);
   });
 
   it("🔑 نطاق مش متحدد → NO_BUSINESS (مش [] اللي معناها كل الأوردرات في getOrders)", async () => {

@@ -8,16 +8,17 @@ import { Request, Response, Express } from "express";
 import {
   getDb,
   getBusinessIdsByGroupSlug,
+  getBusinessIdsForTenant,
   getOrderItems,
   orderContentChangedAfterShipmentCreation,
 } from "./db";
+import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import {
   buildShipmentContents,
   SHIPMENT_STALE_WARNING,
 } from "../shared/orderContent";
 import { orders } from "../drizzle/schema";
 import { eq, and, isNotNull, isNull, ne, inArray, notInArray, or } from "drizzle-orm";
-import { requireAdminOrManager } from "./authMiddleware";
 
 /**
  * حالات إنشاء الشحنة على `orders.bostaStatus`.
@@ -557,6 +558,16 @@ function sendAwbResult(res: Response, result: BostaAwbFetchResult) {
   return res.send(result.buffer);
 }
 
+/**
+ * أنشطة التينانت المسموح بها للطلب (من `authInfo.tenantId` اللي علّقها requireAdminOrManager،
+ * مش من العميل). fail-closed: بلا tenant / DB مش متاحة → `null` (المتصل يرفض).
+ */
+async function allowedBusinessIdsForReq(req: Request): Promise<number[] | null> {
+  const auth = (req as RequestWithAuth).authInfo;
+  if (!auth || auth.tenantId == null) return null;
+  return await getBusinessIdsForTenant(auth.tenantId);
+}
+
 async function handleSingleAwb(req: Request, res: Response) {
   try {
     const orderId = Number(req.params.id);
@@ -565,8 +576,16 @@ async function handleSingleAwb(req: Request, res: Response) {
     const db = await getDb();
     if (!db) return res.status(500).json({ error: "قاعدة البيانات غير متاحة" });
 
+    // عزل التينانت: لازم نحدّد أنشطة المستخدم قبل أي جلب. null = تعذّر التحديد → رفض.
+    const allowed = await allowedBusinessIdsForReq(req);
+    if (allowed == null) return res.status(403).json({ error: "الحساب غير مرتبط بمؤسسة صالحة" });
+
     const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
     if (!order) return res.status(404).json({ error: "الأوردر غير موجود" });
+    // fail-closed: الأوردر لازم يكون ضمن أنشطة المستخدم — يمنع IDOR بزيادة الـid.
+    if (order.businessId == null || !allowed.includes(order.businessId)) {
+      return res.status(403).json({ error: "هذا الأوردر خارج نطاق حسابك" });
+    }
     if (!order.bostaShipmentId) {
       return res.status(400).json({ error: "لم يتم إرسال هذا الأوردر لبوسطة بعد" });
     }
@@ -590,8 +609,16 @@ async function handleBulkAwb(req: Request, res: Response) {
     const db = await getDb();
     if (!db) return res.status(500).json({ error: "قاعدة البيانات غير متاحة" });
 
+    // عزل التينانت: نحدّد أنشطة المستخدم، وأي id مطلوب خارجها → رفض كامل (مش تجاهل صامت).
+    const allowed = await allowedBusinessIdsForReq(req);
+    if (allowed == null) return res.status(403).json({ error: "الحساب غير مرتبط بمؤسسة صالحة" });
+
     const rows = await db.select().from(orders).where(inArray(orders.id, ids));
-    const shipmentIds = rows
+    const owned = rows.filter((o) => o.businessId != null && allowed.includes(o.businessId));
+    if (owned.length !== ids.length) {
+      return res.status(403).json({ error: "بعض الأوردرات خارج نطاق حسابك" });
+    }
+    const shipmentIds = owned
       .map((o) => o.bostaShipmentId)
       .filter((v): v is string => Boolean(v));
 
