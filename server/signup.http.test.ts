@@ -4,13 +4,17 @@ import request from "supertest";
 
 /**
  * Phase 3.3 — التسجيل العام POST /api/signup. اختبار HTTP فعلي (supertest) بـmock لدوال DB،
- * بدون DB إنتاج. بيغطّي: النجاح، التحقق، منع enumeration، 415، rate-limit.
+ * بدون DB إنتاج. بيغطّي: النجاح **بعد insert حقيقي**، فشل insert → 500 (مفيش نجاح وهمي)،
+ * التحقق، 415، rate-limit.
  */
 
-const state: { taken: boolean; created: any[] } = { taken: false, created: [] };
+const state: { created: any[]; failInsert: boolean } = { created: [], failInsert: false };
 vi.mock("./db", () => ({
-  isSignupIdentifierTaken: vi.fn(async () => state.taken),
-  createSignupRequest: vi.fn(async (input: any) => { state.created.push(input); return state.created.length; }),
+  createSignupRequest: vi.fn(async (input: any) => {
+    if (state.failInsert) throw new Error("db down");
+    state.created.push(input);
+    return state.created.length; // id > 0
+  }),
 }));
 
 const validBody = {
@@ -34,8 +38,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  state.taken = false;
   state.created = [];
+  state.failInsert = false;
   clearLimiter(); // نبدأ كل تست بحد نظيف
 });
 
@@ -56,12 +60,12 @@ describe("🔑 signup", () => {
     expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|tenantId|businessId|password/i);
   });
 
-  it("🔑 منع enumeration: البريد/اليوزر مأخوذ → نفس الرد العام، بدون إدراج", async () => {
-    state.taken = true;
+  it("🔑 فشل الـinsert → 500 (مفيش نجاح وهمي) — إصلاح bug الإنتاج", async () => {
+    state.failInsert = true;
     const res = await post(validBody);
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(state.created).toHaveLength(0); // ما اتعملش طلب
+    expect(res.status).toBe(500);
+    expect(res.body.success).toBe(false);
+    expect(state.created).toHaveLength(0);
   });
 
   it("🔑 password أقصر من 12 بايت → 400", async () => {
@@ -92,5 +96,5 @@ describe("🔑 signup", () => {
     }
     const blocked = await post({ ...validBody, email: "u11@example.com", username: "user11" });
     expect(blocked.status).toBe(429);
-  });
+  }, 20000); // 10× bcrypt(12) فعلية بطيئة — timeout أوسع يمنع الوميض تحت الحمل المتوازي.
 });
