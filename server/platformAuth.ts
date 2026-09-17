@@ -1,16 +1,17 @@
 /**
- * Platform Admin authentication (Phase 3.2) — منفصل تمامًا عن مصادقة العملاء.
+ * Platform Admin authentication (Phase 3.2, hardened) — منفصل تمامًا عن مصادقة العملاء.
  *
  * عزل كامل:
  *   • كوكي مستقلة `platform_admin_session` بمسار `/api/platform` — المتصفّح **مايبعتهاش** لأي
- *     tenant API إطلاقًا، والعكس: مسارات التينانت بتقرا كوكيز العميل الخاصة بيها بس (مش دي).
- *   • توقيع الجلسة بـ`PLATFORM_SESSION_SECRET` (سر مستقل) — توكن الموظف/المالك (JWT_SECRET)
- *     مستحيل يتحقّق هنا، وبالعكس.
+ *     مسار عميل، والعكس: مسارات العميل بتقرا كوكيزها الخاصة بس (مش دي).
+ *   • توقيع الجلسة بسر مستقل `PLATFORM_SESSION_SECRET` + HS256 + issuer/audience/sessionType
+ *     مثبّتين ومُتحقَّق منهم — توكن الموظف/المالك مستحيل يتحقّق هنا، وبالعكس.
  *   • لا يعتمد على tenantId/businessId؛ isActive بيتفحص كل request.
- *   • fail-closed: أي سر ناقص/ضعيف → المسارات ترجع 503 والحارس يرفض الكل.
+ *   • fail-closed: سر ناقص/ضعيف → المسارات 503 والحارس يرفض الكل.
  *
- * ملاحظات أمان: مفيش secret افتراضي في الكود؛ مفيش password/token/cookie في اللوجز؛
- * الـMFA مُجهَّز (mfaSecret nullable، مايتخزنش plaintext) بس **مش منفّذ** في المرحلة دي.
+ * أمان: مفيش secret افتراضي؛ مفيش password/token/cookie في اللوجز/الـaudit؛ الـMFA مُجهَّز
+ * (mfaSecret nullable، مايتخزنش plaintext) بس **مش منفّذ** هنا. القرار الأمني بيعتمد **فقط**
+ * على تحقّق الجلسة/الأدمن — فشل الـaudit مايعتبرش auth ناجح ولا يمنعه.
  */
 import { Router, type Express, type Request, type Response, type NextFunction } from "express";
 import bcrypt from "bcryptjs";
@@ -25,41 +26,56 @@ import { isSecureRequest } from "./_core/cookies";
 
 export const PLATFORM_COOKIE = "platform_admin_session";
 const COOKIE_PATH = "/api/platform";
-const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8 ساعات — جلسة محدودة
+const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8 ساعات
 const SESSION_EXPIRES_IN = "8h";
+const JWT_ALG = "HS256" as const;
+export const PLATFORM_ISSUER = "matjarak-platform";
+export const PLATFORM_AUDIENCE = "matjarak-platform-admin";
+export const PLATFORM_SESSION_TYPE = "platform_admin";
 
-// ── تحقّق السر مرة واحدة عند التحميل: مستقل، موجود، وقوي (≥ 32 حرف)، ومختلف عن JWT_SECRET ──
+// حدود الإدخال
+const USERNAME_MIN = 3;
+const USERNAME_MAX = 50;
+const PASSWORD_MIN_BYTES = 12;
+const PASSWORD_MAX_BYTES = 72; // bcrypt بيقصّ بعد 72 بايت
+
+// ── تحقّق السر مرة واحدة: مستقل، موجود، ≥32، ومختلف عن JWT_SECRET ──
 const PLATFORM_SESSION_SECRET = process.env.PLATFORM_SESSION_SECRET;
 export function platformAuthConfigError(): string | null {
-  if (!PLATFORM_SESSION_SECRET) return "PLATFORM_SESSION_SECRET غير مضبوط";
-  if (PLATFORM_SESSION_SECRET.length < 32) return "PLATFORM_SESSION_SECRET أقصر من 32 حرفًا (ضعيف)";
-  if (PLATFORM_SESSION_SECRET === process.env.JWT_SECRET)
-    return "PLATFORM_SESSION_SECRET لازم يكون مختلفًا عن JWT_SECRET";
+  if (!PLATFORM_SESSION_SECRET) return "missing";
+  if (PLATFORM_SESSION_SECRET.length < 32) return "weak";
+  if (PLATFORM_SESSION_SECRET === process.env.JWT_SECRET) return "not_independent";
   return null;
 }
-const CONFIG_ERROR = platformAuthConfigError();
-const ENABLED = CONFIG_ERROR === null;
+const ENABLED = platformAuthConfigError() === null;
 if (!ENABLED) {
-  // مايكسرش تطبيق العميل — بس بيعطّل platform auth ويوضّح السبب (fail-closed).
-  console.error(`[platform-auth] معطّل: ${CONFIG_ERROR}. مسارات /api/platform هترجع 503.`);
+  // رسالة عامة فقط — بلا سبب أو قيمة. يعطّل platform auth فقط (tenant system مايتأثرش).
+  console.error("[platform-auth] disabled: session secret is not configured correctly");
 }
 
-/** IP آمن: افتراضيًا عنوان السوكت المباشر (مانثقش في X-Forwarded-For إلا لو مفعّل صراحةً). */
+/**
+ * IP المصدر لمفتاح rate-limit والتدقيق. **ملاحظة**: خلف بروكسي Coolify ده غالبًا IP البروكسي
+ * مش العميل الحقيقي — مانثقش في X-Forwarded-For (قابل للتزوير) ومابنغيّرش trust proxy العام
+ * دلوقتي. (دين لاحق: إعداد trusted proxy/CIDR خاص بـCoolify لاستخراج client IP بأمان.)
+ */
 export function clientIp(req: Request): string {
-  if (process.env.PLATFORM_TRUST_PROXY === "true") {
-    const xff = req.headers["x-forwarded-for"];
-    const first = Array.isArray(xff) ? xff[0] : (xff ?? "").split(",")[0];
-    if (first && first.trim()) return first.trim();
-  }
   return req.socket?.remoteAddress ?? "unknown";
 }
 
-// ── Rate limiting بسيط in-memory (بلا dependency جديدة؛ per-process — يتصفّر مع restart) ──
+// ── Rate limiting in-memory (نسخة واحدة فقط؛ per-process، يتصفّر مع restart) ──
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 5;
+const MAX_ENTRIES = 10_000;
 const attempts = new Map<string, { count: number; resetAt: number }>();
-function rateKey(req: Request, username: string): string {
-  return `${clientIp(req)}::${username}`;
+let sweepTimer: ReturnType<typeof setInterval> | undefined;
+function ensureSweep() {
+  if (sweepTimer) return;
+  sweepTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [k, rec] of attempts) if (now > rec.resetAt) attempts.delete(k);
+  }, WINDOW_MS);
+  // ماtمنعش Node من الإغلاق.
+  sweepTimer.unref?.();
 }
 export function isRateLimited(key: string, now = Date.now()): boolean {
   const rec = attempts.get(key);
@@ -72,25 +88,78 @@ export function isRateLimited(key: string, now = Date.now()): boolean {
 }
 export function recordFailure(key: string, now = Date.now()): void {
   const rec = attempts.get(key);
-  if (!rec || now > rec.resetAt) {
-    attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
+  if (rec && now <= rec.resetAt) {
+    rec.count += 1;
     return;
   }
-  rec.count += 1;
+  // إدخال جديد — طبّق السقف والإخلاء لو محتاج (المفتاح مش موجود حاليًا).
+  if (!attempts.has(key) && attempts.size >= MAX_ENTRIES) {
+    let evicted = false;
+    for (const [k, r] of attempts) {
+      if (now > r.resetAt) { attempts.delete(k); evicted = true; break; }
+    }
+    if (!evicted) {
+      const oldest = attempts.keys().next().value; // Map بيحافظ على ترتيب الإدخال
+      if (oldest !== undefined) attempts.delete(oldest);
+    }
+  }
+  attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
+  ensureSweep();
 }
 export function clearFailures(key: string): void {
   attempts.delete(key);
 }
+export function rateLimitSize(): number {
+  return attempts.size;
+}
 export const RATE_LIMIT_MAX_FAILURES = MAX_FAILURES;
+export const RATE_LIMIT_MAX_ENTRIES = MAX_ENTRIES;
 
-function normalizeUsername(raw: unknown): string {
-  return String(raw ?? "").trim().toLowerCase();
+/** تحقّق شكل بيانات الدخول: نوع نصّي فقط + الحدود. مايحوّلش object/array/number بـString(). */
+export function parseCredentials(body: any):
+  | { ok: true; username: string; password: string }
+  | { ok: false } {
+  if (!body || typeof body.username !== "string" || typeof body.password !== "string") {
+    return { ok: false };
+  }
+  const username = body.username.trim().toLowerCase();
+  if (username.length < USERNAME_MIN || username.length > USERNAME_MAX) return { ok: false };
+  const bytes = Buffer.byteLength(body.password, "utf8");
+  if (bytes < PASSWORD_MIN_BYTES || bytes > PASSWORD_MAX_BYTES) return { ok: false };
+  return { ok: true, username, password: body.password };
+}
+
+// ── حماية Origin للطلبات الحسّاسة (login/logout) ──
+function allowedOrigins(): Set<string> {
+  return new Set(
+    (process.env.PLATFORM_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map(o => o.trim())
+      .filter(Boolean)
+  );
+}
+/** مقارنة exact origin بعد parsing آمن. لا Host وحده، لا startsWith/includes. */
+export function isOriginAllowed(req: Request): boolean {
+  const isProd = process.env.NODE_ENV === "production";
+  const allow = allowedOrigins();
+  // في dev/test: لو مفيش قائمة مضبوطة نسمح؛ لو مضبوطة نفرضها.
+  if (!isProd && allow.size === 0) return true;
+  const origin = req.headers.origin;
+  if (!origin || typeof origin !== "string") return false; // production: Origin مفقود = رفض
+  let parsed: string;
+  try {
+    parsed = new URL(origin).origin;
+  } catch {
+    return false;
+  }
+  return allow.has(parsed);
 }
 
 function platformCookieOptions(req: Request) {
   return {
     httpOnly: true as const,
-    secure: isSecureRequest(req),
+    // production: Secure إجباري بلا اعتماد على X-Forwarded-Proto؛ dev: حسب الطلب.
+    secure: process.env.NODE_ENV === "production" ? true : isSecureRequest(req),
     sameSite: "strict" as const,
     path: COOKIE_PATH,
   };
@@ -100,28 +169,42 @@ export interface PlatformRequest extends Request {
   platformAdmin?: { id: number; username: string };
 }
 
+function signSession(adminId: number): string {
+  return jwt.sign(
+    { platformAdminId: adminId, sessionType: PLATFORM_SESSION_TYPE },
+    PLATFORM_SESSION_SECRET as string,
+    { algorithm: JWT_ALG, issuer: PLATFORM_ISSUER, audience: PLATFORM_AUDIENCE, expiresIn: SESSION_EXPIRES_IN }
+  );
+}
+
+function verifySession(token: string): { platformAdminId: number } | null {
+  try {
+    const payload: any = jwt.verify(token, PLATFORM_SESSION_SECRET as string, {
+      algorithms: [JWT_ALG],
+      issuer: PLATFORM_ISSUER,
+      audience: PLATFORM_AUDIENCE,
+    });
+    if (payload?.sessionType !== PLATFORM_SESSION_TYPE) return null;
+    const id = Number(payload?.platformAdminId);
+    if (!id) return null;
+    return { platformAdminId: id };
+  } catch {
+    return null;
+  }
+}
+
 /**
- * حارس مسارات المنصة — بيتحقّق من الجلسة المستقلة كل request:
- *   توكن platform_admin_session → تحقّق بـPLATFORM_SESSION_SECRET → جلب الأدمن → isActive.
- * أي فشل = رفض موحّد 401. لا يعتمد على tenantId/businessId.
+ * حارس مسارات المنصة — بيتحقّق كل request: توكن الكوكي المستقلة → verify (alg+iss+aud+type)
+ * → جلب الأدمن → isActive. أي فشل = رفض موحّد 401. لا يعتمد على tenantId/businessId، ولا
+ * يقبل Authorization header (كوكي فقط).
  */
-export async function requirePlatformAdmin(
-  req: Request,
-  res: Response,
-  next: NextFunction
-) {
+export async function requirePlatformAdmin(req: Request, res: Response, next: NextFunction) {
   if (!ENABLED) return res.status(503).json({ error: "مصادقة المنصة غير مفعّلة" });
   const token = req.cookies?.[PLATFORM_COOKIE];
   if (!token) return res.status(401).json({ error: "غير مصرح" });
-  let payload: any;
-  try {
-    payload = jwt.verify(token, PLATFORM_SESSION_SECRET as string);
-  } catch {
-    return res.status(401).json({ error: "غير مصرح" });
-  }
-  const adminId = Number(payload?.platformAdminId);
-  if (!adminId) return res.status(401).json({ error: "غير مصرح" });
-  const admin = await getPlatformAdminById(adminId);
+  const session = verifySession(token);
+  if (!session) return res.status(401).json({ error: "غير مصرح" });
+  const admin = await getPlatformAdminById(session.platformAdminId);
   if (!admin || !admin.isActive) return res.status(401).json({ error: "غير مصرح" });
   (req as PlatformRequest).platformAdmin = { id: admin.id, username: admin.username };
   return next();
@@ -130,7 +213,6 @@ export async function requirePlatformAdmin(
 export function registerPlatformAuthRoutes(app: Express) {
   const router = Router();
 
-  // لو السر ناقص/ضعيف: كل المسارات fail-closed بـ503 (مفيش تسريب سبب للعميل).
   if (!ENABLED) {
     router.all("/auth/*", (_req, res) => res.status(503).json({ error: "مصادقة المنصة غير مفعّلة" }));
     app.use("/api/platform", router);
@@ -139,28 +221,34 @@ export function registerPlatformAuthRoutes(app: Express) {
 
   // POST /api/platform/auth/login
   router.post("/auth/login", async (req, res) => {
-    const username = normalizeUsername(req.body?.username);
-    const password = String(req.body?.password ?? "");
-    const key = rateKey(req, username);
+    // Content-Type: application/json فقط.
+    if (!req.is("application/json")) {
+      return res.status(415).json({ success: false, error: "نوع المحتوى غير مدعوم" });
+    }
+    // Origin (production أو لو مضبوط في dev).
+    if (!isOriginAllowed(req)) {
+      return res.status(403).json({ success: false, error: "مصدر غير مسموح" });
+    }
+    // شكل الإدخال (نوع نصّي + حدود) — رسالة عامة، ماتكشفش وجود المستخدم.
+    const parsed = parseCredentials(req.body);
+    if (!parsed.ok) {
+      return res.status(400).json({ success: false, error: "بيانات غير صالحة" });
+    }
+    const { username, password } = parsed;
     const ip = clientIp(req);
-
-    // رسالة عامة موحّدة لكل فشل — ماتكشفش هل username موجود.
+    const key = `${ip}::${username}`;
     const genericFail = () => res.status(401).json({ success: false, error: "بيانات الدخول غير صحيحة" });
 
     if (isRateLimited(key)) {
-      await addPlatformAuditLog({ action: "login_rate_limited", details: `user=${username}`, ipAddress: ip });
+      await addPlatformAuditLog({ action: "login_rate_limited", details: JSON.stringify({ username }), ipAddress: ip });
       return res.status(429).json({ success: false, error: "محاولات كثيرة، حاول لاحقًا" });
-    }
-    if (!username || !password) {
-      recordFailure(key);
-      return genericFail();
     }
 
     const admin = await getPlatformAdminByUsername(username);
     const ok = admin && admin.isActive && admin.passwordHash
       ? await bcrypt.compare(password, admin.passwordHash)
       : false;
-    // نعمل bcrypt.compare وهمي لو الأدمن مش موجود عشان نقلّل timing oracle.
+    // compare وهمي لو الأدمن مش موجود — تقليل timing oracle.
     if (!admin) await bcrypt.compare(password, "$2a$12$0000000000000000000000000000000000000000000000000000a");
 
     if (!ok || !admin) {
@@ -168,39 +256,42 @@ export function registerPlatformAuthRoutes(app: Express) {
       await addPlatformAuditLog({
         platformAdminId: admin?.id ?? null,
         action: "login_failed",
-        details: `user=${username}`, // بلا password/token
+        details: JSON.stringify({ username }), // بنية محددة، بلا password/token
         ipAddress: ip,
       });
       return genericFail();
     }
 
     clearFailures(key);
-    const token = jwt.sign({ platformAdminId: admin.id }, PLATFORM_SESSION_SECRET as string, {
-      expiresIn: SESSION_EXPIRES_IN,
-    });
+    const token = signSession(admin.id);
     res.cookie(PLATFORM_COOKIE, token, { ...platformCookieOptions(req), maxAge: SESSION_MAX_AGE_MS });
     touchPlatformAdminLogin(admin.id).catch(() => {});
     await addPlatformAuditLog({ platformAdminId: admin.id, action: "login", ipAddress: ip });
-    // نرجّع الحقول العامة فقط (id + username) — لا أي أسرار.
     return res.json({ success: true, admin: { id: admin.id, username: admin.username } });
   });
 
   // POST /api/platform/auth/logout
   router.post("/auth/logout", async (req, res) => {
+    if (!isOriginAllowed(req)) {
+      return res.status(403).json({ success: false, error: "مصدر غير مسموح" });
+    }
     const token = req.cookies?.[PLATFORM_COOKIE];
     if (token) {
-      try {
-        const payload: any = jwt.verify(token, PLATFORM_SESSION_SECRET as string);
-        await addPlatformAuditLog({ platformAdminId: Number(payload?.platformAdminId) || null, action: "logout", ipAddress: clientIp(req) });
-      } catch {
-        // توكن تالف — نمسح الكوكي بس.
+      const session = verifySession(token);
+      if (session) {
+        await addPlatformAuditLog({ platformAdminId: session.platformAdminId, action: "logout", ipAddress: clientIp(req) });
       }
     }
-    res.clearCookie(PLATFORM_COOKIE, { path: COOKIE_PATH });
+    res.clearCookie(PLATFORM_COOKIE, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production" ? true : isSecureRequest(req),
+      sameSite: "strict",
+      path: COOKIE_PATH,
+    });
     return res.json({ success: true });
   });
 
-  // GET /api/platform/auth/me
+  // GET /api/platform/auth/me — محمي بالجلسة (+ SameSite)؛ مايحتاجش Origin/Content-Type.
   router.get("/auth/me", requirePlatformAdmin, (req, res) => {
     const admin = (req as PlatformRequest).platformAdmin!;
     return res.json({ admin: { id: admin.id, username: admin.username } });
