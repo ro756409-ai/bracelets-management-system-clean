@@ -10,8 +10,8 @@ import { getLoginUrl } from "@/const";
  * مسارات الموظفين محفوظة زي ما كانت (جلساتهم منفصلة).
  */
 
-// صفحات عامة: لا مصادقة ولا تحويل.
-export const PUBLIC_PATHS = ["/login", "/signup"];
+// صفحات عامة + لوحة المنصة (لها مصادقتها المستقلة): لا تحويل بمعالج 401 الخاص بالعملاء.
+export const PUBLIC_PATHS = ["/login", "/signup", "/platform-admin"];
 
 // مسارات الموظفين: UNAUTHORIZED هنا مايوديش لدخول المالك.
 export const EMPLOYEE_PATHS = [

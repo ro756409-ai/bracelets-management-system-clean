@@ -102,6 +102,9 @@ import {
   platformAuditLogs,
   type PlatformAdmin,
   signupRequests,
+  type SignupRequest,
+  tenants,
+  memberships,
 } from "../drizzle/schema";
 import {
   calcPayrollLine,
@@ -406,6 +409,122 @@ export async function isSignupIdentifierTaken(
     )
     .limit(1);
   return pending.length > 0;
+}
+
+// ── الحقول الآمنة لطلبات التسجيل (بلا passwordHash إطلاقًا للعرض) ──
+const signupRequestSafeColumns = {
+  id: signupRequests.id, ownerName: signupRequests.ownerName, businessName: signupRequests.businessName,
+  phone: signupRequests.phone, email: signupRequests.email, username: signupRequests.username,
+  status: signupRequests.status, rejectionReason: signupRequests.rejectionReason,
+  reviewedByPlatformAdminId: signupRequests.reviewedByPlatformAdminId, reviewedAt: signupRequests.reviewedAt,
+  createdTenantId: signupRequests.createdTenantId, createdBusinessId: signupRequests.createdBusinessId,
+  createdEmployeeId: signupRequests.createdEmployeeId, createdAt: signupRequests.createdAt,
+} as const;
+
+export type SignupRequestSafe = Omit<SignupRequest, "passwordHash" | "updatedAt">;
+
+/** قائمة طلبات التسجيل (بلا passwordHash). status اختياري للفلترة. */
+export async function listSignupRequests(status?: "pending" | "approved" | "rejected"): Promise<SignupRequestSafe[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const q = db.select(signupRequestSafeColumns).from(signupRequests);
+  const rows = status
+    ? await q.where(eq(signupRequests.status, status)).orderBy(desc(signupRequests.createdAt))
+    : await q.orderBy(desc(signupRequests.createdAt));
+  return rows as SignupRequestSafe[];
+}
+
+export async function getSignupRequestById(id: number): Promise<SignupRequestSafe | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select(signupRequestSafeColumns).from(signupRequests).where(eq(signupRequests.id, id)).limit(1);
+  return rows[0] as SignupRequestSafe | undefined;
+}
+
+/** slug آمن فريد: أساس ASCII من الاسم (أو fallback) + لاحقة عشوائية — server-side فقط. */
+function makeSlug(base: string, fallback: string, maxLen: number): string {
+  const ascii = base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 20);
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${ascii || fallback}-${rand}`.slice(0, maxLen);
+}
+
+const TRIAL_DAYS = 14;
+
+export type ApproveResult =
+  | { ok: true; tenantId: number; businessId: number; employeeId: number }
+  | { ok: false; code: "not_found" | "not_pending" | "conflict"; message: string };
+
+/**
+ * قبول طلب تسجيل — **transaction ذرية واحدة**: tenant + business فارغ + owner employee (من
+ * بيانات الطلب وكلمة السر المشفّرة) + membership(owner) + تجربة 14 يوم + تحويل الطلب approved.
+ * يقفل صف الطلب (FOR UPDATE) ويمنع القبول المتكرر. أي فشل (يوزر مكرر…) = rollback كامل.
+ */
+export async function approveSignupRequest(requestId: number, platformAdminId: number): Promise<ApproveResult> {
+  const db = await getDb();
+  if (!db) return { ok: false, code: "conflict", message: "Database not available" };
+  const insertedId = (r: unknown) => Number((Array.isArray(r) ? r[0] : (r as any))?.insertId);
+  try {
+    return await db.transaction(async tx => {
+      const locked = await tx.select().from(signupRequests).where(eq(signupRequests.id, requestId)).limit(1).for("update");
+      const reqRow = locked[0];
+      if (!reqRow) return { ok: false, code: "not_found", message: "الطلب غير موجود" } as ApproveResult;
+      if (reqRow.status !== "pending" || reqRow.createdTenantId != null)
+        return { ok: false, code: "not_pending", message: "الطلب تمت معالجته بالفعل" } as ApproveResult;
+
+      const now = new Date();
+      const trialEndsAt = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+
+      const tenantId = insertedId(await tx.insert(tenants).values({
+        name: reqRow.businessName,
+        slug: makeSlug(reqRow.businessName, "tenant", 60),
+        status: "trialing",
+        trialStartsAt: now,
+        trialEndsAt,
+        ownerName: reqRow.ownerName,
+        ownerEmail: reqRow.email,
+      }));
+      const businessId = insertedId(await tx.insert(businesses).values({
+        tenantId,
+        name: reqRow.businessName,
+        slug: makeSlug(reqRow.businessName, "biz", 50),
+      }));
+      const employeeId = insertedId(await tx.insert(employees).values({
+        name: reqRow.ownerName, phone: reqRow.phone, email: reqRow.email,
+        role: "super_admin", isActive: true, tenantId, businessId,
+        username: reqRow.username, passwordHash: reqRow.passwordHash,
+      }));
+      await tx.insert(memberships).values({ employeeId, tenantId, role: "owner", status: "active" });
+      await tx.update(signupRequests).set({
+        status: "approved", reviewedByPlatformAdminId: platformAdminId, reviewedAt: now,
+        createdTenantId: tenantId, createdBusinessId: businessId, createdEmployeeId: employeeId,
+        passwordHash: "", // اتنقلت لـemployee — نمسحها من الطلب (بلا احتفاظ).
+      }).where(eq(signupRequests.id, requestId));
+
+      return { ok: true, tenantId, businessId, employeeId } as ApproveResult;
+    });
+  } catch (err) {
+    // غالبًا تعارض username/email (unique) بين التقديم والقبول — rollback تلقائي.
+    console.error("[approveSignupRequest] failed:", (err as Error).message);
+    return { ok: false, code: "conflict", message: "تعذّر القبول — قد يكون اسم المستخدم مستخدمًا بالفعل" };
+  }
+}
+
+/** رفض طلب pending. reason اختياري. يمنع رفض طلب متعالج. */
+export async function rejectSignupRequest(requestId: number, platformAdminId: number, reason?: string):
+  Promise<{ ok: true } | { ok: false; code: "not_found" | "not_pending" }> {
+  const db = await getDb();
+  if (!db) return { ok: false, code: "not_found" };
+  return await db.transaction(async tx => {
+    const locked = await tx.select().from(signupRequests).where(eq(signupRequests.id, requestId)).limit(1).for("update");
+    const reqRow = locked[0];
+    if (!reqRow) return { ok: false, code: "not_found" };
+    if (reqRow.status !== "pending") return { ok: false, code: "not_pending" };
+    await tx.update(signupRequests).set({
+      status: "rejected", reviewedByPlatformAdminId: platformAdminId, reviewedAt: new Date(),
+      rejectionReason: reason?.trim() || null, passwordHash: "",
+    }).where(eq(signupRequests.id, requestId));
+    return { ok: true };
+  });
 }
 
 /** إدراج طلب تسجيل (pending). passwordHash بيتحسب في الـcaller (bcrypt) — مفيش plaintext. */
