@@ -5,6 +5,9 @@ const templateRoot = path.resolve(import.meta.dirname);
 
 export default defineConfig({
   root: templateRoot,
+  // نفس سلوك vite: JSX runtime تلقائي — عشان مكوّنات الـ.tsx تشتغل في اختبارات jsdom بلا
+  // الحاجة لاستيراد React يدويًا في كل ملف.
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: {
       "@": path.resolve(templateRoot, "client", "src"),
@@ -27,6 +30,8 @@ export default defineConfig({
       // this project does not currently depend on.
       "client/src/**/*.test.ts",
       "client/src/**/*.spec.ts",
+      // اختبارات مكوّنات تحتاج DOM — تحدّد بيئتها بـ`// @vitest-environment jsdom` في أول الملف.
+      "client/src/**/*.test.tsx",
     ],
   },
 });

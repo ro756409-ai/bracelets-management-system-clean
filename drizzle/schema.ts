@@ -20,10 +20,25 @@ export const tenants = mysqlTable("tenants", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 150 }).notNull(),
   slug: varchar("slug", { length: 60 }).notNull().unique(),
-  status: mysqlEnum("status", ["trialing", "active", "past_due", "canceled"])
+  // القيم الأصلية محفوظة كما هي (توافق)، مع إضافة suspended/expired (additive) لدورة حياة
+  // التجربة والإيقاف. الإضافة في آخر الـenum = تغيير غير مدمّر للبيانات الحالية.
+  status: mysqlEnum("status", [
+    "trialing",
+    "active",
+    "past_due",
+    "canceled",
+    "suspended",
+    "expired",
+  ])
     .default("trialing")
     .notNull(),
+  // بداية التجربة (وقت التفعيل) + نهايتها؛ trialEndsAt = trialStartsAt + 14 يوم افتراضيًا.
+  trialStartsAt: timestamp("trialStartsAt"),
   trialEndsAt: timestamp("trialEndsAt"),
+  // وقت الإيقاف اليدوي (suspend) — للتدقيق والعرض.
+  suspendedAt: timestamp("suspendedAt"),
+  // ملاحظة إدارية داخلية يكتبها Platform Admin (مش ظاهرة للعميل).
+  adminNotes: text("adminNotes"),
   ownerName: varchar("ownerName", { length: 150 }),
   ownerEmail: varchar("ownerEmail", { length: 320 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -2219,3 +2234,108 @@ export type FinancialTransaction = typeof financialTransactions.$inferSelect;
 export type InventoryBalance = typeof inventoryBalances.$inferSelect;
 export type Shipment = typeof shipments.$inferSelect;
 export type AccountingClosing = typeof accountingClosings.$inferSelect;
+
+// ==================== MULTI-TENANT SIGNUP & PLATFORM ADMIN (Phase 3) ====================
+// إضافات فقط (additive) — مفيش تعديل على منطق العزل الحالي. الإنشاء الفعلي للحسابات بيتم
+// server-side وقت موافقة Platform Admin فقط؛ مفيش tenant/business/employee بيتعمل قبل الموافقة.
+
+// عضوية المستخدم داخل تينانت. **FK = employeeId وليس userId**: الهوية الفعلية في النظام هي
+// جدول employees (جدول users غير مستخدم فعليًا)، فالعضوية بتربط employee بتينانت + دوره
+// وحالته فيه. unique(employeeId, tenantId): النسخة الأولى عضوية واحدة لكل موظف داخل تينانت،
+// والتصميم قابل للتوسّع لتعدد التينانتات لاحقًا.
+export const memberships = mysqlTable(
+  "memberships",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    employeeId: int("employeeId").notNull(),
+    tenantId: int("tenantId").notNull(),
+    role: varchar("role", { length: 50 }).default("owner").notNull(),
+    status: mysqlEnum("status", ["active", "suspended", "invited"])
+      .default("active")
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    employeeTenantUnique: uniqueIndex("memberships_employee_tenant_unique").on(
+      table.employeeId,
+      table.tenantId
+    ),
+    tenantIdx: index("memberships_tenant_idx").on(table.tenantId),
+  })
+);
+export type Membership = typeof memberships.$inferSelect;
+export type InsertMembership = typeof memberships.$inferInsert;
+
+// أدمن المنصة — كيان **منفصل تمامًا** عن employees/tenants. مالوش tenantId/businessId، وممنوع
+// يوصله أي عميل. mfaSecret nullable ومجهّز للتشفير لاحقًا (مايُخزَّنش كنص مكشوف في الاستخدام).
+export const platformAdmins = mysqlTable("platform_admins", {
+  id: int("id").autoincrement().primaryKey(),
+  username: varchar("username", { length: 50 }).notNull().unique(),
+  email: varchar("email", { length: 320 }),
+  passwordHash: varchar("passwordHash", { length: 255 }).notNull(),
+  mfaSecret: varchar("mfaSecret", { length: 255 }),
+  isActive: boolean("isActive").default(true).notNull(),
+  lastLoginAt: timestamp("lastLoginAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type PlatformAdmin = typeof platformAdmins.$inferSelect;
+export type InsertPlatformAdmin = typeof platformAdmins.$inferInsert;
+
+// طلبات التسجيل العامة — دورة حياة مستقلة عن التينانت. كلمة السر تُخزَّن hashed فورًا (bcrypt)،
+// ومفيش tenant/business/employee بيتعمل قبل الموافقة. عند القبول تُملأ created*Id بالربط.
+// البريد يبقى globally unique للحسابات المُنشأة (يُفرض وقت القبول)؛ هنا index فقط عشان إعادة
+// التقديم بعد الرفض تفضل ممكنة.
+export const signupRequests = mysqlTable(
+  "signup_requests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    ownerName: varchar("ownerName", { length: 150 }).notNull(),
+    businessName: varchar("businessName", { length: 150 }).notNull(),
+    phone: varchar("phone", { length: 30 }).notNull(),
+    email: varchar("email", { length: 320 }).notNull(),
+    username: varchar("username", { length: 50 }).notNull(),
+    passwordHash: varchar("passwordHash", { length: 255 }).notNull(),
+    status: mysqlEnum("status", ["pending", "approved", "rejected"])
+      .default("pending")
+      .notNull(),
+    rejectionReason: text("rejectionReason"),
+    reviewedByPlatformAdminId: int("reviewedByPlatformAdminId"),
+    reviewedAt: timestamp("reviewedAt"),
+    createdTenantId: int("createdTenantId"),
+    createdBusinessId: int("createdBusinessId"),
+    createdEmployeeId: int("createdEmployeeId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    statusIdx: index("signup_requests_status_idx").on(table.status),
+    emailIdx: index("signup_requests_email_idx").on(table.email),
+    usernameIdx: index("signup_requests_username_idx").on(table.username),
+  })
+);
+export type SignupRequest = typeof signupRequests.$inferSelect;
+export type InsertSignupRequest = typeof signupRequests.$inferInsert;
+
+// تدقيق عمليات Platform Admin — **مش مرتبط بأي tenant** (خصوصًا مش legacy). بيسجّل login/
+// approve/reject/suspend/reactivate/extend_trial + مين نفّذها وامتى وعلى مين.
+export const platformAuditLogs = mysqlTable(
+  "platform_audit_logs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    platformAdminId: int("platformAdminId"),
+    action: varchar("action", { length: 50 }).notNull(),
+    targetType: varchar("targetType", { length: 50 }),
+    targetId: int("targetId"),
+    details: text("details"),
+    ipAddress: varchar("ipAddress", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    adminIdx: index("platform_audit_logs_admin_idx").on(table.platformAdminId),
+    actionIdx: index("platform_audit_logs_action_idx").on(table.action),
+  })
+);
+export type PlatformAuditLog = typeof platformAuditLogs.$inferSelect;
+export type InsertPlatformAuditLog = typeof platformAuditLogs.$inferInsert;

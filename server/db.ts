@@ -98,6 +98,13 @@ import {
   shipmentEvents,
   carrierSettlements,
   accountingClosingAdjustments,
+  platformAdmins,
+  platformAuditLogs,
+  type PlatformAdmin,
+  signupRequests,
+  type SignupRequest,
+  tenants,
+  memberships,
 } from "../drizzle/schema";
 import {
   calcPayrollLine,
@@ -278,6 +285,269 @@ export async function getBusinessIdsForTenant(
     .from(businesses)
     .where(eq(businesses.tenantId, tenantId));
   return rows.map(r => r.id);
+}
+
+// ==================== PLATFORM ADMIN (Phase 3.2) ====================
+// كيان منفصل تمامًا عن employees/tenants. كل الدوال دي server-side فقط، ومفيهاش أي علاقة
+// بـtenantId/businessId (مفيش عزل tenant هنا — ده فوق كل التينانتات، بصلاحية منفصلة).
+
+/** بحث بالـusername المطبّع (trim+lowercase بيتم في الـcaller). null لو مش موجود/DB مش متاحة. */
+export async function getPlatformAdminByUsername(
+  username: string
+): Promise<PlatformAdmin | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(platformAdmins)
+    .where(eq(platformAdmins.username, username))
+    .limit(1);
+  return rows[0];
+}
+
+export async function getPlatformAdminById(
+  id: number
+): Promise<PlatformAdmin | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(platformAdmins)
+    .where(eq(platformAdmins.id, id))
+    .limit(1);
+  return rows[0];
+}
+
+export async function touchPlatformAdminLogin(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(platformAdmins)
+    .set({ lastLoginAt: new Date() })
+    .where(eq(platformAdmins.id, id));
+}
+
+export async function countPlatformAdmins(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select({ id: platformAdmins.id }).from(platformAdmins);
+  return rows.length;
+}
+
+/** إنشاء أدمن منصة. الـpasswordHash بيتحسب في الـcaller (bcrypt) — مفيش plaintext هنا. */
+export async function createPlatformAdmin(input: {
+  username: string;
+  email?: string | null;
+  passwordHash: string;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(platformAdmins).values({
+    username: input.username,
+    email: input.email ?? null,
+    passwordHash: input.passwordHash,
+  });
+  const row = Array.isArray(result) ? result[0] : result;
+  return Number((row as { insertId?: number } | undefined)?.insertId);
+}
+
+/** تدقيق فعل أدمن منصة. ممنوع تمرير password/token/cookie في details. */
+export async function addPlatformAuditLog(input: {
+  platformAdminId?: number | null;
+  action: string;
+  targetType?: string | null;
+  targetId?: number | null;
+  details?: string | null;
+  ipAddress?: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.insert(platformAuditLogs).values({
+      platformAdminId: input.platformAdminId ?? null,
+      action: input.action,
+      targetType: input.targetType ?? null,
+      targetId: input.targetId ?? null,
+      details: input.details ?? null,
+      ipAddress: input.ipAddress ?? null,
+    });
+  } catch (err) {
+    // التدقيق مايكسرش المسار الأساسي، بس نسجّل الفشل نفسه (بلا بيانات حساسة).
+    console.error("[platform audit] failed to write log:", (err as Error).message);
+  }
+}
+
+// ==================== PUBLIC SIGNUP (Phase 3.3) ====================
+// طلبات التسجيل العامة — دورة حياة مستقلة عن التينانت. مفيش tenant/business/employee بيتعمل
+// هنا؛ ده بس إدراج طلب pending. الإنشاء الفعلي وقت موافقة Platform Admin (P3.4).
+
+/**
+ * هل البريد أو اسم المستخدم مأخوذ بالفعل؟ (email/username مطبّعين lowercase في الـcaller).
+ * بيفحص employees (الحسابات الفعلية) + signup_requests المعلّقة. للاستخدام الداخلي فقط —
+ * الرد للعميل يفضل عام (ماينكشفش أي حقل اتكرر) لمنع الـenumeration.
+ */
+export async function isSignupIdentifierTaken(
+  emailNorm: string,
+  usernameNorm: string
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const emp = await db
+    .select({ id: employees.id })
+    .from(employees)
+    .where(or(eq(employees.email, emailNorm), eq(employees.username, usernameNorm)))
+    .limit(1);
+  if (emp.length > 0) return true;
+  const pending = await db
+    .select({ id: signupRequests.id })
+    .from(signupRequests)
+    .where(
+      and(
+        eq(signupRequests.status, "pending"),
+        or(eq(signupRequests.email, emailNorm), eq(signupRequests.username, usernameNorm))
+      )
+    )
+    .limit(1);
+  return pending.length > 0;
+}
+
+// ── الحقول الآمنة لطلبات التسجيل (بلا passwordHash إطلاقًا للعرض) ──
+const signupRequestSafeColumns = {
+  id: signupRequests.id, ownerName: signupRequests.ownerName, businessName: signupRequests.businessName,
+  phone: signupRequests.phone, email: signupRequests.email, username: signupRequests.username,
+  status: signupRequests.status, rejectionReason: signupRequests.rejectionReason,
+  reviewedByPlatformAdminId: signupRequests.reviewedByPlatformAdminId, reviewedAt: signupRequests.reviewedAt,
+  createdTenantId: signupRequests.createdTenantId, createdBusinessId: signupRequests.createdBusinessId,
+  createdEmployeeId: signupRequests.createdEmployeeId, createdAt: signupRequests.createdAt,
+} as const;
+
+export type SignupRequestSafe = Omit<SignupRequest, "passwordHash" | "updatedAt">;
+
+/** قائمة طلبات التسجيل (بلا passwordHash). status اختياري للفلترة. */
+export async function listSignupRequests(status?: "pending" | "approved" | "rejected"): Promise<SignupRequestSafe[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const q = db.select(signupRequestSafeColumns).from(signupRequests);
+  const rows = status
+    ? await q.where(eq(signupRequests.status, status)).orderBy(desc(signupRequests.createdAt))
+    : await q.orderBy(desc(signupRequests.createdAt));
+  return rows as SignupRequestSafe[];
+}
+
+export async function getSignupRequestById(id: number): Promise<SignupRequestSafe | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select(signupRequestSafeColumns).from(signupRequests).where(eq(signupRequests.id, id)).limit(1);
+  return rows[0] as SignupRequestSafe | undefined;
+}
+
+/** slug آمن فريد: أساس ASCII من الاسم (أو fallback) + لاحقة عشوائية — server-side فقط. */
+function makeSlug(base: string, fallback: string, maxLen: number): string {
+  const ascii = base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 20);
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${ascii || fallback}-${rand}`.slice(0, maxLen);
+}
+
+const TRIAL_DAYS = 14;
+
+export type ApproveResult =
+  | { ok: true; tenantId: number; businessId: number; employeeId: number }
+  | { ok: false; code: "not_found" | "not_pending" | "conflict"; message: string };
+
+/**
+ * قبول طلب تسجيل — **transaction ذرية واحدة**: tenant + business فارغ + owner employee (من
+ * بيانات الطلب وكلمة السر المشفّرة) + membership(owner) + تجربة 14 يوم + تحويل الطلب approved.
+ * يقفل صف الطلب (FOR UPDATE) ويمنع القبول المتكرر. أي فشل (يوزر مكرر…) = rollback كامل.
+ */
+export async function approveSignupRequest(requestId: number, platformAdminId: number): Promise<ApproveResult> {
+  const db = await getDb();
+  if (!db) return { ok: false, code: "conflict", message: "Database not available" };
+  const insertedId = (r: unknown) => Number((Array.isArray(r) ? r[0] : (r as any))?.insertId);
+  try {
+    return await db.transaction(async tx => {
+      const locked = await tx.select().from(signupRequests).where(eq(signupRequests.id, requestId)).limit(1).for("update");
+      const reqRow = locked[0];
+      if (!reqRow) return { ok: false, code: "not_found", message: "الطلب غير موجود" } as ApproveResult;
+      if (reqRow.status !== "pending" || reqRow.createdTenantId != null)
+        return { ok: false, code: "not_pending", message: "الطلب تمت معالجته بالفعل" } as ApproveResult;
+
+      const now = new Date();
+      const trialEndsAt = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+
+      const tenantId = insertedId(await tx.insert(tenants).values({
+        name: reqRow.businessName,
+        slug: makeSlug(reqRow.businessName, "tenant", 60),
+        status: "trialing",
+        trialStartsAt: now,
+        trialEndsAt,
+        ownerName: reqRow.ownerName,
+        ownerEmail: reqRow.email,
+      }));
+      const businessId = insertedId(await tx.insert(businesses).values({
+        tenantId,
+        name: reqRow.businessName,
+        slug: makeSlug(reqRow.businessName, "biz", 50),
+      }));
+      const employeeId = insertedId(await tx.insert(employees).values({
+        name: reqRow.ownerName, phone: reqRow.phone, email: reqRow.email,
+        role: "super_admin", isActive: true, tenantId, businessId,
+        username: reqRow.username, passwordHash: reqRow.passwordHash,
+      }));
+      await tx.insert(memberships).values({ employeeId, tenantId, role: "owner", status: "active" });
+      await tx.update(signupRequests).set({
+        status: "approved", reviewedByPlatformAdminId: platformAdminId, reviewedAt: now,
+        createdTenantId: tenantId, createdBusinessId: businessId, createdEmployeeId: employeeId,
+        passwordHash: "", // اتنقلت لـemployee — نمسحها من الطلب (بلا احتفاظ).
+      }).where(eq(signupRequests.id, requestId));
+
+      return { ok: true, tenantId, businessId, employeeId } as ApproveResult;
+    });
+  } catch (err) {
+    // غالبًا تعارض username/email (unique) بين التقديم والقبول — rollback تلقائي.
+    console.error("[approveSignupRequest] failed:", (err as Error).message);
+    return { ok: false, code: "conflict", message: "تعذّر القبول — قد يكون اسم المستخدم مستخدمًا بالفعل" };
+  }
+}
+
+/** رفض طلب pending. reason اختياري. يمنع رفض طلب متعالج. */
+export async function rejectSignupRequest(requestId: number, platformAdminId: number, reason?: string):
+  Promise<{ ok: true } | { ok: false; code: "not_found" | "not_pending" }> {
+  const db = await getDb();
+  if (!db) return { ok: false, code: "not_found" };
+  return await db.transaction(async tx => {
+    const locked = await tx.select().from(signupRequests).where(eq(signupRequests.id, requestId)).limit(1).for("update");
+    const reqRow = locked[0];
+    if (!reqRow) return { ok: false, code: "not_found" };
+    if (reqRow.status !== "pending") return { ok: false, code: "not_pending" };
+    await tx.update(signupRequests).set({
+      status: "rejected", reviewedByPlatformAdminId: platformAdminId, reviewedAt: new Date(),
+      rejectionReason: reason?.trim() || null, passwordHash: "",
+    }).where(eq(signupRequests.id, requestId));
+    return { ok: true };
+  });
+}
+
+/** إدراج طلب تسجيل (pending). passwordHash بيتحسب في الـcaller (bcrypt) — مفيش plaintext. */
+export async function createSignupRequest(input: {
+  ownerName: string;
+  businessName: string;
+  phone: string;
+  email: string;
+  username: string;
+  passwordHash: string;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(signupRequests).values({
+    ownerName: input.ownerName,
+    businessName: input.businessName,
+    phone: input.phone,
+    email: input.email,
+    username: input.username,
+    passwordHash: input.passwordHash,
+  });
+  const row = Array.isArray(result) ? result[0] : result;
+  return Number((row as { insertId?: number } | undefined)?.insertId);
 }
 
 /**

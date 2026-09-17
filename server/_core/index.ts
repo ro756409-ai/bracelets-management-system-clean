@@ -9,6 +9,9 @@ import { registerExportRoutes } from "../exportExcel";
 import { registerWebhookRoutes } from "../easyorderWebhook";
 import { registerBostaWebhookRoutes } from "../bostaWebhook";
 import { registerBostaAwbRoutes } from "../bosta.service";
+import { registerPlatformAuthRoutes } from "../platformAuth";
+import { registerPlatformAdminRoutes } from "../platformAdmin";
+import { registerSignupRoutes } from "../signup";
 import employeeAuthRouter from "../employeeAuth";
 import cookieParser from "cookie-parser";
 import { appRouter } from "../routers";
@@ -69,6 +72,12 @@ async function startServer() {
   registerBostaWebhookRoutes(app);
   // Bosta AWB (official shipping label) print/download routes
   registerBostaAwbRoutes(app);
+  // Platform Admin auth routes (منفصلة تمامًا عن مصادقة العملاء — /api/platform/auth/*)
+  registerPlatformAuthRoutes(app);
+  // Platform Admin — إدارة طلبات التسجيل (/api/platform/signup-requests/*) محمي بجلسة المنصة
+  registerPlatformAdminRoutes(app);
+  // Public tenant signup (POST /api/signup) — طلب pending فقط، بلا إنشاء tenant قبل الموافقة
+  registerSignupRoutes(app);
   // Employee auth routes
   app.use("/api/employee", employeeAuthRouter);
   // tRPC API

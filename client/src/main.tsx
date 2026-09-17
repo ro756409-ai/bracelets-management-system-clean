@@ -1,47 +1,20 @@
 import { trpc } from "@/lib/trpc";
-import { UNAUTHED_ERR_MSG } from '@shared/const';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink, TRPCClientError } from "@trpc/client";
+import { httpBatchLink } from "@trpc/client";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
-import { getLoginUrl } from "./const";
+import { handleUnauthorizedRedirect } from "./_core/authRedirect";
 import "./index.css";
 
 const queryClient = new QueryClient();
 
-// مسارات الموظفين - لا تحتاج Manus OAuth
-const EMPLOYEE_PATHS = [
-  '/employee-login',
-  '/employee-dashboard',
-  '/warehouse-dashboard',
-  '/manager-dashboard',
-  '/facebook-entry',
-  '/today-shipments',
-  '/shipping-schedule',
-  // مساحة المحاسب جلسة موظف (user=null) — أي UNAUTHORIZED هنا مايوديهوش لـManus OAuth.
-  '/accountant',
-];
-
-const redirectToLoginIfUnauthorized = (error: unknown) => {
-  if (!(error instanceof TRPCClientError)) return;
-  if (typeof window === "undefined") return;
-
-  const isUnauthorized = error.message === UNAUTHED_ERR_MSG;
-  if (!isUnauthorized) return;
-
-  // لو المستخدم في صفحة موظفين، لا تحوله لـ Manus OAuth
-  const currentPath = window.location.pathname;
-  const isEmployeePath = EMPLOYEE_PATHS.some(p => currentPath.startsWith(p));
-  if (isEmployeePath) return;
-
-  window.location.href = getLoginUrl();
-};
-
+// التحويل لصفحة الدخول عند UNAUTHORIZED — المنطق في authRedirect.ts (يستثني /login و/signup
+// ومسارات الموظفين). عام هنا عشان أي query/mutation غير مصرّح.
 queryClient.getQueryCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.query.state.error;
-    redirectToLoginIfUnauthorized(error);
+    handleUnauthorizedRedirect(error);
     console.error("[API Query Error]", error);
   }
 });
@@ -49,7 +22,7 @@ queryClient.getQueryCache().subscribe(event => {
 queryClient.getMutationCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.mutation.state.error;
-    redirectToLoginIfUnauthorized(error);
+    handleUnauthorizedRedirect(error);
     console.error("[API Mutation Error]", error);
   }
 });

@@ -154,9 +154,13 @@ describe("🔑 حماية الاستلام في الواجهة + لا نظام �
 });
 
 describe("🔑 إصلاح الـlogout للمحاسب", () => {
-  const main = fs.readFileSync("client/src/main.tsx", "utf-8");
+  // EMPLOYEE_PATHS اتنقلت من main.tsx لـauthRedirect.ts (منطق التحويل النقي) في إصلاح P3.3.
+  const authRedirect = fs.readFileSync("client/src/_core/authRedirect.ts", "utf-8");
   it("🔑 /accountant ضمن EMPLOYEE_PATHS — مايتحوّلش لـManus OAuth على UNAUTHORIZED", () => {
-    const list = main.slice(main.indexOf("EMPLOYEE_PATHS"), main.indexOf("]", main.indexOf("EMPLOYEE_PATHS")));
+    const list = authRedirect.slice(
+      authRedirect.indexOf("EMPLOYEE_PATHS"),
+      authRedirect.indexOf("]", authRedirect.indexOf("EMPLOYEE_PATHS"))
+    );
     expect(list).toContain("/accountant");
   });
   it("🔑 القراءات اللي المحاسب محتاجها بقت authenticatedProcedure (tenant-scoped)", () => {
