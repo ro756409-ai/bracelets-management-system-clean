@@ -9,6 +9,7 @@ import { registerExportRoutes } from "../exportExcel";
 import { registerWebhookRoutes } from "../easyorderWebhook";
 import { registerBostaWebhookRoutes } from "../bostaWebhook";
 import { registerBostaAwbRoutes } from "../bosta.service";
+import { registerPlatformAuthRoutes } from "../platformAuth";
 import employeeAuthRouter from "../employeeAuth";
 import cookieParser from "cookie-parser";
 import { appRouter } from "../routers";
@@ -69,6 +70,8 @@ async function startServer() {
   registerBostaWebhookRoutes(app);
   // Bosta AWB (official shipping label) print/download routes
   registerBostaAwbRoutes(app);
+  // Platform Admin auth routes (منفصلة تمامًا عن مصادقة العملاء — /api/platform/auth/*)
+  registerPlatformAuthRoutes(app);
   // Employee auth routes
   app.use("/api/employee", employeeAuthRouter);
   // tRPC API

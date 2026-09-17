@@ -98,6 +98,9 @@ import {
   shipmentEvents,
   carrierSettlements,
   accountingClosingAdjustments,
+  platformAdmins,
+  platformAuditLogs,
+  type PlatformAdmin,
 } from "../drizzle/schema";
 import {
   calcPayrollLine,
@@ -278,6 +281,96 @@ export async function getBusinessIdsForTenant(
     .from(businesses)
     .where(eq(businesses.tenantId, tenantId));
   return rows.map(r => r.id);
+}
+
+// ==================== PLATFORM ADMIN (Phase 3.2) ====================
+// كيان منفصل تمامًا عن employees/tenants. كل الدوال دي server-side فقط، ومفيهاش أي علاقة
+// بـtenantId/businessId (مفيش عزل tenant هنا — ده فوق كل التينانتات، بصلاحية منفصلة).
+
+/** بحث بالـusername المطبّع (trim+lowercase بيتم في الـcaller). null لو مش موجود/DB مش متاحة. */
+export async function getPlatformAdminByUsername(
+  username: string
+): Promise<PlatformAdmin | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(platformAdmins)
+    .where(eq(platformAdmins.username, username))
+    .limit(1);
+  return rows[0];
+}
+
+export async function getPlatformAdminById(
+  id: number
+): Promise<PlatformAdmin | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(platformAdmins)
+    .where(eq(platformAdmins.id, id))
+    .limit(1);
+  return rows[0];
+}
+
+export async function touchPlatformAdminLogin(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(platformAdmins)
+    .set({ lastLoginAt: new Date() })
+    .where(eq(platformAdmins.id, id));
+}
+
+export async function countPlatformAdmins(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rows = await db.select({ id: platformAdmins.id }).from(platformAdmins);
+  return rows.length;
+}
+
+/** إنشاء أدمن منصة. الـpasswordHash بيتحسب في الـcaller (bcrypt) — مفيش plaintext هنا. */
+export async function createPlatformAdmin(input: {
+  username: string;
+  email?: string | null;
+  passwordHash: string;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(platformAdmins).values({
+    username: input.username,
+    email: input.email ?? null,
+    passwordHash: input.passwordHash,
+  });
+  const row = Array.isArray(result) ? result[0] : result;
+  return Number((row as { insertId?: number } | undefined)?.insertId);
+}
+
+/** تدقيق فعل أدمن منصة. ممنوع تمرير password/token/cookie في details. */
+export async function addPlatformAuditLog(input: {
+  platformAdminId?: number | null;
+  action: string;
+  targetType?: string | null;
+  targetId?: number | null;
+  details?: string | null;
+  ipAddress?: string | null;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  try {
+    await db.insert(platformAuditLogs).values({
+      platformAdminId: input.platformAdminId ?? null,
+      action: input.action,
+      targetType: input.targetType ?? null,
+      targetId: input.targetId ?? null,
+      details: input.details ?? null,
+      ipAddress: input.ipAddress ?? null,
+    });
+  } catch (err) {
+    // التدقيق مايكسرش المسار الأساسي، بس نسجّل الفشل نفسه (بلا بيانات حساسة).
+    console.error("[platform audit] failed to write log:", (err as Error).message);
+  }
 }
 
 /**
