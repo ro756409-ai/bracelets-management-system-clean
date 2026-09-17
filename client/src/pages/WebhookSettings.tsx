@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SetupJourney } from "@/components/SetupJourney";
 import {
   Copy, CheckCircle, XCircle, AlertCircle, RefreshCw, Zap,
   Package, Phone, MapPin, Calendar, ChevronDown, ChevronUp, Info
@@ -187,7 +188,8 @@ export default function WebhookSettings() {
             سجل Easy Order
           </h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            كل الأوردرات الواردة من Easy Order محفوظة هنا بشكل دائم — حتى بعد إعادة تشغيل السيرفر
+            إعداد ومتابعة ربط Easy Order: كل الأوردرات الواردة عبر الـWebhook مسجّلة هنا بشكل دائم —
+            حتى بعد إعادة تشغيل السيرفر. لإضافة/تعديل بيانات الربط، افتح قناة EasyOrder من صفحة قنوات البيع.
           </p>
         </div>
         <Button
@@ -200,6 +202,8 @@ export default function WebhookSettings() {
           تحديث
         </Button>
       </div>
+
+      <SetupJourney current="easyorder" />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

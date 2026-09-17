@@ -24,7 +24,7 @@ import {
   Plus, Search, CheckCircle, XCircle, Clock, UserPlus, Eye, FileSpreadsheet, Download, Truck,
   Trash2, Printer, PhoneCall, PhoneOff, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
   MoreHorizontal, MoreVertical, ListChecks, LayoutGrid, Rows3,
-  Package, AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal,
+  Package, AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal, UserX,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import ImportExcelDialog from "@/components/ImportExcelDialog";
@@ -79,13 +79,13 @@ type PendingConfirm =
 
 const FILTER_DESCRIPTORS: FilterDescriptor<{
   status: string; source: string; website: string; governorates: string[];
-  adName: string; hideAssigned: boolean; employee: string; dateRange: DateRange;
+  adName: string; employee: string; dateRange: DateRange;
 }>[] = [
   { key: "status", label: "الحالة", format: (v) => STATUS_LABEL(v) },
   { key: "source", label: "المصدر" },
   { key: "governorates", label: "المحافظة" },
   { key: "adName", label: "البيدج" },
-  { key: "hideAssigned", label: "التوزيع", format: () => "غير الموزعة فقط" },
+  // hideAssigned بقى زرًّا رئيسيًا فوق الجدول — مش شريحة فلتر متقدمة.
   // اللقطة بتمرّر اسم الموظف مش رقمه، عشان الشريحة تقرأ "الموظف: أحمد" من غير ما ملف
   // الثوابت ده يحتاج يعرف حاجة عن قائمة الموظفين.
   { key: "employee", label: "الموظف" },
@@ -621,14 +621,15 @@ export default function Orders() {
   // remains the single source of truth; this object exists purely to describe them) ====
   const filtersSnapshot = {
     status: statusFilter, source: sourceFilter, website: websiteFilter,
-    governorates: governorateFilter, adName: adNameFilter, hideAssigned, dateRange,
+    governorates: governorateFilter, adName: adNameFilter, dateRange,
     employee: employeeFilter === "all"
       ? "all"
       : employeeNameById.get(Number(employeeFilter)) ?? `#${employeeFilter}`,
   };
   const filterChips = buildFilterChips(filtersSnapshot, FILTER_DESCRIPTORS);
   // الفلاتر اللي هتروح Drawer «المتقدمة» — العدّ مشتقّ من نفس chips الموجودة (مفيش منطق جديد).
-  const ADVANCED_FILTER_KEYS = new Set(["website", "governorates", "adName", "employee", "hideAssigned"]);
+  // hideAssigned بقى زرًّا رئيسيًا واضحًا فوق الجدول (مش داخل الفلاتر المتقدمة).
+  const ADVANCED_FILTER_KEYS = new Set(["website", "governorates", "adName", "employee"]);
   const advancedActiveCount = filterChips.filter(c => ADVANCED_FILTER_KEYS.has(c.key)).length;
   const clearOneFilter = (key: string) => {
     setPage(1);
@@ -1073,6 +1074,25 @@ export default function Orders() {
             </span>
           )}
         </button>
+        {/* زر رئيسي واضح: الأوردرات غير الموزعة (بدل التحكم المدفون في الفلاتر المتقدمة).
+            عرض فقط — بيفلتر unassigned server-side، ومايوزّعش أي أوردر. */}
+        <button
+          onClick={() => { setActiveTab('all'); setHideAssigned(v => !v); setPage(1); }}
+          disabled={employeeFilter !== 'all'}
+          title={employeeFilter !== 'all' ? 'غير متاح أثناء الفلترة بموظف محدد' : 'عرض الأوردرات اللي مالهاش موظف مسؤول'}
+          className={`inline-flex items-center gap-1.5 rounded-[var(--radius-brand-pill)] border px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+            hideAssigned && employeeFilter === 'all'
+              ? 'border-[var(--warning)] bg-[var(--warning)]/15 text-[var(--warning)]'
+              : 'border-border bg-card text-muted-foreground hover:bg-muted'
+          }`}
+        >
+          <UserX className="h-4 w-4" /> الأوردرات غير الموزعة
+          {hideAssigned && employeeFilter === 'all' && activeTab === 'all' && data?.total != null && (
+            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-black/10 px-1 text-xs font-bold tabular-nums">
+              {Number(data.total).toLocaleString('ar-EG')}
+            </span>
+          )}
+        </button>
         {(statusCounts?.needsReview ?? 0) > 0 && (
           <span className="ms-auto inline-flex items-center gap-1.5 rounded-[var(--radius-brand-pill)] border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-3 py-1.5 text-sm font-medium text-[var(--warning)]">
             <AlertTriangle className="h-4 w-4" /> يحتاج مراجعة: {(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')}
@@ -1264,19 +1284,6 @@ export default function Orders() {
                     </Select>
                   </div>
 
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-foreground">التوزيع</label>
-                    <Button
-                      variant={hideAssigned ? "default" : "outline"}
-                      size="sm"
-                      className="h-9 w-full"
-                      disabled={employeeFilter !== "all"}
-                      title={employeeFilter !== "all" ? "غير متاح أثناء الفلترة بموظف محدد" : undefined}
-                      onClick={() => { setHideAssigned(v => !v); setPage(1); }}
-                    >
-                      {hideAssigned ? "غير الموزعة فقط" : "كل الأوردرات"}
-                    </Button>
-                  </div>
                 </>
               }
             />

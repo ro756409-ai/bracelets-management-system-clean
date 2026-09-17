@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Plus, Edit, Building2, ToggleLeft, ToggleRight } from "lucide-react";
+import { SetupJourney } from "@/components/SetupJourney";
 import { toast } from "sonner";
 
 export default function Businesses() {
@@ -104,7 +105,10 @@ export default function Businesses() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">إدارة الأنشطة</h1>
-          <p className="text-muted-foreground mt-1">إدارة الأنشطة التجارية والبراندات</p>
+          <p className="text-muted-foreground mt-1">
+            أنشئ وأدِر البراندات/الأنشطة التجارية. كل نشاط له أوردراته ومخزنه وموظفيه وحساباته
+            بشكل منفصل. ابدأ بإنشاء نشاط، وبعدها اربط له قنوات البيع.
+          </p>
         </div>
         <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
           <DialogTrigger asChild>
@@ -146,6 +150,8 @@ export default function Businesses() {
         </Dialog>
       </div>
 
+      <SetupJourney current="business" />
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -166,6 +172,27 @@ export default function Businesses() {
               </TableRow>
             </TableHeader>
             <TableBody>
+              {(businesses?.length ?? 0) === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6}>
+                    <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                        <Building2 className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-foreground">لا توجد أنشطة بعد</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          ابدأ بإنشاء أول نشاط تجاري (براند/فرع) — بعدها تقدر تربطله قنوات بيع وتستقبل أوردرات.
+                        </p>
+                      </div>
+                      <Button onClick={() => setIsAddOpen(true)}>
+                        <Plus className="h-4 w-4 ml-2" />
+                        إنشاء أول نشاط
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
               {businesses?.map((business: any) => (
                 <TableRow key={business.id}>
                   <TableCell>{business.id}</TableCell>
