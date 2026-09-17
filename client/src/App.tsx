@@ -7,6 +7,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Orders from "./pages/Orders";
 import DailyLedger from "./pages/DailyLedger";
@@ -136,6 +137,7 @@ function Router() {
     <Switch>
       <Route path={"/"} component={Home} />
       <Route path={"/login"} component={Login} />
+      <Route path={"/signup"} component={Register} />
       <Route path={"/dashboard"}>
         <ProtectedLayout><Dashboard /></ProtectedLayout>
       </Route>

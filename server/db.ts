@@ -101,6 +101,7 @@ import {
   platformAdmins,
   platformAuditLogs,
   type PlatformAdmin,
+  signupRequests,
 } from "../drizzle/schema";
 import {
   calcPayrollLine,
@@ -371,6 +372,63 @@ export async function addPlatformAuditLog(input: {
     // التدقيق مايكسرش المسار الأساسي، بس نسجّل الفشل نفسه (بلا بيانات حساسة).
     console.error("[platform audit] failed to write log:", (err as Error).message);
   }
+}
+
+// ==================== PUBLIC SIGNUP (Phase 3.3) ====================
+// طلبات التسجيل العامة — دورة حياة مستقلة عن التينانت. مفيش tenant/business/employee بيتعمل
+// هنا؛ ده بس إدراج طلب pending. الإنشاء الفعلي وقت موافقة Platform Admin (P3.4).
+
+/**
+ * هل البريد أو اسم المستخدم مأخوذ بالفعل؟ (email/username مطبّعين lowercase في الـcaller).
+ * بيفحص employees (الحسابات الفعلية) + signup_requests المعلّقة. للاستخدام الداخلي فقط —
+ * الرد للعميل يفضل عام (ماينكشفش أي حقل اتكرر) لمنع الـenumeration.
+ */
+export async function isSignupIdentifierTaken(
+  emailNorm: string,
+  usernameNorm: string
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const emp = await db
+    .select({ id: employees.id })
+    .from(employees)
+    .where(or(eq(employees.email, emailNorm), eq(employees.username, usernameNorm)))
+    .limit(1);
+  if (emp.length > 0) return true;
+  const pending = await db
+    .select({ id: signupRequests.id })
+    .from(signupRequests)
+    .where(
+      and(
+        eq(signupRequests.status, "pending"),
+        or(eq(signupRequests.email, emailNorm), eq(signupRequests.username, usernameNorm))
+      )
+    )
+    .limit(1);
+  return pending.length > 0;
+}
+
+/** إدراج طلب تسجيل (pending). passwordHash بيتحسب في الـcaller (bcrypt) — مفيش plaintext. */
+export async function createSignupRequest(input: {
+  ownerName: string;
+  businessName: string;
+  phone: string;
+  email: string;
+  username: string;
+  passwordHash: string;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(signupRequests).values({
+    ownerName: input.ownerName,
+    businessName: input.businessName,
+    phone: input.phone,
+    email: input.email,
+    username: input.username,
+    passwordHash: input.passwordHash,
+  });
+  const row = Array.isArray(result) ? result[0] : result;
+  return Number((row as { insertId?: number } | undefined)?.insertId);
 }
 
 /**

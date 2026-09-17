@@ -126,7 +126,16 @@ export default function Login() {
               </Button>
             </form>
 
-            <div className="mt-6 text-center">
+            <div className="mt-6 space-y-2 text-center">
+              <p className="text-xs text-muted-foreground">
+                تاجر جديد؟{" "}
+                <a
+                  href="/signup"
+                  className="text-primary hover:underline font-medium"
+                >
+                  إنشاء حساب
+                </a>
+              </p>
               <p className="text-xs text-muted-foreground">
                 موظف؟{" "}
                 <a
