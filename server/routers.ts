@@ -2605,8 +2605,11 @@ export const appRouter = router({
       }),
 
     // جرد كل الموظفين دفعة واحدة
-    allInventory: adminProcedure.query(async () => {
-      const emps = await getActiveEmployees();
+    allInventory: adminProcedure.query(async ({ ctx }) => {
+      // fail-closed: نطاق الجلسة فقط. غياب النطاق/بلا membership → [-1] → صفر موظفين،
+      // مش موظفي كل التينانتات (الاستدعاء العاري بلا نطاق كان بيسرّب أسماء تينانتات أخرى).
+      const businessIds = await scopeBusinessIds(ctx, {});
+      const emps = await getActiveEmployees(undefined, businessIds);
       const results = await Promise.all(
         emps
           .filter(e => e.role === "agent")
@@ -4695,11 +4698,12 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const emp = (ctx as any).employee;
-        const bId = emp.businessId ?? undefined;
+        // fail-closed: نطاق أنشطة الجلسة (متقيّد بالـtenant)؛ null/بلا نشاط → [-1] → صفر،
+        // مش `emp.businessId ?? undefined` اللي بيرجّع كل التينانتات لو النشاط null.
+        const businessIds = await scopeBusinessIds(empScope(ctx), {});
         const [perf, emps] = await Promise.all([
-          getEmployeePerformance(input.dateFrom, input.dateTo, bId),
-          getAllEmployees(bId),
+          getEmployeePerformance(input.dateFrom, input.dateTo, undefined, businessIds),
+          getAllEmployees(undefined, businessIds),
         ]);
         return perf.map(p => {
           const emp = emps.find(e => e.id === p.employeeId);
@@ -4754,14 +4758,15 @@ export const appRouter = router({
 
     // Employees list
     employeesList: managerPortalProcedure.query(async ({ ctx }) => {
-      const emp = (ctx as any).employee;
-      return getAllEmployees(emp.businessId ?? undefined);
+      // fail-closed: نطاق الجلسة، مش `emp.businessId ?? undefined` (null → الكل).
+      const businessIds = await scopeBusinessIds(empScope(ctx), {});
+      return getAllEmployees(undefined, businessIds);
     }),
 
     // Active employees list
     activeEmployeesList: managerPortalProcedure.query(async ({ ctx }) => {
-      const emp = (ctx as any).employee;
-      return getActiveEmployees(emp.businessId ?? undefined);
+      const businessIds = await scopeBusinessIds(empScope(ctx), {});
+      return getActiveEmployees(undefined, businessIds);
     }),
 
     // Create employee

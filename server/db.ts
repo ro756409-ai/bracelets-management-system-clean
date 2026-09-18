@@ -2315,8 +2315,10 @@ export async function getEmployeePerformance(
   const correctedFrom = dateFrom ? cairoStartOfDay(dateFrom) : undefined;
   const correctedTo = dateTo ? cairoEndOfDay(dateTo) : undefined;
   const conditions = [];
-  if (businessIds && businessIds.length > 0)
-    conditions.push(inArray(orders.businessId, businessIds));
+  // fail-closed: businessIds مُمرَّرة (حتى لو []) → قيد صارم؛ فاضي → [-1] → صفر صفوف،
+  // مش تجاهل الفلتر (اللي كان بيرجّع كل التينانتات). businessId المفرد للتوافق القديم.
+  const scoped = scopedBusinessFilter(orders.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
   else if (businessId) conditions.push(eq(orders.businessId, businessId));
   if (correctedFrom) conditions.push(gte(orders.createdAt, correctedFrom));
   if (correctedTo) conditions.push(lte(orders.createdAt, correctedTo));
@@ -2348,8 +2350,9 @@ export async function getCancellationReasons(
   const correctedFrom = dateFrom ? cairoStartOfDay(dateFrom) : undefined;
   const correctedTo = dateTo ? cairoEndOfDay(dateTo) : undefined;
   const conditions = [eq(orders.status, "cancelled")];
-  if (businessIds && businessIds.length > 0)
-    conditions.push(inArray(orders.businessId, businessIds));
+  // fail-closed: نفس منطق getEmployeePerformance — [] → [-1] → صفر، مش تجاهل الفلتر.
+  const scoped = scopedBusinessFilter(orders.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
   else if (businessId) conditions.push(eq(orders.businessId, businessId));
   if (correctedFrom) conditions.push(gte(orders.cancelledAt, correctedFrom));
   if (correctedTo) conditions.push(lte(orders.cancelledAt, correctedTo));
