@@ -9,7 +9,7 @@
  */
 import { Router, type Express, type Request } from "express";
 import bcrypt from "bcryptjs";
-import { isSignupIdentifierTaken, createSignupRequest } from "./db";
+import { createSignupRequest } from "./db";
 
 const OWNER_MIN = 2, OWNER_MAX = 150;
 const BIZ_MIN = 2, BIZ_MAX = 150;
@@ -103,19 +103,26 @@ export function registerSignupRoutes(app: Express) {
     if (!parsed.ok) return res.status(400).json({ success: false, error: parsed.error });
     const v = parsed.value;
 
+    // نحفظ الطلب **دايمًا** للمدخلات الصحيحة، ونرجّع النجاح **فقط بعد insert حقيقي**. مفيش
+    // تخطّي صامت: الفحص القديم ضد employees/الطلبات كان بيرجّع نجاحًا وهميًا لو البريد/اليوزر
+    // مطابق لموظف legacy (السبب الجذري لفقد الطلبات على Production DB=default). التفرّد يُفرض
+    // server-side وقت القبول. الرد عام موحّد فمايكشفش وجود أي حساب (لا enumeration).
     try {
-      // منع enumeration: لو مأخوذ، نرجّع نفس الرد العام بدون إدراج (مفيش كشف أي حقل).
-      if (await isSignupIdentifierTaken(v.email, v.username)) {
-        return res.json(RECEIVED);
-      }
       const passwordHash = await bcrypt.hash(v.password, 12);
-      await createSignupRequest({
+      const id = await createSignupRequest({
         ownerName: v.ownerName, businessName: v.businessName, phone: v.phone,
         email: v.email, username: v.username, passwordHash,
       });
+      if (!id || Number.isNaN(id)) {
+        // insert ما رجّعش id صالح — نعتبره فشلًا (مانعرضش نجاحًا وهميًا).
+        console.error("[signup] insert returned no id");
+        return res.status(500).json({ success: false, error: "تعذّر إنشاء الطلب، حاول لاحقًا" });
+      }
+      // logging آمن: id فقط — بلا password/بريد/أي secret.
+      console.log(`[signup] pending request created id=${id}`);
       return res.json(RECEIVED);
     } catch (err) {
-      console.error("[signup] failed:", (err as Error).message);
+      console.error("[signup] failed to persist request:", (err as Error).message);
       return res.status(500).json({ success: false, error: "تعذّر إنشاء الطلب، حاول لاحقًا" });
     }
   });
