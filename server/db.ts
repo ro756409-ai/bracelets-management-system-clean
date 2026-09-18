@@ -287,6 +287,17 @@ export async function getBusinessIdsForTenant(
   return rows.map(r => r.id);
 }
 
+/**
+ * فلتر عزل fail-closed لقوائم القراءة: `businessIds` = الأنشطة المسموحة (من session server-side).
+ *   • undefined → المسار القديم للنداءات الداخلية اللي بتمرّر businessId مفرد (بترجع undefined هنا).
+ *   • [] (فاضية) → `[-1]` = صفر صفوف (مستحيل تتطابق) — **مايرجعش كل الصفوف أبدًا**.
+ *   • قائمة → inArray. ده بيضمن إن غياب businessId من العميل = أنشطة المستخدم فقط، مش كل النظام.
+ */
+function scopedBusinessFilter(column: any, businessIds?: number[]) {
+  if (!businessIds) return undefined;
+  return inArray(column, businessIds.length ? businessIds : [-1]);
+}
+
 // ==================== PLATFORM ADMIN (Phase 3.2) ====================
 // كيان منفصل تمامًا عن employees/tenants. كل الدوال دي server-side فقط، ومفيهاش أي علاقة
 // بـtenantId/businessId (مفيش عزل tenant هنا — ده فوق كل التينانتات، بصلاحية منفصلة).
@@ -774,6 +785,8 @@ export async function getUserByOpenId(openId: string) {
 // ==================== EMPLOYEES ====================
 export interface EmployeeFilters {
   businessId?: number;
+  /** عزل fail-closed من الـsession — قائمة أنشطة التينانت. فاضية → صفر صفوف. */
+  businessIds?: number[];
   search?: string;
   role?: string;
   isActive?: boolean;
@@ -783,11 +796,13 @@ export interface EmployeeFilters {
 const { passwordHash: _employeePasswordHashColumn, ...employeeSafeColumns } =
   getTableColumns(employees);
 
-export async function getAllEmployees(businessId?: number) {
+export async function getAllEmployees(businessId?: number, businessIds?: number[]) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [];
   if (businessId) conditions.push(eq(employees.businessId, businessId));
+  const scoped = scopedBusinessFilter(employees.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
   return db
     .select(employeeSafeColumns)
     .from(employees)
@@ -801,6 +816,8 @@ export async function searchEmployees(filters: EmployeeFilters) {
   const conditions: any[] = [];
   if (filters.businessId)
     conditions.push(eq(employees.businessId, filters.businessId));
+  const scopedEmp = scopedBusinessFilter(employees.businessId, filters.businessIds);
+  if (scopedEmp) conditions.push(scopedEmp);
   if (filters.role) conditions.push(eq(employees.role, filters.role as any));
   if (filters.isActive !== undefined)
     conditions.push(eq(employees.isActive, filters.isActive));
@@ -861,11 +878,13 @@ export async function countActiveAdminTierEmployees(
   return rows.length;
 }
 
-export async function getActiveEmployees(businessId?: number) {
+export async function getActiveEmployees(businessId?: number, businessIds?: number[]) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [eq(employees.isActive, true)];
   if (businessId) conditions.push(eq(employees.businessId, businessId));
+  const scoped = scopedBusinessFilter(employees.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
   return db
     .select(employeeSafeColumns)
     .from(employees)
@@ -2747,6 +2766,7 @@ export async function getReturnsList(
     dateFrom?: Date;
     dateTo?: Date;
     businessId?: number;
+    businessIds?: number[];
   } = {}
 ) {
   const db = await getDb();
@@ -2759,9 +2779,12 @@ export async function getReturnsList(
     dateFrom,
     dateTo,
     businessId,
+    businessIds,
   } = filters;
   const conditions: ReturnType<typeof eq>[] = [];
   if (businessId) conditions.push(eq(returnsTable.businessId, businessId));
+  const scopedRet = scopedBusinessFilter(returnsTable.businessId, businessIds);
+  if (scopedRet) conditions.push(scopedRet as any);
   if (governorate) conditions.push(eq(returnsTable.governorate, governorate));
   if (returnReason)
     conditions.push(eq(returnsTable.returnReason, returnReason as any));
@@ -2787,12 +2810,15 @@ export async function getReturnsList(
 export async function getReturnsStats(
   dateFrom?: Date,
   dateTo?: Date,
-  businessId?: number
+  businessId?: number,
+  businessIds?: number[]
 ) {
   const db = await getDb();
   if (!db) return { total: 0, totalAmount: 0, byReason: [], byGovernorate: [] };
   const conditions: ReturnType<typeof eq>[] = [];
   if (businessId) conditions.push(eq(returnsTable.businessId, businessId));
+  const scopedRs = scopedBusinessFilter(returnsTable.businessId, businessIds);
+  if (scopedRs) conditions.push(scopedRs as any);
   if (dateFrom) conditions.push(gte(returnsTable.createdAt, dateFrom));
   if (dateTo) conditions.push(lte(returnsTable.createdAt, dateTo));
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -2917,10 +2943,12 @@ export async function createPrintLog(data: {
   return { id: result[0].insertId };
 }
 
-export async function getPrintLogs(limit = 50, businessId?: number) {
+export async function getPrintLogs(limit = 50, businessId?: number, businessIds?: number[]) {
   const db = await getDb();
   const conditions: any[] = [];
   if (businessId) conditions.push(eq(printLogs.businessId, businessId));
+  const scoped = scopedBusinessFilter(printLogs.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
   const rows = await db!
     .select()
     .from(printLogs)
@@ -2985,6 +3013,7 @@ export async function getActivityLogs(
     dateFrom?: Date;
     dateTo?: Date;
     businessId?: number;
+    businessIds?: number[];
   } = {}
 ) {
   const db = await getDb();
@@ -2999,9 +3028,12 @@ export async function getActivityLogs(
     dateFrom,
     dateTo,
     businessId,
+    businessIds,
   } = filters;
   const conditions: ReturnType<typeof eq>[] = [];
   if (businessId) conditions.push(eq(activityLogs.businessId, businessId));
+  const scopedAct = scopedBusinessFilter(activityLogs.businessId, businessIds);
+  if (scopedAct) conditions.push(scopedAct as any);
   if (action) conditions.push(eq(activityLogs.action, action));
   if (entityType) conditions.push(eq(activityLogs.entityType, entityType));
   if (entityId) conditions.push(eq(activityLogs.entityId, entityId));
@@ -3056,13 +3088,16 @@ function toSafeSalesChannel(row: SalesChannel): SafeSalesChannel {
 
 export async function getAllSalesChannels(
   businessId?: number,
-  opts: { includeInactive?: boolean } = { includeInactive: true }
+  opts: { includeInactive?: boolean } = { includeInactive: true },
+  businessIds?: number[]
 ): Promise<SafeSalesChannel[]> {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [];
   if (!opts.includeInactive) conditions.push(eq(salesChannels.isActive, true));
   if (businessId) conditions.push(eq(salesChannels.businessId, businessId));
+  const scoped = scopedBusinessFilter(salesChannels.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
   const rows = await db
     .select()
     .from(salesChannels)
@@ -3072,12 +3107,15 @@ export async function getAllSalesChannels(
 }
 
 export async function getActiveSalesChannels(
-  businessId?: number
+  businessId?: number,
+  businessIds?: number[]
 ): Promise<SafeSalesChannel[]> {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [eq(salesChannels.isActive, true)];
   if (businessId) conditions.push(eq(salesChannels.businessId, businessId));
+  const scoped = scopedBusinessFilter(salesChannels.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
   const rows = await db
     .select()
     .from(salesChannels)
@@ -3327,13 +3365,16 @@ export async function finishSyncLog(id: number, data: Partial<InsertSyncLog>) {
 }
 
 export async function getSyncLogs(
-  filters: { channelId?: number; limit?: number } = {}
+  filters: { channelId?: number; limit?: number; channelIds?: number[] } = {}
 ) {
   const db = await getDb();
   if (!db) return [];
   const conditions: any[] = [];
   if (filters.channelId)
     conditions.push(eq(syncLogs.channelId, filters.channelId));
+  // عزل fail-closed: لو مفيش channelId محدد، نقصّ على قنوات التينانت فقط (مش كل النظام).
+  const scoped = scopedBusinessFilter(syncLogs.channelId, filters.channelIds);
+  if (scoped) conditions.push(scoped);
   return db
     .select()
     .from(syncLogs)

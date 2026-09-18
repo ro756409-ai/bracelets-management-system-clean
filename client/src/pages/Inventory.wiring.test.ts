@@ -37,9 +37,13 @@ describe("🔑 Inventory — multi-business isolation محفوظ", () => {
     expect(src).toContain("currentBusinessIds");
     expect(src).not.toContain("currentGroup");
   });
-  it("🔑 عملية الحركة (WRITE) بتتطلب نشاط واحد صريح — مش «كل الأنشطة»", () => {
-    // حارس الكتابة القائم: مفيش حركة تحت نطاق متعدد/غير محدد.
-    expect(src).toContain("currentBusinessIds?.length !== 1");
-    expect(src).toContain("businessId: currentBusinessIds[0]");
+  it("🔑 عملية الحركة (WRITE) بتحُلّ نشاطًا واحدًا محدّدًا — مش «كل الأنشطة»", () => {
+    // الكتابة بتبعت businessId محدّد (targetBusinessId): المبدّل لو نشاط واحد، وإلا المصدر
+    // الواحد useBrandOptions اللي بيختار النشاط الوحيد تلقائيًا (مالك بنشاط واحد ما يتعطّلش).
+    // نطاق متعدد/فاضي بلا اختيار → يُرفض (لا حركة تحت «كل الأنشطة»).
+    expect(src).toContain("useBrandOptions()");
+    expect(src).toContain("const targetBusinessId =");
+    expect(src).toContain("if (targetBusinessId == null)");
+    expect(src).toContain("businessId: targetBusinessId,");
   });
 });

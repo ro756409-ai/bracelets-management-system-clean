@@ -56,6 +56,7 @@ import {
 } from "@shared/inventoryCalculations";
 import { InventoryAccountingSection } from "./InventoryAccounting";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useBrandOptions } from "@/hooks/useBrandOptions";
 
 const STATUS_LABELS: Record<StockStatus, string> = {
   available: "متوفر",
@@ -85,6 +86,8 @@ function variantLabel(v: any): string {
 export default function Inventory() {
   const utils = trpc.useUtils();
   const { currentBusinessIds } = useBusinessContext();
+  // المصدر الواحد لاختيار النشاط (يعالج: واحد→تلقائي، صفر→isEmpty، أكتر→اختيار).
+  const brandOptions = useBrandOptions();
   const { user } = useAuth();
   const { permissions } = usePermissions();
   const isAdmin = user?.role === "admin";
@@ -482,8 +485,18 @@ export default function Inventory() {
       return;
     }
     if (productFormMode === "create") {
-      if (currentBusinessIds?.length !== 1) {
-        toast.error("اختار قسم يحتوي على Business واحد قبل إنشاء منتج");
+      // النشاط المستهدَف: النشاط المختار في المبدّل (لو واحد)، وإلا المصدر الواحد
+      // (useBrandOptions) اللي بيختار النشاط الوحيد تلقائيًا — فمالك بنشاط واحد مايتطلبش
+      // اختيارًا مخفيًا. صفر أنشطة → isEmpty؛ أكتر من واحد بلا اختيار → اطلب اختيارًا.
+      const targetBusinessId =
+        (currentBusinessIds?.length === 1 ? currentBusinessIds[0] : undefined) ??
+        brandOptions.selectedId;
+      if (targetBusinessId == null) {
+        toast.error(
+          brandOptions.isEmpty
+            ? "لا يوجد نشاط متاح لإنشاء منتج"
+            : "اختر النشاط من مبدّل الأنشطة بالأعلى قبل إنشاء منتج"
+        );
         return;
       }
       createProductMutation.mutate({
@@ -493,7 +506,7 @@ export default function Inventory() {
         price: priceNum !== undefined ? String(priceNum) : undefined,
         currentStock: stockNum,
         minStockLevel: minNum,
-        businessId: currentBusinessIds[0],
+        businessId: targetBusinessId,
       });
     } else {
       if (!productFormId) return;

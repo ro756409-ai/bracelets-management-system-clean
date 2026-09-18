@@ -2405,11 +2405,9 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessId = await scopeBusinessId(
-          ctx,
-          input?.businessId
-        );
-        return searchEmployees({ ...(input ?? {}), businessId });
+        // عزل fail-closed: أنشطة التينانت من الـsession (undefined/آخر = أنشطة المستخدم فقط).
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
+        return searchEmployees({ ...(input ?? {}), businessId: undefined, businessIds });
       }),
     activeList: protectedProcedure
       .input(
@@ -2420,11 +2418,8 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessId = await scopeBusinessId(
-          ctx,
-          input?.businessId
-        );
-        return getActiveEmployees(businessId);
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
+        return getActiveEmployees(undefined, businessIds);
       }),
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -5630,10 +5625,6 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessIds = await scopeBusinessIds(ctx, input);
-        const businessId = await scopeBusinessId(
-          ctx,
-          input.businessId
-        );
         const [perf, emps] = await Promise.all([
           getEmployeePerformance(
             input.dateFrom,
@@ -5641,7 +5632,7 @@ export const appRouter = router({
             undefined,
             businessIds
           ),
-          getAllEmployees(businessId),
+          getAllEmployees(undefined, businessIds),
         ]);
         return perf.map(p => {
           const emp = emps.find(e => e.id === p.employeeId);
@@ -5842,11 +5833,8 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessId = await scopeBusinessId(
-          ctx,
-          input.businessId
-        );
-        return getReturnsList({ ...input, businessId });
+        const businessIds = await scopeBusinessIds(ctx, input);
+        return getReturnsList({ ...input, businessId: undefined, businessIds });
       }),
 
     // إحصائيات المرتجعات
@@ -5859,11 +5847,8 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const businessId = await scopeBusinessId(
-          ctx,
-          input.businessId
-        );
-        return getReturnsStats(input.dateFrom, input.dateTo, businessId);
+        const businessIds = await scopeBusinessIds(ctx, input);
+        return getReturnsStats(input.dateFrom, input.dateTo, undefined, businessIds);
       }),
   }),
 
@@ -6014,11 +5999,8 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessId = await scopeBusinessId(
-          ctx,
-          input?.businessId
-        );
-        const logs = await getPrintLogs(input?.limit ?? 50, businessId);
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
+        const logs = await getPrintLogs(input?.limit ?? 50, undefined, businessIds);
         return logs;
       }),
 
@@ -6059,10 +6041,7 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessId = await scopeBusinessId(
-          ctx,
-          input?.businessId
-        );
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
         return getActivityLogs({
           page: input?.page ?? 1,
           limit: input?.limit ?? 50,
@@ -6072,7 +6051,7 @@ export const appRouter = router({
           performedBy: input?.performedBy,
           dateFrom: input?.dateFrom ? new Date(input.dateFrom) : undefined,
           dateTo: input?.dateTo ? new Date(input.dateTo) : undefined,
-          businessId,
+          businessIds,
         });
       }),
   }),
@@ -6291,13 +6270,12 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessId = await scopeBusinessId(
-          ctx,
-          input?.businessId
-        );
-        return getAllSalesChannels(businessId, {
+        // عزل fail-closed: أنشطة التينانت من الـsession — غياب businessId = قنوات المستخدم فقط،
+        // مش كل النظام. (كان scopeBusinessId المفرد بيرجّع undefined → getAll بلا فلتر = كل القنوات.)
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
+        return getAllSalesChannels(undefined, {
           includeInactive: input?.includeInactive ?? true,
-        });
+        }, businessIds);
       }),
     activeList: adminProcedure
       .input(
@@ -6308,11 +6286,8 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        const businessId = await scopeBusinessId(
-          ctx,
-          input?.businessId
-        );
-        return getActiveSalesChannels(businessId);
+        const businessIds = await scopeBusinessIds(ctx, input ?? {});
+        return getActiveSalesChannels(undefined, businessIds);
       }),
     get: adminProcedure
       .input(z.object({ id: z.number() }))
@@ -6546,12 +6521,15 @@ export const appRouter = router({
           .optional()
       )
       .query(async ({ ctx, input }) => {
-        if (input?.channelId != null)
+        if (input?.channelId != null) {
           await requireOwned(ctx, "salesChannel", input.channelId);
-        return getSyncLogs({
-          channelId: input?.channelId,
-          limit: input?.limit ?? 50,
-        });
+          return getSyncLogs({ channelId: input.channelId, limit: input?.limit ?? 50 });
+        }
+        // fail-closed: بلا channelId، نقصّ على قنوات التينانت فقط (مش كل النظام).
+        const businessIds = await scopeBusinessIds(ctx, {});
+        const channels = await getAllSalesChannels(undefined, { includeInactive: true }, businessIds);
+        const channelIds = channels.map(c => c.id);
+        return getSyncLogs({ channelIds, limit: input?.limit ?? 50 });
       }),
   }),
 
