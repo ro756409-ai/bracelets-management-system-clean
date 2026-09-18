@@ -3556,6 +3556,109 @@ export async function createVariant(data: InsertProductVariant) {
   await db.insert(productVariants).values(data);
 }
 
+/**
+ * الـSKUات (lowercased) المستخدمة فعلًا داخل نشاط معيّن — من منتجاته أو تركيباته — من ضمن
+ * قائمة مطلوبة. لفحص تفرّد الـSKU **داخل النشاط** (متطلب المرحلة B). التركيبات مالهاش
+ * businessId فبنوصلها بالمنتج الأب عبر join.
+ */
+export async function findTakenSkusInBusiness(
+  businessId: number,
+  skus: string[]
+): Promise<Set<string>> {
+  const db = await getDb();
+  const taken = new Set<string>();
+  if (!db) return taken;
+  const wanted = new Set(
+    skus.map(s => s.trim().toLowerCase()).filter(Boolean)
+  );
+  if (!wanted.size) return taken;
+  const prod = await db
+    .select({ sku: products.sku })
+    .from(products)
+    .where(eq(products.businessId, businessId));
+  for (const r of prod) {
+    const s = r.sku?.trim().toLowerCase();
+    if (s && wanted.has(s)) taken.add(s);
+  }
+  const vars = await db
+    .select({ sku: productVariants.sku })
+    .from(productVariants)
+    .innerJoin(products, eq(productVariants.productId, products.id))
+    .where(eq(products.businessId, businessId));
+  for (const r of vars) {
+    const s = r.sku?.trim().toLowerCase();
+    if (s && wanted.has(s)) taken.add(s);
+  }
+  return taken;
+}
+
+export interface NewProductVariantInput {
+  color?: string | null;
+  size?: string | null;
+  name?: string | null;
+  sku: string;
+  price?: string | null;
+  costPrice?: string | null;
+  currentStock?: number;
+  minStockLevel?: number;
+}
+
+/**
+ * إنشاء منتج + كل تركيباته (Color×Size) في **transaction واحدة** (المرحلة B). الكل-أو-لا-شيء:
+ * لو أي تركيبة فشلت تترجع الدفعة كلها — مايتسجّلش نص منتج. المنتج الأب مع تركيبات مايحملش
+ * sku/price/currentStock خاصة به (بتعيش على التركيبات، نفس نمط الأساور).
+ * تفرّد اللون×المقاس وتفرّد الـSKU داخل النشاط بيتفحصوا في الراوتر قبل الاستدعاء؛ وهنا
+ * بنعيد فحص تكرار اللون×المقاس داخل الدفعة (دفاع في العمق قبل أي كتابة).
+ */
+export async function createProductWithVariants(
+  businessId: number,
+  product: {
+    name: string;
+    description?: string | null;
+    categoryId?: number | null;
+    minStockLevel?: number;
+  },
+  variants: NewProductVariantInput[]
+): Promise<{ productId: number; variantIds: number[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (!variants.length) throw new Error("لا توجد تركيبات لإنشائها");
+  return db.transaction(async tx => {
+    const [pRes] = await tx.insert(products).values({
+      businessId,
+      name: product.name,
+      description: product.description ?? undefined,
+      categoryId: product.categoryId ?? undefined,
+      minStockLevel: product.minStockLevel ?? 15,
+    } as InsertProduct);
+    const productId = Number((pRes as any).insertId);
+    if (!productId) throw new Error("تعذّر إنشاء المنتج");
+    const variantIds: number[] = [];
+    const seen = new Set<string>();
+    for (const v of variants) {
+      const key = `${(v.color ?? "").trim().toLowerCase()}|${(v.size ?? "").trim().toLowerCase()}`;
+      if (seen.has(key))
+        throw new Error("تركيبة لون/مقاس مكررة داخل المنتج");
+      seen.add(key);
+      const [vRes] = await tx.insert(productVariants).values({
+        productId,
+        color: v.color?.trim() || undefined,
+        size: v.size?.trim() || undefined,
+        name: v.name?.trim() || undefined,
+        sku: v.sku.trim(),
+        price: v.price ?? undefined,
+        costPrice: v.costPrice ?? undefined,
+        currentStock: v.currentStock ?? 0,
+        minStockLevel: v.minStockLevel ?? 5,
+        isActive: true,
+      } as InsertProductVariant);
+      const vid = Number((vRes as any).insertId);
+      if (vid) variantIds.push(vid);
+    }
+    return { productId, variantIds };
+  });
+}
+
 export async function updateVariant(
   id: number,
   data: Partial<InsertProductVariant>

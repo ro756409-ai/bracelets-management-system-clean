@@ -57,6 +57,12 @@ import {
 import { InventoryAccountingSection } from "./InventoryAccounting";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
+import {
+  VariantMatrixBuilder,
+  emptyVariantMatrix,
+  enabledVariants,
+  type VariantMatrixValue,
+} from "@/components/inventory/VariantMatrixBuilder";
 
 const STATUS_LABELS: Record<StockStatus, string> = {
   available: "متوفر",
@@ -150,6 +156,11 @@ export default function Inventory() {
   const [pfPrice, setPfPrice] = useState("");
   const [pfStock, setPfStock] = useState("0");
   const [pfMinStock, setPfMinStock] = useState("15");
+  // وضع المنتج: بسيط (SKU/سعر واحد) أو متعدد الخيارات (ألوان×مقاسات = تركيبات).
+  const [pfIsVariant, setPfIsVariant] = useState(false);
+  const [pfMatrix, setPfMatrix] = useState<VariantMatrixValue>(
+    emptyVariantMatrix()
+  );
 
   // Product archive confirm
   const [archiveProductTarget, setArchiveProductTarget] = useState<any | null>(
@@ -322,6 +333,17 @@ export default function Inventory() {
     onError: e => toast.error(e.message),
   });
 
+  const createWithVariantsMutation = trpc.products.createWithVariants.useMutation(
+    {
+      onSuccess: () => {
+        toast.success("تم إضافة المنتج وكل تركيباته بنجاح");
+        utils.products.list.invalidate();
+        closeProductForm();
+      },
+      onError: e => toast.error(e.message),
+    }
+  );
+
   const editProductMutation = trpc.products.update.useMutation({
     onSuccess: () => {
       toast.success("تم تعديل المنتج بنجاح");
@@ -466,11 +488,72 @@ export default function Inventory() {
   function closeProductForm() {
     setShowProductFormDialog(false);
     setProductFormId(null);
+    setPfIsVariant(false);
+    setPfMatrix(emptyVariantMatrix());
   }
 
   function submitProductForm() {
     if (!pfName.trim()) {
       toast.error("اسم المنتج مطلوب");
+      return;
+    }
+    // وضع متعدد الخيارات (إنشاء فقط): المنتج + كل تركيباته في transaction واحدة.
+    if (productFormMode === "create" && pfIsVariant) {
+      // النشاط المستهدَف: نفس منطق الوضع البسيط (المبدّل لو نشاط واحد، وإلا المصدر الواحد).
+      const targetBusinessId =
+        (currentBusinessIds?.length === 1 ? currentBusinessIds[0] : undefined) ??
+        brandOptions.selectedId;
+      if (targetBusinessId == null) {
+        toast.error(
+          brandOptions.isEmpty
+            ? "لا يوجد نشاط متاح لإنشاء منتج"
+            : "اختر النشاط من مبدّل الأنشطة بالأعلى قبل إنشاء منتج"
+        );
+        return;
+      }
+      const rows = enabledVariants(pfMatrix);
+      if (rows.length === 0) {
+        toast.error("أضف تركيبة مفعّلة واحدة على الأقل (لون/مقاس)");
+        return;
+      }
+      const variants = [];
+      for (const r of rows) {
+        if (!r.sku.trim()) {
+          toast.error(`تركيبة ${r.color || ""} ${r.size || ""} بلا SKU`);
+          return;
+        }
+        const priceN = r.price.trim() === "" ? undefined : Number(r.price);
+        const costN = r.costPrice.trim() === "" ? undefined : Number(r.costPrice);
+        const stockN = Number(r.currentStock || "0");
+        const minN = Number(r.minStockLevel || "0");
+        if (
+          (priceN !== undefined && (isNaN(priceN) || priceN < 0)) ||
+          (costN !== undefined && (isNaN(costN) || costN < 0)) ||
+          isNaN(stockN) ||
+          stockN < 0 ||
+          isNaN(minN) ||
+          minN < 0
+        ) {
+          toast.error(`أرقام غير صحيحة في تركيبة ${r.color || ""} ${r.size || ""}`);
+          return;
+        }
+        variants.push({
+          color: r.color.trim() || undefined,
+          size: r.size.trim() || undefined,
+          sku: r.sku.trim(),
+          price: priceN,
+          costPrice: costN,
+          currentStock: stockN,
+          minStockLevel: minN,
+        });
+      }
+      createWithVariantsMutation.mutate({
+        name: pfName.trim(),
+        description: pfDescription.trim() || undefined,
+        businessId: targetBusinessId,
+        minStockLevel: Number(pfMinStock) || 15,
+        variants,
+      });
       return;
     }
     const stockNum = Number(pfStock);
@@ -2237,7 +2320,13 @@ export default function Inventory() {
           if (!o) closeProductForm();
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent
+          className={
+            productFormMode === "create" && pfIsVariant
+              ? "max-w-3xl"
+              : "max-w-md"
+          }
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {productFormMode === "create" ? (
@@ -2250,7 +2339,7 @@ export default function Inventory() {
                 : "تعديل المنتج"}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-3 max-h-[70vh] overflow-y-auto">
             <div>
               <Label>
                 اسم المنتج <span className="text-destructive">*</span>
@@ -2272,51 +2361,76 @@ export default function Inventory() {
                 rows={2}
               />
             </div>
-            <div>
-              <Label>
-                SKU (اختياري — اتركه فارغًا لو المنتج له أنواع متعددة بأسعار
-                مختلفة)
-              </Label>
-              <Input
-                value={pfSku}
-                onChange={e => setPfSku(e.target.value)}
-                className="mt-1 font-mono"
-                placeholder="كود المنتج"
+
+            {/* اختيار نوع المنتج — إنشاء فقط (التعديل بيفضل على المنتج البسيط الحالي). */}
+            {productFormMode === "create" && (
+              <div className="flex items-center gap-2 rounded-md border p-2">
+                <Checkbox
+                  id="pf-is-variant"
+                  checked={pfIsVariant}
+                  onCheckedChange={c => setPfIsVariant(Boolean(c))}
+                />
+                <Label htmlFor="pf-is-variant" className="cursor-pointer">
+                  منتج متعدد الخيارات (ألوان/مقاسات)
+                </Label>
+              </div>
+            )}
+
+            {productFormMode === "create" && pfIsVariant ? (
+              <VariantMatrixBuilder
+                value={pfMatrix}
+                onChange={setPfMatrix}
+                skuBase={pfSku}
               />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label>السعر (اختياري)</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={pfPrice}
-                  onChange={e => setPfPrice(e.target.value)}
-                  className="mt-1"
-                  placeholder="ج.م"
-                />
-              </div>
-              <div>
-                <Label>المخزون</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={pfStock}
-                  onChange={e => setPfStock(e.target.value)}
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>الحد الأدنى</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={pfMinStock}
-                  onChange={e => setPfMinStock(e.target.value)}
-                  className="mt-1"
-                />
-              </div>
-            </div>
+            ) : (
+              <>
+                <div>
+                  <Label>
+                    SKU (اختياري — اتركه فارغًا لو المنتج له أنواع متعددة بأسعار
+                    مختلفة)
+                  </Label>
+                  <Input
+                    value={pfSku}
+                    onChange={e => setPfSku(e.target.value)}
+                    className="mt-1 font-mono"
+                    placeholder="كود المنتج"
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <Label>السعر (اختياري)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={pfPrice}
+                      onChange={e => setPfPrice(e.target.value)}
+                      className="mt-1"
+                      placeholder="ج.م"
+                    />
+                  </div>
+                  <div>
+                    <Label>المخزون</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={pfStock}
+                      onChange={e => setPfStock(e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label>الحد الأدنى</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={pfMinStock}
+                      onChange={e => setPfMinStock(e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={closeProductForm}>
@@ -2325,10 +2439,13 @@ export default function Inventory() {
             <Button
               onClick={submitProductForm}
               disabled={
-                createProductMutation.isPending || editProductMutation.isPending
+                createProductMutation.isPending ||
+                createWithVariantsMutation.isPending ||
+                editProductMutation.isPending
               }
             >
               {createProductMutation.isPending ||
+              createWithVariantsMutation.isPending ||
               editProductMutation.isPending ? (
                 <span className="flex items-center gap-2">
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />

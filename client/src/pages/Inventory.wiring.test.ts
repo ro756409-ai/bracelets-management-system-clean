@@ -37,6 +37,16 @@ describe("🔑 Inventory — multi-business isolation محفوظ", () => {
     expect(src).toContain("currentBusinessIds");
     expect(src).not.toContain("currentGroup");
   });
+  it("🔑 (المرحلة B) منتج متعدد الخيارات: بانِي المصفوفة + createWithVariants معزول بنشاط واحد", () => {
+    // وضع الـvariants بيستخدم المكوّن المخصّص + الـendpoint الذرّي، بنفس حلّ النشاط الواحد.
+    expect(src).toContain("VariantMatrixBuilder");
+    expect(src).toContain("trpc.products.createWithVariants.useMutation");
+    expect(src).toContain("enabledVariants(pfMatrix)");
+    expect(src).toContain("businessId: targetBusinessId,");
+    // المنتج البسيط لسه موجود (لا انحدار)
+    expect(src).toContain("trpc.products.create.useMutation");
+  });
+
   it("🔑 عملية الحركة (WRITE) بتحُلّ نشاطًا واحدًا محدّدًا — مش «كل الأنشطة»", () => {
     // الكتابة بتبعت businessId محدّد (targetBusinessId): المبدّل لو نشاط واحد، وإلا المصدر
     // الواحد useBrandOptions اللي بيختار النشاط الوحيد تلقائيًا (مالك بنشاط واحد ما يتعطّلش).

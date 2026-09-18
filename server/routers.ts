@@ -584,6 +584,8 @@ import {
   getAllProducts,
   getProductById,
   createProduct,
+  createProductWithVariants,
+  findTakenSkusInBusiness,
   updateProduct,
   isSkuTaken,
   isVariantNameTaken,
@@ -2703,6 +2705,115 @@ export const appRouter = router({
         }
         await createProduct({ ...input, businessId });
         return { success: true };
+      }),
+    // إنشاء منتج متعدد الخيارات: الأب + كل تركيبات Color×Size في transaction واحدة.
+    // الكل-أو-لا-شيء؛ العزل بـbusinessId؛ منع تكرار اللون×المقاس؛ SKU فريد داخل النشاط.
+    createWithVariants: adminProcedure
+      .input(
+        z.object({
+          name: z.string().min(2),
+          description: z.string().optional(),
+          businessId: z.number().optional(),
+          categoryId: z.number().optional(),
+          minStockLevel: z.number().min(0).default(15),
+          variants: z
+            .array(
+              z.object({
+                color: z.string().optional(),
+                size: z.string().optional(),
+                name: z.string().optional(),
+                sku: z.string().min(1, "رمز المنتج (SKU) مطلوب"),
+                price: z.number().min(0).optional(),
+                costPrice: z.number().min(0).optional(),
+                currentStock: z.number().min(0).default(0),
+                minStockLevel: z.number().min(0).default(5),
+              })
+            )
+            .min(1, "لازم تركيبة واحدة على الأقل"),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        // 1) العزل: نشاط واحد محدّد تابع للجلسة (نفس حارس products.create).
+        const scopedBusinessIds = await scopeBusinessIds(ctx, {
+          businessId: input.businessId,
+        });
+        if (scopedBusinessIds?.length !== 1)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "اختار Business واحد عند إنشاء المنتج",
+          });
+        const businessId = scopedBusinessIds[0];
+
+        // 2) كل تركيبة لازم يكون ليها بُعد واحد على الأقل (لون أو مقاس أو اسم).
+        for (const v of input.variants) {
+          if (!v.color?.trim() && !v.size?.trim() && !v.name?.trim())
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "كل تركيبة لازم يكون ليها لون أو مقاس على الأقل",
+            });
+        }
+
+        // 3) منع تكرار نفس اللون×المقاس داخل المنتج (قبل أي كتابة).
+        const comboSeen = new Set<string>();
+        for (const v of input.variants) {
+          const key = `${(v.color ?? "").trim().toLowerCase()}|${(v.size ?? "").trim().toLowerCase()}`;
+          if (comboSeen.has(key))
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `تركيبة مكررة: ${v.color ?? ""} / ${v.size ?? ""}`,
+            });
+          comboSeen.add(key);
+        }
+
+        // 4) تفرّد الـSKU: داخل الدفعة، وداخل النشاط (منتجات + تركيبات النشاط).
+        const skuSeen = new Set<string>();
+        for (const v of input.variants) {
+          const s = v.sku.trim().toLowerCase();
+          if (skuSeen.has(s))
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `رمز المنتج (SKU) "${v.sku}" مكرر داخل التركيبات`,
+            });
+          skuSeen.add(s);
+        }
+        const takenInBusiness = await findTakenSkusInBusiness(
+          businessId,
+          input.variants.map(v => v.sku)
+        );
+        for (const v of input.variants) {
+          if (takenInBusiness.has(v.sku.trim().toLowerCase()))
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `رمز المنتج (SKU) "${v.sku}" مستخدم بالفعل في هذا النشاط`,
+            });
+        }
+
+        // 5) مخزون افتتاحي: مسموح فقط قبل Go-Live المحاسبي (نفس حارس products.create).
+        if (input.variants.some(v => v.currentStock !== 0))
+          await assertLegacyInventoryMutationAllowed(businessId);
+
+        // 6) إنشاء الأب + كل التركيبات في transaction واحدة (الكل-أو-لا-شيء).
+        const result = await createProductWithVariants(
+          businessId,
+          {
+            name: input.name,
+            description: input.description,
+            categoryId: input.categoryId,
+            minStockLevel: input.minStockLevel,
+          },
+          input.variants.map(v => ({
+            color: v.color,
+            size: v.size,
+            name: v.name,
+            sku: v.sku,
+            price: v.price !== undefined ? String(v.price) : undefined,
+            costPrice:
+              v.costPrice !== undefined ? String(v.costPrice) : undefined,
+            currentStock: v.currentStock,
+            minStockLevel: v.minStockLevel,
+          }))
+        );
+        return { success: true, ...result };
       }),
     update: adminProcedure
       .input(
