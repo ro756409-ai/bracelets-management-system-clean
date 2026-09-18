@@ -136,9 +136,13 @@ describe("🔑 لا حذف بيانات/جداول/كود داخلي", () => {
     expect(fs.existsSync("server/payrollV2.service.ts")).toBe(true);
     expect(fs.existsSync("server/expensesV2.service.ts")).toBe(true);
   });
-  it("🔑 مفيش migration جديدة للتجميد (مفيش تعديل schema)", () => {
+  it("🔑 التجميد نفسه بلا migration/تعديل schema (flag فقط)", () => {
+    // التجميد code-only (flag + توجيه). مفيش أي migration محاسبية. لو موجود 0036 فهو مهمة
+    // منفصلة (عمود مُنشئ الأوردر لموظف الإدخال)، مش تغيير schema محاسبي.
     const migrations = fs.readdirSync("drizzle").filter(f => f.endsWith(".sql"));
-    // آخر migration هي 0035 (Phase 3) — مفيش 0036 اتعملت في المهمة دي.
-    expect(migrations.some(f => f.startsWith("0036"))).toBe(false);
+    const accountingMigration = migrations.some(
+      f => /accounting|expense|payroll|closing|treasury|financial/i.test(f)
+    );
+    expect(accountingMigration).toBe(false);
   });
 });

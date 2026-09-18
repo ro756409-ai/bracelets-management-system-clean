@@ -5303,6 +5303,8 @@ export const appRouter = router({
             notes: input.notes ?? null,
             status: "new",
             lastUpdatedBy: ctx.employee.id,
+            // مُنشئ ثابت: من جلسة الموظف، مرة واحدة عند الإنشاء، مش من input، ومابيتغيّرش بعدين.
+            createdByEmployeeId: ctx.employee.id,
             variantId: headerVariantId,
             size: input.size ?? null,
             color: input.color ?? null,
@@ -5354,9 +5356,11 @@ export const appRouter = router({
         if (!db) return [];
         const { orders } = await import("../drizzle/schema");
         const { and, gte, lte } = await import("drizzle-orm");
+        // ملكية موظف الإدخال: المُنشئ الثابت (مش lastUpdatedBy المتغيّر). أوردر قديم
+        // createdByEmployeeId=NULL مايظهرش له (وده مقصود — المالك بيتعامل مع القديم).
         const conditions: any[] = [
           eq(orders.source, "facebook"),
-          eq(orders.lastUpdatedBy, ctx.employee.id),
+          eq(orders.createdByEmployeeId, ctx.employee.id),
         ];
         // Filter by employee's businessId
         if (ctx.employee.businessId) {
@@ -5400,14 +5404,15 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
-        // التأكد إن الأوردر ده هو اللي دخله الموظف
+        // ملكية ثابتة: الأوردر لازم يكون createdByEmployeeId = نفس الموظف (مش lastUpdatedBy
+        // المتغيّر). أوردر قديم NULL → مايتطابقش → موظف الإدخال مايقدرش يحذفه.
         const [order] = await db
           .select()
           .from(orders)
           .where(
             and(
               eq(orders.id, input.orderId),
-              eq(orders.lastUpdatedBy, ctx.employee.id),
+              eq(orders.createdByEmployeeId, ctx.employee.id),
               eq(orders.source, "facebook")
             )
           )
@@ -5463,14 +5468,15 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
-        // التأكد إن الأوردر ده هو اللي دخله الموظف
+        // ملكية ثابتة: createdByEmployeeId = نفس الموظف (مش lastUpdatedBy). أوردر قديم
+        // NULL → مايتطابقش → موظف الإدخال مايقدرش يعدّله.
         const [order] = await db
           .select()
           .from(orders)
           .where(
             and(
               eq(orders.id, input.orderId),
-              eq(orders.lastUpdatedBy, ctx.employee.id),
+              eq(orders.createdByEmployeeId, ctx.employee.id),
               eq(orders.source, "facebook")
             )
           )

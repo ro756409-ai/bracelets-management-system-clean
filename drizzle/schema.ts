@@ -406,6 +406,11 @@ export const orders = mysqlTable("orders", {
   notes: text("notes"),
   employeeNotes: text("employeeNotes"),
   lastUpdatedBy: int("lastUpdatedBy"),
+  // مُنشئ الأوردر الثابت: بيتحدّد مرة واحدة عند الإنشاء اليدوي من موظف الإدخال ومابيتغيّرش
+  // (على عكس lastUpdatedBy المتغيّر مع أي تعديل). أساس ملكية موظف الإدخال لأوردراته.
+  // nullable: الأوردرات القديمة والمصادر التانية (استيراد/webhook/المالك) بتفضل NULL —
+  // بلا backfill تخميني. بلا FK (نفس نمط assignedEmployeeId/lastUpdatedBy)، index بس.
+  createdByEmployeeId: int("createdByEmployeeId"),
   importRowIndex: int("importRowIndex"),
   importBatchId: int("importBatchId"),
   externalOrderId: varchar("externalOrderId", { length: 100 }),
