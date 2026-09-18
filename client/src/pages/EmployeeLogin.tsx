@@ -49,8 +49,8 @@ export default function EmployeeLogin() {
       if (data.employee.role === 'manager') {
         setLocation("/dashboard");
       } else if (data.employee.role === 'accountant') {
-        // المحاسب له مساحة عمل مخصّصة بسيطة — مش شاشة تشغيل الأوردرات ولا صفحة المالك.
-        setLocation("/accountant");
+        // النظام المحاسبي مجمّد: المحاسب بيروح صفحة «قيد إعادة التطوير» الآمنة بدل مساحة الحسابات.
+        setLocation("/accounting-disabled");
       } else if (
         data.employee.role === 'facebook_entry' ||
         data.employee.role === 'data_entry'

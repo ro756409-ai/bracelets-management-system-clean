@@ -47,9 +47,9 @@ describe("🔑 سلوك الأدوار في التنقّل", () => {
     expect(keys).toEqual(["home", "orders", "operations", "inventory", "team", "reports", "settings"]);
   });
 
-  it("🔑 المالك يشوف رابط الحسابات القديم في الأدوات", () => {
+  it("🔑 النظام المحاسبي مجمّد: رابط الحسابات متخفي حتى عن المالك", () => {
     const tools = visibleToolsLinks(OWNER.isAdmin, OWNER.perms);
-    expect(tools.some(l => l.path === "/accounting")).toBe(true);
+    expect(tools.some(l => l.path === "/accounting")).toBe(false);
   });
 
   it("🔑 المدير يشوف الوجهات لكن **مش** الحسابات (مفيش accounting.view)", () => {

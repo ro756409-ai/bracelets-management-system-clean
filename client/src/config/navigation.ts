@@ -182,11 +182,14 @@ export function visibleDestinations(isAdmin: boolean, permissions: string[]): Na
   });
 }
 
-/** روابط «المزيد» المرئية (أدوات + الحسابات القديمة). */
+/**
+ * روابط «المزيد» المرئية (أدوات فقط).
+ * النظام المحاسبي مجمّد (قرار: إعادة بناء لاحقًا) — رابط الحسابات **متخفي لكل المستخدمين**
+ * بما فيهم المالك. الثابت `ACCOUNTING_LINK` باقٍ في الكود (مش محذوف) للنظام القادم، بس
+ * مابيتعرضش في القائمة. الحماية الأساسية على السيرفر.
+ */
 export function visibleToolsLinks(isAdmin: boolean, permissions: string[]): NavLink[] {
-  const tools = TOOLS_LINKS.filter(l => canSeeNav(l, isAdmin, permissions));
-  const acc = canSeeNav(ACCOUNTING_LINK, isAdmin, permissions) ? [ACCOUNTING_LINK] : [];
-  return [...tools, ...acc];
+  return TOOLS_LINKS.filter(l => canSeeNav(l, isAdmin, permissions));
 }
 
 /** الوجهة اللي المسار الحالي تابع لها (للـactive state في الشل). */

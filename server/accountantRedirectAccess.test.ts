@@ -17,14 +17,14 @@ const routers = fs.readFileSync("server/routers.ts", "utf-8");
 const trpcCore = fs.readFileSync("server/_core/trpc.ts", "utf-8");
 
 describe("🔑 توجيه المحاسب بعد الدخول", () => {
-  it("🔑 المحاسب بيروح على /accounting مش /employee-dashboard", () => {
+  it("🔑 النظام المحاسبي مجمّد: المحاسب بيروح لصفحة «قيد التطوير» الآمنة مش /accountant", () => {
     const fn = login.slice(login.indexOf("Redirect based on role"));
     const body = fn.slice(0, fn.indexOf("} catch"));
     expect(body).toContain("data.employee.role === 'accountant'");
-    // بعد P2-A: المحاسب بيروح مساحته المخصّصة /accountant (مش صفحة المالك /accounting).
     const branch = body.slice(body.indexOf("role === 'accountant'"));
     expect(branch.slice(0, branch.indexOf("else")))
-      .toContain('setLocation("/accountant")');
+      .toContain('setLocation("/accounting-disabled")');
+    expect(body).not.toContain('setLocation("/accountant")');
   });
 
   it("المدير لسه بيروح على /dashboard (مغيّرناش سلوكه)", () => {
@@ -47,19 +47,15 @@ describe("🔑 صفحات الحسابات بتفتح للمحاسب (FinancialR
     expect(body).toContain("Redirect");
   });
 
-  it("🔑 كل صفحات الحسابات اتغلّفت بـFinancialRoute بصلاحية الصفحة", () => {
-    const routeBlock = app.slice(app.indexOf('path="/accounting"'), app.indexOf('path={"/facebook-entry"}'));
-    // مفيش ProtectedLayout فاضل جوه بلوك الحسابات — كله FinancialRoute
-    expect(routeBlock).not.toContain("ProtectedLayout");
-    for (const perm of [
-      'permission="accounting.view"',
-      'permission="payroll.view"',
-      'permission="ad_spend.view"',
-      'permission="shipping_finance.view"',
-      'permission="inventory_costing.view"',
+  it("🔑 النظام مجمّد: كل صفحات الحسابات بتعرض AccountingDisabled (مش FinancialRoute محاسبية)", () => {
+    for (const path of [
+      "/accounting", "/treasury", "/expenses", "/collections", "/payroll",
+      "/closings", "/daily-ledger", "/advertising", "/shipping-finance",
     ]) {
-      expect(routeBlock, perm).toContain(perm);
+      expect(app).toContain(`<Route path="${path}"><AccountingDisabled /></Route>`);
     }
+    // صفحات المخزون فقط تفضل FinancialRoute بصلاحية inventory_costing (تشغيل مستمر).
+    expect(app).toContain('permission="inventory_costing.view"');
   });
 
   it("🔑 المخزون التشغيلي (استلام/تحويل/ورشة) بصلاحية inventory_costing مش مالية", () => {
@@ -73,11 +69,11 @@ describe("🔑 صفحات الحسابات بتفتح للمحاسب (FinancialR
 });
 
 describe("🔑 المحاسب محجوب عن صفحات التشغيل", () => {
-  it("🔑 BlockFinancialUser بيحوّل صاحب accounting.view غير المالك للحسابات", () => {
-    const comp = app.slice(app.indexOf("function BlockFinancialUser"), app.indexOf("function Router"));
+  it("🔑 BlockFinancialUser بيحوّل صاحب accounting.view غير المالك لصفحة «قيد التطوير»", () => {
+    const comp = app.slice(app.indexOf("function BlockFinancialUser"), app.indexOf("function EmployeeDashboardGuard"));
     expect(comp).toContain('user?.role !== "admin" && permissions.includes("accounting.view")');
-    // بعد P2-A: التحويل بقى لمساحة المحاسب /accountant.
-    expect(comp).toContain('Redirect to="/accountant"');
+    // النظام مجمّد: التحويل بقى للصفحة الآمنة.
+    expect(comp).toContain('Redirect to="/accounting-disabled"');
   });
 
   it("🔑 لوحات الموظفين التشغيلية متغلّفة بالحارس", () => {

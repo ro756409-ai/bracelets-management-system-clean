@@ -50,6 +50,7 @@ import ScanLogs from "./pages/ScanLogs";
 import BostaOrders from "./pages/BostaOrders";
 import Accounting from "./pages/Accounting";
 import AccountantWorkspace from "./pages/AccountantWorkspace";
+import AccountingDisabled from "./pages/AccountingDisabled";
 import Stocktake from "./pages/Stocktake";
 import DashboardLayout from "./components/DashboardLayout";
 import { useAuth } from "./_core/hooks/useAuth";
@@ -65,10 +66,10 @@ function ProtectedLayout({ children }: { children: React.ReactNode }) {
 
 /** أنسب صفحة هبوط لجلسة حسب صلاحياتها — بيتستخدم لما نطرد حد من صفحة مالوش حق فيها. */
 function homeForPermissions(perms: string[]): string {
-  // صاحب accounting.view غير المالك هو المحاسب — بيروح مساحته المخصّصة، مش صفحة المالك.
-  // (المالك admin بيعدّي كل الحُرّاس فمابيوصلش هنا أصلاً.)
-  if (perms.includes("accounting.view")) return "/accountant";
+  // النظام المحاسبي مجمّد: المحاسب (accounting.view وبس، غير المالك) بيروح صفحة «قيد
+  // التطوير» الآمنة بدل مساحة الحسابات. المالك admin بيعدّي الحُرّاس فمابيوصلش هنا.
   if (perms.includes("dashboard.view")) return "/dashboard";
+  if (perms.includes("accounting.view")) return "/accounting-disabled";
   return "/employee-dashboard";
 }
 
@@ -115,7 +116,8 @@ function BlockFinancialUser({ children }: { children: React.ReactNode }) {
   const { permissions, isLoading } = usePermissions();
   if (isLoading) return null;
   if (user?.role !== "admin" && permissions.includes("accounting.view")) {
-    return <Redirect to="/accountant" />;
+    // النظام المحاسبي مجمّد: المحاسب بيتحوّل لصفحة «قيد التطوير» الآمنة بدل مساحة الحسابات.
+    return <Redirect to="/accounting-disabled" />;
   }
   return <>{children}</>;
 }
@@ -196,9 +198,10 @@ function Router() {
         <ProtectedLayout><Reports /></ProtectedLayout>
       </Route>
       <Route path={"/employee-login"} component={EmployeeLogin} />
-      {/* مساحة المحاسب المخصّصة — layout خاص بيها (bare)، مش DashboardLayout بتاع المالك. */}
+      {/* النظام المحاسبي مجمّد: /accountant وكل المسارات المحاسبية بتعرض صفحة «قيد التطوير»
+          الآمنة لأي دور (بما فيهم المالك) — لا بيانات تشغيلية ولا مالية. */}
       <Route path={"/accountant"}>
-        <FinancialRoute permission="accounting.view" bare><AccountantWorkspace /></FinancialRoute>
+        <AccountingDisabled />
       </Route>
       {/* لوحات التشغيل: المحاسب (الموظف الوحيد غير الإداري بصلاحية مالية) بيتحوّل عنها
           للحسابات لو فتحها بالـURL — باقي أدوار التشغيل متأثرش. */}
@@ -260,39 +263,20 @@ function Router() {
       <Route path="/bosta-orders">
         <ProtectedLayout><BostaOrders /></ProtectedLayout>
       </Route>
-      {/* صفحات الحسابات: التاب بيتحدد من المسار. كلها متحرسة بـFinancialRoute بصلاحية
-          الصفحة — فبتفتح للمالك والمحاسب، وبيتحوّل عنها مين مالوش الصلاحية (المدير مثلاً).
-          المسارات القديمة محفوظة عشان أي رابط قديم أو bookmark يفضل شغّال. */}
-      <Route path="/accounting">
-        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/treasury">
-        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/expenses">
-        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/collections">
-        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/supplier-statements">
-        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/salary-profiles">
-        <FinancialRoute permission="payroll.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/salary-preparation">
-        <FinancialRoute permission="payroll.view"><SalaryPreparation /></FinancialRoute>
-      </Route>
-      <Route path="/payroll">
-        <FinancialRoute permission="payroll.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/closings">
-        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/daily-ledger">
-        <FinancialRoute permission="accounting.view"><DailyLedger /></FinancialRoute>
-      </Route>
+      {/* النظام المحاسبي مجمّد (قرار: إعادة بناء لاحقًا). كل مساراته القديمة محفوظة عشان أي
+          رابط/bookmark مايكسرش، لكن بتعرض صفحة «قيد التطوير» الآمنة بدل الشاشات المالية —
+          لأي دور. القراءات/الكتابات المحاسبية متوقّفة على السيرفر برضه. مسارات المخزون
+          (goods-receipt/stocktake/stock-transfer/workshop-returns) **مش** متأثرة. */}
+      <Route path="/accounting"><AccountingDisabled /></Route>
+      <Route path="/treasury"><AccountingDisabled /></Route>
+      <Route path="/expenses"><AccountingDisabled /></Route>
+      <Route path="/collections"><AccountingDisabled /></Route>
+      <Route path="/supplier-statements"><AccountingDisabled /></Route>
+      <Route path="/salary-profiles"><AccountingDisabled /></Route>
+      <Route path="/salary-preparation"><AccountingDisabled /></Route>
+      <Route path="/payroll"><AccountingDisabled /></Route>
+      <Route path="/closings"><AccountingDisabled /></Route>
+      <Route path="/daily-ledger"><AccountingDisabled /></Route>
       <Route path="/goods-receipt">
         <FinancialRoute permission="inventory_costing.view"><GoodsReceipt /></FinancialRoute>
       </Route>
@@ -307,18 +291,11 @@ function Router() {
       <Route path="/workshop-returns">
         <FinancialRoute permission="inventory_costing.view"><WorkshopReturns /></FinancialRoute>
       </Route>
-      <Route path="/daily-collections">
-        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/advertising">
-        <FinancialRoute permission="ad_spend.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/accounting-settings">
-        <FinancialRoute permission="accounting.view"><Accounting /></FinancialRoute>
-      </Route>
-      <Route path="/shipping-finance">
-        <FinancialRoute permission="shipping_finance.view"><Accounting /></FinancialRoute>
-      </Route>
+      <Route path="/daily-collections"><AccountingDisabled /></Route>
+      <Route path="/advertising"><AccountingDisabled /></Route>
+      <Route path="/accounting-settings"><AccountingDisabled /></Route>
+      <Route path="/shipping-finance"><AccountingDisabled /></Route>
+      <Route path="/accounting-disabled"><AccountingDisabled /></Route>
       <Route path={"/facebook-entry"}>
         <BlockFinancialUser>
           <OrderCreateGuard><FacebookEntry /></OrderCreateGuard>

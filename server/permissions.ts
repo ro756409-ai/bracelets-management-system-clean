@@ -110,6 +110,44 @@ export function isFinancialPermission(permission: Permission): boolean {
   return FINANCIAL_PERMISSIONS.has(permission);
 }
 
+/**
+ * تجميد النظام المحاسبي الحالي (قرار: إعادة بنائه لاحقًا بطريقة مختلفة). كل عمليات الكتابة
+ * المحاسبية للمستخدم (مصروفات، مرتبات، تحصيلات، خزن وحسابات مالية، إقفالات، إعلانات) متوقّفة
+ * عبر نقطة واحدة في `permissionProcedure`. مقصود إنها كتابة بس — القراءات (view و export)
+ * والمخزون (inventory_costing) والشحن التشغيلي (shipping_finance و shipping_ops) والإعدادات
+ * والأوردرات مش مجمّدة عشان تشغيل الأوردرات والمخزون وبوسطة يفضل شغّال. الدوال الداخلية
+ * (services) اللي بيستدعيها تأكيد الأوردر أو بوسطة أو التكلفة مش بتعدّي من هنا.
+ */
+export const FROZEN_ACCOUNTING_WRITE_PERMISSIONS: ReadonlySet<Permission> =
+  new Set<Permission>([
+    "accounting.manage", "accounting.create", "accounting.approve",
+    "financial_accounts.manage",
+    "closing.create", "closing.submit", "closing.approve", "closing.adjust", "closing.lock",
+    "ad_spend.manage",
+    "payroll.manage", "payroll.approve", "payroll.pay",
+    "treasury.transfer", "settlements.create",
+  ]);
+
+/**
+ * النظام المحاسبي مُفعَّل؟ الافتراضي **لأ** (مجمّد) في التطبيق. الاختبارات بتفعّله عشان
+ * تفضل تتحقّق من المنطق الداخلي المحفوظ (مش محذوف) للنظام القادم.
+ */
+export function isAccountingModuleEnabled(): boolean {
+  return process.env.ACCOUNTING_MODULE_ENABLED === "true";
+}
+
+/** هل الصلاحية دي عملية كتابة محاسبية متوقّفة حاليًا (والنظام مجمّد)؟ */
+export function isFrozenAccountingWrite(permission: Permission): boolean {
+  return (
+    !isAccountingModuleEnabled() &&
+    FROZEN_ACCOUNTING_WRITE_PERMISSIONS.has(permission)
+  );
+}
+
+/** رسالة موحّدة للمستخدم عند محاولة عملية محاسبية أثناء التجميد. */
+export const ACCOUNTING_FROZEN_MESSAGE =
+  "النظام المحاسبي قيد إعادة التطوير حاليًا";
+
 /** Every employees.role enum value (existing + new) — single source of truth for both the TS type and the runtime array (used by z.enum() in routers.ts). */
 export const EMPLOYEE_ROLE_VALUES = [
   "agent", "warehouse", "manager", "facebook_entry", "scanner",

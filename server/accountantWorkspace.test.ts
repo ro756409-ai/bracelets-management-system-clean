@@ -94,22 +94,21 @@ const accCollections = acc("AccCollections.tsx");
 const accWorkshop = acc("AccWorkshop.tsx");
 const accStocktake = acc("AccStocktake.tsx");
 
-describe("🔑 توجيه المحاسب لمساحته المخصّصة", () => {
-  it("🔑 اللوجين بيوجّه accountant لـ/accountant", () => {
+describe("🔑 النظام المحاسبي مجمّد — التوجيه لصفحة آمنة", () => {
+  it("🔑 اللوجين بيوجّه accountant لصفحة «قيد التطوير» مش /accountant", () => {
     const branch = login.slice(login.indexOf("role === 'accountant'"));
-    expect(branch.slice(0, branch.indexOf("else"))).toContain('setLocation("/accountant")');
+    expect(branch.slice(0, branch.indexOf("else"))).toContain('setLocation("/accounting-disabled")');
   });
-  it("🔑 مسار /accountant موجود، bare (من غير DashboardLayout)، متحرس بـaccounting.view", () => {
+  it("🔑 مسار /accountant بيعرض AccountingDisabled (مش AccountantWorkspace)", () => {
     const r = app.slice(app.indexOf('path={"/accountant"}'));
     const block = r.slice(0, r.indexOf("</Route>"));
-    expect(block).toContain('FinancialRoute permission="accounting.view" bare');
-    expect(block).toContain("<AccountantWorkspace");
+    expect(block).toContain("<AccountingDisabled />");
+    expect(block).not.toContain("AccountantWorkspace");
   });
-  it("🔑 توجيه الهبوط للمحاسب بقى /accountant مش صفحة المالك", () => {
-    // homeForPermissions + BlockFinancialUser الاتنين بيوجّهوا لـ/accountant
+  it("🔑 توجيه الهبوط والحجب المالي بقى للصفحة الآمنة", () => {
     const homeFn = app.slice(app.indexOf("function homeForPermissions"));
-    expect(homeFn.slice(0, homeFn.indexOf("}"))).toContain('"/accountant"');
-    expect(app).toContain('<Redirect to="/accountant" />');
+    expect(homeFn.slice(0, homeFn.indexOf("}"))).not.toContain('"/accountant"');
+    expect(app).toContain('<Redirect to="/accounting-disabled" />');
   });
 });
 

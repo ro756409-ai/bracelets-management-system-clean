@@ -367,7 +367,7 @@ describe("التابات", () => {
     }
   });
 
-  it("🔑 ومساراتهم كلها بتعدّي على الحسابات", () => {
+  it("🔑 النظام مجمّد: مساراتهم بتعرض AccountingDisabled (مش Accounting)", () => {
     const app = fs.readFileSync("client/src/App.tsx", "utf-8");
     for (const path of [
       "/daily-collections",
@@ -375,8 +375,7 @@ describe("التابات", () => {
       "/advertising",
       "/salary-profiles",
     ]) {
-      const route = app.slice(app.indexOf(`<Route path="${path}">`));
-      expect(route.slice(0, 120), path).toContain("<Accounting />");
+      expect(app, path).toContain(`<Route path="${path}"><AccountingDisabled /></Route>`);
     }
   });
 
