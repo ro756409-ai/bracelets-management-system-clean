@@ -47,6 +47,15 @@ describe("🔑 Inventory — multi-business isolation محفوظ", () => {
     expect(src).toContain("trpc.products.create.useMutation");
   });
 
+  it("🔑 (المرحلة B) إدارة المنتج القائم: إضافة ألوان/مقاسات دفعة + التعديل مايبعتش مخزون", () => {
+    expect(src).toContain("trpc.variants.addToProduct.useMutation");
+    expect(src).toContain("openAddMatrix");
+    // نموذج تعديل الصنف مايرسلش currentStock (المخزون من حوار الحركة المدقّق)
+    expect(src).toContain(
+      "Stock is intentionally NOT sent — edit dialog never overwrites currentStock directly."
+    );
+  });
+
   it("🔑 عملية الحركة (WRITE) بتحُلّ نشاطًا واحدًا محدّدًا — مش «كل الأنشطة»", () => {
     // الكتابة بتبعت businessId محدّد (targetBusinessId): المبدّل لو نشاط واحد، وإلا المصدر
     // الواحد useBrandOptions اللي بيختار النشاط الوحيد تلقائيًا (مالك بنشاط واحد ما يتعطّلش).

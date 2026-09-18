@@ -3665,7 +3665,114 @@ export async function updateVariant(
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(productVariants).set(data).where(eq(productVariants.id, id));
+  // المخزون **مايتغيّرش** من تعديل بيانات الصنف — لازم يمرّ من مسار الحركات المدقّق
+  // (addVariantInventoryMovement) اللي بيسجّل السبب والمستخدم. نشيل currentStock دفاعًا في
+  // العمق حتى لو أي caller حاول يبعته، فمفيش تجاوز لسجل الحركات.
+  const { currentStock: _ignored, ...safe } = data;
+  await db.update(productVariants).set(safe).where(eq(productVariants.id, id));
+}
+
+/**
+ * هل الـSKU مستخدم داخل نشاط معيّن (منتجات أو تركيبات)؟ لفحص التفرّد **داخل النشاط** في
+ * create/update مع استثناء الصنف/المنتج نفسه. نفس الـSKU مسموح في نشاط مختلف.
+ */
+export async function isSkuTakenInBusiness(
+  businessId: number,
+  sku: string,
+  opts: { excludeVariantId?: number; excludeProductId?: number } = {}
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const trimmed = sku.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  const prod = await db
+    .select({ id: products.id, sku: products.sku })
+    .from(products)
+    .where(eq(products.businessId, businessId));
+  for (const r of prod) {
+    if (opts.excludeProductId && r.id === opts.excludeProductId) continue;
+    if (r.sku?.trim().toLowerCase() === lower) return true;
+  }
+  const vars = await db
+    .select({ id: productVariants.id, sku: productVariants.sku })
+    .from(productVariants)
+    .innerJoin(products, eq(productVariants.productId, products.id))
+    .where(eq(products.businessId, businessId));
+  for (const r of vars) {
+    if (opts.excludeVariantId && r.id === opts.excludeVariantId) continue;
+    if (r.sku?.trim().toLowerCase() === lower) return true;
+  }
+  return false;
+}
+
+/** هل للصنف بيانات تاريخية (أوردر أو حركة مخزون)؟ لمنع الحذف النهائي وحماية التاريخ. */
+export async function variantHasHistory(variantId: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [ord] = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(eq(orders.variantId, variantId))
+    .limit(1);
+  if (ord) return true;
+  const [mov] = await db
+    .select({ id: inventoryMovements.id })
+    .from(inventoryMovements)
+    .where(eq(inventoryMovements.variantId, variantId))
+    .limit(1);
+  return Boolean(mov);
+}
+
+/**
+ * إضافة تركيبات **جديدة فقط** لمنتج قائم في transaction واحدة (المرحلة B — إدارة المنتج
+ * القائم). بيتخطّى أي لون×مقاس موجود مسبقًا (مايكرّرش)، ويتأكد أن كل التركيبات الجديدة
+ * ليها بُعد واحد على الأقل. تفرّد الـSKU داخل النشاط بيتفحص في الراوتر قبل الاستدعاء.
+ * بيرجّع التركيبات اللي اتعملت فعلًا واللي اتخطّت.
+ */
+export async function addVariantsToProduct(
+  productId: number,
+  variants: NewProductVariantInput[]
+): Promise<{ createdIds: number[]; skipped: string[] }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getVariantsByProduct(productId, {
+    includeInactive: true,
+  });
+  const existingCombos = new Set(
+    existing.map(
+      v =>
+        `${(v.color ?? "").trim().toLowerCase()}|${(v.size ?? "").trim().toLowerCase()}`
+    )
+  );
+  return db.transaction(async tx => {
+    const createdIds: number[] = [];
+    const skipped: string[] = [];
+    const batchSeen = new Set<string>();
+    for (const v of variants) {
+      const key = `${(v.color ?? "").trim().toLowerCase()}|${(v.size ?? "").trim().toLowerCase()}`;
+      if (existingCombos.has(key) || batchSeen.has(key)) {
+        skipped.push(`${v.color ?? ""}/${v.size ?? ""}`);
+        continue;
+      }
+      batchSeen.add(key);
+      const [vRes] = await tx.insert(productVariants).values({
+        productId,
+        color: v.color?.trim() || undefined,
+        size: v.size?.trim() || undefined,
+        name: v.name?.trim() || undefined,
+        sku: v.sku.trim(),
+        price: v.price ?? undefined,
+        costPrice: v.costPrice ?? undefined,
+        currentStock: v.currentStock ?? 0,
+        minStockLevel: v.minStockLevel ?? 5,
+        isActive: true,
+      } as InsertProductVariant);
+      const vid = Number((vRes as any).insertId);
+      if (vid) createdIds.push(vid);
+    }
+    return { createdIds, skipped };
+  });
 }
 
 export async function deleteVariant(id: number) {

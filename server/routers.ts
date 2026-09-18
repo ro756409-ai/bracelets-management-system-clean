@@ -585,7 +585,9 @@ import {
   getProductById,
   createProduct,
   createProductWithVariants,
+  addVariantsToProduct,
   findTakenSkusInBusiness,
+  isSkuTakenInBusiness,
   updateProduct,
   isSkuTaken,
   isVariantNameTaken,
@@ -2837,8 +2839,20 @@ export const appRouter = router({
             message: "المنتج غير موجود",
           });
         await requireScopedBusinessId(ctx, product.businessId);
-        if (data.currentStock !== undefined)
+        // منتج متعدد الخيارات: المخزون بيعيش على التركيبات، مش على الأب. منع تعديل مخزون
+        // الأب مباشرة (كان بيفسد التاريخ لو حوّلناه لبسيط). الكمية تتعدّل من حركة الـvariant.
+        if (data.currentStock !== undefined) {
+          const variants = await getVariantsByProduct(id, {
+            includeInactive: true,
+          });
+          if (variants.length > 0)
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "المنتج له تركيبات (ألوان/مقاسات) — عدّل المخزون من التركيبة نفسها، مش من المنتج الأب",
+            });
           await assertLegacyInventoryMutationAllowed(product.businessId);
+        }
         if (
           data.sku &&
           (await isSkuTaken(data.sku, { excludeProductId: id }))
@@ -6719,10 +6733,11 @@ export const appRouter = router({
             message: `يوجد بالفعل نوع بنفس الاسم "${rest.name}" لهذا المنتج`,
           });
         }
-        if (await isSkuTaken(rest.sku)) {
+        // تفرّد الـSKU **داخل النشاط** فقط — نفس الـSKU مسموح في نشاط مختلف.
+        if (await isSkuTakenInBusiness(product.businessId, rest.sku)) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل`,
+            message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل في هذا النشاط`,
           });
         }
         await createVariant({
@@ -6731,6 +6746,87 @@ export const appRouter = router({
           ...(costPrice !== undefined ? { costPrice: String(costPrice) } : {}),
         });
         return { success: true };
+      }),
+    // إضافة تركيبات جديدة (ألوان/مقاسات) لمنتج قائم — الجديد فقط، بيتخطّى الموجود.
+    addToProduct: adminProcedure
+      .input(
+        z.object({
+          productId: z.number(),
+          variants: z
+            .array(
+              z.object({
+                color: z.string().optional(),
+                size: z.string().optional(),
+                name: z.string().optional(),
+                sku: z.string().min(1, "رمز المنتج (SKU) مطلوب"),
+                price: z.number().min(0).optional(),
+                costPrice: z.number().min(0).optional(),
+                currentStock: z.number().min(0).default(0),
+                minStockLevel: z.number().min(0).default(5),
+              })
+            )
+            .min(1, "لازم تركيبة واحدة على الأقل"),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        // 1) العزل: المنتج لازم يكون تابع للجلسة.
+        const product = await getProductById(input.productId);
+        if (!product)
+          throw new TRPCError({ code: "NOT_FOUND", message: "المنتج غير موجود" });
+        await requireScopedBusinessId(ctx, product.businessId);
+
+        // 2) كل تركيبة ليها بُعد واحد على الأقل.
+        for (const v of input.variants) {
+          if (!v.color?.trim() && !v.size?.trim() && !v.name?.trim())
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "كل تركيبة لازم يكون ليها لون أو مقاس على الأقل",
+            });
+        }
+
+        // 3) تفرّد SKU: داخل الدفعة + داخل النشاط (منتجات + تركيبات).
+        const skuSeen = new Set<string>();
+        for (const v of input.variants) {
+          const s = v.sku.trim().toLowerCase();
+          if (skuSeen.has(s))
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `رمز المنتج (SKU) "${v.sku}" مكرر داخل الدفعة`,
+            });
+          skuSeen.add(s);
+        }
+        const takenInBusiness = await findTakenSkusInBusiness(
+          product.businessId,
+          input.variants.map(v => v.sku)
+        );
+        for (const v of input.variants) {
+          if (takenInBusiness.has(v.sku.trim().toLowerCase()))
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `رمز المنتج (SKU) "${v.sku}" مستخدم بالفعل في هذا النشاط`,
+            });
+        }
+
+        // 4) مخزون افتتاحي: مسموح فقط قبل Go-Live المحاسبي.
+        if (input.variants.some(v => v.currentStock !== 0))
+          await assertLegacyInventoryMutationAllowed(product.businessId);
+
+        // 5) إضافة الجديد فقط (بيتخطّى اللون×المقاس الموجود) في transaction واحدة.
+        const result = await addVariantsToProduct(
+          input.productId,
+          input.variants.map(v => ({
+            color: v.color,
+            size: v.size,
+            name: v.name,
+            sku: v.sku,
+            price: v.price !== undefined ? String(v.price) : undefined,
+            costPrice:
+              v.costPrice !== undefined ? String(v.costPrice) : undefined,
+            currentStock: v.currentStock,
+            minStockLevel: v.minStockLevel,
+          }))
+        );
+        return { success: true, ...result };
       }),
     update: adminProcedure
       .input(
@@ -6762,14 +6858,23 @@ export const appRouter = router({
             });
           }
         }
-        if (
-          rest.sku &&
-          (await isSkuTaken(rest.sku, { excludeVariantId: id }))
-        ) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل`,
-          });
+        if (rest.sku) {
+          // تفرّد الـSKU داخل النشاط مع استثناء الصنف نفسه؛ نفس الـSKU مسموح في نشاط مختلف.
+          const current = await getVariantById(id);
+          const product = current
+            ? await getProductById(current.productId)
+            : undefined;
+          if (
+            product &&
+            (await isSkuTakenInBusiness(product.businessId, rest.sku, {
+              excludeVariantId: id,
+            }))
+          ) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل في هذا النشاط`,
+            });
+          }
         }
         await updateVariant(id, {
           ...rest,

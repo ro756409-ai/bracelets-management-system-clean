@@ -203,6 +203,15 @@ export default function Inventory() {
   const [vfMinStock, setVfMinStock] = useState("5");
   const [vfIsActive, setVfIsActive] = useState(true);
 
+  // إضافة ألوان/مقاسات دفعة لمنتج قائم
+  const [showAddMatrixDialog, setShowAddMatrixDialog] = useState(false);
+  const [addMatrixProductId, setAddMatrixProductId] = useState<number | null>(
+    null
+  );
+  const [addMatrix, setAddMatrix] = useState<VariantMatrixValue>(
+    emptyVariantMatrix()
+  );
+
   // Variant archive confirm
   const [deleteVariantTarget, setDeleteVariantTarget] = useState<any | null>(
     null
@@ -290,6 +299,20 @@ export default function Inventory() {
     },
     onError: e => toast.error(e.message),
   });
+
+  const addVariantsToProductMutation =
+    trpc.variants.addToProduct.useMutation({
+      onSuccess: res => {
+        const created = res.createdIds?.length ?? 0;
+        const skipped = res.skipped?.length ?? 0;
+        toast.success(
+          `تمت إضافة ${created} تركيبة${skipped ? ` (تم تخطي ${skipped} موجودة مسبقًا)` : ""}`
+        );
+        utils.variants.all.invalidate();
+        closeAddMatrix();
+      },
+      onError: e => toast.error(e.message),
+    });
 
   const deleteVariantMutation = trpc.variants.delete.useMutation({
     onSuccess: () => {
@@ -398,6 +421,61 @@ export default function Inventory() {
     setShowVariantFormDialog(false);
     setVariantFormId(null);
     setVariantFormProductId(null);
+  }
+
+  // ---- إضافة ألوان/مقاسات دفعة لمنتج قائم (الجديد فقط) ----
+  function openAddMatrix(productId: number) {
+    setAddMatrixProductId(productId);
+    setAddMatrix(emptyVariantMatrix());
+    setShowAddMatrixDialog(true);
+  }
+  function closeAddMatrix() {
+    setShowAddMatrixDialog(false);
+    setAddMatrixProductId(null);
+    setAddMatrix(emptyVariantMatrix());
+  }
+  function submitAddMatrix() {
+    if (addMatrixProductId == null) return;
+    const rows = enabledVariants(addMatrix);
+    if (rows.length === 0) {
+      toast.error("أضف تركيبة مفعّلة واحدة على الأقل (لون/مقاس)");
+      return;
+    }
+    const variants = [];
+    for (const r of rows) {
+      if (!r.sku.trim()) {
+        toast.error(`تركيبة ${r.color || ""} ${r.size || ""} بلا SKU`);
+        return;
+      }
+      const priceN = r.price.trim() === "" ? undefined : Number(r.price);
+      const costN = r.costPrice.trim() === "" ? undefined : Number(r.costPrice);
+      const stockN = Number(r.currentStock || "0");
+      const minN = Number(r.minStockLevel || "0");
+      if (
+        (priceN !== undefined && (isNaN(priceN) || priceN < 0)) ||
+        (costN !== undefined && (isNaN(costN) || costN < 0)) ||
+        isNaN(stockN) ||
+        stockN < 0 ||
+        isNaN(minN) ||
+        minN < 0
+      ) {
+        toast.error(`أرقام غير صحيحة في تركيبة ${r.color || ""} ${r.size || ""}`);
+        return;
+      }
+      variants.push({
+        color: r.color.trim() || undefined,
+        size: r.size.trim() || undefined,
+        sku: r.sku.trim(),
+        price: priceN,
+        costPrice: costN,
+        currentStock: stockN,
+        minStockLevel: minN,
+      });
+    }
+    addVariantsToProductMutation.mutate({
+      productId: addMatrixProductId,
+      variants,
+    });
   }
 
   function submitVariantForm() {
@@ -1213,6 +1291,16 @@ export default function Inventory() {
                             >
                               <Plus className="h-3.5 w-3.5 ml-1" />
                               نوع
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 text-xs"
+                              onClick={() => openAddMatrix(product.id)}
+                              title="إضافة ألوان/مقاسات دفعة واحدة"
+                            >
+                              <Plus className="h-3.5 w-3.5 ml-1" />
+                              ألوان/مقاسات
                             </Button>
                             <Button
                               size="sm"
@@ -2455,6 +2543,55 @@ export default function Inventory() {
                 <span className="flex items-center gap-2">
                   <Save className="h-4 w-4" />
                   حفظ
+                </span>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== Add Color/Size Matrix to existing product ===== */}
+      <Dialog
+        open={showAddMatrixDialog}
+        onOpenChange={o => {
+          if (!o) closeAddMatrix();
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Plus className="h-5 w-5 text-primary" />
+              إضافة ألوان/مقاسات
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[70vh] overflow-y-auto">
+            <p className="text-sm text-muted-foreground">
+              التركيبات الموجودة مسبقًا هيتم تخطّيها تلقائيًا — الجديد فقط اللي
+              هيتضاف.
+            </p>
+            <VariantMatrixBuilder
+              value={addMatrix}
+              onChange={setAddMatrix}
+              skuBase=""
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeAddMatrix}>
+              إلغاء
+            </Button>
+            <Button
+              onClick={submitAddMatrix}
+              disabled={addVariantsToProductMutation.isPending}
+            >
+              {addVariantsToProductMutation.isPending ? (
+                <span className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  جاري الحفظ...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <Save className="h-4 w-4" />
+                  إضافة التركيبات الجديدة
                 </span>
               )}
             </Button>
