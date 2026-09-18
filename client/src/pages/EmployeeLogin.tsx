@@ -51,7 +51,11 @@ export default function EmployeeLogin() {
       } else if (data.employee.role === 'accountant') {
         // المحاسب له مساحة عمل مخصّصة بسيطة — مش شاشة تشغيل الأوردرات ولا صفحة المالك.
         setLocation("/accountant");
-      } else if (data.employee.role === 'facebook_entry') {
+      } else if (
+        data.employee.role === 'facebook_entry' ||
+        data.employee.role === 'data_entry'
+      ) {
+        // إدخال البيانات = شاشة إدخال أوردر يدوي (نفس شاشة facebook-entry) — مش بوابة التأكيدات.
         setLocation("/facebook-entry");
       } else if (data.employee.role === 'warehouse') {
         setLocation("/warehouse-dashboard");

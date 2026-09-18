@@ -121,6 +121,40 @@ function BlockFinancialUser({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * حارس لوحة التأكيدات (/employee-dashboard): مقصورة على أدوار التأكيد/المتابعة. موظف الإدخال
+ * (`orders.create` من غير أي `orders.confirm`/`orders.update`/`dashboard.view`) بيتحوّل
+ * لشاشة الإدخال. باقي الأدوار (تأكيد/مشاهدة/مخزن...) بتعدّي زي ما هي — من غير انحدار.
+ * ده توجيه واجهة فوق الحُرّاس الحقيقية على الـendpoints (`requireEmployeePermission`).
+ */
+function EmployeeDashboardGuard({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const { permissions, isLoading } = usePermissions();
+  if (isLoading) return null;
+  const isDataEntryOnly =
+    user?.role !== "admin" &&
+    permissions.includes("orders.create") &&
+    !permissions.includes("orders.confirm") &&
+    !permissions.includes("orders.update") &&
+    !permissions.includes("dashboard.view");
+  if (isDataEntryOnly) return <Redirect to="/facebook-entry" />;
+  return <>{children}</>;
+}
+
+/**
+ * حارس شاشة الإدخال اليدوي (/facebook-entry): مقصورة على من يملك `orders.create`. أي جلسة
+ * أخرى (تأكيد/مشاهدة...) بتتحوّل للوحة التأكيدات. المالك (admin) بيعدّي.
+ */
+function OrderCreateGuard({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const { permissions, isLoading } = usePermissions();
+  if (isLoading) return null;
+  if (user?.role !== "admin" && !permissions.includes("orders.create")) {
+    return <Redirect to="/employee-dashboard" />;
+  }
+  return <>{children}</>;
+}
+
+/**
  * شاشات الشحن (شحنات اليوم / جدول الشحن) ليها جمهورين على **نفس الـroute**:
  *   • جلسة الداشبورد (المالك/المدير — `auth.me` فيه user): تبويب داخل Operations workspace
  *     تحت DashboardLayout، بيقرا من `operations.*` (مش محتاج كوكي employee_token).
@@ -169,7 +203,11 @@ function Router() {
       {/* لوحات التشغيل: المحاسب (الموظف الوحيد غير الإداري بصلاحية مالية) بيتحوّل عنها
           للحسابات لو فتحها بالـURL — باقي أدوار التشغيل متأثرش. */}
       <Route path={"/employee-dashboard"}>
-        <BlockFinancialUser><EmployeeDashboard /></BlockFinancialUser>
+        <BlockFinancialUser>
+          <EmployeeDashboardGuard>
+            <EmployeeDashboard />
+          </EmployeeDashboardGuard>
+        </BlockFinancialUser>
       </Route>
       <Route path={"/warehouse-dashboard"}>
         <BlockFinancialUser><WarehouseDashboard /></BlockFinancialUser>
@@ -282,7 +320,9 @@ function Router() {
         <FinancialRoute permission="shipping_finance.view"><Accounting /></FinancialRoute>
       </Route>
       <Route path={"/facebook-entry"}>
-        <BlockFinancialUser><FacebookEntry /></BlockFinancialUser>
+        <BlockFinancialUser>
+          <OrderCreateGuard><FacebookEntry /></OrderCreateGuard>
+        </BlockFinancialUser>
       </Route>
       <Route path={"/scan-orders"}>
         <ProtectedLayout><ScanOrders /></ProtectedLayout>

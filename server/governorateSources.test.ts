@@ -104,13 +104,13 @@ describe("المدينة بتتحفظ لموظف إدخال البيانات", (
   });
 
   it("🔑 السيرفر بيقبل المدينة في التعديل — مكانتش في الـschema", () => {
-    const proc = routers.slice(routers.indexOf("    updateOrder: employeePortalProcedure"));
+    const proc = routers.slice(routers.indexOf("    updateOrder: requireEmployeePermission(\"orders.create\")"));
     const input = proc.slice(0, proc.indexOf(".mutation("));
     expect(input).toContain("city: z.string().max(100).optional()");
   });
 
   it("🔑 السيرفر بيكتب المدينة فعلًا في الأوردر", () => {
-    const proc = routers.slice(routers.indexOf("    updateOrder: employeePortalProcedure"));
+    const proc = routers.slice(routers.indexOf("    updateOrder: requireEmployeePermission(\"orders.create\")"));
     expect(proc.slice(0, 4000)).toContain("city: input.city ?? null");
   });
 

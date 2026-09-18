@@ -5190,7 +5190,7 @@ export const appRouter = router({
   // ==================== FACEBOOK ENTRY (موظف إدخال فيسبوك) ====================
   facebookEntry: router({
     // إضافة أوردر فيسبوك يدوياً
-    addOrder: employeePortalProcedure
+    addOrder: requireEmployeePermission("orders.create")
       .input(
         z.object({
           customerName: z.string().min(1),
@@ -5232,6 +5232,9 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
+        // العزل: النشاط **إجباريًا من جلسة الموظف**، مش من input العميل ولا القيمة الافتراضية
+        // (businessId=1). موظف بلا نشاط صالح → fail-closed (مفيش أوردر يتكتب).
+        const businessId = await resolveEmployeeBusinessId(empScope(ctx));
         // توليد رقم أوردر فريد
         const timestamp = Date.now();
         const random = Math.floor(Math.random() * 1000)
@@ -5280,6 +5283,7 @@ export const appRouter = router({
           .insert(orders)
           .values({
             orderNumber,
+            businessId,
             customerName: input.customerName,
             customerPhone: normalizedCustomerPhone,
             governorate: input.governorate,
@@ -5378,13 +5382,16 @@ export const appRouter = router({
       }),
 
     // حذف أوردر (الموظف يحذف أوردر دخله هو فقط)
-    deleteOrder: employeePortalProcedure
+    deleteOrder: requireEmployeePermission("orders.create")
       .input(
         z.object({
           orderId: z.number().int().min(1),
         })
       )
       .mutation(async ({ ctx, input }) => {
+        // العزل: الأوردر لازم يكون تابع لنشاط/tenant الموظف (requireOwned). وملكية «مين
+        // دخله» مقيّدة تحت (lastUpdatedBy مؤقتًا — البديل الثابت createdByEmployeeId مرهون
+        // بـMigration 0036 المقترح، مش متطبّق دلوقتي).
         await requireOwned(
           empScope(ctx),
           "order",
@@ -5416,7 +5423,7 @@ export const appRouter = router({
       }),
 
     // تعديل أوردر (الموظف يعدل أوردر دخله هو فقط)
-    updateOrder: employeePortalProcedure
+    updateOrder: requireEmployeePermission("orders.create")
       .input(
         z.object({
           orderId: z.number().int().min(1),
