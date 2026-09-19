@@ -44,24 +44,36 @@ function extractGovernorate(addressBlock: string): string {
   return firstLine;
 }
 
-/** يفصل «اسود مقاس 8 سنين» → لون «اسود» ومقاس «8». */
+/** ينضّف طرف اللون من علامات/أقواس/فواصل زائدة: «بيج (» → «بيج». */
+function cleanColor(s: string): string {
+  return s.replace(/[()\[\]{}،,:：\-–—]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * يفصل نص اللون/المقاس → لون + مقاس. يدعم:
+ *   «اسود مقاس 8 سنين» → اسود / 8
+ *   «بيج (12 سنة)»      → بيج / 12   (المقاس داخل أقواس)
+ *   «بيج 10»            → بيج / 10
+ *   أرقام عربية، و«سنة»/«سنين»، ونطاقات «من 6 إلى 8» → الحد الأعلى.
+ */
 export function splitColorSize(text: string): { color: string; size: string } {
   if (!text) return { color: "", size: "" };
   const t = text.trim();
   // لو فيه كلمة «مقاس/المقاس/الحجم» — اللون قبلها، والمقاس بعدها.
   const byKeyword = t.split(/\s*(?:المقاس|مقاس|الحجم|المقاسات)\s*[:：]?\s*/);
   if (byKeyword.length > 1) {
-    return { color: byKeyword[0].trim(), size: normalizeSize(byKeyword.slice(1).join(" ")) };
+    return { color: cleanColor(byKeyword[0]), size: normalizeSize(byKeyword.slice(1).join(" ")) };
   }
-  // وإلا: اللون قبل أول رقم، والمقاس من أول رقم.
-  const digitMatch = normalizeDigits(t).match(/\d/);
+  // وإلا: اللون قبل أول رقم، والمقاس من أول رقم (الأقواس بتتنضّف).
+  const digits = normalizeDigits(t);
+  const digitMatch = digits.match(/\d/);
   if (digitMatch && digitMatch.index != null) {
     return {
-      color: t.slice(0, digitMatch.index).trim(),
+      color: cleanColor(t.slice(0, digitMatch.index)),
       size: normalizeSize(t.slice(digitMatch.index)),
     };
   }
-  return { color: t, size: "" };
+  return { color: cleanColor(t), size: "" };
 }
 
 export function parsePasteMessage(raw: string): ParsedPaste {
@@ -70,10 +82,10 @@ export function parsePasteMessage(raw: string): ParsedPaste {
   const adName = firstLineValue(text, /بيدج\s*[:：]\s*([^\n]+)/);
   const customerName = firstLineValue(text, /الاسم\s*[:：]\s*([^\n]+)/);
 
-  // الهاتف: «رقم الفون» أو «رقم الفون(1)» — مع الحفاظ على الصفر الأول.
+  // الهاتف: «رقم الفون(1)» أو «رقم التواصل/الموبايل/التليفون» — مع الحفاظ على الصفر الأول.
   let phone = "";
   const phoneM = text.match(
-    /رقم\s*(?:ال)?فون\s*(?:\(?\s*[0-9٠-٩]*\s*\)?)?\s*[:：]\s*([0-9٠-٩۰-۹\s\-]+)/
+    /رقم\s*(?:ال)?(?:فون|تواصل|موبايل|محمول|تليفون|تلفون|هاتف)\s*(?:\(?\s*[0-9٠-٩]*\s*\)?)?\s*[:：]\s*([0-9٠-٩۰-۹\s\-]+)/
   );
   if (phoneM) phone = normalizeDigits(phoneM[1]).replace(/[^\d]/g, "");
   if (!phone) {
@@ -81,9 +93,9 @@ export function parsePasteMessage(raw: string): ParsedPaste {
     if (any) phone = any[1];
   }
 
-  // العنوان: كل السطور بعد «العنوان:» حتى أول حقل معروف تاني.
+  // العنوان: كل السطور بعد «العنوان:» حتى أول حقل معروف تاني (أي «رقم ...»، نوع المنتج، ...).
   const addrM = text.match(
-    /العنوان\s*[:：]\s*([\s\S]*?)(?=\n\s*(?:رقم\s*(?:ال)?فون|نوع\s*المنتج|عدد\s*القطع|اللون|الشحن|الاجمالي|الإجمالي|التاريخ|بيدج)\b|$)/
+    /العنوان\s*[:：]\s*([\s\S]*?)(?=\n\s*(?:رقم\b|نوع\s*المنتج|عدد\s*القطع|اللون|المقاس|الحجم|الشحن|الاجمالي|الإجمالي|التاريخ|بيدج)|$)/
   );
   const addressBlock = addrM ? addrM[1].trim() : "";
   const governorate = extractGovernorate(addressBlock);
@@ -101,7 +113,12 @@ export function parsePasteMessage(raw: string): ParsedPaste {
   if (qtyM) quantity = Math.max(1, parseInt(normalizeDigits(qtyM[1]), 10) || 1);
 
   const colorLine = firstLineValue(text, /اللون\s*[:：]\s*([^\n]+)/);
-  const { color, size } = splitColorSize(colorLine);
+  let { color, size } = splitColorSize(colorLine);
+  // المقاس ممكن ييجي في سطر مستقل «المقاس: ...» — لو ماطلعش من سطر اللون.
+  if (!size) {
+    const sizeLine = firstLineValue(text, /(?:المقاس|الحجم|المقاسات)\s*[:：]\s*([^\n]+)/);
+    if (sizeLine) size = normalizeSize(sizeLine);
+  }
 
   let shipping = 0;
   const shipM = text.match(/الشحن\s*[:：]\s*([^\n]+)/);

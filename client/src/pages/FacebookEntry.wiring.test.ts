@@ -56,10 +56,13 @@ describe("🔑 شاشة الإدخال — variant-based", () => {
 });
 
 describe("🔑 السيرفر — عزل الكتالوج + سقف المخزون", () => {
-  it("🔑 catalog/products مقصورة على نشاط الموظف", () => {
-    const cat = routers.slice(routers.indexOf("catalog: employeePortalProcedure"), routers.indexOf("catalog: employeePortalProcedure") + 260);
-    expect(cat).toContain("resolveEmployeeBusinessId(empScope(ctx))");
-    expect(cat).toContain("getMatchCatalog(businessId)");
+  it("🔑 catalog/products مقصورة على أنشطة tenant الموظف (Afandy Kids) — لا cross-tenant", () => {
+    const cat = routers.slice(routers.indexOf("catalog: employeePortalProcedure"), routers.indexOf("catalog: employeePortalProcedure") + 700);
+    expect(cat).toContain("getBusinessIdsForTenant(requireTenantId(emp))");
+    expect(cat).toContain("getMatchCatalog(undefined, businessIds)");
+    const prod = routers.slice(routers.indexOf("products: employeePortalProcedure"), routers.indexOf("products: employeePortalProcedure") + 800);
+    expect(prod).toContain("getBusinessIdsForTenant(requireTenantId(emp))");
+    expect(prod).toContain("inArray(products.businessId, businessIds)");
   });
   it("🔑 addOrder بيتحقق من ملكية التركيبة وسقف المخزون", () => {
     const start = routers.indexOf('addOrder: requireEmployeePermission("orders.create")');
@@ -67,9 +70,9 @@ describe("🔑 السيرفر — عزل الكتالوج + سقف المخزو�
     expect(block).toContain("getVariantById(p.variantId)");
     expect(block).toContain("أكبر من المتاح");
   });
-  it("🔑 parsePaste معزول بنشاط الموظف (getMatchCatalog(businessId))", () => {
-    const b = routers.slice(routers.indexOf("parsePaste: employeePortalProcedure"), routers.indexOf("parsePaste: employeePortalProcedure") + 500);
-    expect(b).toContain("resolveEmployeeBusinessId(empScope(ctx))");
-    expect(b).toContain("getMatchCatalog(businessId)");
+  it("🔑 parsePaste معزول بأنشطة tenant الموظف", () => {
+    const b = routers.slice(routers.indexOf("parsePaste: employeePortalProcedure"), routers.indexOf("parsePaste: employeePortalProcedure") + 700);
+    expect(b).toContain("getBusinessIdsForTenant(requireTenantId(emp))");
+    expect(b).toContain("getMatchCatalog(undefined, businessIds)");
   });
 });

@@ -86,12 +86,13 @@ describe("🔑 العزل من نقطة واحدة", () => {
     expect(fn).toContain("all.includes(bid) ? [bid] : []"); // لازم تابع للـtenant
   });
 
-  it("🔑 getBusinessIdsForTenant بقى بس جوه sessionBusinessIds (نقطة واحدة)", () => {
-    const outside = routers
-      .split("getBusinessIdsForTenant(")
-      .length - 1;
-    // مرة في الاستيراد/الاستدعاء الوحيد جوه sessionBusinessIds (+ ممكن التعليق) — مش منتشر.
-    expect(outside).toBeLessThanOrEqual(2);
+  it("🔑 getBusinessIdsForTenant مقصور على choke point العزل + كتالوج الإدخال tenant-scoped", () => {
+    const uses = routers.split("getBusinessIdsForTenant(").length - 1;
+    // sessionBusinessIds (choke point العزل الأساسي) + كتالوج شاشة الإدخال المعزول بالـtenant
+    // (products/catalog/parsePaste — منتجات نشاط الموظف، معزولة عن أي tenant تاني). مش منتشر.
+    expect(uses).toBeLessThanOrEqual(6);
+    // العزل الأساسي للأوردرات/الجرد لسه بيمرّ من sessionBusinessIds (مش getBusinessIdsForTenant مباشر).
+    expect(routers).toContain("async function sessionBusinessIds");
   });
 
   it("🔑 الـswitcher (activeList/groups/groupsWithBusinesses) بيمرّ بـsessionBusinessIds", () => {

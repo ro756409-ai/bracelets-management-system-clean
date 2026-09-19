@@ -5563,14 +5563,18 @@ export const appRouter = router({
 
     // جلب قائمة المنتجات — مقصورة على نشاط الموظف (عزل).
     products: employeePortalProcedure.query(async ({ ctx }) => {
-      const businessId = await resolveEmployeeBusinessId(empScope(ctx));
+      // نطاق أنشطة الـtenant بتاع الموظف (Afandy Kids) — كل منتجات نشاطه، معزولة عن أي tenant
+      // تاني (الأسورة tenant منفصل فمستحيل تظهر). fail-closed: بلا أنشطة → صفر.
+      const emp = (ctx as any).employee;
+      const businessIds = (await getBusinessIdsForTenant(requireTenantId(emp))) ?? [];
+      if (businessIds.length === 0) return [];
       const db = await getDb();
       if (!db) return [];
       const { products } = await import("../drizzle/schema");
       return db
         .select()
         .from(products)
-        .where(and(eq(products.isActive, true), eq(products.businessId, businessId)))
+        .where(and(eq(products.isActive, true), inArray(products.businessId, businessIds)))
         .orderBy(products.name);
     }),
 
@@ -5579,8 +5583,11 @@ export const appRouter = router({
      * employee's own business (تركيبات المخزون بتاعت نشاطه بس، مش كل التينانتات).
      */
     catalog: employeePortalProcedure.query(async ({ ctx }) => {
-      const businessId = await resolveEmployeeBusinessId(empScope(ctx));
-      return getMatchCatalog(businessId);
+      // نطاق أنشطة الـtenant بتاع الموظف (Afandy Kids فقط) — معزول عن tenant الأسورة.
+      const emp = (ctx as any).employee;
+      const businessIds = (await getBusinessIdsForTenant(requireTenantId(emp))) ?? [];
+      if (businessIds.length === 0) return { products: [], variants: [] };
+      return getMatchCatalog(undefined, businessIds);
     }),
 
     /**
@@ -5591,8 +5598,12 @@ export const appRouter = router({
     parsePaste: employeePortalProcedure
       .input(z.object({ text: z.string().min(1) }))
       .query(async ({ ctx, input }) => {
-        const businessId = await resolveEmployeeBusinessId(empScope(ctx));
-        const catalog = await getMatchCatalog(businessId); // معزول بالنشاط
+        // نطاق أنشطة الـtenant بتاع الموظف (Afandy Kids فقط) — نفس كتالوج شاشة الإدخال.
+        const emp = (ctx as any).employee;
+        const businessIds = (await getBusinessIdsForTenant(requireTenantId(emp))) ?? [];
+        const catalog = businessIds.length
+          ? await getMatchCatalog(undefined, businessIds)
+          : { products: [], variants: [] };
         const parsed = parsePasteMessage(input.text);
         const match = matchImportItem(
           { name: parsed.productName, color: parsed.color, size: parsed.size },

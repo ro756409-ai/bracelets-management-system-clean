@@ -3419,11 +3419,14 @@ export async function getOrdersNeedingReview(limit = 100) {
 }
 
 /** Full catalog needed by productMatching, in one round-trip. */
-export async function getMatchCatalog(businessId?: number) {
+export async function getMatchCatalog(businessId?: number, businessIds?: number[]) {
   const db = await getDb();
   if (!db) return { products: [], variants: [] };
   const productConditions: any[] = [eq(products.isActive, true)];
-  if (businessId) productConditions.push(eq(products.businessId, businessId));
+  // businessIds (الجمع) = نطاق أنشطة الـtenant (معزول). فاضي → [-1] → صفر منتجات (fail-closed).
+  if (businessIds)
+    productConditions.push(inArray(products.businessId, businessIds.length ? businessIds : [-1]));
+  else if (businessId) productConditions.push(eq(products.businessId, businessId));
   const productRows = await db
     .select()
     .from(products)

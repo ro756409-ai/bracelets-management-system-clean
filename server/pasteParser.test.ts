@@ -59,4 +59,27 @@ describe("🔑 splitColorSize", () => {
   it("🔑 «اسود مقاس 8 سنين»", () => expect(splitColorSize("اسود مقاس 8 سنين")).toEqual({ color: "اسود", size: "8" }));
   it("🔑 «بيج 10»", () => expect(splitColorSize("بيج 10")).toEqual({ color: "بيج", size: "10" }));
   it("🔑 لون بلا مقاس", () => expect(splitColorSize("أحمر")).toEqual({ color: "أحمر", size: "" }));
+  it("🔑 «بيج (12 سنة)» → بيج / 12 (مقاس داخل أقواس)", () =>
+    expect(splitColorSize("بيج (12 سنة)")).toEqual({ color: "بيج", size: "12" }));
+  it("🔑 «بيج (١٢ سنه)» أرقام عربية", () =>
+    expect(splitColorSize("بيج (١٢ سنه)")).toEqual({ color: "بيج", size: "12" }));
+});
+
+describe("🔑 قالب «بيج (12 سنة)» — الاستخراج الكامل", () => {
+  const p = parsePasteMessage(
+    "بيدج: afandy kids\nالاسم: شيماء فهمي\nالعنوان: محافظة السويس\nمنطقة الصباح\nرقم التواصل: 01286711488\nنوع المنتج: طقم أطفال\nعدد القطع: 1\nاللون: بيج (12 سنة)\nالشحن: مجانا\nالاجمالي: 500"
+  );
+  it("🔑 المنتج «طقم أطفال»", () => expect(p.productName).toBe("طقم أطفال"));
+  it("🔑 اللون «بيج»", () => expect(p.color).toBe("بيج"));
+  it("🔑 المقاس «12»", () => expect(p.size).toBe("12"));
+  it("🔑 الهاتف «رقم التواصل» مع الصفر", () => expect(p.customerPhone).toBe("01286711488"));
+  it("🔑 المحافظة السويس", () => expect(p.governorate).toBe("السويس"));
+});
+
+describe("🔑 المقاس في سطر مستقل", () => {
+  it("🔑 «اللون: بيج» + «المقاس: 12 سنين» (سطرين)", () => {
+    const p = parsePasteMessage("نوع المنتج: طقم\nاللون: بيج\nالمقاس: 12 سنين\nالاجمالي: 100");
+    expect(p.color).toBe("بيج");
+    expect(p.size).toBe("12");
+  });
 });
