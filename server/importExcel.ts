@@ -539,7 +539,14 @@ export function registerImportRoutes(app: Express) {
         const filePhoneProductKeys = new Set<string>();
 
         // ── المرحلة ١: التصنيف بلا أي كتابة — بنبني قايمة الصفوف الصالحة للإدخال ──
+        // ملخّص منفصل لكل صف: imported / already_existing / failed_matching + السبب.
+        const reports: Array<{
+          row: number;
+          status: "imported" | "already_existing" | "failed_matching";
+          reason?: string;
+        }> = [];
         const toInsert: Array<Omit<InsertOrder, "orderNumber" | "businessId">> = [];
+        const toInsertRows: number[] = [];
         for (const row of preview) {
           const phone = row.customerPhone.replace(/\s+/g, "");
           const uuid = row.orderId || "";
@@ -559,6 +566,7 @@ export function registerImportRoutes(app: Express) {
               fileUUIDs.has(uuid));
           if (isDuplicateByUUID) {
             duplicates++;
+            reports.push({ row: row.rowIndex, status: "already_existing", reason: `أوردر موجود بالفعل (نفس UUID: ${uuid})` });
             importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر بالـ UUID (${uuid})`);
             continue;
           }
@@ -576,6 +584,7 @@ export function registerImportRoutes(app: Express) {
             isDuplicateByPhoneProductToday || filePhoneProductKeys.has(phoneProductKey);
           if (isDuplicateByPhoneProduct) {
             duplicates++;
+            reports.push({ row: row.rowIndex, status: "already_existing", reason: "أوردر موجود بالفعل (نفس الهاتف + المنتج اليوم)" });
             importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر (نفس الهاتف + المنتج اليوم)`);
             continue;
           }
@@ -594,11 +603,11 @@ export function registerImportRoutes(app: Express) {
           if (!match.matched) {
             // سبب دقيق لكل صف: الاسم واللون والمقاس والـSKU المستلَمين + سبب الفشل.
             const rc = match.received;
-            importErrors.push(
-              `صف ${row.rowIndex}: تعذّرت المطابقة — ` +
-                `المنتج: "${rc.name ?? ""}"، اللون: "${rc.color ?? "—"}"، ` +
-                `المقاس: "${rc.size ?? "—"}"، SKU: "${rc.sku ?? "—"}" — ${match.reason}`
-            );
+            const detail =
+              `المنتج: "${rc.name ?? ""}"، اللون: "${rc.color ?? "—"}"، ` +
+              `المقاس: "${rc.size ?? "—"}"، SKU: "${rc.sku ?? "—"}" — ${match.reason}`;
+            reports.push({ row: row.rowIndex, status: "failed_matching", reason: detail });
+            importErrors.push(`صف ${row.rowIndex}: تعذّرت المطابقة — ${detail}`);
             skipped++;
             continue; // ممنوع إنشاء أوردر لمنتج/تركيبة غير محسومة
           }
@@ -606,6 +615,7 @@ export function registerImportRoutes(app: Express) {
           // بعد ما الصف عدّى كل الفحوص — سجّله في كشف التكرار داخل الملف وضيفه للإدخال.
           if (uuid) fileUUIDs.add(uuid);
           filePhoneProductKeys.add(phoneProductKey);
+          toInsertRows.push(row.rowIndex);
 
           const adName = (row.utmCampaign || "").trim() || undefined;
           toInsert.push({
@@ -641,6 +651,9 @@ export function registerImportRoutes(app: Express) {
             imported: 0,
             skipped,
             duplicates,
+            already_existing: duplicates,
+            failed_matching: skipped,
+            reports, // كل الصفوف المكررة/غير المطابقة (مفيش أي صف اتكتب — atomic اترجع)
             errors: [
               ...importErrors,
               `فشل الاستيراد — اترجعت الدفعة كلها ومفيش أوردر اتكتب: ${err?.message ?? err}`,
@@ -649,7 +662,19 @@ export function registerImportRoutes(app: Express) {
           });
         }
 
-        return res.json({ imported, skipped, duplicates, errors: importErrors });
+        // الصفوف اللي دخلت فعلًا (بعد نجاح الـtransaction) → imported.
+        for (const r of toInsertRows) reports.push({ row: r, status: "imported" });
+
+        return res.json({
+          imported,
+          skipped,
+          duplicates,
+          // ملخّص منفصل واضح زي المطلوب: مستورد / موجود بالفعل / فشل مطابقة.
+          already_existing: duplicates,
+          failed_matching: skipped,
+          reports,
+          errors: importErrors,
+        });
       } catch (err: any) {
         return res.status(400).json({ error: err.message || "خطأ في استيراد الملف" });
       }
