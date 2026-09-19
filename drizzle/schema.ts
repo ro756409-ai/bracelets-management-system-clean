@@ -406,11 +406,10 @@ export const orders = mysqlTable("orders", {
   notes: text("notes"),
   employeeNotes: text("employeeNotes"),
   lastUpdatedBy: int("lastUpdatedBy"),
-  // مُنشئ الأوردر الثابت: بيتحدّد مرة واحدة عند الإنشاء اليدوي من موظف الإدخال ومابيتغيّرش
-  // (على عكس lastUpdatedBy المتغيّر مع أي تعديل). أساس ملكية موظف الإدخال لأوردراته.
-  // nullable: الأوردرات القديمة والمصادر التانية (استيراد/webhook/المالك) بتفضل NULL —
-  // بلا backfill تخميني. بلا FK (نفس نمط assignedEmployeeId/lastUpdatedBy)، index بس.
-  createdByEmployeeId: int("createdByEmployeeId"),
+  // ملاحظة: عمود المُنشئ الثابت `createdByEmployeeId` مؤجَّل مع Migration 0036 (لسه مش مطبّق
+  // على الإنتاج). **ممنوع إضافته لـschema هنا قبل تطبيق الـmigration** — لأن drizzle بيعمل
+  // SELECT لكل أعمدة الـschema، فعمود مش موجود في القاعدة بيكسر **كل** استعلامات الأوردرات
+  // (حادثة الإنتاج: اختفت أوردرات كل الأنشطة). يُعاد بعد تطبيق 0036 (migration الأول، ثم الكود).
   importRowIndex: int("importRowIndex"),
   importBatchId: int("importBatchId"),
   externalOrderId: varchar("externalOrderId", { length: 100 }),

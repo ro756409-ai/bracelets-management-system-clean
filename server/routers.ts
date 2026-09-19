@@ -5322,8 +5322,6 @@ export const appRouter = router({
             notes: input.notes ?? null,
             status: "new",
             lastUpdatedBy: ctx.employee.id,
-            // مُنشئ ثابت: من جلسة الموظف، مرة واحدة عند الإنشاء، مش من input، ومابيتغيّرش بعدين.
-            createdByEmployeeId: ctx.employee.id,
             variantId: headerVariantId,
             size: input.size ?? null,
             color: input.color ?? null,
@@ -5375,11 +5373,11 @@ export const appRouter = router({
         if (!db) return [];
         const { orders } = await import("../drizzle/schema");
         const { and, gte, lte } = await import("drizzle-orm");
-        // ملكية موظف الإدخال: المُنشئ الثابت (مش lastUpdatedBy المتغيّر). أوردر قديم
-        // createdByEmployeeId=NULL مايظهرش له (وده مقصود — المالك بيتعامل مع القديم).
+        // ملكية موظف الإدخال (مؤقتًا عبر lastUpdatedBy لحد ما يتطبّق Migration 0036 وينضاف
+        // createdByEmployeeId الثابت). العزل الأساسي بالنشاط تحت. + عزل بالـbusinessId.
         const conditions: any[] = [
           eq(orders.source, "facebook"),
-          eq(orders.createdByEmployeeId, ctx.employee.id),
+          eq(orders.lastUpdatedBy, ctx.employee.id),
         ];
         // Filter by employee's businessId
         if (ctx.employee.businessId) {
@@ -5423,15 +5421,15 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
-        // ملكية ثابتة: الأوردر لازم يكون createdByEmployeeId = نفس الموظف (مش lastUpdatedBy
-        // المتغيّر). أوردر قديم NULL → مايتطابقش → موظف الإدخال مايقدرش يحذفه.
+        // ملكية موظف الإدخال (مؤقتًا عبر lastUpdatedBy لحد تطبيق Migration 0036 — العزل الأساسي
+        // بالنشاط عبر requireOwned فوق). createdByEmployeeId الثابت هيرجع بعد الـmigration.
         const [order] = await db
           .select()
           .from(orders)
           .where(
             and(
               eq(orders.id, input.orderId),
-              eq(orders.createdByEmployeeId, ctx.employee.id),
+              eq(orders.lastUpdatedBy, ctx.employee.id),
               eq(orders.source, "facebook")
             )
           )
@@ -5487,15 +5485,15 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
-        // ملكية ثابتة: createdByEmployeeId = نفس الموظف (مش lastUpdatedBy). أوردر قديم
-        // NULL → مايتطابقش → موظف الإدخال مايقدرش يعدّله.
+        // ملكية موظف الإدخال (مؤقتًا عبر lastUpdatedBy لحد تطبيق Migration 0036 — العزل
+        // الأساسي بالنشاط عبر requireOwned فوق). createdByEmployeeId الثابت هيرجع بعد الـmigration.
         const [order] = await db
           .select()
           .from(orders)
           .where(
             and(
               eq(orders.id, input.orderId),
-              eq(orders.createdByEmployeeId, ctx.employee.id),
+              eq(orders.lastUpdatedBy, ctx.employee.id),
               eq(orders.source, "facebook")
             )
           )
