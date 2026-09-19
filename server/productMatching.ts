@@ -21,6 +21,7 @@ export interface MatchableProduct {
   sku: string | null;
   price: string | null;
   businessId?: number | null;
+  currentStock?: number | null;
 }
 
 export interface MatchableVariant {
@@ -32,6 +33,7 @@ export interface MatchableVariant {
   isActive?: boolean;
   color?: string | null;
   size?: string | null;
+  currentStock?: number | null;
 }
 
 export interface MatchCatalog {

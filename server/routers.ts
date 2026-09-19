@@ -5250,6 +5250,23 @@ export const appRouter = router({
             .map(p => p.productId)
             .filter((id): id is number => id != null)
         );
+        // تحقّق التركيبة + سقف المخزون: كل بند بـvariantId لازم تركيبته تابعة لمنتجه، والكمية
+        // مش أكبر من المتاح — منع تسجيل كمية أكبر من المخزون (مش إخفاء واجهة فقط).
+        for (const p of input.selectedProducts) {
+          if (p.variantId == null) continue;
+          const variant = await getVariantById(p.variantId);
+          if (!variant || (p.productId != null && variant.productId !== p.productId))
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "التركيبة (اللون/المقاس) غير صحيحة لهذا المنتج",
+            });
+          const qty = p.quantity ?? 1;
+          if (qty > variant.currentStock)
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `الكمية المطلوبة (${qty}) أكبر من المتاح (${variant.currentStock}) للتركيبة`,
+            });
+        }
         const itemsWithQty = input.selectedProducts.map(p => ({
           ...p,
           quantity: p.quantity ?? 1,
@@ -5544,25 +5561,26 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    // جلب قائمة المنتجات
-    products: employeePortalProcedure.query(async () => {
+    // جلب قائمة المنتجات — مقصورة على نشاط الموظف (عزل).
+    products: employeePortalProcedure.query(async ({ ctx }) => {
+      const businessId = await resolveEmployeeBusinessId(empScope(ctx));
       const db = await getDb();
       if (!db) return [];
       const { products } = await import("../drizzle/schema");
       return db
         .select()
         .from(products)
-        .where(eq(products.isActive, true))
+        .where(and(eq(products.isActive, true), eq(products.businessId, businessId)))
         .orderBy(products.name);
     }),
 
     /**
-     * Active catalog (products + their variants) for the paste parser and the item picker.
-     * Since the parent/variant refactor, `products` alone is only the parent + standalones —
-     * the engraving types live in product_variants, so both are needed to select an item.
+     * Active catalog (products + their variants) for the item picker — SCOPED to the
+     * employee's own business (تركيبات المخزون بتاعت نشاطه بس، مش كل التينانتات).
      */
-    catalog: employeePortalProcedure.query(async () => {
-      return getMatchCatalog();
+    catalog: employeePortalProcedure.query(async ({ ctx }) => {
+      const businessId = await resolveEmployeeBusinessId(empScope(ctx));
+      return getMatchCatalog(businessId);
     }),
 
     /**

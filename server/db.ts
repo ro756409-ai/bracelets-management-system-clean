@@ -3448,6 +3448,7 @@ export async function getMatchCatalog(businessId?: number) {
       sku: p.sku,
       price: p.price,
       businessId: p.businessId,
+      currentStock: p.currentStock,
     })),
     variants: variantRows.map(v => ({
       id: v.id,
@@ -3458,6 +3459,7 @@ export async function getMatchCatalog(businessId?: number) {
       isActive: v.isActive,
       color: v.color,
       size: v.size,
+      currentStock: v.currentStock,
     })),
   };
 }

@@ -98,9 +98,9 @@ describe("المدينة بتتحفظ لموظف إدخال البيانات", (
   const page = fs.readFileSync("client/src/pages/FacebookEntry.tsx", "utf-8");
   const routers = fs.readFileSync("server/routers.ts", "utf-8");
 
-  it("🔑 فورم التعديل بيبعت المدينة — مكانش بيبعتها خالص", () => {
+  it("🔑 فورم التعديل بيبعت المدينة", () => {
     const save = page.slice(page.indexOf("updateOrderMutation.mutate({"));
-    expect(save.slice(0, save.indexOf("});"))).toContain("city: editForm.city || undefined");
+    expect(save.slice(0, save.indexOf("});"))).toContain("city: editCust.city.trim() || undefined");
   });
 
   it("🔑 السيرفر بيقبل المدينة في التعديل — مكانتش في الـschema", () => {
@@ -116,7 +116,7 @@ describe("المدينة بتتحفظ لموظف إدخال البيانات", (
 
   it("فورم الإنشاء لسه بيبعت المدينة", () => {
     const save = page.slice(page.indexOf("addOrderMutation.mutate({"));
-    expect(save.slice(0, save.indexOf("});"))).toContain("city: form.city || undefined");
+    expect(save.slice(0, save.indexOf("});"))).toContain("city: cust.city.trim() || undefined");
   });
 });
 
@@ -126,8 +126,9 @@ describe("المدينة بتتصفّر لما المحافظة تتغيّر", (
     expect(dialog).toContain("value !== header.governorate");
 
     const dataEntry = fs.readFileSync("client/src/pages/FacebookEntry.tsx", "utf-8");
-    // الإنشاء والتعديل الاتنين
-    expect((dataEntry.match(/v !== f\.governorate/g) ?? []).length).toBe(2);
+    // custForm مشترك للإنشاء والتعديل: تغيير المحافظة بيصفّر المدينة (مرة واحدة في المصدر).
+    expect(dataEntry).toContain("v !== c.governorate");
+    expect(dataEntry).toContain("city: \"\"");
   });
 
   it("المدن بتتفلتر حسب المحافظة المختارة", () => {
