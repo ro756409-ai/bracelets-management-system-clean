@@ -6,6 +6,7 @@ import * as db from "./db";
 import type { InsertOrder } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
 import { findPotentialDuplicates, type ExistingOrderForDuplicateCheck } from "./duplicateDetection";
+import { matchImportItem } from "./productMatching";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -269,6 +270,33 @@ function matchProduct(productNameRaw: string, products: any[], variantRaw?: stri
   return null;
 }
 
+/**
+ * يستخرج اللون والمقاس والاسم الأساسي من نص زي:
+ *   "بدلة كورن للأطفال - اللون: أسود المقاس: من 6 إلى 5 سنين"
+ * الاسم الأساسي = الجزء قبل أول «اللون/المقاس/الحجم» بعد إزالة الفواصل الزائدة.
+ */
+export function extractColorSize(text: string): {
+  color: string;
+  size: string;
+  baseName: string;
+} {
+  let color = "";
+  let size = "";
+  const colorM = text.match(
+    /(?:اللون|color)\s*[:：]\s*([^\/|,،\n]+?)(?=\s*(?:المقاس|الحجم|المقاسات|size)\s*[:：]|[\/|,،\n]|$)/i
+  );
+  if (colorM) color = colorM[1].trim();
+  const sizeM = text.match(
+    /(?:المقاس|الحجم|المقاسات|size)\s*[:：]\s*([^\/|\n]+?)(?=\s*(?:اللون|color)\s*[:：]|[\/|\n]|$)/i
+  );
+  if (sizeM) size = sizeM[1].trim();
+  let baseName = text;
+  const cut = text.search(/(?:اللون|المقاس|الحجم|المقاسات|color|size)\s*[:：]/i);
+  if (cut >= 0) baseName = text.slice(0, cut);
+  baseName = baseName.replace(/[-–—:\s]+$/u, "").trim();
+  return { color, size, baseName };
+}
+
 function normalizeGov(raw: string): string {
   if (!raw) return "غير محدد";
   const trimmed = raw.trim();
@@ -322,6 +350,8 @@ function parseExcelRows(buffer: Buffer): {
     variant: headers.findIndex(h => h === "variant"),
     quantity: headers.findIndex(h => h === "quantity"),
     sku: headers.findIndex(h => h === "sku"),
+    color: headers.findIndex(h => h === "color" || h === "colour" || h === "اللون"),
+    size: headers.findIndex(h => h === "size" || h === "المقاس"),
     itemPrice: headers.findIndex(h => h === "item price" || h === "itemprice"),
     note: headers.findIndex(h => h === "note" || h === "notes"),
     altPhone: headers.findIndex(h => h === "alt phone" || h === "altphone"),
@@ -375,6 +405,14 @@ function parseExcelRows(buffer: Buffer): {
     const notes = get(colIdx.note);
     const variantRaw = get(colIdx.variant); // full variant column (may have \n)
     const variantFirst = variantRaw.split("\n")[0].trim();
+    const skuRaw = get(colIdx.sku);
+
+    // اللون/المقاس: أعمدة مخصّصة لو موجودة، وإلا استخراجهم من اسم المنتج + عمود variant.
+    const extracted = extractColorSize(`${mainProduct} ${variantFirst}`.trim());
+    const color = get(colIdx.color) || extracted.color;
+    const size = get(colIdx.size) || extracted.size;
+    // الاسم الأساسي للمطابقة = المنتج بعد إزالة تفاصيل اللون/المقاس المدمجة.
+    const baseName = extracted.baseName || mainProduct;
 
     // Build display productName: product + variant for readability
     const displayProductName = mainProduct + (variantFirst ? ` - ${variantFirst}` : "");
@@ -390,6 +428,11 @@ function parseExcelRows(buffer: Buffer): {
       customerAddress: address || city,
       governorate,
       productName: displayProductName,
+      rawProductName: mainProduct,
+      baseName,             // اسم المنتج بعد التنظيف — للمطابقة
+      color,
+      size,
+      sku: skuRaw,
       variantRaw,         // keep for smart matching
       quantity: totalQty || mainQty,
       totalAmount: totalAmount.toFixed(2),
@@ -466,8 +509,8 @@ export function registerImportRoutes(app: Express) {
         let duplicates = 0;
         const importErrors: string[] = [...errors];
 
-        // المنتجات للمطابقة — مقيّدة بالنشاط ده بس.
-        const products = await db.getAllProducts(businessId);
+        // الكتالوج للمطابقة (منتجات + تركيباتها) — مقيّد بالنشاط ده بس (عزل).
+        const catalog = await db.getMatchCatalog(businessId);
 
         // كشف التكرار **داخل النشاط ده فقط** ومحدود بالحجم: الصفوف اللي ممكن تطابق —
         // نفس externalOrderId من الملف، أو المتسجّلة النهاردة. مش كل أوردرات كل الشركات.
@@ -537,11 +580,27 @@ export function registerImportRoutes(app: Express) {
             continue;
           }
 
-          const matchedProduct = matchProduct(row.productName, products, row.variantRaw);
-          if (!matchedProduct) {
-            importErrors.push(`صف ${row.rowIndex}: منتج غير مطابق "${row.productName}" — يحتاج مراجعة يدوية`);
+          // مطابقة variant-aware صارمة: Variant SKU ← Product SKU ← اسم+لون+مقاس. بلا تخمين.
+          const match = matchImportItem(
+            {
+              sku: row.sku || undefined,
+              name: row.baseName || row.rawProductName,
+              color: row.color || undefined,
+              size: row.size || undefined,
+              variantText: row.variantRaw || undefined,
+            },
+            catalog
+          );
+          if (!match.matched) {
+            // سبب دقيق لكل صف: الاسم واللون والمقاس والـSKU المستلَمين + سبب الفشل.
+            const rc = match.received;
+            importErrors.push(
+              `صف ${row.rowIndex}: تعذّرت المطابقة — ` +
+                `المنتج: "${rc.name ?? ""}"، اللون: "${rc.color ?? "—"}"، ` +
+                `المقاس: "${rc.size ?? "—"}"، SKU: "${rc.sku ?? "—"}" — ${match.reason}`
+            );
             skipped++;
-            continue;
+            continue; // ممنوع إنشاء أوردر لمنتج/تركيبة غير محسومة
           }
 
           // بعد ما الصف عدّى كل الفحوص — سجّله في كشف التكرار داخل الملف وضيفه للإدخال.
@@ -554,8 +613,12 @@ export function registerImportRoutes(app: Express) {
             customerPhone: row.customerPhone,
             customerAddress: row.customerAddress,
             governorate: row.governorate,
-            productId: matchedProduct.id,
+            productId: match.productId,
             productName: row.productName,
+            // التركيبة المحسومة: بنحفظ variantId واللون والمقاس بوضوح.
+            variantId: match.variantId ?? null,
+            color: match.color ?? null,
+            size: match.size ?? null,
             quantity: row.quantity,
             totalAmount: row.totalAmount,
             source: "easyorder",

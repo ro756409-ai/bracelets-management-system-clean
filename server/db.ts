@@ -3456,6 +3456,8 @@ export async function getMatchCatalog(businessId?: number) {
       sku: v.sku,
       price: v.price,
       isActive: v.isActive,
+      color: v.color,
+      size: v.size,
     })),
   };
 }

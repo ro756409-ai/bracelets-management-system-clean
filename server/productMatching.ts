@@ -30,6 +30,8 @@ export interface MatchableVariant {
   sku: string | null;
   price: string | null;
   isActive?: boolean;
+  color?: string | null;
+  size?: string | null;
 }
 
 export interface MatchCatalog {
@@ -78,6 +80,41 @@ export function normalizeArabic(text: string): string {
 
 function normSku(sku: string): string {
   return sku.trim().toLowerCase();
+}
+
+/** أرقام عربية-هندية → ASCII (٠-٩ و ۰-۹). */
+export function normalizeDigits(text: string): string {
+  return text.replace(/[٠-٩۰-۹]/g, d => {
+    const code = d.charCodeAt(0);
+    const base = code >= 0x06f0 ? 0x06f0 : 0x0660;
+    return String(code - base);
+  });
+}
+
+/**
+ * تطبيع اللون للمطابقة: تطبيع عربي (أ→ا، ة→ه...) + حروف صغيرة. فـ«أسود» و«اسود» و«Black»
+ * (بعد lowercase) بتتقارن بثبات؛ الألوان الإنجليزية بتفضل زي ما هي بعد التصغير.
+ */
+export function normalizeColor(text: string | null | undefined): string {
+  if (!text) return "";
+  return normalizeArabic(text);
+}
+
+/**
+ * تطبيع المقاس: بيستخرج أرقام المقاس ويتجاهل الكلمات (مقاس/من/إلى/لـ/سنين/سنة/عام). فـ
+ * «مقاس 6» و«6» و«من 6 سنين» كلها → "6". النطاقات («من 5 لـ6 سنين») → الأرقام مرتّبة
+ * ومتجمّعة "5-6"، فـ«من 6 إلى 5» يطابق «من 5 لـ6». لو مفيش أرقام، بيرجّع النص المطبّع.
+ */
+export function normalizeSize(text: string | null | undefined): string {
+  if (!text) return "";
+  const digits = normalizeDigits(String(text));
+  const nums = digits.match(/\d+/g);
+  if (nums && nums.length > 0) {
+    return Array.from(new Set(nums.map(n => String(parseInt(n, 10)))))
+      .sort((a, b) => Number(a) - Number(b))
+      .join("-");
+  }
+  return normalizeArabic(digits);
 }
 
 /** Exact match, then single-candidate substring containment. Null when zero or 2+ candidates. */
@@ -269,5 +306,171 @@ export function matchExternalItem(input: MatchInput, catalog: MatchCatalog): Mat
   return {
     matched: false,
     reason: `لا يوجد منتج أو نوع مطابق لـ ${described || "صنف بلا اسم أو SKU"}`,
+  };
+}
+
+// ============================================================
+// Import matcher (Excel / EasyOrder file) — variant-aware, STRICT (never guesses).
+// ============================================================
+
+export interface ImportMatchInput {
+  /** SKU as printed in the file (variant SKU preferred, product SKU accepted). */
+  sku?: string | null;
+  /** Product name as printed (may embed color/size — extract those into color/size first). */
+  name?: string | null;
+  color?: string | null;
+  size?: string | null;
+  /** Raw variant/option text (e.g. bracelet engraving "نوع الحفر: آية الكرسي") — fallback. */
+  variantText?: string | null;
+}
+
+export type ImportMatchResult =
+  | {
+      matched: true;
+      method: "variant_sku" | "product_sku_variant" | "name_color_size" | "product_only";
+      productId: number;
+      productName: string;
+      variantId?: number;
+      variantName?: string;
+      color?: string | null;
+      size?: string | null;
+      sku?: string | null;
+      unitPrice: string | null;
+    }
+  | {
+      matched: false;
+      reason: string;
+      /** ما استُلم فعلًا — لعرضه في تقرير الفشل بدقة. */
+      received: { name?: string | null; color?: string | null; size?: string | null; sku?: string | null };
+    };
+
+/**
+ * يطابق صنفًا قادمًا من ملف استيراد بمنتج + تركيبة، **بلا تخمين** يخصم من تركيبة خاطئة:
+ *   1) Variant SKU (الأدق).
+ *   2) Product SKU → ثم تحديد التركيبة داخله باللون+المقاس (لو للمنتج تركيبات).
+ *   3) اسم المنتج (بعد التطبيع) → ثم تحديد التركيبة باللون+المقاس.
+ * منتج له تركيبات لكن اللون/المقاس مش متطابق = فشل صريح (مش product-only)، فمفيش خصم غلط.
+ * منتج بسيط (بلا تركيبات) = مطابقة على مستوى المنتج.
+ */
+export function matchImportItem(
+  input: ImportMatchInput,
+  catalog: MatchCatalog
+): ImportMatchResult {
+  const activeVariants = catalog.variants.filter(v => v.isActive !== false);
+  const variantsOf = (pid: number) => activeVariants.filter(v => v.productId === pid);
+  const received = {
+    name: input.name ?? null,
+    color: input.color ?? null,
+    size: input.size ?? null,
+    sku: input.sku ?? null,
+  };
+  const wantColor = normalizeColor(input.color);
+  const wantSize = normalizeSize(input.size);
+
+  // ── 1) Variant SKU مباشر ──
+  const sku = input.sku?.trim();
+  if (sku) {
+    const s = normSku(sku);
+    const vHits = activeVariants.filter(v => v.sku && normSku(v.sku) === s);
+    if (vHits.length === 1) {
+      const p = catalog.products.find(pp => pp.id === vHits[0].productId);
+      if (p)
+        return {
+          matched: true, method: "variant_sku", productId: p.id, productName: p.name,
+          variantId: vHits[0].id, variantName: vHits[0].name ?? undefined,
+          color: vHits[0].color ?? null, size: vHits[0].size ?? null, sku: vHits[0].sku,
+          unitPrice: vHits[0].price ?? p.price,
+        };
+    }
+    if (vHits.length > 1)
+      return { matched: false, reason: `رمز التركيبة (SKU) "${sku}" مرتبط بأكثر من تركيبة`, received };
+  }
+
+  // ── حدّد المنتج: Product SKU ثم الاسم المطبّع ──
+  let product = null as MatchableProduct | null;
+  let productMethod: "product_sku_variant" | "name_color_size" = "name_color_size";
+  if (sku) {
+    const s = normSku(sku);
+    const pHits = catalog.products.filter(p => p.sku && normSku(p.sku) === s);
+    if (pHits.length === 1) { product = pHits[0]; productMethod = "product_sku_variant"; }
+    else if (pHits.length > 1)
+      return { matched: false, reason: `رمز المنتج (SKU) "${sku}" مرتبط بأكثر من منتج`, received };
+  }
+  if (!product && input.name?.trim()) {
+    const { hit, ambiguousWith } = matchByName(input.name, catalog.products, p => p.name);
+    if (hit) product = hit;
+    else if (ambiguousWith && ambiguousWith.length > 1)
+      return { matched: false, reason: `اسم المنتج "${input.name}" يطابق أكثر من منتج`, received };
+  }
+  if (!product)
+    return {
+      matched: false,
+      reason: `لا يوجد منتج مطابق للاسم "${input.name ?? ""}"${sku ? ` أو الرمز "${sku}"` : ""}`,
+      received,
+    };
+
+  // ── حدّد التركيبة داخل المنتج ──
+  const vs = variantsOf(product.id);
+  if (vs.length === 0) {
+    // منتج بسيط بلا تركيبات — مطابقة على مستوى المنتج.
+    return {
+      matched: true, method: "product_only", productId: product.id, productName: product.name,
+      color: null, size: null, sku: product.sku, unitPrice: product.price,
+    };
+  }
+  // المنتج له تركيبات → نحدّد واحدة (بلا تخمين):
+  // (أ) باللون+المقاس لو موجودين (ملابس).
+  if (wantColor || wantSize) {
+    const byCS = vs.filter(v =>
+      (!wantColor || normalizeColor(v.color) === wantColor) &&
+      (!wantSize || normalizeSize(v.size) === wantSize)
+    );
+    if (byCS.length === 1) {
+      const v = byCS[0];
+      return {
+        matched: true, method: productMethod, productId: product.id, productName: product.name,
+        variantId: v.id, variantName: v.name ?? undefined,
+        color: v.color ?? null, size: v.size ?? null, sku: v.sku,
+        unitPrice: v.price ?? product.price,
+      };
+    }
+    if (byCS.length > 1)
+      return {
+        matched: false,
+        reason: `أكثر من تركيبة تطابق اللون "${input.color ?? ""}" والمقاس "${input.size ?? ""}" في "${product.name}"`,
+        received,
+      };
+    return {
+      matched: false,
+      reason: `مفيش تركيبة باللون "${input.color ?? ""}" والمقاس "${input.size ?? ""}" في المنتج "${product.name}"`,
+      received,
+    };
+  }
+  // (ب) باسم التركيبة (fallback للأساور: نوع الحفر) — من variantText ثم الاسم بعد التنظيف.
+  const nameCandidates: string[] = [];
+  if (input.variantText) nameCandidates.push(extractVariantLabel(input.variantText));
+  if (input.name) { nameCandidates.push(stripBraceletPrefix(input.name)); nameCandidates.push(input.name); }
+  for (const c of nameCandidates) {
+    if (!c?.trim()) continue;
+    const { hit, ambiguousWith } = matchByName(c, vs, v => v.name);
+    if (hit)
+      return {
+        matched: true, method: productMethod, productId: product.id, productName: product.name,
+        variantId: hit.id, variantName: hit.name ?? undefined,
+        color: hit.color ?? null, size: hit.size ?? null, sku: hit.sku,
+        unitPrice: hit.price ?? product.price,
+      };
+    if (ambiguousWith && ambiguousWith.length > 1)
+      return {
+        matched: false,
+        reason: `"${c}" يطابق أكثر من نوع في "${product.name}"`,
+        received,
+      };
+  }
+  // مفيش لون/مقاس ولا اسم تركيبة يحسم — فشل صريح (مايتخصمش من الأب).
+  return {
+    matched: false,
+    reason: `المنتج "${product.name}" له تركيبات (ألوان/مقاسات/أنواع) لكن الصف مافيهوش ما يحدّد التركيبة`,
+    received,
   };
 }
