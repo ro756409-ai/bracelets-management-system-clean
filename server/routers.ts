@@ -552,6 +552,17 @@ async function resolveEmployeeBusinessId(
 }
 
 /**
+ * أنشطة نشاط الموظف الواحد لكتالوج شاشة الإدخال (منتجات + تركيبات). نطاق **نشاط الموظف
+ * فقط** (مش كل الـtenant) — أضمن عزل ممكن: مستحيل تظهر منتجات نشاط تاني (زي الأسورة) حتى لو
+ * كانوا في نفس الـtenant. بيمرّ من نفس choke point العزل (`scopeBusinessIds`) اللي بيرجّع
+ * `[businessId]` للموظف أو `[-1]` (رفض). فاضي/رفض → صفر منتجات (fail-closed، مش الكل).
+ */
+async function employeeCatalogBusinessIds(ctx: ScopeCtx): Promise<number[]> {
+  const ids = (await scopeBusinessIds(ctx, {})) ?? [];
+  return ids.filter(id => id !== NO_BUSINESS);
+}
+
+/**
  * نفس `scopeBusinessId` لكن بيرجّع `number` مضمون.
  *
  * `scopeBusinessId` بيرجّع undefined في حالة واحدة بس: لما المدخل نفسه يكون null/undefined
@@ -5563,10 +5574,9 @@ export const appRouter = router({
 
     // جلب قائمة المنتجات — مقصورة على نشاط الموظف (عزل).
     products: employeePortalProcedure.query(async ({ ctx }) => {
-      // نطاق أنشطة الـtenant بتاع الموظف (Afandy Kids) — كل منتجات نشاطه، معزولة عن أي tenant
-      // تاني (الأسورة tenant منفصل فمستحيل تظهر). fail-closed: بلا أنشطة → صفر.
-      const emp = (ctx as any).employee;
-      const businessIds = (await getBusinessIdsForTenant(requireTenantId(emp))) ?? [];
+      // نطاق نشاط الموظف الواحد — منتجاته النشطة فقط، معزولة عن أي نشاط/tenant تاني (الأسورة).
+      // fail-closed: بلا نشاط → صفر (مش كل المنتجات).
+      const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
       if (businessIds.length === 0) return [];
       const db = await getDb();
       if (!db) return [];
@@ -5583,9 +5593,8 @@ export const appRouter = router({
      * employee's own business (تركيبات المخزون بتاعت نشاطه بس، مش كل التينانتات).
      */
     catalog: employeePortalProcedure.query(async ({ ctx }) => {
-      // نطاق أنشطة الـtenant بتاع الموظف (Afandy Kids فقط) — معزول عن tenant الأسورة.
-      const emp = (ctx as any).employee;
-      const businessIds = (await getBusinessIdsForTenant(requireTenantId(emp))) ?? [];
+      // نطاق نشاط الموظف الواحد فقط — معزول عن أي نشاط تاني (الأسورة) حتى داخل نفس الـtenant.
+      const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
       if (businessIds.length === 0) return { products: [], variants: [] };
       return getMatchCatalog(undefined, businessIds);
     }),
@@ -5598,9 +5607,8 @@ export const appRouter = router({
     parsePaste: employeePortalProcedure
       .input(z.object({ text: z.string().min(1) }))
       .query(async ({ ctx, input }) => {
-        // نطاق أنشطة الـtenant بتاع الموظف (Afandy Kids فقط) — نفس كتالوج شاشة الإدخال.
-        const emp = (ctx as any).employee;
-        const businessIds = (await getBusinessIdsForTenant(requireTenantId(emp))) ?? [];
+        // نطاق نشاط الموظف الواحد فقط — نفس كتالوج شاشة الإدخال، معزول عن أي نشاط تاني.
+        const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
         const catalog = businessIds.length
           ? await getMatchCatalog(undefined, businessIds)
           : { products: [], variants: [] };

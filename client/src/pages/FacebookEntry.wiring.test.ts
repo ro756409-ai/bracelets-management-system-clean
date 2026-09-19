@@ -56,13 +56,16 @@ describe("🔑 شاشة الإدخال — variant-based", () => {
 });
 
 describe("🔑 السيرفر — عزل الكتالوج + سقف المخزون", () => {
-  it("🔑 catalog/products مقصورة على أنشطة tenant الموظف (Afandy Kids) — لا cross-tenant", () => {
-    const cat = routers.slice(routers.indexOf("catalog: employeePortalProcedure"), routers.indexOf("catalog: employeePortalProcedure") + 700);
-    expect(cat).toContain("getBusinessIdsForTenant(requireTenantId(emp))");
+  it("🔑 catalog/products مقصورة على نشاط الموظف الواحد فقط — لا cross-business/tenant", () => {
+    const cat = routers.slice(routers.indexOf("catalog: employeePortalProcedure"), routers.indexOf("catalog: employeePortalProcedure") + 500);
+    expect(cat).toContain("employeeCatalogBusinessIds(empScope(ctx))");
     expect(cat).toContain("getMatchCatalog(undefined, businessIds)");
-    const prod = routers.slice(routers.indexOf("products: employeePortalProcedure"), routers.indexOf("products: employeePortalProcedure") + 800);
-    expect(prod).toContain("getBusinessIdsForTenant(requireTenantId(emp))");
+    const prod = routers.slice(routers.indexOf("products: employeePortalProcedure"), routers.indexOf("products: employeePortalProcedure") + 900);
+    expect(prod).toContain("employeeCatalogBusinessIds(empScope(ctx))");
     expect(prod).toContain("inArray(products.businessId, businessIds)");
+    // نطاق نشاط واحد بيمرّ من choke point العزل (scopeBusinessIds)، مش كل الـtenant.
+    const helper = routers.slice(routers.indexOf("async function employeeCatalogBusinessIds"), routers.indexOf("async function employeeCatalogBusinessIds") + 400);
+    expect(helper).toContain("scopeBusinessIds(ctx, {})");
   });
   it("🔑 addOrder بيتحقق من ملكية التركيبة وسقف المخزون", () => {
     const start = routers.indexOf('addOrder: requireEmployeePermission("orders.create")');
@@ -70,9 +73,9 @@ describe("🔑 السيرفر — عزل الكتالوج + سقف المخزو�
     expect(block).toContain("getVariantById(p.variantId)");
     expect(block).toContain("أكبر من المتاح");
   });
-  it("🔑 parsePaste معزول بأنشطة tenant الموظف", () => {
+  it("🔑 parsePaste معزول بنشاط الموظف الواحد", () => {
     const b = routers.slice(routers.indexOf("parsePaste: employeePortalProcedure"), routers.indexOf("parsePaste: employeePortalProcedure") + 700);
-    expect(b).toContain("getBusinessIdsForTenant(requireTenantId(emp))");
+    expect(b).toContain("employeeCatalogBusinessIds(empScope(ctx))");
     expect(b).toContain("getMatchCatalog(undefined, businessIds)");
   });
 });
