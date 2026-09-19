@@ -15,6 +15,8 @@ import {
   testChannelConnection,
 } from "./easyorder.service";
 import { parseFacebookOrder } from "../shared/facebookOrderParser";
+import { matchImportItem } from "./productMatching";
+import { parsePasteMessage } from "./pasteParser";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -5584,18 +5586,35 @@ export const appRouter = router({
     }),
 
     /**
-     * Parses a pasted customer message into a REVIEW DRAFT using the live catalog.
-     * Read-only: creates nothing and never submits. The employee reviews and confirms.
+     * يحلّل رسالة العميل الملصوقة ويطابق المنتج/التركيبة **داخل نشاط الموظف فقط**. read-only:
+     * مابيكتبش حاجة. بيرجّع الحقول المستخرجة + التركيبة المحسومة (variantId/SKU) أو رسالة سبب
+     * واضحة لو مفيش تركيبة مطابقة (الموظف بيملّي الباقي بدل اختيار تركيبة غلط).
      */
-    parseOrder: employeePortalProcedure
-      .input(
-        z.object({
-          text: z.string().min(1),
-        })
-      )
-      .query(async ({ input }) => {
-        const catalog = await getMatchCatalog();
-        return parseFacebookOrder(input.text, catalog);
+    parsePaste: employeePortalProcedure
+      .input(z.object({ text: z.string().min(1) }))
+      .query(async ({ ctx, input }) => {
+        const businessId = await resolveEmployeeBusinessId(empScope(ctx));
+        const catalog = await getMatchCatalog(businessId); // معزول بالنشاط
+        const parsed = parsePasteMessage(input.text);
+        const match = matchImportItem(
+          { name: parsed.productName, color: parsed.color, size: parsed.size },
+          catalog
+        );
+        return {
+          parsed,
+          match: match.matched
+            ? {
+                productId: match.productId,
+                productName: match.productName,
+                variantId: match.variantId ?? null,
+                sku: match.sku ?? null,
+                color: match.color ?? null,
+                size: match.size ?? null,
+                unitPrice: match.unitPrice,
+              }
+            : null,
+          matchReason: match.matched ? null : match.reason,
+        };
       }),
 
     // جلب variants منتج معين (للكفر ووتر بروف)

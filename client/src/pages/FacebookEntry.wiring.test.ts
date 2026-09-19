@@ -15,13 +15,23 @@ describe("🔑 شاشة الإدخال — variant-based", () => {
     expect(page).toContain("trpc.facebookEntry.catalog.useQuery");
   });
 
-  it("🔑 اتشال منطق الإسورة/الووتر/اللصق القديم", () => {
+  it("🔑 اتشال منطق الإسورة/الووتر القديم", () => {
     for (const legacy of [
-      "WATERPROOF_PRODUCT_ID", "نوع الحفر", "parseOrder", "waterproofVariants",
+      "WATERPROOF_PRODUCT_ID", "نوع الحفر", "waterproofVariants",
       "confidenceTone", "عدد الأساور",
     ]) {
       expect(page, legacy).not.toContain(legacy);
     }
+  });
+
+  it("🔑 خانة لصق رسالة العميل + تحليل تلقائي (parsePaste)", () => {
+    expect(page).toContain("لصق رسالة العميل");
+    expect(page).toContain("function parseAndFill");
+    expect(page).toContain("utils.facebookEntry.parsePaste.fetch");
+    // بيخزّن التركيبة (variantId) من نتيجة التحليل، مش نص اللون/المقاس بس
+    expect(page).toContain("variantId: res.match.variantId");
+    // لو مفيش تركيبة → رسالة واضحة بدل اختيار غلط
+    expect(page).toContain("matchReason");
   });
 
   it("🔑 الإرسال بيحمل variantId وسعر الوحدة لكل صنف", () => {
@@ -56,5 +66,10 @@ describe("🔑 السيرفر — عزل الكتالوج + سقف المخزو�
     const block = routers.slice(start, routers.indexOf("myOrders:", start));
     expect(block).toContain("getVariantById(p.variantId)");
     expect(block).toContain("أكبر من المتاح");
+  });
+  it("🔑 parsePaste معزول بنشاط الموظف (getMatchCatalog(businessId))", () => {
+    const b = routers.slice(routers.indexOf("parsePaste: employeePortalProcedure"), routers.indexOf("parsePaste: employeePortalProcedure") + 500);
+    expect(b).toContain("resolveEmployeeBusinessId(empScope(ctx))");
+    expect(b).toContain("getMatchCatalog(businessId)");
   });
 });

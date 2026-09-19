@@ -6,8 +6,9 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
-  Plus, Phone, MapPin, Package, LogOut, RefreshCw, X, Trash2, Pencil, Save, Eraser,
+  Plus, Phone, MapPin, Package, LogOut, RefreshCw, X, Trash2, Pencil, Save, Eraser, ClipboardPaste, AlertTriangle,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Card, CardContent, CardHeader, CardTitle,
 } from "@/components/ui/card";
@@ -49,8 +50,11 @@ const DRAFT_KEY = "manualEntryDraft";
 
 export default function FacebookEntry() {
   const governorateOptions = useGovernorateOptions();
+  const utils = trpc.useUtils();
   const [cust, setCust] = useState<CustomerForm>(EMPTY_CUSTOMER);
   const [items, setItems] = useState<PickedItem[]>([]);
+  const [pasteText, setPasteText] = useState("");
+  const [parsing, setParsing] = useState(false);
   const [showOrders, setShowOrders] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -114,9 +118,58 @@ export default function FacebookEntry() {
     toast.success("تم حفظ المسودة على هذا الجهاز");
   }
   function clearForm() {
-    setCust(EMPTY_CUSTOMER); setItems([]);
+    setCust(EMPTY_CUSTOMER); setItems([]); setPasteText("");
     localStorage.removeItem(DRAFT_KEY);
     toast.success("تم مسح النموذج");
+  }
+
+  // لصق رسالة العميل → تحليل تلقائي وملء الحقول (قابلة للتعديل يدويًا بعدها).
+  async function parseAndFill() {
+    if (!pasteText.trim()) return;
+    setParsing(true);
+    try {
+      const res = await utils.facebookEntry.parsePaste.fetch({ text: pasteText });
+      const p = res.parsed;
+      setCust(c => ({
+        ...c,
+        customerName: p.customerName || c.customerName,
+        customerPhone: p.customerPhone || c.customerPhone,
+        governorate: p.governorate || c.governorate,
+        customerAddress: p.customerAddress || c.customerAddress,
+        adName: p.adName || c.adName,
+        shipping: String(p.shipping ?? 0),
+      }));
+      if (res.match) {
+        // تركيبة محسومة من المخزون — نخزّن variantId/SKU (مش نص اللون/المقاس بس).
+        const v = catalog.variants.find(x => x.id === res.match!.variantId);
+        const prod = catalog.products.find(x => x.id === res.match!.productId);
+        const avail = v?.currentStock ?? prod?.currentStock ?? 0;
+        setItems([
+          {
+            productId: res.match.productId,
+            productName: res.match.productName,
+            variantId: res.match.variantId ?? undefined,
+            sku: res.match.sku ?? null,
+            color: res.match.color ?? null,
+            size: res.match.size ?? null,
+            quantity: Math.min(p.quantity || 1, avail || (p.quantity || 1)),
+            unitPrice: Number(res.match.unitPrice ?? 0),
+            availableStock: avail,
+          },
+        ]);
+        toast.success("تم تحليل الرسالة وتحديد التركيبة من المخزون");
+      } else {
+        // مفيش تركيبة مطابقة — نملّي الباقي ونعرض السبب بدل اختيار تركيبة غلط.
+        setItems([]);
+        toast.warning(
+          `تم ملء البيانات، لكن لم يتم تحديد الصنف تلقائيًا: ${res.matchReason ?? "اختر المنتج واللون والمقاس يدويًا"}`
+        );
+      }
+    } catch (e: any) {
+      toast.error(`تعذّر التحليل: ${e.message}`);
+    } finally {
+      setParsing(false);
+    }
   }
 
   function buildSelectedProducts(list: PickedItem[]) {
@@ -292,6 +345,33 @@ export default function FacebookEntry() {
             <CardTitle className="text-base">أوردر جديد</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* لصق رسالة العميل — تحليل تلقائي وملء الحقول (تفضل قابلة للتعديل يدويًا). */}
+            <div className="rounded-md border bg-muted/30 p-2 space-y-2">
+              <Label className="text-xs flex items-center gap-1">
+                <ClipboardPaste className="h-3.5 w-3.5" /> لصق رسالة العميل (تحليل تلقائي)
+              </Label>
+              <Textarea
+                value={pasteText}
+                onChange={e => setPasteText(e.target.value)}
+                rows={4}
+                dir="rtl"
+                placeholder={"بيدج: ...\nالاسم: ...\nالعنوان: محافظة ...\nرقم الفون(1): 01xxxxxxxxx\nنوع المنتج: ...\nعدد القطع: ١\nاللون: اسود مقاس 8 سنين\nالشحن: مجانا\nالاجمالي: ..."}
+                className="text-xs font-mono"
+              />
+              <div className="flex items-center gap-2">
+                <Button type="button" size="sm" onClick={parseAndFill} disabled={parsing || !pasteText.trim()}>
+                  {parsing ? (
+                    <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" /> جاري التحليل...</span>
+                  ) : (
+                    <span className="flex items-center gap-2"><ClipboardPaste className="h-4 w-4" /> تحليل وملء</span>
+                  )}
+                </Button>
+                <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" /> راجع الحقول بعد التحليل قبل الحفظ
+                </span>
+              </div>
+            </div>
+
             {custForm(cust, setCust)}
 
             <div className="border-t pt-3">

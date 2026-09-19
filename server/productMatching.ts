@@ -104,17 +104,16 @@ export function normalizeColor(text: string | null | undefined): string {
 
 /**
  * تطبيع المقاس: بيستخرج أرقام المقاس ويتجاهل الكلمات (مقاس/من/إلى/لـ/سنين/سنة/عام). فـ
- * «مقاس 6» و«6» و«من 6 سنين» كلها → "6". النطاقات («من 5 لـ6 سنين») → الأرقام مرتّبة
- * ومتجمّعة "5-6"، فـ«من 6 إلى 5» يطابق «من 5 لـ6». لو مفيش أرقام، بيرجّع النص المطبّع.
+ * «مقاس 6» و«6» و«من 6 سنين» كلها → "6". النطاق بيتحوّل لـ**الحد الأعلى** (اللي بيطابق مقاس
+ * المخزون المفرد): «من 5 إلى 6 سنين» → "6"، «من 6 إلى 8» → "8"، «من 10 إلى 12 سنة» → "12".
+ * لو مفيش أرقام، بيرجّع النص المطبّع.
  */
 export function normalizeSize(text: string | null | undefined): string {
   if (!text) return "";
   const digits = normalizeDigits(String(text));
   const nums = digits.match(/\d+/g);
   if (nums && nums.length > 0) {
-    return Array.from(new Set(nums.map(n => String(parseInt(n, 10)))))
-      .sort((a, b) => Number(a) - Number(b))
-      .join("-");
+    return String(Math.max(...nums.map(n => parseInt(n, 10))));
   }
   return normalizeArabic(digits);
 }
@@ -311,6 +310,50 @@ export function matchExternalItem(input: MatchInput, catalog: MatchCatalog): Mat
   };
 }
 
+/**
+ * مجموعات أسماء المنتجات المكافئة (aliases). كل مجموعة = أسماء بتشير لنفس المنتج، بتُطابَق
+ * **فقط مع منتجات الكتالوج الممرَّر (المعزول بالنشاط)**. مش mapping لمنتج بعينه — مجرد توسيع
+ * للمكافئات النصية، فمستحيل تسحب منتج نشاط تاني. الإضافة هنا آمنة طالما المجموعة أسماء ملابس
+ * أطفال (ماينفعش تطابق منتج أساور لأنه مش في كتالوج Afandy Kids أصلًا).
+ */
+export const PRODUCT_NAME_ALIASES: string[][] = [
+  [
+    "بدلة كورن للأطفال",
+    "بدلة كورن للاطفال",
+    "بدله كورن للاطفال",
+    "طقم اطفال",
+    "طقم أطفال",
+    "ملابس اطفالي",
+    "ملابس أطفالي",
+  ],
+];
+
+/**
+ * يحلّ المنتج عبر الأسماء البديلة: لو الاسم المستلَم يطابق (تطبيعًا) عضوًا في مجموعة، بنجمّع
+ * كل منتجات الكتالوج اللي تطابق أي عضو في نفس المجموعة. منتج واحد فريد → مطابقة؛ أكتر من
+ * منتج مختلف → غموض (بلا تخمين)؛ صفر → لا شيء.
+ */
+export function resolveProductByAlias(
+  name: string,
+  products: MatchableProduct[]
+): { hit: MatchableProduct | null; ambiguous?: boolean } {
+  const n = normalizeArabic(name);
+  if (!n) return { hit: null };
+  for (const group of PRODUCT_NAME_ALIASES) {
+    const normGroup = group.map(normalizeArabic);
+    const nameInGroup = normGroup.some(g => n === g || n.includes(g) || g.includes(n));
+    if (!nameInGroup) continue;
+    const matched = products.filter(p => {
+      const pn = normalizeArabic(p.name);
+      return normGroup.some(g => pn === g || pn.includes(g) || g.includes(pn));
+    });
+    const uniqueIds = Array.from(new Set(matched.map(p => p.id)));
+    if (uniqueIds.length === 1) return { hit: matched.find(p => p.id === uniqueIds[0])! };
+    if (uniqueIds.length > 1) return { hit: null, ambiguous: true };
+  }
+  return { hit: null };
+}
+
 // ============================================================
 // Import matcher (Excel / EasyOrder file) — variant-aware, STRICT (never guesses).
 // ============================================================
@@ -403,6 +446,15 @@ export function matchImportItem(
     if (hit) product = hit;
     else if (ambiguousWith && ambiguousWith.length > 1)
       return { matched: false, reason: `اسم المنتج "${input.name}" يطابق أكثر من منتج`, received };
+  }
+  // (fallback آمن) أسماء بديلة: لو الاسم المستلَم عضو في مجموعة أسماء مكافئة، نطابق أي عضو
+  // في المجموعة مع **منتجات النشاط الحالي فقط** (catalog معزول). لو أدّت لأكثر من منتج
+  // مختلف → غموض بلا تخمين. مستحيل توصل لمنتج نشاط تاني لأن الكتالوج مقيّد بالنشاط.
+  if (!product && input.name?.trim()) {
+    const aliasRes = resolveProductByAlias(input.name, catalog.products);
+    if (aliasRes.hit) product = aliasRes.hit;
+    else if (aliasRes.ambiguous)
+      return { matched: false, reason: `اسم المنتج "${input.name}" (اسم بديل) يطابق أكثر من منتج`, received };
   }
   if (!product)
     return {

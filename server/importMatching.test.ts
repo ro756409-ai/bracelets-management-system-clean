@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   matchImportItem,
+  resolveProductByAlias,
   normalizeSize,
   normalizeColor,
   normalizeDigits,
@@ -46,7 +47,12 @@ describe("🔑 تطبيع", () => {
     expect(normalizeSize("6")).toBe("6");
     expect(normalizeSize("من 6 سنين")).toBe("6");
     expect(normalizeSize("٨")).toBe("8");
-    expect(normalizeSize("من 6 إلى 5 سنين")).toBe(normalizeSize("من 5 لـ6 سنين")); // نطاق مرتّب
+  });
+  it("🔑 نطاقات Easy Orders → الحد الأعلى", () => {
+    expect(normalizeSize("من 5 إلى 6 سنين")).toBe("6");
+    expect(normalizeSize("من 6 إلى 8 سنين")).toBe("8");
+    expect(normalizeSize("من 8 إلى 10 سنين")).toBe("10");
+    expect(normalizeSize("من 10 إلى 12 سنة")).toBe("12");
   });
   it("🔑 اللون: «أسود» = «اسود»", () => {
     expect(normalizeColor("أسود")).toBe(normalizeColor("اسود"));
@@ -115,6 +121,59 @@ describe("🔑 لا تخمين — فشل صريح بسبب دقيق", () => {
     const r = matchImportItem({ name: "منتج مش موجود خالص", color: "أسود", size: "6" }, catalog);
     expect(r.matched).toBe(false);
     if (!r.matched) expect(r.reason).toContain("لا يوجد منتج مطابق");
+  });
+});
+
+// كتالوج Afandy Kids الحقيقي: المنتج اسمه «ملابس اطفالي» والصفوف بتيجي باسم «بدلة كورن...».
+const afandyCatalog: MatchCatalog = {
+  products: [{ id: 50, name: "ملابس اطفالي", sku: null, price: "300.00", businessId: 7 }],
+  variants: [
+    { id: 500, productId: 50, name: null, sku: "AF-BLK-8", price: "300.00", isActive: true, color: "أسود", size: "8" },
+    { id: 501, productId: 50, name: null, sku: "AF-BEG-10", price: "300.00", isActive: true, color: "بيج", size: "10" },
+  ],
+};
+// كتالوج نشاط الأسورة (منفصل) — لإثبات عدم التطابق العابر للأنشطة.
+const braceletBiz: MatchCatalog = {
+  products: [{ id: 1, name: "أسورة نحاس", sku: "BRAC-1", price: "100.00", businessId: 99 }],
+  variants: [{ id: 10, productId: 1, name: "سادة", sku: "BR-SADA", price: "100.00", isActive: true, color: null, size: null }],
+};
+
+describe("🔑 أسماء بديلة آمنة (aliases) — داخل النشاط فقط", () => {
+  it("🔑 «بدلة كورن للأطفال» → منتج «ملابس اطفالي» عبر الاسم البديل", () => {
+    const r = matchImportItem({ name: "بدلة كورن للأطفال", color: "أسود", size: "من 6 إلى 8 سنين" }, afandyCatalog);
+    expect(r.matched).toBe(true);
+    if (r.matched) { expect(r.productId).toBe(50); expect(r.sku).toBe("AF-BLK-8"); }
+  });
+  it("🔑 «طقم اطفال» و«بدله كورن للاطفال» → نفس المنتج", () => {
+    expect(resolveProductByAlias("طقم اطفال", afandyCatalog.products).hit?.id).toBe(50);
+    expect(resolveProductByAlias("بدله كورن للاطفال", afandyCatalog.products).hit?.id).toBe(50);
+  });
+  it("🔑 الاسم البديل لو أدّى لأكثر من منتج → غموض بلا تخمين", () => {
+    const twoMatches: MatchCatalog = {
+      products: [
+        { id: 50, name: "ملابس اطفالي", sku: null, price: "1", businessId: 7 },
+        { id: 51, name: "طقم اطفال", sku: null, price: "1", businessId: 7 },
+      ],
+      variants: [],
+    };
+    const res = resolveProductByAlias("بدلة كورن للأطفال", twoMatches.products);
+    expect(res.hit).toBeNull();
+    expect(res.ambiguous).toBe(true);
+  });
+});
+
+describe("🔒 عزل عبر الأنشطة — Afandy Kids لا يطابق منتجات الأسورة", () => {
+  it("🔒 اسم/بديل ملابس على كتالوج الأسورة → لا مطابقة", () => {
+    expect(matchImportItem({ name: "بدلة كورن للأطفال", color: "أسود", size: "8" }, braceletBiz).matched).toBe(false);
+    expect(matchImportItem({ name: "ملابس اطفالي", color: "أسود", size: "8" }, braceletBiz).matched).toBe(false);
+    expect(resolveProductByAlias("بدلة كورن للأطفال", braceletBiz.products).hit).toBeNull();
+  });
+  it("🔒 SKU الأسورة على كتالوج Afandy → لا مطابقة (مش fallback)", () => {
+    expect(matchImportItem({ sku: "BRAC-1" }, afandyCatalog).matched).toBe(false);
+    expect(matchImportItem({ sku: "BR-SADA" }, afandyCatalog).matched).toBe(false);
+  });
+  it("🔒 العكس: اسم الأسورة على كتالوج Afandy → لا مطابقة", () => {
+    expect(matchImportItem({ name: "أسورة نحاس", variantText: "نوع الحفر: سادة" }, afandyCatalog).matched).toBe(false);
   });
 });
 
