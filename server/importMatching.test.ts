@@ -117,8 +117,8 @@ describe("🔑 لا تخمين — فشل صريح بسبب دقيق", () => {
     expect(r.matched).toBe(false);
     if (!r.matched) expect(r.reason).toContain("تركيبات");
   });
-  it("🔑 اسم غير معروف → فشل مع السبب", () => {
-    const r = matchImportItem({ name: "منتج مش موجود خالص", color: "أسود", size: "6" }, catalog);
+  it("🔑 اسم غير معروف + لون/مقاس غير موجودين → فشل مع السبب", () => {
+    const r = matchImportItem({ name: "منتج مش موجود خالص", color: "أحمر", size: "99" }, catalog);
     expect(r.matched).toBe(false);
     if (!r.matched) expect(r.reason).toContain("لا يوجد منتج مطابق");
   });
@@ -162,7 +162,38 @@ describe("🔑 أسماء بديلة آمنة (aliases) — داخل النشا�
   });
 });
 
+describe("🔑 fallback حتمي — تركيبة واحدة فريدة باللون+المقاس (بلا اسم مطابق)", () => {
+  it("🔑 اسم مختلف تمامًا لكن لون+مقاس يحدّدان تركيبة فريدة → مطابقة", () => {
+    // اسم الملف مش في الـaliases ومش اسم المنتج، لكن (أسود,8) تركيبة واحدة في النشاط.
+    const r = matchImportItem({ name: "منتج باسم غريب مش معروف", color: "أسود", size: "من 6 إلى 8 سنين" }, afandyCatalog);
+    expect(r.matched).toBe(true);
+    if (r.matched) { expect(r.method).toBe("color_size_unique"); expect(r.sku).toBe("AF-BLK-8"); }
+  });
+  it("🔒 الغموض يمنع الـfallback: تركيبتان بنفس اللون+المقاس → لا مطابقة", () => {
+    const dupCatalog: MatchCatalog = {
+      products: [
+        { id: 1, name: "منتج أ", sku: null, price: "1", businessId: 7 },
+        { id: 2, name: "منتج ب", sku: null, price: "1", businessId: 7 },
+      ],
+      variants: [
+        { id: 11, productId: 1, name: null, sku: "A-BLK-8", price: "1", isActive: true, color: "أسود", size: "8" },
+        { id: 22, productId: 2, name: null, sku: "B-BLK-8", price: "1", isActive: true, color: "أسود", size: "8" },
+      ],
+    };
+    expect(matchImportItem({ name: "مجهول", color: "أسود", size: "8" }, dupCatalog).matched).toBe(false);
+  });
+  it("🔑 سبب الفشل بيعرض منتجات النشاط المتاحة (تشخيص)", () => {
+    const r = matchImportItem({ name: "مش موجود", color: "أحمر", size: "99" }, afandyCatalog);
+    expect(r.matched).toBe(false);
+    if (!r.matched) expect(r.reason).toContain("ملابس اطفالي");
+  });
+});
+
 describe("🔒 عزل عبر الأنشطة — Afandy Kids لا يطابق منتجات الأسورة", () => {
+  it("🔒 fallback اللون+المقاس مايوصلش منتج نشاط تاني (الأساور بلا تركيبات لون/مقاس)", () => {
+    // كتالوج الأسورة مافيهوش تركيبات بلون/مقاس، فالـfallback مايتفعّلش عليه.
+    expect(matchImportItem({ name: "أي اسم", color: "أسود", size: "8" }, braceletBiz).matched).toBe(false);
+  });
   it("🔒 اسم/بديل ملابس على كتالوج الأسورة → لا مطابقة", () => {
     expect(matchImportItem({ name: "بدلة كورن للأطفال", color: "أسود", size: "8" }, braceletBiz).matched).toBe(false);
     expect(matchImportItem({ name: "ملابس اطفالي", color: "أسود", size: "8" }, braceletBiz).matched).toBe(false);

@@ -317,14 +317,23 @@ export function matchExternalItem(input: MatchInput, catalog: MatchCatalog): Mat
  * أطفال (ماينفعش تطابق منتج أساور لأنه مش في كتالوج Afandy Kids أصلًا).
  */
 export const PRODUCT_NAME_ALIASES: string[][] = [
+  // ملابس أطفال (Afandy Kids) — أسماء مكافئة لنفس المنتج.
   [
     "بدلة كورن للأطفال",
     "بدلة كورن للاطفال",
     "بدله كورن للاطفال",
+    "بدلة كورن",
+    "بدله كورن",
+    "كورن اطفالي",
     "طقم اطفال",
     "طقم أطفال",
+    "طقم كورن",
     "ملابس اطفالي",
     "ملابس أطفالي",
+    "ملابس اطفال",
+    "ملابس أطفال",
+    "لبس اطفالي",
+    "لبس اطفال",
   ],
 ];
 
@@ -372,7 +381,7 @@ export interface ImportMatchInput {
 export type ImportMatchResult =
   | {
       matched: true;
-      method: "variant_sku" | "product_sku_variant" | "name_color_size" | "product_only";
+      method: "variant_sku" | "product_sku_variant" | "name_color_size" | "product_only" | "color_size_unique";
       productId: number;
       productName: string;
       variantId?: number;
@@ -456,12 +465,37 @@ export function matchImportItem(
     else if (aliasRes.ambiguous)
       return { matched: false, reason: `اسم المنتج "${input.name}" (اسم بديل) يطابق أكثر من منتج`, received };
   }
-  if (!product)
+  // (fallback حتمي — بلا تخمين) لو الاسم/الـSKU مش حاسمين، بس في **تركيبة واحدة فريدة**
+  // في النشاط (الكتالوج معزول) تطابق اللون+المقاس بالظبط → نستخدمها. مش تخمين: التركيبة
+  // فريدة على مستوى النشاط. أكتر من تركيبة → غموض → مانكملش (فشل صريح تحت). للأساور مافيش
+  // تركيبات لون/مقاس فمابيتفعّلش، ومستحيل يوصل لمنتج نشاط تاني (الكتالوج مقيّد بالنشاط).
+  if (!product && wantColor && wantSize) {
+    const csMatches = activeVariants.filter(
+      v => normalizeColor(v.color) === wantColor && normalizeSize(v.size) === wantSize
+    );
+    if (csMatches.length === 1) {
+      const v = csMatches[0];
+      const p = catalog.products.find(pp => pp.id === v.productId);
+      if (p)
+        return {
+          matched: true, method: "color_size_unique", productId: p.id, productName: p.name,
+          variantId: v.id, variantName: v.name ?? undefined,
+          color: v.color ?? null, size: v.size ?? null, sku: v.sku,
+          unitPrice: v.price ?? p.price,
+        };
+    }
+  }
+  if (!product) {
+    // سبب واضح + قائمة منتجات النشاط (معزولة) عشان الموظف يشوف الأسماء الفعلية ويطابق يدويًا.
+    const available = catalog.products.map(p => p.name).slice(0, 12).join("، ") || "لا توجد منتجات في هذا النشاط";
     return {
       matched: false,
-      reason: `لا يوجد منتج مطابق للاسم "${input.name ?? ""}"${sku ? ` أو الرمز "${sku}"` : ""}`,
+      reason:
+        `لا يوجد منتج مطابق للاسم "${input.name ?? ""}"${sku ? ` أو الرمز "${sku}"` : ""}` +
+        ` — منتجات نشاطك المتاحة: ${available}`,
       received,
     };
+  }
 
   // ── حدّد التركيبة داخل المنتج ──
   const vs = variantsOf(product.id);
