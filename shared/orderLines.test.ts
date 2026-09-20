@@ -185,3 +185,42 @@ describe("🔒 أسباب منع الحفظ بالعربي", () => {
     expect(saveBlockers([{ ...ok, quantity: 5 }], base)).toEqual([]);
   });
 });
+
+describe("🔑 أزواج لون/مقاس → سطر لكل قطعة", () => {
+  const pairs = [
+    { color: "بيج", size: "10" },
+    { color: "اسود", size: "6" },
+  ];
+
+  it("🔑 منتج واحد + زوجان → سطران بنفس المنتج وتركيبتين", () => {
+    const lines = buildDraftLines(["طقم اطفال"], 2, pairs);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ term: "طقم اطفال", color: "بيج", size: "10", quantity: 1 });
+    expect(lines[1]).toMatchObject({ term: "طقم اطفال", color: "اسود", size: "6", quantity: 1 });
+  });
+
+  it("🔑 الترتيب محفوظ — بيج مع 10 وأسود مع 6", () => {
+    const lines = buildDraftLines(["طقم اطفال"], 2, pairs);
+    expect(lines.map(l => `${l.color}/${l.size}`)).toEqual(["بيج/10", "اسود/6"]);
+  });
+
+  it("🔑 زوج واحد → سطر واحد بكل الكمية واللون والمقاس", () => {
+    const lines = buildDraftLines(["طقم اطفال"], 2, [{ color: "اسود", size: "8" }]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ quantity: 2, color: "اسود", size: "8" });
+  });
+
+  it("🔒 عدد القطع أكبر من الأزواج → سطر ناقص للباقي", () => {
+    const lines = buildDraftLines(["طقم اطفال"], 3, pairs);
+    expect(lines).toHaveLength(3);
+    expect(lines[2].color).toBeUndefined();
+    expect(lines.reduce((s, l) => s + l.quantity, 0)).toBe(3);
+  });
+
+  it("🔑 بلا أزواج → السلوك القديم زي ما هو", () => {
+    expect(buildDraftLines(["عين حورس", "ذكر التحصين"], 2)).toEqual([
+      { term: "عين حورس", quantity: 1, needsPick: true },
+      { term: "ذكر التحصين", quantity: 1, needsPick: true },
+    ]);
+  });
+});

@@ -99,6 +99,22 @@ const val = (v: CatalogVariant, d: VariantDim) => {
  */
 export function variantDimensions(vs: CatalogVariant[]): VariantDim[] {
   const dims = DIM_ORDER.filter(d => vs.some(v => val(v, d) !== ""));
+
+  // **«النوع» بيتشال لو اللون+المقاس لوحدهم بيميّزوا كل تركيبة.**
+  //
+  // في الإنتاج فيه منتجات ملابس اتسجّل في عمود `name` بتاعها حاجة مش «نوع» حقيقي:
+  // الـSKU («AFK-BLK-6»)، أو اسم المنتج نفسه («بدلة اطفالي»)، أو إعادة صياغة للّون
+  // والمقاس («اسود 10»). كلها بتملا قائمة «النوع» بقيم مالهاش معنى للموظف. بدل قايمة
+  // استثناءات بتتنسى، بنسأل سؤالًا واحدًا: هل اللون+المقاس كافيين لتمييز كل تركيبة؟
+  // لو أيوه فـ«النوع» زيادة مهما كان محتواه. الأساور مالهاش لون/مقاس فبتفضل بالنوع.
+  const csDims = dims.filter(d => d === "color" || d === "size");
+  if (dims.includes("name") && csDims.length > 0) {
+    // JSON كمفتاح بدل فاصل نصّي: مستحيل يصطدم بقيمة لون/مقاس، ومفيش حروف تحكّم
+    // في الملف (بايت NUL حرفي كان بيخلّي git يعامل الملف كثنائي ويكسر الدمج).
+    const keys = vs.map(v => JSON.stringify(csDims.map(d => val(v, d))));
+    if (new Set(keys).size === vs.length) return csDims;
+  }
+
   if (dims.length > 0) return dims;
   return vs.some(v => val(v, "sku") !== "") ? ["sku"] : [];
 }
@@ -137,9 +153,17 @@ export function resolveVariant(
  * وصف التركيبة للعرض/الطباعة: النوع ثم اللون ثم المقاس (الموجود منهم فقط).
  * بيتخطّى الاسم اللي هو نفسه الـSKU — نفس قاعدة `val`، فالبوليصة مابتحملش كودًا تقنيًا.
  */
-export function variantLabel(v: CatalogVariant | null | undefined): string {
+export function variantLabel(
+  v: CatalogVariant | null | undefined,
+  /**
+   * الأبعاد اللي هتتعرض. لازم تتمرّر من `variantDimensions(productVariants)` عشان
+   * الوصف يطابق اللي الموظف شافه في القوائم — «النوع» المحذوف (لأن اللون والمقاس
+   * كافيين) مايرجعش يظهر في اسم البند وعلى البوليصة.
+   */
+  dims: VariantDim[] = DIM_ORDER
+): string {
   if (!v) return "";
-  return DIM_ORDER.map(d => val(v, d)).filter(Boolean).join(" / ");
+  return dims.map(d => val(v, d)).filter(Boolean).join(" / ");
 }
 
 const num = (s: string | null | undefined) => {
@@ -199,7 +223,7 @@ export function VariantOrderPicker({
     // لازم يتسجّل بكميته الصحيحة؛ العجز بيتعرض كتنبيه و`confirmOrder` بتعلّمه
     // needsReview وقت التأكيد. المنع هنا كان بيخلي الموظف يقلّل الكمية عشان يعدّي.
     if (!product || !ready) return;
-    const label = variantLabel(resolved);
+    const label = variantLabel(resolved, dims);
     onChange([
       ...value,
       {

@@ -22,6 +22,7 @@ import { GovernorateCitySelect } from "@/components/orders/GovernorateCitySelect
 import {
   VariantOrderPicker,
   variantLabel,
+  variantDimensions,
   type Catalog,
   type PickedItem,
 } from "@/components/orders/VariantOrderPicker";
@@ -186,6 +187,10 @@ export default function FacebookEntry() {
         const m = l.match;
         const v = m?.variantId ? catalog.variants.find(x => x.id === m.variantId) : undefined;
         const prod = m?.productId ? catalog.products.find(x => x.id === m.productId) : undefined;
+        // نفس أبعاد المنتج اللي المنتقي بيعرضها — عشان الوصف مايرجّعش «نوعًا» متخفي.
+        const dims = variantDimensions(
+          catalog.variants.filter(x => x.productId === m?.productId && x.isActive !== false)
+        );
         return {
           productId: m?.productId ?? 0,
           productName: m?.productName ?? l.term,
@@ -193,7 +198,7 @@ export default function FacebookEntry() {
           sku: m?.sku ?? null,
           color: m?.color ?? null,
           size: m?.size ?? null,
-          optionLabel: variantLabel(v) || null,
+          optionLabel: variantLabel(v, dims) || null,
           quantity: l.quantity,
           // سعر الوحدة من توزيع الإجمالي المكتوب في الرسالة — مش من الكتالوج، عشان
           // عروض الكمية (قطعتان بـ400) تفضل زي ما الموظف اعتمدها. قابل للتعديل.
@@ -285,11 +290,14 @@ export default function FacebookEntry() {
         const v = catalog.variants.find(x => x.id === it.variantId);
         const p = catalog.products.find(x => x.id === it.productId);
         const avail = v?.currentStock ?? p?.currentStock ?? it.quantity ?? 0;
+        const dims = variantDimensions(
+          catalog.variants.filter(x => x.productId === it.productId && x.isActive !== false)
+        );
         return {
           productId: it.productId, productName: it.productName ?? p?.name ?? "",
           variantId: it.variantId ?? undefined, sku: v?.sku ?? p?.sku ?? null,
           color: v?.color ?? order.color ?? null, size: v?.size ?? order.size ?? null,
-          optionLabel: variantLabel(v) || null,
+          optionLabel: variantLabel(v, dims) || null,
           quantity: it.quantity ?? 1, unitPrice: Number(v?.price ?? p?.price ?? 0),
           availableStock: avail,
         } as PickedItem;

@@ -615,6 +615,7 @@ import {
   addVariantsToProduct,
   variantIdentityKey,
   variantIdentityLabel,
+  generateVariantSkus,
   getOwnedProductNames,
   buildOrderHeaderName,
   findTakenSkusInBusiness,
@@ -2755,7 +2756,8 @@ export const appRouter = router({
                 color: z.string().optional(),
                 size: z.string().optional(),
                 name: z.string().optional(),
-                sku: z.string().min(1, "رمز المنتج (SKU) مطلوب"),
+                // الرمز اختياري: لو اتساب فاضي السيرفر بيولّد رمزًا داخليًا فريدًا (AUTO-…).
+                sku: z.string().optional(),
                 price: z.number().min(0).optional(),
                 costPrice: z.number().min(0).optional(),
                 currentStock: z.number().min(0).default(0),
@@ -2800,27 +2802,40 @@ export const appRouter = router({
         }
 
         // 4) تفرّد الـSKU: داخل الدفعة، وداخل النشاط (منتجات + تركيبات النشاط).
+        // الرمز اللي التاجر كتبه بيتفحص كامل؛ اللي ساب مكانه فاضي بيتولّد له رمز
+        // داخلي فريد تحت (AUTO-…) بدل ما إنشاء المنتج كله يتوقف.
+        const typed = input.variants
+          .map(v => v.sku?.trim())
+          .filter((s): s is string => !!s);
         const skuSeen = new Set<string>();
-        for (const v of input.variants) {
-          const s = v.sku.trim().toLowerCase();
-          if (skuSeen.has(s))
+        for (const s of typed) {
+          const k = s.toLowerCase();
+          if (skuSeen.has(k))
             throw new TRPCError({
               code: "CONFLICT",
-              message: `رمز المنتج (SKU) "${v.sku}" مكرر داخل التركيبات`,
+              message: `رمز المنتج (SKU) "${s}" مكرر داخل التركيبات`,
             });
-          skuSeen.add(s);
+          skuSeen.add(k);
         }
-        const takenInBusiness = await findTakenSkusInBusiness(
+        const takenInBusiness = await findTakenSkusInBusiness(businessId, typed);
+        for (const s of typed) {
+          if (takenInBusiness.has(s.toLowerCase()))
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `رمز المنتج (SKU) "${s}" مستخدم بالفعل في هذا النشاط`,
+            });
+        }
+        // الفاضي بياخد رمزًا مولَّدًا ومتحقَّق من تفرّده في القاعدة.
+        const autoCreate = await generateVariantSkus(
           businessId,
-          input.variants.map(v => v.sku)
+          input.variants.filter(v => !v.sku?.trim()).length,
+          skuSeen
         );
-        for (const v of input.variants) {
-          if (takenInBusiness.has(v.sku.trim().toLowerCase()))
-            throw new TRPCError({
-              code: "CONFLICT",
-              message: `رمز المنتج (SKU) "${v.sku}" مستخدم بالفعل في هذا النشاط`,
-            });
-        }
+        let autoIdxCreate = 0;
+        const withSkus = input.variants.map(v => ({
+          ...v,
+          sku: v.sku?.trim() || autoCreate[autoIdxCreate++],
+        }));
 
         // 5) مخزون افتتاحي: مسموح فقط قبل Go-Live المحاسبي (نفس حارس products.create).
         if (input.variants.some(v => v.currentStock !== 0))
@@ -2835,7 +2850,7 @@ export const appRouter = router({
             categoryId: input.categoryId,
             minStockLevel: input.minStockLevel,
           },
-          input.variants.map(v => ({
+          withSkus.map(v => ({
             color: v.color,
             size: v.size,
             name: v.name,
@@ -5295,6 +5310,10 @@ export const appRouter = router({
         // لازم يتسجّل بكميته الصحيحة. سياسة `confirmOrder` المعتمدة أصلاً مابتمنعش
         // التأكيد بسبب العجز (بتعلّم needsReview بدل ما ترفض)، فمنع الإدخال كان أقسى
         // من التأكيد نفسه وكان بيخلي الموظف يزوّر الكمية عشان يعدّي.
+        // اللون/المقاس لكل بند بيتاخدوا من **تركيبته هو**، مش من هيدر الأوردر.
+        // كانوا بيتنسخوا من `input.color/size` للبند الأول بس، فأوردر بقطعتين
+        // بتركيبتين مختلفتين كان بيسجّل البند التاني بلون ومقاس فاضيين.
+        const variantById = new Map<number, { color: string | null; size: string | null }>();
         for (const p of input.selectedProducts) {
           if (p.variantId == null) continue;
           // variantId من غير productId ممنوع — مايبقاش فيه منتج نتحقّق التركيبة ضده.
@@ -5311,6 +5330,7 @@ export const appRouter = router({
               code: "BAD_REQUEST",
               message: "التركيبة غير صحيحة لهذا المنتج",
             });
+          variantById.set(p.variantId, { color: variant.color, size: variant.size });
         }
         // **الاسم من كتالوج النشاط، مش من العميل** — وقبل أي كتابة.
         //
@@ -5401,14 +5421,15 @@ export const appRouter = router({
               // Each item carries its OWN variant now (previously only the first product could
               // have one, which made multi-engraving orders impossible to represent).
               variantId: p.variantId,
+              // من التركيبة نفسها؛ ولو البند بلا تركيبة بنرجع لحقول الهيدر (منتج بسيط).
               size:
-                p.productId === headerProductId
-                  ? (input.size ?? undefined)
-                  : undefined,
+                (p.variantId != null ? variantById.get(p.variantId)?.size : null) ??
+                (p.productId === headerProductId ? (input.size ?? undefined) : undefined) ??
+                undefined,
               color:
-                p.productId === headerProductId
-                  ? (input.color ?? undefined)
-                  : undefined,
+                (p.variantId != null ? variantById.get(p.variantId)?.color : null) ??
+                (p.productId === headerProductId ? (input.color ?? undefined) : undefined) ??
+                undefined,
             }))
           );
         }
@@ -5681,23 +5702,36 @@ export const appRouter = router({
         // **سطر لكل نوع مذكور.** «عين حورس وذكر التحصين» + «عدد القطع: 2» = قطعتين
         // مختلفتين، وكانوا بيتحوّلوا لسطر واحد فالنوع التاني بيضيع. عدد القطع أكبر من
         // الأنواع → سطور ناقصة الموظف بيكمّلها (مش توزيع بالتخمين).
-        const draft = buildDraftLines(parsed.productTerms, parsed.quantity);
+        const draft = buildDraftLines(
+          parsed.productTerms,
+          parsed.quantity,
+          parsed.colorSizePairs
+        );
         const { unitPrices } = distributeSubtotal(
           draft.map(l => l.quantity),
           parsed.itemsSubtotal
         );
         const lines = draft.map((l, i) => {
-          const m = l.term
+          // **كل سطر بلونه ومقاسه بتوعه.** المطابقة بتحصل على
+          // (اسم المنتج + اللون المطبّع + المقاس المطبّع) — مش على `variant.name`
+          // ولا الـSKU، عشان منتج الملابس تركيباته بتتحدد باللون والمقاس بس.
+          const m = l.term || l.color || l.size
             ? matchImportItem(
-                // اللون/المقاس بيتطبّقوا على السطر الوحيد بس — مايتنسخوش على كل نوع.
-                draft.length === 1
-                  ? { name: l.term, color: parsed.color, size: parsed.size }
-                  : { name: l.term, variantText: l.term },
+                {
+                  name: l.term,
+                  // النوع المذكور (نوع الحفر مثلًا) بيتبعت كـvariantText كمان، عشان
+                  // يتطابق على اسم التركيبة جوه المنتج لو المنتج اتحدد بطريقة تانية.
+                  variantText: l.term || undefined,
+                  color: l.color ?? null,
+                  size: l.size ?? null,
+                },
                 catalog
               )
             : null;
           return {
             term: l.term,
+            color: l.color ?? null,
+            size: l.size ?? null,
             quantity: l.quantity,
             unitPrice: unitPrices[i] ?? 0,
             match: m ? shape(m) : null,
@@ -6859,7 +6893,8 @@ export const appRouter = router({
           name: z.string().min(1, "اسم النوع مطلوب"),
           color: z.string().optional(),
           size: z.string().optional(),
-          sku: z.string().min(1, "رمز المنتج (SKU) مطلوب"),
+          // الرمز اختياري: لو اتساب فاضي السيرفر بيولّد رمزًا داخليًا فريدًا (AUTO-…).
+                sku: z.string().optional(),
           price: z.number().min(0).optional(),
           costPrice: z.number().min(0).optional(),
           currentStock: z.number().min(0).default(0),
@@ -6885,14 +6920,19 @@ export const appRouter = router({
           });
         }
         // تفرّد الـSKU **داخل النشاط** فقط — نفس الـSKU مسموح في نشاط مختلف.
-        if (await isSkuTakenInBusiness(product.businessId, rest.sku)) {
+        const typedSku = rest.sku?.trim();
+        if (typedSku && (await isSkuTakenInBusiness(product.businessId, typedSku))) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: `رمز المنتج (SKU) "${rest.sku}" مستخدم بالفعل في هذا النشاط`,
+            message: `رمز المنتج (SKU) "${typedSku}" مستخدم بالفعل في هذا النشاط`,
           });
         }
+        // فاضي → رمز داخلي فريد (AUTO-…) بدل رفض الإضافة.
+        const resolvedSku =
+          typedSku || (await generateVariantSkus(product.businessId, 1))[0];
         await createVariant({
           ...rest,
+          sku: resolvedSku,
           ...(price !== undefined ? { price: String(price) } : {}),
           ...(costPrice !== undefined ? { costPrice: String(costPrice) } : {}),
         });
@@ -6909,7 +6949,8 @@ export const appRouter = router({
                 color: z.string().optional(),
                 size: z.string().optional(),
                 name: z.string().optional(),
-                sku: z.string().min(1, "رمز المنتج (SKU) مطلوب"),
+                // الرمز اختياري: لو اتساب فاضي السيرفر بيولّد رمزًا داخليًا فريدًا (AUTO-…).
+                sku: z.string().optional(),
                 price: z.number().min(0).optional(),
                 costPrice: z.number().min(0).optional(),
                 currentStock: z.number().min(0).default(0),
@@ -6936,27 +6977,38 @@ export const appRouter = router({
         }
 
         // 3) تفرّد SKU: داخل الدفعة + داخل النشاط (منتجات + تركيبات).
+        // الفاضي بيتولّد له رمز داخلي (AUTO-…) بدل ما الإضافة كلها تترفض.
+        const typed = input.variants
+          .map(v => v.sku?.trim())
+          .filter((x): x is string => !!x);
         const skuSeen = new Set<string>();
-        for (const v of input.variants) {
-          const s = v.sku.trim().toLowerCase();
-          if (skuSeen.has(s))
+        for (const x of typed) {
+          const k = x.toLowerCase();
+          if (skuSeen.has(k))
             throw new TRPCError({
               code: "CONFLICT",
-              message: `رمز المنتج (SKU) "${v.sku}" مكرر داخل الدفعة`,
+              message: `رمز المنتج (SKU) "${x}" مكرر داخل الدفعة`,
             });
-          skuSeen.add(s);
+          skuSeen.add(k);
         }
-        const takenInBusiness = await findTakenSkusInBusiness(
+        const takenInBusiness = await findTakenSkusInBusiness(product.businessId, typed);
+        for (const x of typed) {
+          if (takenInBusiness.has(x.toLowerCase()))
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `رمز المنتج (SKU) "${x}" مستخدم بالفعل في هذا النشاط`,
+            });
+        }
+        const autoAdd = await generateVariantSkus(
           product.businessId,
-          input.variants.map(v => v.sku)
+          input.variants.filter(v => !v.sku?.trim()).length,
+          skuSeen
         );
-        for (const v of input.variants) {
-          if (takenInBusiness.has(v.sku.trim().toLowerCase()))
-            throw new TRPCError({
-              code: "CONFLICT",
-              message: `رمز المنتج (SKU) "${v.sku}" مستخدم بالفعل في هذا النشاط`,
-            });
-        }
+        let autoIdxAdd = 0;
+        const withSkus = input.variants.map(v => ({
+          ...v,
+          sku: v.sku?.trim() || autoAdd[autoIdxAdd++],
+        }));
 
         // 4) مخزون افتتاحي: مسموح فقط قبل Go-Live المحاسبي.
         if (input.variants.some(v => v.currentStock !== 0))
@@ -6965,7 +7017,7 @@ export const appRouter = router({
         // 5) إضافة الجديد فقط (بيتخطّى اللون×المقاس الموجود) في transaction واحدة.
         const result = await addVariantsToProduct(
           input.productId,
-          input.variants.map(v => ({
+          withSkus.map(v => ({
             color: v.color,
             size: v.size,
             name: v.name,

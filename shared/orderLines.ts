@@ -12,6 +12,10 @@
 export interface DraftLine {
   /** النص اللي الرسالة ذكرته لهذا السطر (نوع/منتج) — للعرض والمطابقة اليدوية. */
   term: string;
+  /** اللون المذكور لهذه القطعة تحديدًا (لو سطر اللون فيه أكتر من زوج). */
+  color?: string;
+  /** المقاس المذكور لهذه القطعة تحديدًا. */
+  size?: string;
   quantity: number;
   /** مفيش منتج/تركيبة محسومة — الموظف لازم يختار قبل الحفظ. */
   needsPick: boolean;
@@ -27,12 +31,40 @@ export interface DraftLine {
  *     يحدّد نوع كل قطعة فاضلة بدل ما نوزّع بالتخمين.
  *   • أنواع > عدد القطع → سطر لكل نوع بكمية 1 (الكمية المكتوبة أقل من الواقع).
  */
-export function buildDraftLines(terms: string[], quantity: number): DraftLine[] {
+export function buildDraftLines(
+  terms: string[],
+  quantity: number,
+  /**
+   * أزواج اللون/المقاس بالترتيب. لو فيه أكتر من زوج، **هي اللي بتحدّد عدد القطع**
+   * ونوع المنتج الواحد بيتكرّر عليها: «نوع المنتج: طقم اطفال» + «اللون: بيج مقاس 10
+   * اسود مقاس 6» = قطعتين من نفس المنتج بتركيبتين مختلفتين.
+   */
+  pairs: { color: string; size: string }[] = []
+): DraftLine[] {
   const qty = Math.max(1, Math.floor(quantity) || 1);
   const clean = terms.map(t => t.trim()).filter(Boolean);
+  const cs = pairs.filter(p => (p.color ?? "").trim() || (p.size ?? "").trim());
 
-  if (clean.length === 0) return [{ term: "", quantity: qty, needsPick: true }];
-  if (clean.length === 1) return [{ term: clean[0], quantity: qty, needsPick: true }];
+  // أزواج لون/مقاس متعددة → سطر لكل زوج، والمنتج واحد بيتكرّر.
+  if (cs.length > 1) {
+    const base = clean.length === 1 ? clean[0] : "";
+    const lines: DraftLine[] = cs.map(p => ({
+      term: clean.length > 1 ? (clean.shift() ?? base) : base,
+      color: p.color,
+      size: p.size,
+      quantity: 1,
+      needsPick: true,
+    }));
+    for (let i = lines.length; i < qty; i++)
+      lines.push({ term: base, quantity: 1, needsPick: true });
+    return lines;
+  }
+
+  const one = cs[0];
+  if (clean.length === 0)
+    return [{ term: "", quantity: qty, needsPick: true, color: one?.color, size: one?.size }];
+  if (clean.length === 1)
+    return [{ term: clean[0], quantity: qty, needsPick: true, color: one?.color, size: one?.size }];
 
   const lines: DraftLine[] = clean.map(term => ({ term, quantity: 1, needsPick: true }));
   for (let i = clean.length; i < qty; i++) {

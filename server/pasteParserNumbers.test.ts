@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePasteMessage, splitProductTerms } from "./pasteParser";
+import { parsePasteMessage, splitProductTerms, parseColorSizePairs } from "./pasteParser";
 
 /**
  * المرحلة B — قراءة الأرقام حتمية ومحدودة بالـlabel.
@@ -156,4 +156,49 @@ describe("🔑 فصل الأنواع المذكورة", () => {
     expect(splitProductTerms("عين حورس وذكر التحصين وسادة")).toEqual([
       "عين حورس", "ذكر التحصين", "سادة",
     ]));
+});
+
+describe("🔑 أزواج اللون/المقاس بالترتيب", () => {
+  it("🔑 «بيج مقاس 10 اسود مقاس 6» → زوجان بالترتيب", () => {
+    expect(parseColorSizePairs("بيج مقاس 10 اسود مقاس 6")).toEqual([
+      { color: "بيج", size: "10" },
+      { color: "اسود", size: "6" },
+    ]);
+  });
+  it("🔑 بلا كلمة «مقاس»: «بيج 10 اسود 6»", () => {
+    expect(parseColorSizePairs("بيج 10 اسود 6")).toEqual([
+      { color: "بيج", size: "10" },
+      { color: "اسود", size: "6" },
+    ]);
+  });
+  it("🔑 «لون بيج مقاس 10» → كلمة «لون» مش جزء من اللون", () => {
+    expect(parseColorSizePairs("لون بيج مقاس 10")).toEqual([{ color: "بيج", size: "10" }]);
+  });
+  it("🔑 زوج واحد بصيغه المختلفة", () => {
+    expect(parseColorSizePairs("اسود مقاس 8 سنين")).toEqual([{ color: "اسود", size: "8" }]);
+    expect(parseColorSizePairs("بيج (12 سنة)")).toEqual([{ color: "بيج", size: "12" }]);
+  });
+  it("🔒 نطاق «من 6 إلى 8» زوج واحد بالحد الأعلى — مش زوجين", () => {
+    expect(parseColorSizePairs("من 6 إلى 8")).toEqual([{ color: "", size: "8" }]);
+  });
+  it("🔑 لون بلا مقاس", () => {
+    expect(parseColorSizePairs("أحمر")).toEqual([{ color: "أحمر", size: "" }]);
+  });
+  it("🔑 ثلاثة أزواج", () => {
+    expect(parseColorSizePairs("بيج 10 اسود 6 احمر 8")).toEqual([
+      { color: "بيج", size: "10" },
+      { color: "اسود", size: "6" },
+      { color: "احمر", size: "8" },
+    ]);
+  });
+  it("🔑 الرسالة الكاملة بتطلّع الزوجين", () => {
+    const p = parsePasteMessage(
+      "نوع المنتج: طقم اطفال\nعدد القطع: 2\nاللون: بيج مقاس 10 اسود مقاس 6"
+    );
+    expect(p.quantity).toBe(2);
+    expect(p.colorSizePairs).toEqual([
+      { color: "بيج", size: "10" },
+      { color: "اسود", size: "6" },
+    ]);
+  });
 });

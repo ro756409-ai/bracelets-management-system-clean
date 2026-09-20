@@ -949,8 +949,14 @@ export async function getAllProducts(
   if (!db) return [];
   const conditions: any[] = [];
   if (!opts.includeInactive) conditions.push(eq(products.isActive, true));
-  if (businessIds && businessIds.length > 0) {
-    conditions.push(inArray(products.businessId, businessIds));
+  if (businessIds) {
+    // **نطاق متحقَّق وفاضي = رفض، مش سماح.** `businessIds = []` معناها «اتحققت،
+    // ومفيش نشاط مسموح» — وكانت بتعدّي من غير أي فلتر فترجّع منتجات كل الأنشطة
+    // وكل الـtenants. `undefined` (مفيش فلتر أصلاً) هي الحالة التانية ولسه شغالة.
+    // نفس منطق `NO_BUSINESS` في الراوتر، بس هنا كمان عشان أي نداء مباشر يفضل مقفول.
+    conditions.push(
+      inArray(products.businessId, businessIds.length > 0 ? businessIds : [-1])
+    );
   } else if (businessId) {
     conditions.push(eq(products.businessId, businessId));
   }
@@ -3812,6 +3818,64 @@ export interface NewProductVariantInput {
   costPrice?: string | null;
   currentStock?: number;
   minStockLevel?: number;
+}
+
+/**
+ * يولّد SKU داخليًا للتركيبات اللي التاجر ساب رمزها فاضي.
+ *
+ * الـSKU مطلوب داخليًا (بيربط حركات المخزون والمسح بالكاميرا وتفرّد التركيبة داخل
+ * النشاط)، لكن إجباره على التاجر كان بيوقف إنشاء منتج كامل عشان «تركيبة اسود 6 بلا
+ * SKU» — وهو مالوش أي معنى عنده. بنولّده هنا **على السيرفر**: بادئة `AUTO-` عشان
+ * يتفرّق عن رمز بشري، وتفرّد متحقَّق منه داخل النشاط مع إعادة محاولة عند التعارض.
+ *
+ * `taken` هي الرموز المحجوزة في النشاط (من `findTakenSkusInBusiness`) + اللي اتولّد
+ * في نفس الدفعة — فالتوليد مابيصطدمش بنفسه.
+ */
+function candidateSku(): string {
+  const stamp = Date.now().toString(36).toUpperCase();
+  const rand = Math.floor(Math.random() * 36 ** 4)
+    .toString(36)
+    .toUpperCase()
+    .padStart(4, "0");
+  return `AUTO-${stamp}-${rand}`;
+}
+
+/**
+ * `count` رمزًا فريدًا داخل النشاط.
+ *
+ * التفرّد متحقَّق منه **مقابل قاعدة البيانات** مش مقابل مجموعة في الذاكرة: التوليد
+ * بيقارن المرشّحين بـ`findTakenSkusInBusiness` (اللي بتفحص منتجات النشاط وتركيباته)
+ * وبيعيد توليد المتعارض منهم. من غير الفحص ده كان ممكن يتولّد رمز موجود بالفعل
+ * ويكسر تفرّد الـSKU اللي المسح بالكاميرا بيعتمد عليه.
+ *
+ * `reserved` هي الرموز المحجوزة في نفس الطلب (اللي التاجر كتبها) — فالمولَّد
+ * مابيصطدمش بيها ولا بنفسه.
+ */
+export async function generateVariantSkus(
+  businessId: number,
+  count: number,
+  reserved: Set<string> = new Set()
+): Promise<string[]> {
+  const out: string[] = [];
+  const local = new Set(reserved);
+  for (let attempt = 0; attempt < 5 && out.length < count; attempt++) {
+    const need = count - out.length;
+    const batch: string[] = [];
+    while (batch.length < need) {
+      const c = candidateSku();
+      if (local.has(c.toLowerCase())) continue;
+      local.add(c.toLowerCase());
+      batch.push(c);
+    }
+    const clash = await findTakenSkusInBusiness(businessId, batch);
+    for (const c of batch) {
+      if (clash.has(c.toLowerCase())) local.delete(c.toLowerCase());
+      else out.push(c);
+    }
+  }
+  if (out.length < count)
+    throw new Error("تعذّر توليد رمز فريد للتركيبة — حاول مرة أخرى");
+  return out;
 }
 
 /**

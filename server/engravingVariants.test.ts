@@ -371,6 +371,75 @@ describe.runIf(CAN_E2E)("🔑 نوع الحفر — سلوكي", () => {
     expect(row.quantity).toBe(2);
   });
 
+  it("🔑 **لون ومقاس**: «بيج مقاس 10 اسود مقاس 6» → سطران بالتركيبة الصح", async () => {
+    const d = await getDb();
+    // منتج ملابس في نشاط A: لون × مقاس، والاسم في عمود name = اسم المنتج (بيانات
+    // زي اللي في الإنتاج) عشان نتأكد إن «النوع» مابيظهرش والمطابقة باللون والمقاس.
+    const clothes = await createProductWithVariants(A.businessId, { name: `طقم اطفال ${tag}` }, [
+      { name: `طقم اطفال ${tag}`, color: "بيج", size: "10", sku: `CS-BEG10-${tag}`, currentStock: 5, price: "400" },
+      { name: `طقم اطفال ${tag}`, color: "اسود", size: "6", sku: `CS-BLK6-${tag}`, currentStock: 5, price: "400" },
+      { name: `طقم اطفال ${tag}`, color: "بيج", size: "6", sku: `CS-BEG6-${tag}`, currentStock: 5, price: "400" },
+    ]);
+    ids.productIds.push(clothes.productId);
+    const [vBeg10, vBlk6] = clothes.variantIds;
+
+    const res = await caller(deA).facebookEntry.parsePaste({
+      text: [
+        "الاسم : محمود السعيد",
+        "العنوان :قلبشو بلقاس دقهليه",
+        "رقم الفون(1): 01066250909",
+        `نوع المنتج : طقم اطفال ${tag}`,
+        "عدد القطع : 2",
+        "اللون : بيج مقاس 10 اسود مقاس 6",
+      ].join("\n"),
+    });
+
+    expect(res.parsed.quantity).toBe(2);
+    expect(res.parsed.colorSizePairs).toEqual([
+      { color: "بيج", size: "10" },
+      { color: "اسود", size: "6" },
+    ]);
+    expect(res.parsed.governorate).toBe("الدقهلية");
+
+    // سطران، كل واحد بتركيبته الصح — المطابقة بـproductId + لون + مقاس
+    expect(res.lines).toHaveLength(2);
+    expect(res.lines[0].match?.variantId).toBe(vBeg10);
+    expect(res.lines[0].match?.color).toBe("بيج");
+    expect(res.lines[0].match?.size).toBe("10");
+    expect(res.lines[1].match?.variantId).toBe(vBlk6);
+    expect(res.lines[1].match?.color).toBe("اسود");
+    expect(res.lines[1].match?.size).toBe("6");
+    // كلاهما من نفس المنتج
+    expect(new Set(res.lines.map(l => l.match?.productId)).size).toBe(1);
+    expect(res.lines[0].match?.productId).toBe(clothes.productId);
+
+    // الحفظ بيدّي بندين بـvariantId مختلف
+    const saved = await caller(deA).facebookEntry.addOrder({
+      customerName: "محمود السعيد", customerPhone: "01066250909",
+      governorate: res.parsed.governorate, customerAddress: res.parsed.customerAddress,
+      selectedProducts: res.lines.map(l => ({
+        productId: l.match!.productId, productName: l.match!.productName,
+        quantity: l.quantity, variantId: l.match!.variantId!, unitPrice: 400,
+      })),
+      totalAmount: 800,
+    } as any);
+    const [row] = await d!.select().from(orders).where(inArray(orders.orderNumber, [saved.orderNumber]));
+    ids.orderIds.push(row.id);
+    const items = (await getOrderItemsForOrders([row.id])).get(row.id) ?? [];
+    expect(items).toHaveLength(2);
+    expect(items.map(i => i.variantId).sort()).toEqual([vBeg10, vBlk6].sort());
+    expect(items.map(i => i.color).sort()).toEqual(["اسود", "بيج"].sort());
+    expect(items.map(i => i.size).sort()).toEqual(["10", "6"].sort());
+  });
+
+  it("🔒 لون ومقاس مش موجودين في المنتج → مفيش تخمين", async () => {
+    const res = await caller(deA).facebookEntry.parsePaste({
+      text: `نوع المنتج : طقم اطفال ${tag}\nعدد القطع : 1\nاللون : أخضر مقاس 99`,
+    });
+    expect(res.lines[0].match).toBeNull();
+    expect(res.lines[0].matchReason).toBeTruthy();
+  });
+
   it("🔒 نص لا يطابق أي منتج → مفيش اختيار تلقائي", async () => {
     const res = await caller(deA).facebookEntry.parsePaste({
       text: "نوع المنتج: حاجة مش موجودة خالص\nعدد القطع: 1",

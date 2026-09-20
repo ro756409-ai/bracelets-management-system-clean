@@ -41,10 +41,18 @@ describe("🔑 اكتشاف الأبعاد من بيانات التركيبات 
   it("🔑 منتج بسيط (بلا تركيبات) → بلا أبعاد", () => {
     expect(variantDimensions([])).toEqual([]);
   });
-  it("🔑 منتج بأبعاد متعددة (نوع + لون) يعرضهم كلهم", () => {
+  it("🔑 نوع ثابت + لون مميِّز → اللون بس (قائمة نوع بخيار واحد مالهاش لازمة)", () => {
     const multi = [
       v({ id: 31, productId: 30, name: "منقوش", color: "ذهبي" }),
       v({ id: 32, productId: 30, name: "منقوش", color: "فضي" }),
+    ];
+    expect(variantDimensions(multi)).toEqual(["color"]);
+  });
+
+  it("🔑 نوع مميِّز + لون → الاتنين لازمين", () => {
+    const multi = [
+      v({ id: 33, productId: 30, name: "منقوش", color: "ذهبي" }),
+      v({ id: 34, productId: 30, name: "سادة", color: "ذهبي" }),
     ];
     expect(variantDimensions(multi)).toEqual(["name", "color"]);
   });
@@ -120,6 +128,9 @@ describe("🔒 SKU مايتعرضش كـ«نوع»", () => {
   });
   it("🔒 وصف التركيبة للطباعة/بوسطة بلا SKU", () => {
     expect(variantLabel(CLOTHES_SKU_NAMED[0])).toBe("اسود / 6");
+    expect(variantLabel(CLOTHES_SKU_NAMED[0], variantDimensions(CLOTHES_SKU_NAMED))).toBe(
+      "اسود / 6"
+    );
   });
   it("🔑 لا انحدار: اسم بشري مختلف عن الـSKU يفضل ظاهر", () => {
     // الأساور: name عربي و sku مثل AYAT-001 — مستحيل يتساووا
@@ -138,5 +149,55 @@ describe("🔒 SKU مايتعرضش كـ«نوع»", () => {
     expect(variantDimensions(onlySku)).toEqual(["sku"]);
     expect(DIM_LABEL.sku).toBe("الرمز");
     expect(resolveVariant(onlySku, ["sku"], { sku: "K-2" }).variant?.id).toBe(42);
+  });
+});
+
+describe("🔒 «النوع» بيتشال لما اللون+المقاس كافيين", () => {
+  const withName = (name: string, color: string, size: string, id: number) =>
+    v({ id, productId: 50, name, color, size, sku: `S-${id}` });
+
+  it("🔒 اسم = اسم المنتج → لون ومقاس بس", () => {
+    const vs = [
+      withName("بدلة اطفالي", "اسود", "6", 1),
+      withName("بدلة اطفالي", "بيج", "10", 2),
+    ];
+    expect(variantDimensions(vs)).toEqual(["color", "size"]);
+  });
+
+  it("🔒 اسم = إعادة صياغة للّون والمقاس («اسود 10») → لون ومقاس بس", () => {
+    const vs = [withName("اسود 6", "اسود", "6", 1), withName("بيج 10", "بيج", "10", 2)];
+    expect(variantDimensions(vs)).toEqual(["color", "size"]);
+    expect(variantLabel(vs[0], variantDimensions(vs))).toBe("اسود / 6");
+  });
+
+  it("🔒 اسم = SKU → لون ومقاس بس (نفس السلوك)", () => {
+    expect(variantDimensions(CLOTHES_SKU_NAMED)).toEqual(["color", "size"]);
+  });
+
+  it("🔑 اسم حقيقي بيميّز تركيبات بنفس اللون والمقاس → «النوع» بيفضل", () => {
+    // نفس اللون والمقاس بنوعين مختلفين — اللون+المقاس مش كافيين هنا
+    const vs = [
+      withName("قطن", "اسود", "6", 1),
+      withName("كتان", "اسود", "6", 2),
+    ];
+    expect(variantDimensions(vs)).toEqual(["name", "color", "size"]);
+  });
+
+  it("🔑 لا انحدار: الأساور (بلا لون/مقاس) بتفضل بالنوع", () => {
+    expect(variantDimensions(BRACELET)).toEqual(["name"]);
+  });
+
+  it("🔑 التركيبة بتتحسم باللون والمقاس بعد إخفاء النوع", () => {
+    const vs = [
+      withName("بدلة اطفالي", "اسود", "6", 1),
+      withName("بدلة اطفالي", "بيج", "10", 2),
+    ];
+    const dims = variantDimensions(vs);
+    expect(resolveVariant(vs, dims, { color: "بيج", size: "10" }).variant?.id).toBe(2);
+    // اختيار اللون بس مش كفاية
+    expect(resolveVariant(vs, dims, { color: "بيج" }).reason).toBe("incomplete");
+    // واللون بيفلتر المقاسات المتاحة
+    expect(optionsFor(vs, "size", { color: "بيج" })).toEqual(["10"]);
+    expect(optionsFor(vs, "size", { color: "اسود" })).toEqual(["6"]);
   });
 });

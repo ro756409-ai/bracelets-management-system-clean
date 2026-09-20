@@ -138,3 +138,52 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("🔑 variants سلوكي
     }
   });
 });
+
+/**
+ * **نطاق متحقَّق وفاضي = رفض.**
+ *
+ * `businessIds = []` معناها «اتحققت من الجلسة، ومفيش نشاط مسموح» — وكانت بتعدّي من
+ * غير أي فلتر فترجّع منتجات وتركيبات **كل الأنشطة وكل الـtenants**. نفس فخ fail-open
+ * اللي `NO_BUSINESS` بيقفله في الراوتر، بس هنا عشان أي نداء مباشر يفضل مقفول.
+ * `undefined` (مفيش فلتر أصلاً) حالة تانية ولسه شغالة للمسارات الإدارية.
+ */
+describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("🔒 نطاق متحقَّق وفاضي = رفض", () => {
+  let F: CoreTestFixture;
+  const tag = Date.now();
+  const made: number[] = [];
+
+  beforeAll(async () => {
+    const d = await getDb(); if (!d) return;
+    F = await createCoreTestFixture("deny-empty");
+    const r = await createProductWithVariants(F.businessId, { name: `منتج نطاق ${tag}` }, [
+      { color: "أسود", size: "S", sku: `DENY-${tag}`, currentStock: 1 },
+    ]);
+    made.push(r.productId);
+  });
+  afterAll(async () => {
+    const d = await getDb(); if (!d) return;
+    if (made.length) {
+      await d.delete(productVariants).where(inArray(productVariants.productId, made));
+      await d.delete(products).where(inArray(products.id, made));
+    }
+    await F?.cleanup();
+  });
+
+  it("🔒 getAllProducts بنطاق [] → صفر (مش كل المنتجات)", async () => {
+    expect((await getAllProducts(undefined, [], { includeInactive: true })).length).toBe(0);
+    expect((await getAllProducts(undefined, [])).length).toBe(0);
+  });
+  it("🔒 getAllVariantsWithProduct بنطاق [] → صفر", async () => {
+    expect(
+      (await getAllVariantsWithProduct(undefined, [], { includeInactive: true })).length
+    ).toBe(0);
+  });
+  it("🔑 undefined لسه معناها «بلا فلتر» (المسارات الإدارية)", async () => {
+    const all = await getAllProducts(undefined, undefined, { includeInactive: true });
+    expect(all.some(p => p.name === `منتج نطاق ${tag}`)).toBe(true);
+  });
+  it("🔑 النطاق الصحيح بيرجّع منتجه", async () => {
+    const mine = await getAllProducts(undefined, [F.businessId], { includeInactive: true });
+    expect(mine.some(p => p.name === `منتج نطاق ${tag}`)).toBe(true);
+  });
+});

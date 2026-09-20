@@ -29,6 +29,8 @@ export interface ParsedPaste {
   productName: string;
   /** الأنواع المذكورة في سطر المنتج («عين حورس وذكر التحصين» → اتنين). */
   productTerms: string[];
+  /** أزواج اللون/المقاس بالترتيب («بيج مقاس 10 اسود مقاس 6» → اتنين). */
+  colorSizePairs: ColorSize[];
   quantity: number;
   color: string;
   size: string;
@@ -124,24 +126,76 @@ function cleanColor(s: string): string {
  *   «بيج 10»            → بيج / 10
  *   أرقام عربية، و«سنة»/«سنين»، ونطاقات «من 6 إلى 8» → الحد الأعلى.
  */
-export function splitColorSize(text: string): { color: string; size: string } {
-  if (!text) return { color: "", size: "" };
-  const t = text.trim();
-  // لو فيه كلمة «مقاس/المقاس/الحجم» — اللون قبلها، والمقاس بعدها.
-  const byKeyword = t.split(/\s*(?:المقاس|مقاس|الحجم|المقاسات)\s*[:：]?\s*/);
-  if (byKeyword.length > 1) {
-    return { color: cleanColor(byKeyword[0]), size: normalizeSize(byKeyword.slice(1).join(" ")) };
+export interface ColorSize {
+  color: string;
+  size: string;
+}
+
+/** كلمات ربط بين رقمين (نطاق «من 6 إلى 8») — مش لون. */
+const RANGE_WORDS = /^(من|الى|إلى|لـ|ل|حتى|و|او|أو)$/;
+/** كلمات بتسبق اللون من غير ما تكون جزء منه. */
+const COLOR_NOISE = /^(?:ال)?(?:لون|الوان|ألوان)\s*/;
+
+/**
+ * يفصل سطر اللون/المقاس لـ**كل الأزواج** بالترتيب اللي اتكتبوا بيه:
+ *   «بيج مقاس 10 اسود مقاس 6» → [بيج/10, اسود/6]
+ *   «اسود مقاس 8 سنين»        → [اسود/8]
+ *   «بيج (12 سنة)»            → [بيج/12]
+ *   «بيج 10»                  → [بيج/10]
+ *   «من 6 إلى 8»              → [/8]  (نطاق = الحد الأعلى، مش زوجين)
+ *
+ * الترتيب مهم: العميل بيكتب اللون وبعده مقاسه مباشرة، فالزوج الأول هو القطعة الأولى.
+ * كانت القراءة القديمة بترجّع زوجًا واحدًا بس، فـ«بيج مقاس 10 اسود مقاس 6» كان بيبقى
+ * لون «بيج» ومقاس 10 (أو max(10,6)) — والقطعة التانية بتضيع خالص.
+ */
+export function parseColorSizePairs(text: string): ColorSize[] {
+  const raw = String(text ?? "").trim();
+  if (!raw) return [];
+  const t = normalizeDigits(raw);
+
+  const out: ColorSize[] = [];
+  // كل «نص ثم رقم»: النص هو اللون (أو كلمة ربط) والرقم هو المقاس.
+  const re = /([^\d]*?)(\d+)/g;
+  let m: RegExpExecArray | null;
+  let lastIndex = 0;
+  while ((m = re.exec(t)) !== null) {
+    lastIndex = re.lastIndex;
+    const label = cleanColor(m[1]).replace(COLOR_NOISE, "").trim();
+    // «مقاس/الحجم» مجرد عنوان، مش لون.
+    const color = label.replace(/(?:^|\s)(?:المقاسات|المقاس|مقاس|الحجم)\s*$/, "").trim();
+    const size = m[2];
+    if (RANGE_WORDS.test(color) || color === "") {
+      const prev = out[out.length - 1];
+      if (prev) {
+        // نطاق: «من 6 إلى 8» → نوسّع مقاس آخر زوج للحد الأعلى بدل ما نعمل زوج جديد.
+        prev.size = String(Math.max(Number(prev.size) || 0, Number(size) || 0));
+        continue;
+      }
+      // أول رقم بلا لون قبله («من 6 …») — زوج بلا لون، والأرقام اللي بعده بتوسّعه.
+      out.push({ color: "", size });
+      continue;
+    }
+    out.push({ color, size });
   }
-  // وإلا: اللون قبل أول رقم، والمقاس من أول رقم (الأقواس بتتنضّف).
-  const digits = normalizeDigits(t);
-  const digitMatch = digits.match(/\d/);
-  if (digitMatch && digitMatch.index != null) {
-    return {
-      color: cleanColor(t.slice(0, digitMatch.index)),
-      size: normalizeSize(t.slice(digitMatch.index)),
-    };
+
+  // نص بلا أي أرقام = لون لوحده.
+  if (out.length === 0) {
+    const color = cleanColor(t).replace(COLOR_NOISE, "").trim();
+    return color ? [{ color, size: "" }] : [];
   }
-  return { color: cleanColor(t), size: "" };
+  // ذيل بعد آخر رقم فيه لون بلا مقاس («بيج 10 وأسود») — بيتسجّل بلا مقاس للمراجعة.
+  const tail = cleanColor(t.slice(lastIndex)).replace(COLOR_NOISE, "").trim();
+  if (tail && !RANGE_WORDS.test(tail) && !/^(سنه|سنين|سنة|عام|اعوام)$/.test(tail))
+    out.push({ color: tail, size: "" });
+
+  return out;
+}
+
+/** أول زوج لون/مقاس — للمسارات اللي لسه بتتعامل مع صنف واحد. */
+export function splitColorSize(text: string): ColorSize {
+  const pairs = parseColorSizePairs(text);
+  if (pairs.length === 0) return { color: "", size: "" };
+  return { color: pairs[0].color, size: normalizeSize(pairs[0].size) };
 }
 
 export function parsePasteMessage(raw: string): ParsedPaste {
@@ -187,11 +241,17 @@ export function parsePasteMessage(raw: string): ParsedPaste {
   }
 
   const colorLine = firstLineValue(text, /اللون\s*[:：]\s*([^\n]+)/);
-  let { color, size } = splitColorSize(colorLine);
+  const rawPairs = parseColorSizePairs(colorLine);
+  const colorSizePairs = rawPairs.map(p => ({ color: p.color, size: normalizeSize(p.size) }));
+  let color = colorSizePairs[0]?.color ?? "";
+  let size = colorSizePairs[0]?.size ?? "";
   // المقاس ممكن ييجي في سطر مستقل «المقاس: ...» — لو ماطلعش من سطر اللون.
   if (!size) {
     const sizeLine = firstLineValue(text, /(?:المقاس|الحجم|المقاسات)\s*[:：]\s*([^\n]+)/);
-    if (sizeLine) size = normalizeSize(sizeLine);
+    if (sizeLine) {
+      size = normalizeSize(sizeLine);
+      if (colorSizePairs[0]) colorSizePairs[0].size = size;
+    }
   }
 
   // كل قيمة من الـlabel بتاعها، محدودة بنهاية السطر أو أول label تاني.
@@ -219,7 +279,7 @@ export function parsePasteMessage(raw: string): ParsedPaste {
 
   return {
     adName, customerName, customerPhone: phone, governorate, city, customerAddress,
-    productName, productTerms, quantity, color, size,
+    productName, productTerms, colorSizePairs, quantity, color, size,
     itemsSubtotal: subtotal, discount, shipping, totalAmount, totalMismatch,
   };
 }

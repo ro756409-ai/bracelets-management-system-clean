@@ -443,10 +443,7 @@ export default function Inventory() {
     }
     const variants = [];
     for (const r of rows) {
-      if (!r.sku.trim()) {
-        toast.error(`تركيبة ${r.color || ""} ${r.size || ""} بلا SKU`);
-        return;
-      }
+      // الرمز اختياري — السيرفر بيولّد رمزًا داخليًا فريدًا (AUTO-…) للفاضي.
       const priceN = r.price.trim() === "" ? undefined : Number(r.price);
       const costN = r.costPrice.trim() === "" ? undefined : Number(r.costPrice);
       const stockN = Number(r.currentStock || "0");
@@ -465,7 +462,7 @@ export default function Inventory() {
       variants.push({
         color: r.color.trim() || undefined,
         size: r.size.trim() || undefined,
-        sku: r.sku.trim(),
+        sku: r.sku.trim() || undefined,
         price: priceN,
         costPrice: costN,
         currentStock: stockN,
@@ -483,10 +480,7 @@ export default function Inventory() {
       toast.error("اسم النوع مطلوب");
       return;
     }
-    if (!vfSku.trim()) {
-      toast.error("رمز المنتج (SKU) مطلوب");
-      return;
-    }
+    // الرمز اختياري — السيرفر بيولّده لو اتساب فاضي.
     const minNum = Number(vfMinStock);
     if (isNaN(minNum) || minNum < 0) {
       toast.error("الحد الأدنى لازم يكون رقم صحيح غير سالب");
@@ -516,7 +510,7 @@ export default function Inventory() {
       createVariantMutation.mutate({
         productId: variantFormProductId,
         name: vfName.trim(),
-        sku: vfSku.trim(),
+        sku: vfSku.trim() || undefined,
         price: priceNum,
         costPrice: costPriceNum,
         currentStock: stockNum,
@@ -529,7 +523,7 @@ export default function Inventory() {
       editVariantMutation.mutate({
         id: variantFormId,
         name: vfName.trim(),
-        sku: vfSku.trim(),
+        sku: vfSku.trim() || undefined,
         price: priceNum,
         costPrice: costPriceNum,
         minStockLevel: minNum,
@@ -596,10 +590,7 @@ export default function Inventory() {
       }
       const variants = [];
       for (const r of rows) {
-        if (!r.sku.trim()) {
-          toast.error(`تركيبة ${r.color || ""} ${r.size || ""} بلا SKU`);
-          return;
-        }
+        // الرمز اختياري — السيرفر بيولّد رمزًا داخليًا فريدًا (AUTO-…) للفاضي.
         const priceN = r.price.trim() === "" ? undefined : Number(r.price);
         const costN = r.costPrice.trim() === "" ? undefined : Number(r.costPrice);
         const stockN = Number(r.currentStock || "0");
@@ -618,7 +609,7 @@ export default function Inventory() {
         variants.push({
           color: r.color.trim() || undefined,
           size: r.size.trim() || undefined,
-          sku: r.sku.trim(),
+          sku: r.sku.trim() || undefined,
           price: priceN,
           costPrice: costN,
           currentStock: stockN,

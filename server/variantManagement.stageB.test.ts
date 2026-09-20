@@ -33,7 +33,10 @@ describe("🔑 حراس المصدر — إدارة variants", () => {
     expect(fn).toContain(".set(safe)");
   });
   it("🔑 variants.create/update بيفحصوا SKU داخل النشاط (مش عالمي)", () => {
-    expect(routers).toContain("isSkuTakenInBusiness(product.businessId, rest.sku)");
+    // الرمز اختياري دلوقتي: الفحص بيتم على اللي التاجر كتبه بس، والفاضي بياخد
+    // رمزًا مولَّدًا (AUTO-…) متحقَّق من تفرّده في نفس النشاط.
+    expect(routers).toContain("isSkuTakenInBusiness(product.businessId, typedSku)");
+    expect(routers).toContain("generateVariantSkus(product.businessId, 1)");
     expect(routers).toContain("excludeVariantId: id");
   });
   it("🔑 variants.addToProduct موجود + products.update بيمنع مخزون منتج له تركيبات", () => {
@@ -139,6 +142,8 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("🔑 إدارة variants
       businessId: A.businessId, orderNumber: `MV-${tag}`,
       customerName: "c", customerPhone: "01000000000", customerAddress: "a",
       governorate: "القاهرة", productName: "p", quantity: 1, totalAmount: "1.00",
+      // `source` عمود NOT NULL بلا default — كل مسارات الكتابة بتحدّده، والـfixture لازم كمان.
+      source: "manual",
       variantId: v.id,
     } as any));
     created.orderIds.push(oid);
