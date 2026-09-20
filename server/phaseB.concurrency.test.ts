@@ -112,10 +112,11 @@ describe("🔑 P1-2/P1-3 · الحركة الذرّية والقفل — على 
     );
     expect(fn).toContain("db.transaction");
     expect(fn).toContain('.for("update")');
-    // الخصم بيمرّ على الحركة الذرّية جوّه نفس الـtx.
-    expect(fn).toContain("addInventoryMovementInTransaction(tx");
-    // فحص «اتأكد خلاص» جوّه القفل — الخصم مرة واحدة.
-    expect(fn).toContain('if (order.status === "confirmed") return;');
+    // الخصم جوّه نفس الـtx: حركة مخزون + تحديث المخزون (تركيبة للمنتجات متعددة الخيارات).
+    expect(fn).toContain("tx.insert(inventoryMovements)");
+    expect(fn).toContain("update(productVariants)");
+    // فحص «اتأكد خلاص» جوّه القفل — الخصم مرة واحدة (idempotent؛ بيرجع بدري).
+    expect(fn).toContain('if (order.status === "confirmed")');
   });
 
   it("🔑 markOrderAsReturned: transaction + قفل + عكس واحد", () => {

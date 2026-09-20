@@ -4041,7 +4041,7 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         // Ownership check: agents can only confirm their own assigned orders
         await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
-        await confirmOrder(input.orderId, emp.id, emp.name);
+        const res = await confirmOrder(input.orderId, emp.id, emp.name);
         await addActivityLog({
           action: "confirm_order",
           entityType: "order",
@@ -4051,7 +4051,14 @@ export const appRouter = router({
           performedByName: emp.name,
           performedByRole: "employee",
         });
-        return { success: true };
+        // التأكيد نجح دائمًا؛ لو فيه عجز مخزون نبلّغ الموظف برسالة نجاح توضّح الحاجة للمراجعة.
+        return {
+          success: true,
+          needsReview: res?.needsReview ?? false,
+          message: res?.stockShortfall
+            ? "تم تأكيد الأوردر، ويوجد عجز مخزون يحتاج مراجعة."
+            : "تم تأكيد الأوردر.",
+        };
       }),
 
     postpone: requireEmployeePermission("orders.update")
