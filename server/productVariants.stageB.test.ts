@@ -30,7 +30,9 @@ describe("🔑 حراس المصدر — createWithVariants", () => {
     expect(fn).toContain("db.transaction(async tx =>");
     expect(fn).toContain("tx.insert(products)");
     expect(fn).toContain("tx.insert(productVariants)");
-    expect(fn).toContain("تركيبة لون/مقاس مكررة"); // دفاع في العمق داخل الـtx
+    expect(fn).toContain("تركيبة مكررة داخل المنتج"); // دفاع في العمق داخل الـtx
+    // هوية التركيبة = النوع+اللون+المقاس (مش لون|مقاس بس)
+    expect(fn).toContain("variantIdentityKey(v)");
   });
   it("🔑 الراوتر بيفحص العزل + تكرار اللون×المقاس + تفرّد SKU داخل النشاط قبل الكتابة", () => {
     const block = routers.slice(

@@ -3815,6 +3815,34 @@ export interface NewProductVariantInput {
 }
 
 /**
+ * مفتاح هوية التركيبة داخل المنتج = **كل الأبعاد**: النوع (مثل نوع الحفر) + اللون + المقاس.
+ * لازم يشمل `name`: منتج زي الأساور تركيباته بتختلف بالنوع فقط (لون/مقاس فاضيين)، فلو
+ * المفتاح لون|مقاس بس كانت كل أنواع الحفر تتحسب تركيبة واحدة مكررة — يعني نوع حفر جديد
+ * إما يترفض (CONFLICT) أو يتخطّى بصمت. القيود القديمة على لون×مقاس بتفضل شغالة لأن
+ * التركيبات بلا اسم مفتاحها بيبقى "|لون|مقاس" زي ما هو.
+ */
+export function variantIdentityKey(v: {
+  name?: string | null;
+  color?: string | null;
+  size?: string | null;
+}): string {
+  const part = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+  return `${part(v.name)}|${part(v.color)}|${part(v.size)}`;
+}
+
+/** وصف التركيبة للرسائل (النوع/اللون/المقاس — الموجود منهم فقط). */
+export function variantIdentityLabel(v: {
+  name?: string | null;
+  color?: string | null;
+  size?: string | null;
+}): string {
+  return [v.name, v.color, v.size]
+    .map(s => (s ?? "").trim())
+    .filter(Boolean)
+    .join(" / ");
+}
+
+/**
  * إنشاء منتج + كل تركيباته (Color×Size) في **transaction واحدة** (المرحلة B). الكل-أو-لا-شيء:
  * لو أي تركيبة فشلت تترجع الدفعة كلها — مايتسجّلش نص منتج. المنتج الأب مع تركيبات مايحملش
  * sku/price/currentStock خاصة به (بتعيش على التركيبات، نفس نمط الأساور).
@@ -3847,9 +3875,9 @@ export async function createProductWithVariants(
     const variantIds: number[] = [];
     const seen = new Set<string>();
     for (const v of variants) {
-      const key = `${(v.color ?? "").trim().toLowerCase()}|${(v.size ?? "").trim().toLowerCase()}`;
+      const key = variantIdentityKey(v);
       if (seen.has(key))
-        throw new Error("تركيبة لون/مقاس مكررة داخل المنتج");
+        throw new Error("تركيبة مكررة داخل المنتج (النوع/اللون/المقاس)");
       seen.add(key);
       const [vRes] = await tx.insert(productVariants).values({
         productId,
@@ -3950,20 +3978,15 @@ export async function addVariantsToProduct(
   const existing = await getVariantsByProduct(productId, {
     includeInactive: true,
   });
-  const existingCombos = new Set(
-    existing.map(
-      v =>
-        `${(v.color ?? "").trim().toLowerCase()}|${(v.size ?? "").trim().toLowerCase()}`
-    )
-  );
+  const existingCombos = new Set(existing.map(variantIdentityKey));
   return db.transaction(async tx => {
     const createdIds: number[] = [];
     const skipped: string[] = [];
     const batchSeen = new Set<string>();
     for (const v of variants) {
-      const key = `${(v.color ?? "").trim().toLowerCase()}|${(v.size ?? "").trim().toLowerCase()}`;
+      const key = variantIdentityKey(v);
       if (existingCombos.has(key) || batchSeen.has(key)) {
-        skipped.push(`${v.color ?? ""}/${v.size ?? ""}`);
+        skipped.push(variantIdentityLabel(v));
         continue;
       }
       batchSeen.add(key);
@@ -4412,6 +4435,46 @@ async function withCatalogProductNames<T extends { productId?: number | null; pr
     // المنتج اتمسح من الكتالوج؟ الاسم المحفوظ هو اللي فاضل — أحسن من اسم فاضي.
     return canonical ? { ...item, productName: canonical } : item;
   });
+}
+
+/**
+ * أسماء المنتجات **من كتالوج النشاط** — مفتاحها id، ومابترجّعش أي منتج تابع لنشاط تاني.
+ *
+ * ده المصدر الوحيد لاسم المنتج وقت إنشاء/تعديل أوردر: الاسم النصّي الجاي من العميل
+ * مابيتصدّقش أبدًا. من غير كده أي متصل (عميل API قديم أو طلب مباشر) يقدر يكتب اسمًا
+ * مركّبًا أو غلط في مرآة الهيدر `orders.productName` — والبنود نفسها بتتصحّح بـ
+ * `withCatalogProductNames` فتفضل المرآة وحدها ملوّثة ومخالفة للبنود.
+ */
+export async function getOwnedProductNames(
+  businessId: number,
+  ids: number[]
+): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const unique = [...new Set(ids.filter(id => id != null))];
+  if (unique.length === 0) return out;
+  const db = await getDb();
+  if (!db) return out;
+  const rows = await db
+    .select({ id: products.id, name: products.name })
+    .from(products)
+    .where(
+      and(inArray(products.id, unique), eq(products.businessId, businessId))
+    );
+  for (const r of rows) out.set(r.id, r.name);
+  return out;
+}
+
+/**
+ * مرآة الهيدر `orders.productName` من البنود: «اسم ×كمية + اسم ×كمية».
+ * **اسم المنتج لوحده** — بلا نوع الحفر/اللون/المقاس؛ دول بيعيشوا في `variantId` لكل بند
+ * وبيتركّبوا لحظة العرض/الطباعة/بوسطة (shared/orderContent.ts).
+ */
+export function buildOrderHeaderName(
+  items: { productName: string; quantity: number }[]
+): string {
+  return items
+    .map(i => (i.quantity > 1 ? `${i.productName} ×${i.quantity}` : i.productName))
+    .join(" + ");
 }
 
 /**

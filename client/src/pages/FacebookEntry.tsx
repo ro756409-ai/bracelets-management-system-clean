@@ -19,6 +19,7 @@ import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { GovernorateCitySelect } from "@/components/orders/GovernorateCitySelect";
 import {
   VariantOrderPicker,
+  variantLabel,
   type Catalog,
   type PickedItem,
 } from "@/components/orders/VariantOrderPicker";
@@ -152,6 +153,7 @@ export default function FacebookEntry() {
             sku: res.match.sku ?? null,
             color: res.match.color ?? null,
             size: res.match.size ?? null,
+            optionLabel: variantLabel(v) || null, // النوع/اللون/المقاس للعرض والطباعة
             quantity: Math.min(p.quantity || 1, avail || (p.quantity || 1)),
             unitPrice: Number(res.match.unitPrice ?? 0),
             availableStock: avail,
@@ -175,6 +177,11 @@ export default function FacebookEntry() {
   function buildSelectedProducts(list: PickedItem[]) {
     return list.map(it => ({
       productId: it.productId,
+      // **اسم المنتج لوحده — من غير النوع/اللون/المقاس.** هوية التركيبة بتتبعت في
+      // `variantId` وبس (نفس عقد shared/orderContent.ts). لو ركّبنا النوع في الاسم
+      // كان الأوردر هيبقى فيه اختيارين: القديم جوه النص والجديد في المعرّف، ولما
+      // الموظف يغيّر النقشة بعدين يفضل الاسم القديم عايش في الصف. العرض والطباعة
+      // وبوسطة كلهم بيركّبوا الاسم+النوع لحظة القراءة من `variantId`.
       productName: it.productName,
       quantity: it.quantity,
       variantId: it.variantId,
@@ -232,6 +239,7 @@ export default function FacebookEntry() {
           productId: it.productId, productName: it.productName ?? p?.name ?? "",
           variantId: it.variantId ?? undefined, sku: v?.sku ?? p?.sku ?? null,
           color: v?.color ?? order.color ?? null, size: v?.size ?? order.size ?? null,
+          optionLabel: variantLabel(v) || null,
           quantity: it.quantity ?? 1, unitPrice: Number(v?.price ?? p?.price ?? 0),
           availableStock: avail,
         } as PickedItem;

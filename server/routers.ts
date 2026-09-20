@@ -599,6 +599,10 @@ import {
   createProduct,
   createProductWithVariants,
   addVariantsToProduct,
+  variantIdentityKey,
+  variantIdentityLabel,
+  getOwnedProductNames,
+  buildOrderHeaderName,
   findTakenSkusInBusiness,
   isSkuTakenInBusiness,
   updateProduct,
@@ -2768,14 +2772,15 @@ export const appRouter = router({
             });
         }
 
-        // 3) منع تكرار نفس اللون×المقاس داخل المنتج (قبل أي كتابة).
+        // 3) منع تكرار نفس التركيبة داخل المنتج (قبل أي كتابة). الهوية = النوع+اللون+المقاس،
+        // عشان منتج تركيباته بالنوع فقط (نوع الحفر) مايتحسبش كله تركيبة واحدة مكررة.
         const comboSeen = new Set<string>();
         for (const v of input.variants) {
-          const key = `${(v.color ?? "").trim().toLowerCase()}|${(v.size ?? "").trim().toLowerCase()}`;
+          const key = variantIdentityKey(v);
           if (comboSeen.has(key))
             throw new TRPCError({
               code: "CONFLICT",
-              message: `تركيبة مكررة: ${v.color ?? ""} / ${v.size ?? ""}`,
+              message: `تركيبة مكررة: ${variantIdentityLabel(v)}`,
             });
           comboSeen.add(key);
         }
@@ -5274,11 +5279,19 @@ export const appRouter = router({
         // مش أكبر من المتاح — منع تسجيل كمية أكبر من المخزون (مش إخفاء واجهة فقط).
         for (const p of input.selectedProducts) {
           if (p.variantId == null) continue;
-          const variant = await getVariantById(p.variantId);
-          if (!variant || (p.productId != null && variant.productId !== p.productId))
+          // variantId من غير productId ممنوع — مايبقاش فيه منتج نتحقّق التركيبة ضده.
+          if (p.productId == null)
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message: "التركيبة (اللون/المقاس) غير صحيحة لهذا المنتج",
+              message: "لازم تحدّد المنتج مع التركيبة",
+            });
+          const variant = await getVariantById(p.variantId);
+          // التركيبة لازم تتبع **نفس المنتج**؛ والمنتج نفسه اتأكّد إنه تابع لنشاط الموظف
+          // أعلاه (requireAllOwned) — فمستحيل تمرير تركيبة من منتج/نشاط تاني.
+          if (!variant || variant.productId !== p.productId)
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "التركيبة غير صحيحة لهذا المنتج",
             });
           const qty = p.quantity ?? 1;
           if (qty > variant.currentStock)
@@ -5287,8 +5300,24 @@ export const appRouter = router({
               message: `الكمية المطلوبة (${qty}) أكبر من المتاح (${variant.currentStock}) للتركيبة`,
             });
         }
+        // **الاسم من كتالوج النشاط، مش من العميل** — وقبل أي كتابة.
+        //
+        // `order_items` بيتصحّح جوه replaceOrderItems بـwithCatalogProductNames، لكن مرآة
+        // الهيدر كانت بتتبني من نص العميل — فعميل API قديم أو طلب مباشر يقدر يحط اسمًا
+        // مركّبًا («أسورة نحاس - آية الكرسي») أو اسم منتج تاني خالص في الهيدر، وتفضل
+        // المرآة مخالفة للبنود. البند اللي مالوش productId (صنف ما اتطابقش) بيحتفظ بنصّه
+        // الخام عن قصد — ده اللي الموظف بيعيّنه يدويًا بعدين.
+        const catalogNames = await getOwnedProductNames(
+          businessId,
+          input.selectedProducts
+            .map(p => p.productId)
+            .filter((id): id is number => id != null)
+        );
         const itemsWithQty = input.selectedProducts.map(p => ({
           ...p,
+          productName:
+            (p.productId != null ? catalogNames.get(p.productId) : undefined) ??
+            p.productName,
           quantity: p.quantity ?? 1,
         }));
         // العدد الإجمالي = مجموع كميات البنود
@@ -5296,12 +5325,8 @@ export const appRouter = router({
           itemsWithQty.reduce((sum, p) => sum + p.quantity, 0) ||
           input.quantity ||
           1;
-        // وصف يجمع كل البنود مع أعدادها (مثال: "آية الكرسي ×4 + التحصين ×4")
-        const productNames = itemsWithQty
-          .map(p =>
-            p.quantity > 1 ? `${p.productName} ×${p.quantity}` : p.productName
-          )
-          .join(" + ");
+        // مرآة الهيدر: أسماء المنتجات وأعدادها فقط (نوع الحفر في variantId لكل بند).
+        const productNames = buildOrderHeaderName(itemsWithQty);
 
         // Any item without a resolved product means the order needs a human to finish
         // mapping it. It is still created — never dropped — but flagged, and the header
@@ -5521,19 +5546,27 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الأوردر غير موجود أو ليس من إدخالك",
           });
+        // نفس حارس الإنشاء: كل منتج لازم يكون في نطاق الموظف، والاسم من الكتالوج مش
+        // من نص العميل — المرآة والبنود يفضلوا متطابقين مهما بعت المتصل.
+        await requireAllOwned(
+          empScope(ctx),
+          "product",
+          input.selectedProducts.map(p => p.productId)
+        );
+        const catalogNames = await getOwnedProductNames(
+          order.businessId,
+          input.selectedProducts.map(p => p.productId)
+        );
         const itemsWithQty = input.selectedProducts.map(p => ({
           ...p,
+          productName: catalogNames.get(p.productId) ?? p.productName,
           quantity: p.quantity ?? 1,
         }));
         const totalQty =
           itemsWithQty.reduce((sum, p) => sum + p.quantity, 0) ||
           input.quantity ||
           1;
-        const productNames = itemsWithQty
-          .map(p =>
-            p.quantity > 1 ? `${p.productName} ×${p.quantity}` : p.productName
-          )
-          .join(" + ");
+        const productNames = buildOrderHeaderName(itemsWithQty);
         const firstProductId = itemsWithQty[0].productId;
         await db
           .update(orders)

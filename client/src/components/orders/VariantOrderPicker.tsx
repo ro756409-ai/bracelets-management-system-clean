@@ -10,14 +10,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, X, Package } from "lucide-react";
+import { Plus, X, Package, AlertTriangle } from "lucide-react";
 
 /**
- * منتقي أصناف الأوردر اليدوي المبني على المخزون (variant-based):
- *   المنتج ← اللون ← المقاس ← الكمية.
- * بيعرض المتاح لكل تركيبة، ويمنع كمية أكبر من المخزون، والمقاسات بتتفلتر حسب اللون المختار.
- * كل صنف مضاف بيحمل variantId وSKU واللون والمقاس والكمية وسعر الوحدة (من التركيبة).
- * مافيهوش أي منطق قديم للإسورة (نوع حفر/نقش/عدد أساور).
+ * منتقي أصناف الأوردر اليدوي — **عام** ومدفوع بأبعاد التركيبات الموجودة فعلًا في المنتج:
+ *   • `name`  → النوع (مثل نوع الحفر/النقشة للأساور)
+ *   • `color` → اللون
+ *   • `size`  → المقاس
+ * بنعرض قائمة لكل بُعد **موجود فعلًا** في تركيبات المنتج المختار (بلا افتراض لون/مقاس، وبلا
+ * أي أسماء ثابتة أو تمييز بالبراند/اسم المنتج). التركيبة تُحسم فقط لما كل الأبعاد تتحدد
+ * وينتج **تطابق واحد ووحيد** — **ممنوع الاختيار الصامت لأول تركيبة**.
+ * الكمية أكثر من قطعة بنقشات مختلفة: بيضيف الموظف بندًا لكل قطعة باختيارها الخاص.
  */
 
 export interface CatalogProduct {
@@ -50,9 +53,63 @@ export interface PickedItem {
   sku?: string | null;
   color?: string | null;
   size?: string | null;
+  /** وصف مقروء للتركيبة (النوع/اللون/المقاس) — بيتحط في اسم البند للطباعة والتفاصيل. */
+  optionLabel?: string | null;
   quantity: number;
   unitPrice: number;
   availableStock: number;
+}
+
+// ── أبعاد التركيبات (دوال نقية قابلة للاختبار) ──
+export type VariantDim = "name" | "color" | "size";
+export const DIM_LABEL: Record<VariantDim, string> = {
+  name: "النوع",
+  color: "اللون",
+  size: "المقاس",
+};
+const DIM_ORDER: VariantDim[] = ["name", "color", "size"];
+
+const val = (v: CatalogVariant, d: VariantDim) => String(v[d] ?? "").trim();
+
+/** الأبعاد اللي ليها قيم فعلية في تركيبات المنتج (بلا افتراض وجود لون/مقاس). */
+export function variantDimensions(vs: CatalogVariant[]): VariantDim[] {
+  return DIM_ORDER.filter(d => vs.some(v => val(v, d) !== ""));
+}
+
+/** القيم المتاحة لبُعد معيّن، مفلترة بما اختاره الموظف في الأبعاد الأخرى. */
+export function optionsFor(
+  vs: CatalogVariant[],
+  dim: VariantDim,
+  selected: Partial<Record<VariantDim, string>>
+): string[] {
+  const pool = vs.filter(v =>
+    DIM_ORDER.every(d => d === dim || !selected[d] || val(v, d) === selected[d])
+  );
+  return Array.from(new Set(pool.map(v => val(v, dim)).filter(Boolean)));
+}
+
+export type ResolveReason = "ok" | "incomplete" | "none" | "ambiguous";
+
+/**
+ * يحسم التركيبة: لازم كل بُعد موجود يتحدد، وينتج **تطابق واحد ووحيد**. أي غير كده →
+ * بلا تركيبة + سبب واضح (مفيش تخمين ولا أول تركيبة).
+ */
+export function resolveVariant(
+  vs: CatalogVariant[],
+  dims: VariantDim[],
+  selected: Partial<Record<VariantDim, string>>
+): { variant: CatalogVariant | null; reason: ResolveReason } {
+  if (dims.length === 0) return { variant: null, reason: "none" };
+  if (dims.some(d => !selected[d])) return { variant: null, reason: "incomplete" };
+  const m = vs.filter(v => dims.every(d => val(v, d) === selected[d]));
+  if (m.length === 1) return { variant: m[0], reason: "ok" };
+  return { variant: null, reason: m.length > 1 ? "ambiguous" : "none" };
+}
+
+/** وصف التركيبة للعرض/الطباعة: النوع ثم اللون ثم المقاس (الموجود منهم فقط). */
+export function variantLabel(v: CatalogVariant | null | undefined): string {
+  if (!v) return "";
+  return DIM_ORDER.map(d => val(v, d)).filter(Boolean).join(" / ");
 }
 
 const num = (s: string | null | undefined) => {
@@ -70,8 +127,7 @@ export function VariantOrderPicker({
   onChange: (items: PickedItem[]) => void;
 }) {
   const [productId, setProductId] = useState<number | null>(null);
-  const [color, setColor] = useState<string>("");
-  const [size, setSize] = useState<string>("");
+  const [selected, setSelected] = useState<Partial<Record<VariantDim, string>>>({});
   const [qty, setQty] = useState<string>("1");
 
   const activeVariants = useMemo(
@@ -84,75 +140,64 @@ export function VariantOrderPicker({
     [activeVariants, productId]
   );
   const hasVariants = productVariants.length > 0;
-
-  // ألوان المنتج (المميّزة، غير الفارغة).
-  const colors = useMemo(
-    () => Array.from(new Set(productVariants.map(v => v.color).filter(Boolean))) as string[],
-    [productVariants]
+  const dims = useMemo(() => variantDimensions(productVariants), [productVariants]);
+  const { variant: resolved, reason } = useMemo(
+    () => resolveVariant(productVariants, dims, selected),
+    [productVariants, dims, selected]
   );
-  // المقاسات المتاحة للّون المختار فقط (أو كل المقاسات لو مفيش ألوان).
-  const sizes = useMemo(() => {
-    const pool = colors.length && color
-      ? productVariants.filter(v => v.color === color)
-      : productVariants;
-    return Array.from(new Set(pool.map(v => v.size).filter(Boolean))) as string[];
-  }, [productVariants, colors.length, color]);
 
-  // التركيبة المحسومة من (اللون، المقاس).
-  const resolvedVariant = useMemo(() => {
-    if (!hasVariants) return null;
-    return (
-      productVariants.find(
-        v =>
-          (colors.length === 0 || v.color === color) &&
-          (sizes.length === 0 || v.size === size)
-      ) ?? null
-    );
-  }, [hasVariants, productVariants, colors.length, color, sizes.length, size]);
-
-  // المخزون المتاح للاختيار الحالي.
   const availableStock = hasVariants
-    ? resolvedVariant?.currentStock ?? 0
+    ? resolved?.currentStock ?? 0
     : product?.currentStock ?? 0;
-
   const unitPrice = hasVariants
-    ? num(resolvedVariant?.price ?? product?.price)
+    ? num(resolved?.price ?? product?.price)
     : num(product?.price);
 
-  const ready =
-    !!product &&
-    (!hasVariants ||
-      (resolvedVariant != null &&
-        (colors.length === 0 || !!color) &&
-        (sizes.length === 0 || !!size)));
-
+  // جاهز فقط لما: منتج بسيط، أو تركيبة محسومة (تطابق واحد ووحيد).
+  const ready = !!product && (!hasVariants || resolved != null);
   const qtyNum = Math.max(1, parseInt(qty || "1", 10) || 1);
   const overStock = qtyNum > availableStock;
 
   function resetPicker() {
     setProductId(null);
-    setColor("");
-    setSize("");
+    setSelected({});
     setQty("1");
   }
 
   function addItem() {
     if (!product || !ready) return;
     if (availableStock <= 0 || overStock) return;
-    const item: PickedItem = {
-      productId: product.id,
-      productName: product.name,
-      variantId: resolvedVariant?.id,
-      sku: resolvedVariant?.sku ?? product.sku,
-      color: resolvedVariant?.color ?? null,
-      size: resolvedVariant?.size ?? null,
-      quantity: qtyNum,
-      unitPrice,
-      availableStock,
-    };
-    onChange([...value, item]);
+    const label = variantLabel(resolved);
+    onChange([
+      ...value,
+      {
+        productId: product.id,
+        productName: product.name,
+        variantId: resolved?.id,
+        sku: resolved?.sku ?? product.sku,
+        color: resolved?.color ?? null,
+        size: resolved?.size ?? null,
+        optionLabel: label || null,
+        quantity: qtyNum,
+        unitPrice,
+        availableStock,
+      },
+    ]);
     resetPicker();
   }
+
+  const hint =
+    !product
+      ? "اختر المنتج"
+      : !hasVariants
+        ? null
+        : reason === "incomplete"
+          ? `اختر ${dims.filter(d => !selected[d]).map(d => DIM_LABEL[d]).join(" و ")}`
+          : reason === "none"
+            ? "لا توجد تركيبة بهذه الخيارات — راجع الاختيار"
+            : reason === "ambiguous"
+              ? "أكثر من تركيبة تطابق هذه الخيارات — حدّد باقي الخيارات"
+              : null;
 
   return (
     <div className="space-y-3">
@@ -164,8 +209,7 @@ export function VariantOrderPicker({
             value={productId != null ? String(productId) : ""}
             onValueChange={v => {
               setProductId(Number(v));
-              setColor("");
-              setSize("");
+              setSelected({});
               setQty("1");
             }}
           >
@@ -182,49 +226,38 @@ export function VariantOrderPicker({
           </Select>
         </div>
 
-        {/* اللون — فقط لو للمنتج ألوان */}
-        {hasVariants && colors.length > 0 && (
-          <div>
-            <Label className="text-xs">اللون</Label>
-            <Select
-              value={color}
-              onValueChange={v => {
-                setColor(v);
-                setSize(""); // المقاسات بتعتمد على اللون
-              }}
-            >
-              <SelectTrigger className="mt-1" data-testid="vop-color">
-                <SelectValue placeholder="اختر اللون" />
-              </SelectTrigger>
-              <SelectContent>
-                {colors.map(c => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        {/* المقاس — المتاح للّون المختار */}
-        {hasVariants && sizes.length > 0 && (
-          <div>
-            <Label className="text-xs">المقاس</Label>
-            <Select value={size} onValueChange={setSize}>
-              <SelectTrigger className="mt-1" data-testid="vop-size">
-                <SelectValue placeholder="اختر المقاس" />
-              </SelectTrigger>
-              <SelectContent>
-                {sizes.map(s => (
-                  <SelectItem key={s} value={s}>
-                    {s}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
+        {/* قائمة لكل بُعد موجود فعلًا في تركيبات المنتج (النوع/اللون/المقاس) */}
+        {dims.map(dim => {
+          const opts = optionsFor(productVariants, dim, selected);
+          return (
+            <div key={dim}>
+              <Label className="text-xs">{DIM_LABEL[dim]}</Label>
+              <Select
+                value={selected[dim] ?? ""}
+                onValueChange={v =>
+                  // تغيير بُعد بيصفّر الأبعاد اللي بعده عشان القوائم تتفلتر صح.
+                  setSelected(prev => {
+                    const next: Partial<Record<VariantDim, string>> = { ...prev, [dim]: v };
+                    const idx = DIM_ORDER.indexOf(dim);
+                    for (const d of DIM_ORDER.slice(idx + 1)) delete next[d];
+                    return next;
+                  })
+                }
+              >
+                <SelectTrigger className="mt-1" data-testid={`vop-${dim}`}>
+                  <SelectValue placeholder={`اختر ${DIM_LABEL[dim]}`} />
+                </SelectTrigger>
+                <SelectContent>
+                  {opts.map(o => (
+                    <SelectItem key={o} value={o}>
+                      {o}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          );
+        })}
 
         {/* الكمية */}
         <div>
@@ -247,13 +280,18 @@ export function VariantOrderPicker({
         <div className="text-xs text-muted-foreground">
           {product && ready ? (
             <>
-              المتاح: <span className={availableStock > 0 ? "font-semibold text-foreground" : "font-semibold text-destructive"}>{availableStock}</span>
+              المتاح:{" "}
+              <span className={availableStock > 0 ? "font-semibold text-foreground" : "font-semibold text-destructive"}>
+                {availableStock}
+              </span>
               {" · "}سعر الوحدة: <span className="font-semibold text-foreground">{unitPrice}</span> ج.م
               {overStock && <span className="text-destructive"> · الكمية أكبر من المتاح</span>}
               {availableStock <= 0 && <span className="text-destructive"> · لا يوجد مخزون</span>}
             </>
           ) : (
-            <>اختر المنتج{hasVariants ? " واللون والمقاس" : ""}</>
+            <span className="flex items-center gap-1">
+              {hint && <AlertTriangle className="h-3 w-3" />} {hint}
+            </span>
           )}
         </div>
         <Button
@@ -267,7 +305,7 @@ export function VariantOrderPicker({
         </Button>
       </div>
 
-      {/* الأصناف المضافة */}
+      {/* الأصناف المضافة — كل بند باختياره الخاص (قطعة بنقشة مختلفة = بند مستقل) */}
       {value.length > 0 && (
         <div className="rounded-md border divide-y">
           {value.map((it, idx) => (
@@ -275,8 +313,7 @@ export function VariantOrderPicker({
               <div className="flex items-center gap-2 flex-wrap">
                 <Package className="h-4 w-4 text-muted-foreground shrink-0" />
                 <span className="font-medium">{it.productName}</span>
-                {it.color && <Badge variant="secondary">{it.color}</Badge>}
-                {it.size && <Badge variant="secondary">{it.size}</Badge>}
+                {it.optionLabel && <Badge variant="secondary">{it.optionLabel}</Badge>}
                 <span className="text-muted-foreground">×{it.quantity}</span>
                 <span className="text-muted-foreground">= {it.unitPrice * it.quantity} ج.م</span>
                 {it.sku && <span className="font-mono text-xs text-muted-foreground">{it.sku}</span>}
