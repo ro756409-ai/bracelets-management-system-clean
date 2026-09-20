@@ -318,6 +318,95 @@ describe.runIf(CAN_E2E)("🔑 نوع الحفر — سلوكي", () => {
     expect(cat.variants.some(v => v.sku === `ENG-B-${tag}`)).toBe(false);
   });
 
+  it("🔑 **الرحلة الكاملة**: لصق نص بنوعين → سطران بتركيبتين وسعر موزّع", async () => {
+    const text = [
+      "اسم العميل: Samar Hasan",
+      "رقم التليفون: 01098260811",
+      "العنوان: المنصورة الصفيح امام صيدلية ياسين",
+      `نوع المنتج: آية الكرسي وذكر التحصين`,
+      "عدد القطع: 2",
+      "السعر: 400",
+      "الشحن: 50 الإجمالي: 450",
+    ].join("\n");
+
+    const res = await caller(deA).facebookEntry.parsePaste({ text });
+
+    // الأرقام: الشحن 50 مش 50450، حتى وهو في نفس سطر الإجمالي
+    expect(res.parsed.shipping).toBe(50);
+    expect(res.parsed.itemsSubtotal).toBe(400);
+    expect(res.parsed.totalAmount).toBe(450);
+    expect(res.parsed.quantity).toBe(2);
+    expect(res.parsed.totalMismatch).toBe(false);
+    expect(res.parsed.customerName).toBe("Samar Hasan");
+    expect(res.parsed.customerPhone).toBe("01098260811");
+    // المحافظة من المدينة، مش أول كلمة من العنوان
+    expect(res.parsed.governorate).toBe("الدقهلية");
+    expect(res.parsed.city).toBe("المنصورة");
+    expect(res.parsed.customerAddress).toBe("المنصورة الصفيح امام صيدلية ياسين");
+
+    // سطران، كل واحد بتركيبته — مش سطر واحد بيبلع النوع التاني
+    expect(res.lines).toHaveLength(2);
+    expect(res.lines.map(l => l.match?.variantId).sort()).toEqual([vAya, vTahseen].sort());
+    expect(res.lines.every(l => l.quantity === 1)).toBe(true);
+    // السعر موزّع: 400 على قطعتين
+    expect(res.lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0)).toBeCloseTo(400, 2);
+
+    // والحفظ بيدّي بندين بـvariantId مختلف
+    const saved = await caller(deA).facebookEntry.addOrder({
+      customerName: res.parsed.customerName, customerPhone: res.parsed.customerPhone,
+      governorate: res.parsed.governorate, customerAddress: res.parsed.customerAddress,
+      selectedProducts: res.lines.map(l => ({
+        productId: l.match!.productId, productName: l.match!.productName,
+        quantity: l.quantity, variantId: l.match!.variantId!, unitPrice: l.unitPrice,
+      })),
+      totalAmount: res.parsed.totalAmount,
+      shippingCost: res.parsed.shipping,
+    } as any);
+    const d = await getDb();
+    const [row] = await d!.select().from(orders).where(inArray(orders.orderNumber, [saved.orderNumber]));
+    ids.orderIds.push(row.id);
+    const items = (await getOrderItemsForOrders([row.id])).get(row.id) ?? [];
+    expect(items).toHaveLength(2);
+    expect(new Set(items.map(i => i.variantId)).size).toBe(2);
+    expect(row.quantity).toBe(2);
+  });
+
+  it("🔒 نص لا يطابق أي منتج → مفيش اختيار تلقائي", async () => {
+    const res = await caller(deA).facebookEntry.parsePaste({
+      text: "نوع المنتج: حاجة مش موجودة خالص\nعدد القطع: 1",
+    });
+    expect(res.lines).toHaveLength(1);
+    expect(res.lines[0].match).toBeNull();
+    expect(res.lines[0].matchReason).toBeTruthy();
+  });
+
+  it("🔑 المخزون مش مانع: كمية 2 والمتاح 1 → تتسجّل 2 بلا أي خصم", async () => {
+    const d = await getDb();
+    // نخلّي تركيبة «آية الكرسي» متاحها 1 بالظبط
+    await d!.update(productVariants).set({ currentStock: 1 }).where(inArray(productVariants.id, [vAya]));
+    const before = (await d!.select().from(productVariants).where(inArray(productVariants.id, [vAya])))[0];
+    expect(before.currentStock).toBe(1);
+
+    const res = await caller(deA).facebookEntry.addOrder({
+      customerName: "عميل كمية", customerPhone: "01234567893", governorate: "القاهرة",
+      customerAddress: "عنوان",
+      selectedProducts: [{ productId: braceletId, productName: "أسورة", quantity: 2, variantId: vAya, unitPrice: 150 }],
+      totalAmount: 300,
+    } as any);
+    expect(res.success).toBe(true);
+
+    const [row] = await d!.select().from(orders).where(inArray(orders.orderNumber, [res.orderNumber]));
+    ids.orderIds.push(row.id);
+    // الكمية اتحفظت 2 — مفيش قصّ صامت لمتاح المخزون
+    const items = (await getOrderItemsForOrders([row.id])).get(row.id) ?? [];
+    expect(items).toHaveLength(1);
+    expect(items[0].quantity).toBe(2);
+    expect(row.quantity).toBe(2);
+    // ومفيش خصم وقت الإدخال — الخصم بيحصل في confirmOrder بس
+    const after = (await d!.select().from(productVariants).where(inArray(productVariants.id, [vAya])))[0];
+    expect(after.currentStock).toBe(1);
+  });
+
   it("🔑 منتج بسيط (بلا تركيبات) لسه بيتسجّل بلا variantId", async () => {
     const res = await caller(deA).facebookEntry.addOrder({
       customerName: "عميل بسيط", customerPhone: "01234567891", governorate: "القاهرة",

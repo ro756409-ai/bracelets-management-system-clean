@@ -6,7 +6,7 @@ import {
   purgeForeignDrafts,
   readEmployeeScope,
   resetEmployeeClientState,
-  keepItemsInCatalog,
+  sanitizeDraftItems,
   DRAFT_PREFIX,
   type EmployeeScope,
 } from "./employeeScope";
@@ -79,7 +79,7 @@ describe("🔒 قراءة الجلسة", () => {
   });
 });
 
-describe("🔒 المسودة المسترجعة متحقَّقة ضد الكتالوج الحالي", () => {
+describe("🔒 المسودة المسترجعة متعقَّمة ضد الكتالوج الحالي", () => {
   const catalog = {
     products: [{ id: 10 }, { id: 20 }],
     variants: [
@@ -87,27 +87,57 @@ describe("🔒 المسودة المسترجعة متحقَّقة ضد الكت�
       { id: 201, productId: 20 },
     ],
   };
+  const row = (o: any) => ({ quantity: 2, unitPrice: 150, ...o });
 
   it("🔒 بند بمنتج مش في الكتالوج بيتشال", () => {
-    expect(keepItemsInCatalog([{ productId: 99, variantId: null }], catalog)).toEqual([]);
+    const r = sanitizeDraftItems([row({ productId: 99, variantId: null })], catalog);
+    expect(r.items).toEqual([]);
+    expect(r.dropped).toBe(1);
   });
-  it("🔒 بند بتركيبة تابعة لمنتج تاني بيتشال", () => {
-    expect(keepItemsInCatalog([{ productId: 10, variantId: 201 }], catalog)).toEqual([]);
+
+  it("🔒 تركيبة تابعة لمنتج تاني → تتمسح والسطر يفضل للمراجعة", () => {
+    const r = sanitizeDraftItems(
+      [row({ productId: 10, variantId: 201, color: "أسود", size: "6", optionLabel: "أسود / 6", sku: "X-1" })],
+      catalog
+    );
+    expect(r.dropped).toBe(0);
+    expect(r.needsReview).toBe(1);
+    expect(r.items).toHaveLength(1);
+    const it0 = r.items[0] as any;
+    // المنتج والكمية والسعر محفوظين — اللي اتمسح هو التركيبة وخصائصها بس
+    expect(it0.productId).toBe(10);
+    expect(it0.quantity).toBe(2);
+    expect(it0.unitPrice).toBe(150);
+    expect(it0.variantId).toBeUndefined();
+    expect(it0.color).toBeNull();
+    expect(it0.size).toBeNull();
+    expect(it0.sku).toBeNull();
+    expect(it0.optionLabel).toBeNull();
+    expect(it0.needsVariantReview).toBe(true);
   });
-  it("🔒 بند بتركيبة مش موجودة بيتشال", () => {
-    expect(keepItemsInCatalog([{ productId: 10, variantId: 999 }], catalog)).toEqual([]);
+
+  it("🔒 تركيبة مش موجودة خالص → نفس المعاملة (مراجعة مش حذف)", () => {
+    const r = sanitizeDraftItems([row({ productId: 10, variantId: 999 })], catalog);
+    expect(r.needsReview).toBe(1);
+    expect((r.items[0] as any).productId).toBe(10);
+    expect((r.items[0] as any).variantId).toBeUndefined();
   });
-  it("🔑 بند سليم بيفضل", () => {
-    const ok = [{ productId: 10, variantId: 101 }];
-    expect(keepItemsInCatalog(ok, catalog)).toEqual(ok);
+
+  it("🔑 بند سليم بيفضل زي ما هو", () => {
+    const ok = [row({ productId: 10, variantId: 101 })];
+    const r = sanitizeDraftItems(ok, catalog);
+    expect(r.items).toEqual(ok);
+    expect(r.needsReview).toBe(0);
   });
+
   it("🔑 منتج بسيط بلا تركيبة بيفضل", () => {
-    const ok = [{ productId: 20, variantId: null }];
-    expect(keepItemsInCatalog(ok, catalog)).toEqual(ok);
+    const ok = [row({ productId: 20, variantId: null })];
+    expect(sanitizeDraftItems(ok, catalog).items).toEqual(ok);
   });
+
   it("🔒 كتالوج فاضي (fail-closed) → مفيش بنود بتترجّع", () => {
-    expect(
-      keepItemsInCatalog([{ productId: 10, variantId: 101 }], { products: [], variants: [] })
-    ).toEqual([]);
+    const r = sanitizeDraftItems([row({ productId: 10, variantId: 101 })], { products: [], variants: [] });
+    expect(r.items).toEqual([]);
+    expect(r.dropped).toBe(1);
   });
 });

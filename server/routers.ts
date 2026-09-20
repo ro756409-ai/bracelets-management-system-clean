@@ -17,6 +17,7 @@ import {
 import { parseFacebookOrder } from "../shared/facebookOrderParser";
 import { matchImportItem } from "./productMatching";
 import { parsePasteMessage } from "./pasteParser";
+import { buildDraftLines, distributeSubtotal } from "../shared/orderLines";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -5664,23 +5665,55 @@ export const appRouter = router({
           ? await getMatchCatalog(undefined, businessIds)
           : { products: [], variants: [] };
         const parsed = parsePasteMessage(input.text);
+        const shape = (m: ReturnType<typeof matchImportItem>) =>
+          m.matched
+            ? {
+                productId: m.productId,
+                productName: m.productName,
+                variantId: m.variantId ?? null,
+                sku: m.sku ?? null,
+                color: m.color ?? null,
+                size: m.size ?? null,
+                unitPrice: m.unitPrice,
+              }
+            : null;
+
+        // **سطر لكل نوع مذكور.** «عين حورس وذكر التحصين» + «عدد القطع: 2» = قطعتين
+        // مختلفتين، وكانوا بيتحوّلوا لسطر واحد فالنوع التاني بيضيع. عدد القطع أكبر من
+        // الأنواع → سطور ناقصة الموظف بيكمّلها (مش توزيع بالتخمين).
+        const draft = buildDraftLines(parsed.productTerms, parsed.quantity);
+        const { unitPrices } = distributeSubtotal(
+          draft.map(l => l.quantity),
+          parsed.itemsSubtotal
+        );
+        const lines = draft.map((l, i) => {
+          const m = l.term
+            ? matchImportItem(
+                // اللون/المقاس بيتطبّقوا على السطر الوحيد بس — مايتنسخوش على كل نوع.
+                draft.length === 1
+                  ? { name: l.term, color: parsed.color, size: parsed.size }
+                  : { name: l.term, variantText: l.term },
+                catalog
+              )
+            : null;
+          return {
+            term: l.term,
+            quantity: l.quantity,
+            unitPrice: unitPrices[i] ?? 0,
+            match: m ? shape(m) : null,
+            matchReason: m && !m.matched ? m.reason : l.term ? null : "اختر المنتج والنوع يدويًا",
+          };
+        });
+
+        // المطابقة المفردة القديمة — متسيبة للتوافق مع أي متصل قديم.
         const match = matchImportItem(
           { name: parsed.productName, color: parsed.color, size: parsed.size },
           catalog
         );
         return {
           parsed,
-          match: match.matched
-            ? {
-                productId: match.productId,
-                productName: match.productName,
-                variantId: match.variantId ?? null,
-                sku: match.sku ?? null,
-                color: match.color ?? null,
-                size: match.size ?? null,
-                unitPrice: match.unitPrice,
-              }
-            : null,
+          lines,
+          match: shape(match),
           matchReason: match.matched ? null : match.reason,
         };
       }),

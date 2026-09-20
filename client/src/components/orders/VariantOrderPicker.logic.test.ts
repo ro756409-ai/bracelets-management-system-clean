@@ -4,6 +4,7 @@ import {
   optionsFor,
   resolveVariant,
   variantLabel,
+  DIM_LABEL,
   type CatalogVariant,
 } from "./VariantOrderPicker";
 
@@ -94,4 +95,48 @@ describe("🔑 وصف التركيبة للعرض/الطباعة", () => {
   it("🔑 الأساور → اسم النوع", () => expect(variantLabel(BRACELET[0])).toBe("آية الكرسي"));
   it("🔑 Afandy → لون / مقاس", () => expect(variantLabel(CLOTHES[1])).toBe("أسود / 8"));
   it("🔑 بلا تركيبة → فاضي", () => expect(variantLabel(null)).toBe(""));
+});
+
+// ── قاعدة العرض: الاسم اللي هو نفسه الـSKU مش «نوع» ──
+// بيانات إنتاج حقيقية: تركيبات ملابس اتسجّل فيها الـSKU في عمود الاسم
+// (name='AFK-BLK-6' و sku='AFK-BLK-6') واللون والمقاس مملوءين صح جنبها.
+const CLOTHES_SKU_NAMED: CatalogVariant[] = [
+  v({ id: 21, productId: 30, name: "AFK-BLK-6", sku: "AFK-BLK-6", color: "اسود", size: "6" }),
+  v({ id: 22, productId: 30, name: "AFK-BLK-8", sku: "AFK-BLK-8", color: "اسود", size: "8" }),
+  v({ id: 23, productId: 30, name: "AFK-BEG-6", sku: "AFK-BEG-6", color: "بيج", size: "6" }),
+];
+
+describe("🔒 SKU مايتعرضش كـ«نوع»", () => {
+  it("🔒 name === sku → البُعد يتشال، واللون والمقاس بس يظهروا", () => {
+    expect(variantDimensions(CLOTHES_SKU_NAMED)).toEqual(["color", "size"]);
+  });
+  it("🔒 مفيش أي كود AFK في قوائم الخيارات", () => {
+    const all = [
+      ...optionsFor(CLOTHES_SKU_NAMED, "color", {}),
+      ...optionsFor(CLOTHES_SKU_NAMED, "size", { color: "اسود" }),
+    ];
+    expect(all.some(o => o.startsWith("AFK"))).toBe(false);
+    expect(all).toContain("اسود");
+  });
+  it("🔒 وصف التركيبة للطباعة/بوسطة بلا SKU", () => {
+    expect(variantLabel(CLOTHES_SKU_NAMED[0])).toBe("اسود / 6");
+  });
+  it("🔑 لا انحدار: اسم بشري مختلف عن الـSKU يفضل ظاهر", () => {
+    // الأساور: name عربي و sku مثل AYAT-001 — مستحيل يتساووا
+    expect(variantDimensions(BRACELET)).toEqual(["name"]);
+    expect(variantLabel(BRACELET[0])).toBe("آية الكرسي");
+  });
+  it("🔑 التركيبة لسه بتتحسم صح باللون والمقاس", () => {
+    const r = resolveVariant(CLOTHES_SKU_NAMED, ["color", "size"], { color: "اسود", size: "8" });
+    expect(r.variant?.id).toBe(22);
+  });
+  it("🔑 ملاذ أخير: تركيبات مميّزة بالـSKU بس → بُعد «الرمز» مش «النوع»", () => {
+    const onlySku = [
+      v({ id: 41, productId: 40, name: "K-1", sku: "K-1" }),
+      v({ id: 42, productId: 40, name: "K-2", sku: "K-2" }),
+    ];
+    expect(variantDimensions(onlySku)).toEqual(["sku"]);
+    expect(DIM_LABEL.sku).toBe("الرمز");
+    expect(resolveVariant(onlySku, ["sku"], { sku: "K-2" }).variant?.id).toBe(42);
+  });
 });

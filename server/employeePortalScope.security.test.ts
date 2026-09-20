@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { inArray } from "drizzle-orm";
 import { appRouter } from "./routers";
 import { getDb, createEmployee, createProductWithVariants } from "./db";
-import { employees, products, productVariants } from "../drizzle/schema";
+import { employees, orders, orderItems, products, productVariants } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 
 /**
@@ -49,8 +49,8 @@ describe("🔒 حالة العميل بتتمسح مع تغيّر الهوية",
     expect(entry).toContain("draftKey(readEmployeeScope())");
     expect(entry).not.toContain('const DRAFT_KEY = "manualEntryDraft"');
   });
-  it("🔒 المسودة المسترجعة متحقَّقة ضد الكتالوج", () => {
-    expect(entry).toContain("keepItemsInCatalog(d.items, catalog)");
+  it("🔒 المسودة المسترجعة متعقَّمة ضد الكتالوج", () => {
+    expect(entry).toContain("sanitizeDraftItems(");
   });
 });
 
@@ -60,7 +60,7 @@ const CAN_E2E = Boolean(process.env.TEST_DATABASE_URL && process.env.JWT_SECRET)
 describe.runIf(CAN_E2E)("🔒 عزل بوابة الموظف — سلوكي", () => {
   let A: CoreTestFixture, B: CoreTestFixture;
   const tag = Date.now();
-  const ids = { empIds: [] as number[], productIds: [] as number[] };
+  const ids = { empIds: [] as number[], productIds: [] as number[], orderIds: [] as number[] };
   let empA = 0, empNoBiz = 0;
   const insId = (r: any) => Number((Array.isArray(r) ? r[0] : r)?.insertId ?? r?.id);
 
@@ -72,6 +72,9 @@ describe.runIf(CAN_E2E)("🔒 عزل بوابة الموظف — سلوكي", ()
   }) as any;
   const caller = (employeeId: number, webUser: any = null) =>
     appRouter.createCaller(ctxFor(employeeId, webUser));
+  async function code(fn: () => Promise<any>): Promise<string> {
+    try { await fn(); return "ok"; } catch (e: any) { return e?.code ?? "ERR"; }
+  }
 
   beforeAll(async () => {
     const d = await getDb(); if (!d) return;
@@ -91,6 +94,10 @@ describe.runIf(CAN_E2E)("🔒 عزل بوابة الموظف — سلوكي", ()
 
   afterAll(async () => {
     const d = await getDb(); if (!d) return;
+    if (ids.orderIds.length) {
+      await d.delete(orderItems).where(inArray(orderItems.orderId, ids.orderIds));
+      await d.delete(orders).where(inArray(orders.id, ids.orderIds));
+    }
     if (ids.empIds.length) await d.delete(employees).where(inArray(employees.id, ids.empIds));
     if (ids.productIds.length) {
       await d.delete(productVariants).where(inArray(productVariants.productId, ids.productIds));
@@ -126,6 +133,46 @@ describe.runIf(CAN_E2E)("🔒 عزل بوابة الموظف — سلوكي", ()
       .facebookEntry.catalog();
     expect(cat.products).toEqual([]);
     expect(cat.variants).toEqual([]);
+  });
+
+  it("🔒 **تزوير هوية العميل** لا يغيّر النطاق — القيم بتيجي من كوكي الموظف", async () => {
+    // الواجهة بتخزّن businessId/tenantId في localStorage لتسمية cache/مسودة بس.
+    // بنحاكي عميلًا مزوّرًا: بيبعت نشاط/تينانت النشاط التاني في input، وجلسة مالك
+    // admin معاه. النطاق لازم يفضل نشاط الموظف من الكوكي.
+    const forged = { businessId: B.businessId, businessIds: [B.businessId], tenantId: B.tenantId };
+
+    // 1) الكتالوج مابياخدش input أصلاً — مفيش مدخل للتزوير
+    const cat = await caller(empA, { id: 1, role: "admin", name: "owner" }).facebookEntry.catalog(forged as any);
+    expect(cat.products.every(p => p.businessId === A.businessId)).toBe(true);
+    expect(cat.products.some(p => p.name === `منتج B ${tag}`)).toBe(false);
+
+    // 2) parsePaste كمان — نفس الكتالوج، ومفيش تأثير للـids المزوّرة
+    const parsed = await caller(empA, { id: 1, role: "admin", name: "owner" })
+      .facebookEntry.parsePaste({ ...forged, text: `نوع المنتج: منتج B ${tag}` } as any);
+    expect(parsed.match).toBeNull();
+
+    // 3) الأوردر بيتكتب في نشاط الموظف مهما بعت العميل
+    const res = await caller(empA, { id: 1, role: "admin", name: "owner" }).facebookEntry.addOrder({
+      ...forged,
+      customerName: "مزوّر", customerPhone: "01234567899", governorate: "القاهرة",
+      customerAddress: "عنوان",
+      selectedProducts: [{ productId: ids.productIds[0], productName: "x", quantity: 1 }],
+      totalAmount: 100,
+    } as any);
+    const d = await getDb();
+    const [row] = await d!.select().from(orders).where(inArray(orders.orderNumber, [res.orderNumber]));
+    ids.orderIds.push(row.id);
+    expect(row.businessId).toBe(A.businessId);
+    expect(row.businessId).not.toBe(B.businessId);
+
+    // 4) منتج النشاط التاني بيترفض حتى مع كل التزوير فوق
+    expect(await code(() => caller(empA, { id: 1, role: "admin", name: "owner" }).facebookEntry.addOrder({
+      ...forged,
+      customerName: "مزوّر2", customerPhone: "01234567898", governorate: "القاهرة",
+      customerAddress: "عنوان",
+      selectedProducts: [{ productId: ids.productIds[1], productName: "y", quantity: 1 }],
+      totalAmount: 100,
+    } as any))).not.toBe("ok");
   });
 
   it("🔒 مفيش fallback لـbusinessId=1", async () => {

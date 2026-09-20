@@ -136,9 +136,20 @@ function matchByName<T>(
   if (exact.length === 1) return { hit: exact[0] };
   if (exact.length > 1) return { hit: null, ambiguousWith: exact };
 
+  // الاحتواء النصّي — **بحدّ أدنى للطول**.
+  //
+  // من غير الحد ده أي منتج اسمه قصير بيتمسك من أي رسالة فيها الحروف دي: منتج اسمه
+  // «بدلة» كان بيطابق أي نص فيه الكلمة، والموظف بيلاقي صنفًا غلط مختارًا من غير ما
+  // يطلب. المطابقة الجزئية مفيدة («أسورة نحاس» جوه «أسورة نحاس مقاس M»)، بس لازم
+  // يكون الجزء المشترك معبّرًا — مش كلمة عامة. أقل من كده = مفيش مطابقة، والحقل
+  // بيفضل فاضي للمراجعة بدل اختيار غلط.
+  const MIN_CONTAIN = 6;
   const contains = named.filter((c) => {
     const n = normalizeArabic(getName(c)!);
-    return t.includes(n) || n.includes(t);
+    if (n.length < MIN_CONTAIN && t.length < MIN_CONTAIN) return false;
+    if (t.includes(n)) return n.length >= MIN_CONTAIN;
+    if (n.includes(t)) return t.length >= MIN_CONTAIN;
+    return false;
   });
   if (contains.length === 1) return { hit: contains[0] };
   if (contains.length > 1) return { hit: null, ambiguousWith: contains };
@@ -381,7 +392,7 @@ export interface ImportMatchInput {
 export type ImportMatchResult =
   | {
       matched: true;
-      method: "variant_sku" | "product_sku_variant" | "name_color_size" | "product_only" | "color_size_unique";
+      method: "variant_sku" | "product_sku_variant" | "name_color_size" | "product_only" | "color_size_unique" | "variant_name_unique";
       productId: number;
       productName: string;
       variantId?: number;
@@ -485,6 +496,27 @@ export function matchImportItem(
         };
     }
   }
+  // (fallback حتمي — بلا تخمين) الاسم المستلَم ممكن يكون **اسم تركيبة** مش منتج:
+  // رسالة العميل بتقول «عين حورس وذكر التحصين» — دول أنواع حفر، والمنتج («أسورة نحاس»)
+  // مش مذكور أصلاً. بنطابق الاسم على أسماء التركيبات داخل كتالوج النشاط، ومانكملش إلا
+  // لو **تركيبة واحدة ووحيدة** طابقت. أكتر من واحدة = غموض صريح (مش أول واحدة)،
+  // ومستحيل توصل لنشاط تاني لأن الكتالوج مقيّد بالنشاط.
+  if (!product && input.name?.trim()) {
+    const { hit, ambiguousWith } = matchByName(input.name, activeVariants, v => v.name);
+    if (hit) {
+      const p = catalog.products.find(pp => pp.id === hit.productId);
+      if (p)
+        return {
+          matched: true, method: "variant_name_unique", productId: p.id, productName: p.name,
+          variantId: hit.id, variantName: hit.name ?? undefined,
+          color: hit.color ?? null, size: hit.size ?? null, sku: hit.sku,
+          unitPrice: hit.price ?? p.price,
+        };
+    }
+    if (ambiguousWith && ambiguousWith.length > 1)
+      return { matched: false, reason: `"${input.name}" يطابق أكثر من نوع في نشاطك`, received };
+  }
+
   if (!product) {
     // سبب واضح + قائمة منتجات النشاط (معزولة) عشان الموظف يشوف الأسماء الفعلية ويطابق يدويًا.
     const available = catalog.products.map(p => p.name).slice(0, 12).join("، ") || "لا توجد منتجات في هذا النشاط";

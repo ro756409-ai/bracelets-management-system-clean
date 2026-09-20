@@ -86,25 +86,67 @@ export function resetEmployeeClientState(
 }
 
 /**
- * يفلتر بنود مسودة مسترجعة: البند بيتقبل **بس** لو منتجه (وتركيبته لو موجودة) لسه
- * موجودين في كتالوج الحساب الحالي. مسودة اتحفظت قبل نقل منتج أو إيقافه — أو مسودة
- * حساب تاني فلتت — مابتترجّعش بمعرّفات هتترفض على السيرفر بعدين.
+ * يعقّم بنود مسودة مسترجعة مقابل كتالوج الحساب الحالي.
+ *
+ * درجتان، مش حذف للكل:
+ *   • **المنتج نفسه مش في الكتالوج** → البند بيتشال (مفيش حاجة نبني عليها).
+ *   • **المنتج سليم لكن التركيبة مش تابعة له** (أو مش موجودة) → بنمسح `variantId`
+ *     والخصائص المشتقّة منه بس، وبنسيب المنتج والكمية والسعر، وبنعلّم السطر
+ *     `needsVariantReview` عشان الموظف يختار النوع من جديد.
+ *
+ * الفرق مهم: حذف السطر كان بيضيّع على الموظف المنتج والكمية والسعر اللي كتبهم
+ * عشان التركيبة بايظة لوحدها. السيرفر بيعيد التحقق من كل معرّف في الحالتين.
  */
-export function keepItemsInCatalog<
-  T extends { productId?: number | null; variantId?: number | null },
+export interface SanitizedDraftItem {
+  /** التركيبة اتمسحت لأنها مش تابعة لمنتج البند — لازم اختيار جديد قبل الحفظ. */
+  needsVariantReview?: boolean;
+}
+
+export function sanitizeDraftItems<
+  T extends {
+    productId?: number | null;
+    variantId?: number | null;
+    color?: string | null;
+    size?: string | null;
+    optionLabel?: string | null;
+    sku?: string | null;
+  },
 >(
   items: T[],
   catalog: {
     products: { id: number }[];
     variants: { id: number; productId: number }[];
   }
-): T[] {
+): { items: (T & SanitizedDraftItem)[]; dropped: number; needsReview: number } {
   const productIds = new Set(catalog.products.map(p => p.id));
   const variantById = new Map(catalog.variants.map(v => [v.id, v.productId]));
-  return items.filter(it => {
-    if (it.productId == null || !productIds.has(it.productId)) return false;
-    if (it.variantId == null) return true;
+  let dropped = 0;
+  let needsReview = 0;
+  const kept: (T & SanitizedDraftItem)[] = [];
+  for (const it of items) {
+    if (it.productId == null || !productIds.has(it.productId)) {
+      dropped++;
+      continue;
+    }
+    if (it.variantId == null) {
+      kept.push(it);
+      continue;
+    }
     // التركيبة لازم تكون تابعة **لنفس المنتج** — نفس شرط السيرفر في addOrder.
-    return variantById.get(it.variantId) === it.productId;
-  });
+    if (variantById.get(it.variantId) === it.productId) {
+      kept.push(it);
+      continue;
+    }
+    needsReview++;
+    kept.push({
+      ...it,
+      variantId: undefined,
+      color: null,
+      size: null,
+      sku: null,
+      optionLabel: null,
+      needsVariantReview: true,
+    });
+  }
+  return { items: kept, dropped, needsReview };
 }

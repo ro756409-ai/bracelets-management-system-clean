@@ -58,22 +58,49 @@ export interface PickedItem {
   quantity: number;
   unitPrice: number;
   availableStock: number;
+  /** السطر لسه محتاج اختيار منتج/تركيبة — الحفظ متوقف عليه. */
+  needsPick?: boolean;
+  /** سبب عدم المطابقة، للعرض جنب السطر. */
+  pickReason?: string | null;
+  /** التركيبة اتمسحت لأنها مش تابعة لمنتج البند (مسودة قديمة). */
+  needsVariantReview?: boolean;
 }
 
 // ── أبعاد التركيبات (دوال نقية قابلة للاختبار) ──
-export type VariantDim = "name" | "color" | "size";
+export type VariantDim = "name" | "color" | "size" | "sku";
 export const DIM_LABEL: Record<VariantDim, string> = {
   name: "النوع",
   color: "اللون",
   size: "المقاس",
+  sku: "الرمز",
 };
 const DIM_ORDER: VariantDim[] = ["name", "color", "size"];
 
-const val = (v: CatalogVariant, d: VariantDim) => String(v[d] ?? "").trim();
+/**
+ * قيمة البُعد — مع قاعدة واحدة دقيقة: **`name` اللي بيساوي `sku` مش تسمية بشرية**.
+ *
+ * في الإنتاج فيه تركيبات ملابس اتسجّل فيها الـSKU في عمود الاسم (`name='AFK-BLK-6'`
+ * و`sku='AFK-BLK-6'`)، فالموظف كان بيشوف قائمة «النوع» مليانة أكواد بدل اللون والمقاس
+ * الموجودين صح جنبها. المقارنة بالتساوي مع الـSKU بالظبط — مش تخمين «شكله كود» — فاسم
+ * بشري حقيقي (نوع الحفر مثلًا) عمره ما هيتخفي: أسماء الأساور عربية وSKU بتاعها
+ * `AYAT-001`، فمستحيل يتساووا.
+ */
+const val = (v: CatalogVariant, d: VariantDim) => {
+  const raw = String((v as any)[d] ?? "").trim();
+  if (d === "name" && raw && raw === String(v.sku ?? "").trim()) return "";
+  return raw;
+};
 
-/** الأبعاد اللي ليها قيم فعلية في تركيبات المنتج (بلا افتراض وجود لون/مقاس). */
+/**
+ * الأبعاد اللي ليها قيم فعلية في تركيبات المنتج (بلا افتراض وجود لون/مقاس).
+ *
+ * لو مفيش أي بُعد مقروء (تركيبات مميّزة بالـSKU وبس)، بنرجّع `sku` كملاذ أخير تحت
+ * عنوان «الرمز» — عشان الموظف يقدر يختار بدل ما يقف قدام منتقي مسدود. مش تحت «النوع».
+ */
 export function variantDimensions(vs: CatalogVariant[]): VariantDim[] {
-  return DIM_ORDER.filter(d => vs.some(v => val(v, d) !== ""));
+  const dims = DIM_ORDER.filter(d => vs.some(v => val(v, d) !== ""));
+  if (dims.length > 0) return dims;
+  return vs.some(v => val(v, "sku") !== "") ? ["sku"] : [];
 }
 
 /** القيم المتاحة لبُعد معيّن، مفلترة بما اختاره الموظف في الأبعاد الأخرى. */
@@ -106,7 +133,10 @@ export function resolveVariant(
   return { variant: null, reason: m.length > 1 ? "ambiguous" : "none" };
 }
 
-/** وصف التركيبة للعرض/الطباعة: النوع ثم اللون ثم المقاس (الموجود منهم فقط). */
+/**
+ * وصف التركيبة للعرض/الطباعة: النوع ثم اللون ثم المقاس (الموجود منهم فقط).
+ * بيتخطّى الاسم اللي هو نفسه الـSKU — نفس قاعدة `val`، فالبوليصة مابتحملش كودًا تقنيًا.
+ */
 export function variantLabel(v: CatalogVariant | null | undefined): string {
   if (!v) return "";
   return DIM_ORDER.map(d => val(v, d)).filter(Boolean).join(" / ");
@@ -240,8 +270,8 @@ export function VariantOrderPicker({
                   // تغيير بُعد بيصفّر الأبعاد اللي بعده عشان القوائم تتفلتر صح.
                   setSelected(prev => {
                     const next: Partial<Record<VariantDim, string>> = { ...prev, [dim]: v };
-                    const idx = DIM_ORDER.indexOf(dim);
-                    for (const d of DIM_ORDER.slice(idx + 1)) delete next[d];
+                    const idx = dims.indexOf(dim);
+                    for (const d of dims.slice(idx + 1)) delete next[d];
                     return next;
                   })
                 }
@@ -312,29 +342,97 @@ export function VariantOrderPicker({
         </Button>
       </div>
 
-      {/* الأصناف المضافة — كل بند باختياره الخاص (قطعة بنقشة مختلفة = بند مستقل) */}
+      {/* الأصناف المضافة — كارت لكل صنف: كمية بأزرار، سعر وحدة قابل للتعديل، إجمالي السطر */}
       {value.length > 0 && (
-        <div className="rounded-md border divide-y">
-          {value.map((it, idx) => (
-            <div key={idx} className="flex items-center justify-between gap-2 p-2 text-sm">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Package className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="font-medium">{it.productName}</span>
-                {it.optionLabel && <Badge variant="secondary">{it.optionLabel}</Badge>}
-                <span className="text-muted-foreground">×{it.quantity}</span>
-                <span className="text-muted-foreground">= {it.unitPrice * it.quantity} ج.م</span>
-                {it.sku && <span className="font-mono text-xs text-muted-foreground">{it.sku}</span>}
-              </div>
-              <button
-                type="button"
-                onClick={() => onChange(value.filter((_, i) => i !== idx))}
-                aria-label="حذف الصنف"
-                className="text-destructive"
+        <div className="space-y-2">
+          {value.map((it, idx) => {
+            const patch = (p: Partial<PickedItem>) =>
+              onChange(value.map((x, i) => (i === idx ? { ...x, ...p } : x)));
+            const over = it.quantity > it.availableStock;
+            return (
+              <div
+                key={idx}
+                className={`rounded-lg border p-3 space-y-2 ${it.needsPick || it.needsVariantReview ? "border-[var(--warning)] bg-[var(--warning)]/5" : ""}`}
+                data-testid={`vop-item-${idx}`}
               >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          ))}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-wrap min-w-0">
+                    <Package className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <span className="font-medium truncate">
+                      {it.productName || "— لم يتم التعرف على المنتج —"}
+                    </span>
+                    {it.optionLabel && <Badge variant="secondary">{it.optionLabel}</Badge>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onChange(value.filter((_, i) => i !== idx))}
+                    aria-label="حذف الصنف"
+                    className="text-destructive shrink-0"
+                    data-testid={`vop-remove-${idx}`}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {(it.needsPick || it.needsVariantReview) && (
+                  <div className="flex items-center gap-1 text-xs text-[var(--warning)]">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    {it.pickReason ?? "اختر النوع لهذه القطعة"}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <div>
+                    <Label className="text-xs">الكمية</Label>
+                    <div className="mt-1 flex items-center gap-1">
+                      <Button
+                        type="button" size="icon" variant="outline" className="h-9 w-9 shrink-0"
+                        onClick={() => patch({ quantity: Math.max(1, it.quantity - 1) })}
+                        aria-label="تقليل الكمية"
+                        data-testid={`vop-qty-minus-${idx}`}
+                      >−</Button>
+                      <Input
+                        type="number" min="1" value={it.quantity}
+                        onChange={e =>
+                          patch({ quantity: Math.max(1, parseInt(e.target.value || "1", 10) || 1) })
+                        }
+                        className="h-9 text-center"
+                        data-testid={`vop-qty-${idx}`}
+                      />
+                      <Button
+                        type="button" size="icon" variant="outline" className="h-9 w-9 shrink-0"
+                        onClick={() => patch({ quantity: it.quantity + 1 })}
+                        aria-label="زيادة الكمية"
+                        data-testid={`vop-qty-plus-${idx}`}
+                      >+</Button>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs">سعر الوحدة</Label>
+                    <Input
+                      type="number" min="0" step="0.01" value={it.unitPrice}
+                      onChange={e => patch({ unitPrice: Math.max(0, Number(e.target.value) || 0) })}
+                      className="mt-1 h-9"
+                      data-testid={`vop-price-${idx}`}
+                    />
+                  </div>
+                  <div className="col-span-2 sm:col-span-1">
+                    <Label className="text-xs">إجمالي السطر</Label>
+                    <div className="mt-1 flex h-9 items-center font-semibold">
+                      {(it.unitPrice * it.quantity).toFixed(2)} ج.م
+                    </div>
+                  </div>
+                </div>
+
+                {/* المخزون تنبيه مش مانع — الحفظ والتأكيد بيكمّلوا والعجز بيتعلّم للمراجعة */}
+                {over && (
+                  <div className="text-xs text-[var(--warning)]">
+                    تنبيه: المطلوب {it.quantity} والمتاح {it.availableStock}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

@@ -28,10 +28,30 @@ describe("🔑 شاشة الإدخال — variant-based", () => {
     expect(page).toContain("لصق رسالة العميل");
     expect(page).toContain("function parseAndFill");
     expect(page).toContain("utils.facebookEntry.parsePaste.fetch");
-    // بيخزّن التركيبة (variantId) من نتيجة التحليل، مش نص اللون/المقاس بس
-    expect(page).toContain("variantId: res.match.variantId");
-    // لو مفيش تركيبة → رسالة واضحة بدل اختيار غلط
+    // سطر لكل نوع مذكور — مش سطر واحد بيبلع الباقي
+    expect(page).toContain("(res.lines ?? []).map");
+    expect(page).toContain("needsPick: !m");
+    // لو مفيش تركيبة → سبب واضح بدل اختيار غلط
     expect(page).toContain("matchReason");
+  });
+
+  it("🔑 السلة: كمية بأزرار، سعر وحدة قابل للتعديل، إجمالي سطر", () => {
+    expect(picker).toContain("data-testid={`vop-qty-minus-${idx}`}");
+    expect(picker).toContain("data-testid={`vop-qty-plus-${idx}`}");
+    expect(picker).toContain("data-testid={`vop-price-${idx}`}");
+    expect(picker).toContain("إجمالي السطر");
+  });
+
+  it("🔑 ملخّص الأوردر وأسباب تعطيل الحفظ بالعربي", () => {
+    expect(page).toContain('data-testid="order-summary"');
+    expect(page).toContain("summarizeCart(items");
+    expect(page).toContain("saveBlockers(items");
+    expect(page).toContain('data-testid="save-blockers"');
+    // الزر مقفول لما فيه مانع، والسبب معروض
+    expect(page).toContain("disabled={addOrderMutation.isPending || blockers.length > 0}");
+    // الشحن والخصم قابلين للتعديل من الملخّص
+    expect(page).toContain('data-testid="sum-shipping"');
+    expect(page).toContain('data-testid="sum-discount"');
   });
 
   it("🔑 الإرسال بيحمل variantId وسعر الوحدة لكل صنف", () => {
@@ -78,9 +98,10 @@ describe("🔑 شاشة الإدخال — variant-based", () => {
     expect(picker).toContain("disabled={!ready}");
     expect(picker).not.toContain("availableStock <= 0 || overStock)");
     expect(picker).toContain("تنبيه: الكمية أكبر من المتاح");
-    // مفيش قصّ صامت للكمية في التحليل
+    // مفيش قصّ صامت للكمية في التحليل — الكمية من سطور الرسالة مش من المتاح
     expect(page).not.toContain("Math.min(p.quantity");
-    expect(page).toContain("quantity: p.quantity || 1,");
+    expect(page).not.toContain("availableStock)");
+    expect(page).toContain("quantity: l.quantity,");
   });
 });
 

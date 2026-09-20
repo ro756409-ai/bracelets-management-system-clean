@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
-import { draftKey, readEmployeeScope, keepItemsInCatalog } from "@/lib/employeeScope";
+import { draftKey, readEmployeeScope, sanitizeDraftItems } from "@/lib/employeeScope";
+import { summarizeCart, saveBlockers } from "@shared/orderLines";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,11 +42,12 @@ type CustomerForm = {
   notes: string;
   adName: string;
   shipping: string;
+  discount: string;
 };
 
 const EMPTY_CUSTOMER: CustomerForm = {
   customerName: "", customerPhone: "", governorate: "", customerAddress: "",
-  city: "", notes: "", adName: "", shipping: "0",
+  city: "", notes: "", adName: "", shipping: "0", discount: "0",
 };
 
 export default function FacebookEntry() {
@@ -58,6 +60,10 @@ export default function FacebookEntry() {
   const [items, setItems] = useState<PickedItem[]>([]);
   const [pasteText, setPasteText] = useState("");
   const [parsing, setParsing] = useState(false);
+  // عدد القطع اللي الرسالة قالته — الحفظ بيتوقف لو مجموع كميات السلة مايساويهوش.
+  const [expectedPieces, setExpectedPieces] = useState<number | null>(null);
+  const [totalMismatch, setTotalMismatch] = useState(false);
+  const [totalConfirmed, setTotalConfirmed] = useState(false);
   const [showOrders, setShowOrders] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -78,11 +84,23 @@ export default function FacebookEntry() {
       { enabled: showOrders }
     );
 
-  const subtotal = useMemo(
-    () => items.reduce((s, it) => s + it.unitPrice * it.quantity, 0),
-    [items]
+  // الملخّص وأسباب منع الحفظ من نفس الدوال النقية المختبَرة (shared/orderLines).
+  const summary = useMemo(
+    () => summarizeCart(items, Number(cust.shipping), Number(cust.discount)),
+    [items, cust.shipping, cust.discount]
   );
-  const total = subtotal + (Number(cust.shipping) || 0);
+  const subtotal = summary.itemsSubtotal;
+  const total = summary.total;
+  const blockers = useMemo(
+    () =>
+      saveBlockers(items, {
+        shipping: Number(cust.shipping),
+        discount: Number(cust.discount),
+        expectedPieces: expectedPieces,
+        totalNeedsConfirm: totalMismatch && !totalConfirmed,
+      }),
+    [items, cust.shipping, cust.discount, expectedPieces, totalMismatch, totalConfirmed]
+  );
 
   const addOrderMutation = trpc.facebookEntry.addOrder.useMutation({
     onSuccess: data => {
@@ -117,12 +135,14 @@ export default function FacebookEntry() {
       if (!raw) return;
       const d = JSON.parse(raw) as { cust: CustomerForm; items: PickedItem[] };
       if (d.cust) setCust(d.cust);
-      const kept = Array.isArray(d.items) ? keepItemsInCatalog(d.items, catalog) : [];
-      const dropped = (d.items?.length ?? 0) - kept.length;
-      setItems(kept);
+      const s = sanitizeDraftItems(Array.isArray(d.items) ? d.items : [], catalog);
+      setItems(s.items);
+      const notes: string[] = [];
+      if (s.dropped > 0) notes.push(`اتشال ${s.dropped} صنف مش موجود في كتالوج نشاطك`);
+      if (s.needsReview > 0) notes.push(`${s.needsReview} صنف محتاج اختيار النوع من جديد`);
       toast.info(
-        dropped > 0
-          ? `تم استرجاع مسودة محفوظة — واتشال ${dropped} صنف مش موجود في كتالوج نشاطك`
+        notes.length
+          ? `تم استرجاع مسودة محفوظة — ${notes.join("، ")}`
           : "تم استرجاع مسودة محفوظة"
       );
     } catch { localStorage.removeItem(DRAFT_KEY); }
@@ -135,6 +155,7 @@ export default function FacebookEntry() {
   }
   function clearForm() {
     setCust(EMPTY_CUSTOMER); setItems([]); setPasteText("");
+    setExpectedPieces(null); setTotalMismatch(false); setTotalConfirmed(false);
     localStorage.removeItem(DRAFT_KEY);
     toast.success("تم مسح النموذج");
   }
@@ -150,42 +171,53 @@ export default function FacebookEntry() {
         ...c,
         customerName: p.customerName || c.customerName,
         customerPhone: p.customerPhone || c.customerPhone,
+        // المحافظة **يقين أو فراغ** — لو التحليل مش متأكد بيسيبها والموظف يختار.
         governorate: p.governorate || c.governorate,
+        city: p.city || c.city,
         customerAddress: p.customerAddress || c.customerAddress,
         adName: p.adName || c.adName,
         shipping: String(p.shipping ?? 0),
+        discount: String(p.discount ?? 0),
       }));
-      if (res.match) {
-        // تركيبة محسومة من المخزون — نخزّن variantId/SKU (مش نص اللون/المقاس بس).
-        const v = catalog.variants.find(x => x.id === res.match!.variantId);
-        const prod = catalog.products.find(x => x.id === res.match!.productId);
-        const avail = v?.currentStock ?? prod?.currentStock ?? 0;
-        setItems([
-          {
-            productId: res.match.productId,
-            productName: res.match.productName,
-            variantId: res.match.variantId ?? undefined,
-            sku: res.match.sku ?? null,
-            color: res.match.color ?? null,
-            size: res.match.size ?? null,
-            optionLabel: variantLabel(v) || null, // النوع/اللون/المقاس للعرض والطباعة
-            // **الكمية من طلب العميل، مش من المخزون.** كانت `Math.min(الكمية, المتاح)` —
-            // قصّ صامت خلّى «عدد القطع: 2» تتسجّل 1 لما التركيبة مخزونها 1، من غير ما
-            // الموظف يعرف. المخزون بيتعرض كتنبيه، والتأكيد مابيتمنعش بسببه (سياسة
-            // confirmOrder المعتمدة) — فالإدخال أولى إنه مايمنعش.
-            quantity: p.quantity || 1,
-            unitPrice: Number(res.match.unitPrice ?? 0),
-            availableStock: avail,
-          },
-        ]);
-        toast.success("تم تحليل الرسالة وتحديد التركيبة من المخزون");
-      } else {
-        // مفيش تركيبة مطابقة — نملّي الباقي ونعرض السبب بدل اختيار تركيبة غلط.
-        setItems([]);
+      // **سطر لكل نوع مذكور.** السيرفر بيرجّع `lines` مبنية من الأنواع وعدد القطع،
+      // ومعاها توزيع إجمالي الأصناف على القطع. السطر اللي مااتطابقش بيفضل بلا منتج
+      // ومعلّم للمراجعة — مابنختارش أول منتج ولا أول تركيبة.
+      const built: PickedItem[] = (res.lines ?? []).map(l => {
+        const m = l.match;
+        const v = m?.variantId ? catalog.variants.find(x => x.id === m.variantId) : undefined;
+        const prod = m?.productId ? catalog.products.find(x => x.id === m.productId) : undefined;
+        return {
+          productId: m?.productId ?? 0,
+          productName: m?.productName ?? l.term,
+          variantId: m?.variantId ?? undefined,
+          sku: m?.sku ?? null,
+          color: m?.color ?? null,
+          size: m?.size ?? null,
+          optionLabel: variantLabel(v) || null,
+          quantity: l.quantity,
+          // سعر الوحدة من توزيع الإجمالي المكتوب في الرسالة — مش من الكتالوج، عشان
+          // عروض الكمية (قطعتان بـ400) تفضل زي ما الموظف اعتمدها. قابل للتعديل.
+          unitPrice: l.unitPrice || Number(m?.unitPrice ?? 0),
+          availableStock: v?.currentStock ?? prod?.currentStock ?? 0,
+          needsPick: !m,
+          pickReason: l.matchReason ?? null,
+        } as PickedItem;
+      });
+      setItems(built);
+
+      if (!p.governorate) toast.info("لم نتعرف على المحافظة — اختر المحافظة");
+      setExpectedPieces(p.quantity || null);
+      setTotalMismatch(Boolean(p.totalMismatch));
+      setTotalConfirmed(false);
+
+      const missing = built.filter(b => b.needsPick).length;
+      if (p.totalMismatch)
+        toast.warning("الإجمالي المكتوب لا يساوي (الأصناف + الشحن − الخصم) — راجع القيم");
+      if (missing > 0)
         toast.warning(
-          `تم ملء البيانات، لكن لم يتم تحديد الصنف تلقائيًا: ${res.matchReason ?? "اختر المنتج واللون والمقاس يدويًا"}`
+          `تم ملء البيانات — ${missing} من ${built.length} صنف محتاج اختيار يدوي`
         );
-      }
+      else toast.success(`تم التحليل: ${built.length} صنف`);
     } catch (e: any) {
       toast.error(`تعذّر التحليل: ${e.message}`);
     } finally {
@@ -213,10 +245,8 @@ export default function FacebookEntry() {
     if (!cust.customerPhone.trim()) return toast.error("رقم الهاتف مطلوب");
     if (!cust.governorate.trim()) return toast.error("المحافظة مطلوبة");
     if (!cust.customerAddress.trim()) return toast.error("العنوان مطلوب");
-    if (items.length === 0) return toast.error("أضف صنفًا واحدًا على الأقل");
-    // حارس واجهة إضافي — السيرفر بيتحقق من المخزون برضه.
-    const over = items.find(it => it.quantity > it.availableStock);
-    if (over) return toast.error(`الكمية أكبر من المتاح للصنف ${over.productName}`);
+    // المخزون **مش** ضمن الموانع — تنبيه بس، زي سياسة confirmOrder.
+    if (blockers.length > 0) return toast.error(blockers[0]);
     const first = items[0];
     addOrderMutation.mutate({
       customerName: cust.customerName.trim(),
@@ -246,6 +276,7 @@ export default function FacebookEntry() {
       notes: order.notes ?? "",
       adName: order.adName ?? "",
       shipping: String(order.shippingFees ?? "0"),
+      discount: "0",
     });
     // بنود التعديل: من عناصر الأوردر لو متاحة، وإلا صنف واحد من رأس الأوردر.
     const src = (order.items?.length ? order.items : [{ productId: order.productId, productName: order.productName, quantity: order.quantity, variantId: order.variantId }]);
@@ -408,13 +439,66 @@ export default function FacebookEntry() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between border-t pt-3 text-sm">
-              <span className="text-muted-foreground">الإجمالي (الأصناف {subtotal} + الشحن {Number(cust.shipping) || 0})</span>
-              <span className="font-bold text-lg">{total} ج.م</span>
+            {/* ملخّص الأوردر — بيتحدّث فورًا مع أي تعديل في كمية أو سعر أو شحن أو خصم */}
+            <div className="rounded-lg border bg-muted/30 p-3 space-y-1 text-sm" data-testid="order-summary">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">عدد القطع</span>
+                <span className="font-semibold" data-testid="sum-pieces">{summary.pieces}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">إجمالي الأصناف</span>
+                <span className="font-semibold">{summary.itemsSubtotal.toFixed(2)} ج.م</span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">الشحن</span>
+                <Input
+                  type="number" min="0" step="0.01" value={cust.shipping}
+                  onChange={e => setCust(c => ({ ...c, shipping: e.target.value }))}
+                  className="h-8 w-28 text-left" data-testid="sum-shipping"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">الخصم</span>
+                <Input
+                  type="number" min="0" step="0.01" value={cust.discount}
+                  onChange={e => setCust(c => ({ ...c, discount: e.target.value }))}
+                  className="h-8 w-28 text-left" data-testid="sum-discount"
+                />
+              </div>
+              <div className="flex justify-between border-t pt-1 text-base">
+                <span className="font-semibold">الإجمالي النهائي</span>
+                <span className="font-bold" data-testid="sum-total">{summary.total.toFixed(2)} ج.م</span>
+              </div>
+              {totalMismatch && (
+                <label className="flex items-center gap-2 pt-1 text-xs text-[var(--warning)]">
+                  <input
+                    type="checkbox" checked={totalConfirmed}
+                    onChange={e => setTotalConfirmed(e.target.checked)}
+                    data-testid="confirm-total"
+                  />
+                  الإجمالي المكتوب في الرسالة لا يساوي الحساب — راجعته وأؤكده
+                </label>
+              )}
             </div>
 
+            {/* سبب تعطيل الحفظ بالعربي — الموظف مايضغطش زرًا مقفولًا بلا تفسير */}
+            {blockers.length > 0 && (
+              <div className="rounded-lg border border-[var(--warning)] bg-[var(--warning)]/5 p-2 text-xs space-y-1" data-testid="save-blockers">
+                {blockers.map((b, i) => (
+                  <div key={i} className="flex items-center gap-1 text-[var(--warning)]">
+                    <AlertTriangle className="h-3 w-3 shrink-0" /> {b}
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="flex items-center gap-2">
-              <Button onClick={submit} disabled={addOrderMutation.isPending} className="flex-1">
+              <Button
+                onClick={submit}
+                disabled={addOrderMutation.isPending || blockers.length > 0}
+                className="flex-1"
+                data-testid="save-order"
+              >
                 {addOrderMutation.isPending ? (
                   <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" /> جاري الحفظ...</span>
                 ) : (
