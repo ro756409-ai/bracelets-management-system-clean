@@ -7,9 +7,12 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { BrandLogo } from "@/components/BrandLogo";
 import { Eye, EyeOff, Lock, User } from "lucide-react";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
+import { readEmployeeScope, resetEmployeeClientState } from "@/lib/employeeScope";
 
 export default function EmployeeLogin() {
   const [, setLocation] = useLocation();
+  const queryClient = useQueryClient();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -43,6 +46,10 @@ export default function EmployeeLogin() {
 
       // Store employee info in localStorage
       localStorage.setItem("employee_session", JSON.stringify(data.employee));
+      // **تغيّرت الهوية → امسح كل حالة الحساب السابق على الجهاز.** من غير السطر ده
+      // كان كتالوج الموظف اللي قبله (المخزّن في react-query بمفتاح بلا هوية) ومسودته
+      // بيظهروا للموظف الجديد — بيانات نشاط تاني في شاشة إدخاله.
+      resetEmployeeClientState(queryClient, readEmployeeScope());
       toast.success(`أهلاً ${data.employee.name}!`);
       
       // Redirect based on role

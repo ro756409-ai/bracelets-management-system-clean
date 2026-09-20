@@ -1,5 +1,6 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
+import { draftKey, readEmployeeScope, keepItemsInCatalog } from "@/lib/employeeScope";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,11 +48,12 @@ const EMPTY_CUSTOMER: CustomerForm = {
   city: "", notes: "", adName: "", shipping: "0",
 };
 
-const DRAFT_KEY = "manualEntryDraft";
-
 export default function FacebookEntry() {
   const governorateOptions = useGovernorateOptions();
   const utils = trpc.useUtils();
+  // مفتاح المسودة مربوط بالحساب (tenant/نشاط/موظف) — مسودة حساب تاني على نفس الجهاز
+  // عمرها ما تترجّع هنا. المفتاح العام القديم اتشال.
+  const DRAFT_KEY = useMemo(() => draftKey(readEmployeeScope()), []);
   const [cust, setCust] = useState<CustomerForm>(EMPTY_CUSTOMER);
   const [items, setItems] = useState<PickedItem[]>([]);
   const [pasteText, setPasteText] = useState("");
@@ -67,8 +69,8 @@ export default function FacebookEntry() {
   const [deletingOrderId, setDeletingOrderId] = useState<number | null>(null);
 
   const { data: me, isLoading: meLoading } = trpc.employeePortal.me.useQuery();
-  const { data: catalog = { products: [], variants: [] } } =
-    trpc.facebookEntry.catalog.useQuery() as { data: Catalog };
+  const { data: catalog = { products: [], variants: [] }, isLoading: catalogLoading } =
+    trpc.facebookEntry.catalog.useQuery() as { data: Catalog; isLoading: boolean };
 
   const { data: myOrders = [], refetch: refetchOrders } =
     trpc.facebookEntry.myOrders.useQuery(
@@ -101,18 +103,31 @@ export default function FacebookEntry() {
     onError: e => toast.error(`خطأ: ${e.message}`),
   });
 
-  // مسودة محلية (نفس الجهاز فقط) — تسترجع مرة عند الفتح.
+  // مسودة محلية (نفس الجهاز والحساب فقط) — تسترجع مرة بعد ما الكتالوج يوصل.
+  //
+  // الاسترجاع مُقيَّد بالكتالوج الحالي: أي بند منتجه أو تركيبته مش موجودة في كتالوج
+  // نشاط الموظف بتتشال. مسودة اتحفظت قبل إيقاف منتج — أو فلتت من حساب تاني — ماتقدرش
+  // تدخّل معرّفات هتترفض على السيرفر بعدين. السيرفر بيعيد التحقق من كل معرّف برضه.
+  const draftRestored = useRef(false);
   useEffect(() => {
+    if (draftRestored.current || catalogLoading) return;
+    draftRestored.current = true;
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
       if (!raw) return;
       const d = JSON.parse(raw) as { cust: CustomerForm; items: PickedItem[] };
       if (d.cust) setCust(d.cust);
-      if (Array.isArray(d.items)) setItems(d.items);
-      toast.info("تم استرجاع مسودة محفوظة");
+      const kept = Array.isArray(d.items) ? keepItemsInCatalog(d.items, catalog) : [];
+      const dropped = (d.items?.length ?? 0) - kept.length;
+      setItems(kept);
+      toast.info(
+        dropped > 0
+          ? `تم استرجاع مسودة محفوظة — واتشال ${dropped} صنف مش موجود في كتالوج نشاطك`
+          : "تم استرجاع مسودة محفوظة"
+      );
     } catch { localStorage.removeItem(DRAFT_KEY); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [catalogLoading]);
 
   function saveDraft() {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({ cust, items }));
@@ -154,7 +169,11 @@ export default function FacebookEntry() {
             color: res.match.color ?? null,
             size: res.match.size ?? null,
             optionLabel: variantLabel(v) || null, // النوع/اللون/المقاس للعرض والطباعة
-            quantity: Math.min(p.quantity || 1, avail || (p.quantity || 1)),
+            // **الكمية من طلب العميل، مش من المخزون.** كانت `Math.min(الكمية, المتاح)` —
+            // قصّ صامت خلّى «عدد القطع: 2» تتسجّل 1 لما التركيبة مخزونها 1، من غير ما
+            // الموظف يعرف. المخزون بيتعرض كتنبيه، والتأكيد مابيتمنعش بسببه (سياسة
+            // confirmOrder المعتمدة) — فالإدخال أولى إنه مايمنعش.
+            quantity: p.quantity || 1,
             unitPrice: Number(res.match.unitPrice ?? 0),
             availableStock: avail,
           },

@@ -1,4 +1,5 @@
 import { CommandPalette } from "@/components/shared/CommandPalette";
+import { EmployeeScopeGuard } from "@/components/EmployeeScopeGuard";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
@@ -321,6 +322,10 @@ function App() {
                 render their own layout — navigation shortcuts that only work in some
                 places are worse than none, because you stop trusting them. */}
             <CommandPalette />
+            {/* أي تغيير في هوية موظف الجلسة (دخول/خروج/انتهاء) بيمسح cache الاستعلامات
+                ومسودات الحسابات التانية — مركّب هنا عشان مايعتمدش على إن كل موضع
+                تسجيل خروج يفتكر ينضّف. */}
+            <EmployeeScopeGuard />
             <Router />
           </TooltipProvider>
         </BusinessProvider>

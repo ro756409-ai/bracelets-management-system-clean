@@ -77,6 +77,11 @@ router.post("/login", async (req, res) => {
         name: employee.name,
         role: employee.role,
         username: employee.username,
+        // هوية النطاق — عشان الواجهة تبني مفاتيح cache/مسودة **مخصوصة بالحساب** وتمسح
+        // اللي مش تابع له. مش صلاحية: العزل الحقيقي بيتحدد على السيرفر من كوكي الموظف
+        // (`empScope`)، والقيم دي مابتتقبلش من العميل في أي استعلام.
+        businessId: employee.businessId ?? null,
+        tenantId: employee.tenantId ?? null,
       },
     });
   } catch (err) {
@@ -118,6 +123,9 @@ router.get("/me", async (req, res) => {
       name: employee.name,
       role: employee.role,
       username: employee.username,
+      // نفس هوية النطاق اللي بيرجّعها /login — الواجهة بتتأكد إن جلستها لسه نفس الحساب.
+      businessId: employee.businessId ?? null,
+      tenantId: employee.tenantId ?? null,
     });
   } catch {
     res.clearCookie(COOKIE_NAME);

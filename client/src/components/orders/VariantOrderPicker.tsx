@@ -165,8 +165,10 @@ export function VariantOrderPicker({
   }
 
   function addItem() {
+    // **المخزون مابيمنعش الإضافة.** العميل طلب قطعتين والمتاح واحدة = أوردر حقيقي
+    // لازم يتسجّل بكميته الصحيحة؛ العجز بيتعرض كتنبيه و`confirmOrder` بتعلّمه
+    // needsReview وقت التأكيد. المنع هنا كان بيخلي الموظف يقلّل الكمية عشان يعدّي.
     if (!product || !ready) return;
-    if (availableStock <= 0 || overStock) return;
     const label = variantLabel(resolved);
     onChange([
       ...value,
@@ -265,7 +267,7 @@ export function VariantOrderPicker({
           <Input
             type="number"
             min="1"
-            max={availableStock || undefined}
+            // مفيش max من المخزون — الكمية بتتبع طلب العميل (تنبيه بس لو أكبر من المتاح).
             value={qty}
             onChange={e => setQty(e.target.value)}
             className="mt-1"
@@ -285,8 +287,13 @@ export function VariantOrderPicker({
                 {availableStock}
               </span>
               {" · "}سعر الوحدة: <span className="font-semibold text-foreground">{unitPrice}</span> ج.م
-              {overStock && <span className="text-destructive"> · الكمية أكبر من المتاح</span>}
-              {availableStock <= 0 && <span className="text-destructive"> · لا يوجد مخزون</span>}
+              {/* تنبيه مخزون — مش مانع. الحفظ والتأكيد بيكمّلوا والعجز بيتعلّم للمراجعة. */}
+              {overStock && (
+                <span className="text-[var(--warning)]"> · تنبيه: الكمية أكبر من المتاح</span>
+              )}
+              {availableStock <= 0 && (
+                <span className="text-[var(--warning)]"> · تنبيه: لا يوجد مخزون</span>
+              )}
             </>
           ) : (
             <span className="flex items-center gap-1">
@@ -298,7 +305,7 @@ export function VariantOrderPicker({
           type="button"
           size="sm"
           onClick={addItem}
-          disabled={!ready || availableStock <= 0 || overStock}
+          disabled={!ready}
           data-testid="vop-add"
         >
           <Plus className="h-4 w-4 ml-1" /> إضافة الصنف

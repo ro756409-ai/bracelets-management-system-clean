@@ -295,13 +295,26 @@ function requireTenantId(emp: { tenantId: number | null }): number {
 }
 
 /**
- * يبني ScopeCtx من جلسة employeePortal (اللي بتستخدم `(ctx as any).employee`). بيحافظ
- * على المدير (جلسة admin صناعية → كل الأنشطة) وبيقيّد الموظف العادي على نشاطه —
- * نفس منطق `sessionBusinessIds` بالظبط.
+ * يبني ScopeCtx من جلسة employeePortal (اللي بتستخدم `(ctx as any).employee`).
+ *
+ * **`user` مابيتمرّرش عن قصد — نطاق البوابة هو نشاط الموظف وبس.**
+ *
+ * `employeePortalProcedure` بتحقن `ctx.employee` من كوكي الموظف، لكنها **مابتمسحش**
+ * `ctx.user` بتاع جلسة المالك على الويب. فلو نفس المتصفح فيه الاتنين (المالك بيجرّب
+ * شاشة الموظف، أو فتح البوابة في تاب جنب لوحته)، كان `sessionBusinessIds` بيلاقي
+ * `user.role === "admin"` وبيرجّع **كل أنشطة الـtenant** — يعني قيد `employee.businessId`
+ * بيتجاهَل بالكامل، وكتالوج شاشة الإدخال يعرض منتجات أنشطة تانية.
+ *
+ * التوسعة دي مالهاش أي مبرر في البوابة: الموظف الإداري (manager/admin في جدول
+ * `employees`) نطاقه أصلاً `[employee.businessId]` من غير جلسة الويب — فشيل `user`
+ * مابيغيّرش سلوكه، بيقفل بس التوسعة العرضية الجاية من جلسة تانية خالص.
+ *
+ * صلاحيات الأدوار مالهاش دعوة بالنطاق: `requireEmployeePermission` لسه بتحكم «يعمل
+ * إيه»، ودي بتحكم «على أنهي نشاط» — والفصل ده مقصود.
  */
 function empScope(ctx: any): ScopeCtx {
   const emp = ctx.employee;
-  return { tenantId: requireTenantId(emp), user: ctx.user ?? null, employee: emp };
+  return { tenantId: requireTenantId(emp), user: null, employee: emp };
 }
 
 /**
@@ -5275,8 +5288,12 @@ export const appRouter = router({
             .map(p => p.productId)
             .filter((id): id is number => id != null)
         );
-        // تحقّق التركيبة + سقف المخزون: كل بند بـvariantId لازم تركيبته تابعة لمنتجه، والكمية
-        // مش أكبر من المتاح — منع تسجيل كمية أكبر من المخزون (مش إخفاء واجهة فقط).
+        // تحقّق **الملكية والتركيب** لكل بند — مش المخزون.
+        //
+        // المخزون مابيمنعش تسجيل أوردر: العميل طلب قطعتين والمتاح واحدة = أوردر حقيقي
+        // لازم يتسجّل بكميته الصحيحة. سياسة `confirmOrder` المعتمدة أصلاً مابتمنعش
+        // التأكيد بسبب العجز (بتعلّم needsReview بدل ما ترفض)، فمنع الإدخال كان أقسى
+        // من التأكيد نفسه وكان بيخلي الموظف يزوّر الكمية عشان يعدّي.
         for (const p of input.selectedProducts) {
           if (p.variantId == null) continue;
           // variantId من غير productId ممنوع — مايبقاش فيه منتج نتحقّق التركيبة ضده.
@@ -5292,12 +5309,6 @@ export const appRouter = router({
             throw new TRPCError({
               code: "BAD_REQUEST",
               message: "التركيبة غير صحيحة لهذا المنتج",
-            });
-          const qty = p.quantity ?? 1;
-          if (qty > variant.currentStock)
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `الكمية المطلوبة (${qty}) أكبر من المتاح (${variant.currentStock}) للتركيبة`,
             });
         }
         // **الاسم من كتالوج النشاط، مش من العميل** — وقبل أي كتابة.

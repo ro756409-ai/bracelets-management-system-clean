@@ -71,10 +71,16 @@ describe("🔑 شاشة الإدخال — variant-based", () => {
     expect(sub).not.toContain("optionLabel");
   });
 
-  it("🔑 المخزون معروض والكمية مسقوفة بالمتاح (واجهة)", () => {
+  it("🔑 المخزون تنبيه مش مانع — الكمية بتتبع طلب العميل", () => {
     expect(picker).toContain("availableStock");
     expect(picker).toContain("overStock");
-    expect(picker).toContain("disabled={!ready || availableStock <= 0 || overStock}");
+    // الإضافة متوقفة على حسم التركيبة بس — مش على المخزون
+    expect(picker).toContain("disabled={!ready}");
+    expect(picker).not.toContain("availableStock <= 0 || overStock)");
+    expect(picker).toContain("تنبيه: الكمية أكبر من المتاح");
+    // مفيش قصّ صامت للكمية في التحليل
+    expect(page).not.toContain("Math.min(p.quantity");
+    expect(page).toContain("quantity: p.quantity || 1,");
   });
 });
 
@@ -90,11 +96,12 @@ describe("🔑 السيرفر — عزل الكتالوج + سقف المخزو�
     const helper = routers.slice(routers.indexOf("async function employeeCatalogBusinessIds"), routers.indexOf("async function employeeCatalogBusinessIds") + 400);
     expect(helper).toContain("scopeBusinessIds(ctx, {})");
   });
-  it("🔑 addOrder بيتحقق من ملكية التركيبة وسقف المخزون", () => {
+  it("🔑 addOrder بيتحقق من ملكية التركيبة (والمخزون مش مانع)", () => {
     const start = routers.indexOf('addOrder: requireEmployeePermission("orders.create")');
     const block = routers.slice(start, routers.indexOf("myOrders:", start));
     expect(block).toContain("getVariantById(p.variantId)");
-    expect(block).toContain("أكبر من المتاح");
+    // المخزون **مش** مانع للتسجيل (نفس سياسة confirmOrder: يتأكد ويتعلّم للمراجعة)
+    expect(block).not.toContain("أكبر من المتاح");
     // التركيبة لازم تتبع نفس المنتج — والمنتج نفسه تابع لنشاط الموظف (requireAllOwned)،
     // فتركيبة من منتج/نشاط تاني بتترفض على السيرفر مش بالواجهة بس.
     expect(block).toContain("variant.productId !== p.productId");
