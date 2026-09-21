@@ -374,6 +374,53 @@ export function resolveProductByAlias(
   return { hit: null };
 }
 
+/**
+ * أسماء **تركيبات** مكافئة. العميل بيكتب «نقش» والتركيبة في الكتالوج «منقوش»، أو
+ * «ساده» والتركيبة «سادة» (الأخيرة بيغطيها التطبيع أصلًا). زي `PRODUCT_NAME_ALIASES`:
+ * توسيع نصّي بيتطابق **على كتالوج النشاط الممرَّر بس**، فمستحيل يسحب تركيبة من نشاط
+ * تاني. المطابقة بعد التوسيع **دقيقة** (تساوي بعد التطبيع) مش احتواء.
+ */
+export const VARIANT_NAME_ALIASES: string[][] = [
+  ["منقوش", "منقوشة", "نقش", "نقشة", "منقوشه"],
+  ["سادة", "سادا", "ساده"],
+];
+
+/** كل الأسماء المكافئة لاسم (هو نفسه + أعضاء مجموعته لو في مجموعة). */
+function variantNameCandidates(name: string): string[] {
+  const n = normalizeArabic(name);
+  const group = VARIANT_NAME_ALIASES.find(g => g.some(x => normalizeArabic(x) === n));
+  return group ? Array.from(new Set([n, ...group.map(normalizeArabic)])) : [n];
+}
+
+/**
+ * تركيبة واحدة ووحيدة في الكتالوج اسمها **يساوي** الاسم أو أحد مكافئاته. تطابق دقيق —
+ * مش احتواء — عشان «نقش وعين حورس» ماتتحسبش «عين حورس» لأن الاسم جوّاها.
+ */
+export function resolveVariantByExactName<V extends MatchableVariant>(
+  name: string,
+  variants: V[]
+): { hit: V | null; ambiguous: boolean } {
+  const cands = new Set(variantNameCandidates(name));
+  const hits = variants.filter(v => v.name && cands.has(normalizeArabic(v.name)));
+  const ids = Array.from(new Set(hits.map(v => v.id)));
+  if (ids.length === 1) return { hit: hits[0], ambiguous: false };
+  return { hit: null, ambiguous: ids.length > 1 };
+}
+
+/**
+ * هل النص اسم معروف **بالظبط** في كتالوج النشاط — منتج، أو تركيبة (بمكافئاتها)؟
+ * ده الحكم اللي بيقرّر نفصل «و» ولا لأ (`expandSegments`): لازم دقيق، لأن أي احتواء
+ * نصّي هيخلّي جزءين ملزوقين يتحسبوا اسمًا واحدًا معروفًا.
+ */
+export function isExactCatalogTerm(term: string, catalog: MatchCatalog): boolean {
+  const t = normalizeArabic(term);
+  if (!t) return false;
+  if (catalog.products.some(p => normalizeArabic(p.name) === t)) return true;
+  const active = catalog.variants.filter(v => v.isActive !== false);
+  const cands = new Set(variantNameCandidates(term));
+  return active.some(v => v.name && cands.has(normalizeArabic(v.name)));
+}
+
 // ============================================================
 // Import matcher (Excel / EasyOrder file) — variant-aware, STRICT (never guesses).
 // ============================================================
@@ -502,7 +549,15 @@ export function matchImportItem(
   // لو **تركيبة واحدة ووحيدة** طابقت. أكتر من واحدة = غموض صريح (مش أول واحدة)،
   // ومستحيل توصل لنشاط تاني لأن الكتالوج مقيّد بالنشاط.
   if (!product && input.name?.trim()) {
-    const { hit, ambiguousWith } = matchByName(input.name, activeVariants, v => v.name);
+    // الأول: تطابق **دقيق** بالاسم أو مكافئه («نقش» → «منقوش»). بعده الاحتواء النصّي
+    // القديم كملاذ. تركيبتين بنفس الاسم تحت منتجين مختلفين = غموض صريح (قاعدة: منتج
+    // واحد محتمل بس نستخدمه، أكتر من كده الموظف يختار).
+    const exact = resolveVariantByExactName(input.name, activeVariants);
+    if (exact.ambiguous)
+      return { matched: false, reason: `"${input.name}" يطابق أكثر من نوع في نشاطك — اختر المنتج`, received };
+    const { hit, ambiguousWith } = exact.hit
+      ? { hit: exact.hit, ambiguousWith: undefined }
+      : matchByName(input.name, activeVariants, v => v.name);
     if (hit) {
       const p = catalog.products.find(pp => pp.id === hit.productId);
       if (p)
@@ -572,7 +627,11 @@ export function matchImportItem(
   if (input.name) { nameCandidates.push(stripBraceletPrefix(input.name)); nameCandidates.push(input.name); }
   for (const c of nameCandidates) {
     if (!c?.trim()) continue;
-    const { hit, ambiguousWith } = matchByName(c, vs, v => v.name);
+    // تطابق دقيق بالمكافئات جوه المنتج الأول («نقش» → «منقوش»)، بعده الاحتواء.
+    const exactInProduct = resolveVariantByExactName(c, vs);
+    const { hit, ambiguousWith } = exactInProduct.hit
+      ? { hit: exactInProduct.hit, ambiguousWith: undefined }
+      : matchByName(c, vs, v => v.name);
     if (hit)
       return {
         matched: true, method: productMethod, productId: product.id, productName: product.name,

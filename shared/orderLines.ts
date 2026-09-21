@@ -73,6 +73,94 @@ export function buildDraftLines(
   return lines;
 }
 
+// ── أجزاء سطر المنتج → سطور بكميات (واعية بالكتالوج) ──
+
+export interface SegmentInput {
+  text: string;
+  qty: number | null;
+}
+
+/** «و» المستقلة (مش جوه كلمة): «نقش وعين حورس» → [نقش, عين حورس]. */
+function splitOnWaw(text: string): string[] {
+  return text
+    .split(/\s+و\s*(?=\S)/)
+    .map(t => t.trim())
+    .filter(t => t.length > 1);
+}
+
+/**
+ * يفكّ «و» **ضد الكتالوج بس**: الجزء بيتفصل على «و» لو هو نفسه مش اسم معروف **وكل**
+ * الأجزاء الناتجة أسماء معروفة. غير كده بيفضل زي ما هو (سطر للمراجعة).
+ *
+ * كده اسم تركيبة مركّب فيه «و» بيفضل واحد، و«نقش وعين حورس» بيبقى نوعين. `isKnown`
+ * لازم تكون مطابقة **دقيقة** (مش احتواء نصّي) — وإلا «نقش وعين حورس» كلها كانت
+ * هتتحسب «عين حورس» لأن الاسم جوّاها، و«نقش» كانت هتضيع.
+ *
+ * الكمية المكتوبة بتروح لأول جزء؛ الأجزاء اللي اتفصلت بعده كميتها null (بتتحدد من
+ * باقي «عدد القطع»).
+ */
+export function expandSegments(
+  segments: SegmentInput[],
+  isKnown: (term: string) => boolean
+): SegmentInput[] {
+  const out: SegmentInput[] = [];
+  for (const seg of segments) {
+    if (isKnown(seg.text)) {
+      out.push(seg);
+      continue;
+    }
+    const parts = splitOnWaw(seg.text);
+    if (parts.length > 1 && parts.every(isKnown)) {
+      out.push({ text: parts[0], qty: seg.qty });
+      for (const p of parts.slice(1)) out.push({ text: p, qty: null });
+      continue;
+    }
+    out.push(seg);
+  }
+  return out;
+}
+
+/**
+ * يحدّد كمية كل سطر من الكميات المكتوبة و«عدد القطع».
+ *
+ *   • الكمية المكتوبة («٢ ساده») بتتاخد زي ما هي.
+ *   • الباقي = عدد القطع − مجموع المكتوب، وبيتوزّع على السطور اللي مالهاش كمية:
+ *       - سطر واحد بلا كمية → ياخد الباقي كله (أقل حاجة 1).
+ *       - أكتر من سطر → 1 لكل واحد، واللي فاضل بعد كده بيروح لسطر **ناقص**
+ *         الموظف بيحدّد نوعه (مش توزيع بالتخمين).
+ *   • مفيش سطور بلا كمية والباقي موجب → سطر ناقص بالباقي.
+ *   • «عدد القطع» مش مكتوب → مفيش باقي يتوزّع (القطع = المكتوب + 1 لكل سطر بلا كمية).
+ */
+export function allocateQuantities(
+  items: SegmentInput[],
+  totalQty: number,
+  quantityGiven: boolean
+): DraftLine[] {
+  const explicit = items.reduce((s, i) => s + (i.qty ?? 0), 0);
+  const nulls = items.filter(i => i.qty == null).length;
+  const remaining = quantityGiven ? Math.floor(totalQty) - explicit : nulls;
+
+  const lines: DraftLine[] = items.map(i => ({
+    term: i.text,
+    quantity: i.qty ?? 1,
+    needsPick: true,
+  }));
+
+  if (nulls === 1) {
+    const idx = items.findIndex(i => i.qty == null);
+    lines[idx].quantity = Math.max(1, remaining);
+    return lines;
+  }
+  const leftover = remaining - nulls;
+  if (quantityGiven && leftover > 0) {
+    lines.push({ term: "", quantity: leftover, needsPick: true });
+  }
+  if (lines.length === 0) {
+    lines.push({ term: "", quantity: Math.max(1, Math.floor(totalQty) || 1), needsPick: true });
+  }
+  return lines;
+}
+
 /**
  * يوزّع إجمالي الأصناف المعتمد على القطع بالقرش، **ومجموع الناتج يساوي الإجمالي
  * بالظبط**: الباقي من القسمة بيروح لآخر سطر.

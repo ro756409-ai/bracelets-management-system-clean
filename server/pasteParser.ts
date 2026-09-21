@@ -22,6 +22,8 @@ export interface ParsedPaste {
   adName: string;
   customerName: string;
   customerPhone: string;
+  /** رقم الهاتف التاني لو مذكور («رقم الفون(٢)») — منفصل عن العنوان. */
+  customerPhone2: string;
   governorate: string;
   /** المدينة/المركز لو اتحدد من العنوان — منفصل عن المحافظة وعن العنوان الكامل. */
   city: string;
@@ -29,9 +31,17 @@ export interface ParsedPaste {
   productName: string;
   /** الأنواع المذكورة في سطر المنتج («عين حورس وذكر التحصين» → اتنين). */
   productTerms: string[];
+  /**
+   * أجزاء سطر المنتج بكمياتها: «٢ ساده، 1 نقش وعين حورس» →
+   * [{ساده, 2}, {نقش وعين حورس, 1}]. الفصل هنا على الفواصل بس؛ فصل «و» بيحصل بعدين
+   * **ضد الكتالوج** عشان مايكسرش اسم تركيبة مركّب فيه «و».
+   */
+  productSegments: ProductSegment[];
   /** أزواج اللون/المقاس بالترتيب («بيج مقاس 10 اسود مقاس 6» → اتنين). */
   colorSizePairs: ColorSize[];
   quantity: number;
+  /** «عدد القطع» مكتوب صراحة؟ لو لأ، `quantity` قيمة افتراضية (1) مش رقم من العميل. */
+  quantityGiven: boolean;
   color: string;
   size: string;
   /** إجمالي الأصناف قبل الشحن («السعر: 400»). */
@@ -94,6 +104,37 @@ export function splitProductTerms(line: string): string[] {
     .split(/\s*[+،,]\s*|\s+و\s*(?=\S)|\s+ثم\s+/)
     .map(t => t.trim())
     .filter(t => t.length > 1);
+}
+
+export interface ProductSegment {
+  text: string;
+  /** الكمية المكتوبة قبل/بعد الاسم («٢ ساده» / «ساده ×2»)، أو null لو مش مذكورة. */
+  qty: number | null;
+}
+
+/**
+ * يقسّم سطر المنتج على الفواصل (، , + ؛ «ثم») ويستخرج كمية كل جزء:
+ *   «٢ ساده، 1 نقش وعين حورس» → [{ساده, 2}, {نقش وعين حورس, 1}]
+ *   «ساده ×2» / «ساده x2» / «2x ساده» → {ساده, 2}
+ *
+ * **مابيفصلش على «و»** — ده بيحصل ضد كتالوج النشاط (`expandSegments`)، لأن «و» ممكن
+ * تكون جزء من اسم تركيبة مركّب، وفصلها عشوائيًا بيطلّع أصنافًا مالهاش وجود.
+ */
+export function parseProductSegments(line: string): ProductSegment[] {
+  const s = normalizeDigits(String(line ?? "")).trim();
+  if (!s) return [];
+  return s
+    .split(/\s*[+،,؛;]\s*|\s+ثم\s+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      let m = part.match(/^(\d+)\s*[x×*]?\s*(.+)$/);
+      if (m && m[2].trim().length > 1) return { text: m[2].trim(), qty: Number(m[1]) };
+      m = part.match(/^(.+?)\s*[x×*]\s*(\d+)$/);
+      if (m) return { text: m[1].trim(), qty: Number(m[2]) };
+      return { text: part, qty: null };
+    })
+    .filter(seg => seg.text.length > 1 && (seg.qty == null || seg.qty > 0));
 }
 
 /**
@@ -201,25 +242,35 @@ export function splitColorSize(text: string): ColorSize {
 export function parsePasteMessage(raw: string): ParsedPaste {
   const text = String(raw ?? "").replace(/\r/g, "");
 
-  const adName = firstLineValue(text, /بيدج\s*[:：]\s*([^\n]+)/);
+  // محدودة بالـlabel اللي بعدها: «بيدج:عتبة  التاريخ: 20/9» → «عتبة» مش السطر كله.
+  const adName = labelValue(text, "بيدج");
   // «الاسم» أو «اسم العميل» — والقيمة محدودة بالـlabel اللي بعدها زي باقي الحقول.
   const customerName =
     labelValue(text, "اسم\\s*العميل") || labelValue(text, "الاسم");
 
-  // الهاتف: «رقم الفون(1)» أو «رقم التواصل/الموبايل/التليفون» — مع الحفاظ على الصفر الأول.
-  let phone = "";
-  const phoneM = text.match(
-    /رقم\s*(?:ال)?(?:فون|تواصل|موبايل|محمول|تليفون|تلفون|هاتف)\s*(?:\(?\s*[0-9٠-٩]*\s*\)?)?\s*[:：]\s*([0-9٠-٩۰-۹\s\-]+)/
-  );
-  if (phoneM) phone = normalizeDigits(phoneM[1]).replace(/[^\d]/g, "");
-  if (!phone) {
-    const any = normalizeDigits(text).match(/\b(01\d{9})\b/);
-    if (any) phone = any[1];
+  // الهواتف: كل «رقم الفون(1)» / «رقم الفون(٢)» / «رقم التواصل…» بالترتيب. الأول هو
+  // الأساسي والتاني هو الإضافي — منفصلين عن العنوان. القيمة **على نفس السطر** بس
+  // (مسافات وشرطات)، عشان رقم في السطر اللي بعده مايتلزقش.
+  const phones: string[] = [];
+  const phoneRe =
+    /رقم\s*(?:ال)?(?:فون|تواصل|موبايل|محمول|تليفون|تلفون|هاتف)\s*(?:[\(（]\s*[0-9٠-٩۰-۹]*\s*[\)）])?\s*[:：]\s*([0-9٠-٩۰-۹ \t\-]+)/g;
+  for (const m of text.matchAll(phoneRe)) {
+    const n = normalizeDigits(m[1]).replace(/[^\d]/g, "");
+    if (n && !phones.includes(n)) phones.push(n);
   }
+  if (phones.length === 0) {
+    for (const m of normalizeDigits(text).matchAll(/(?<!\d)(01\d{9})(?!\d)/g)) {
+      if (!phones.includes(m[1])) phones.push(m[1]);
+    }
+  }
+  const phone = phones[0] ?? "";
+  const phone2 = phones[1] ?? "";
 
   // العنوان: كل السطور بعد «العنوان:» حتى أول حقل معروف تاني (أي «رقم ...»، نوع المنتج، ...).
   const addrM = text.match(
-    /العنوان\s*[:：]\s*([\s\S]*?)(?=\n\s*(?:رقم\b|نوع\s*المنتج|عدد\s*القطع|اللون|المقاس|الحجم|الشحن|الاجمالي|الإجمالي|التاريخ|بيدج)|$)/
+    // «رقم» بتتقفل بمسافة أو قوس مش بـ`\b`: الـ`\b` في JS بتفهم حروف ASCII بس، فكانت
+    // مابتقفش عند «رقم الفون» العربية والعنوان بيبلع سطور الهاتف كلها.
+    /العنوان\s*[:：]\s*([\s\S]*?)(?=\n\s*(?:رقم(?=[\s(（])|الهاتف|الموبايل|نوع\s*المنتج|عدد\s*القطع|اللون|المقاس|الحجم|السعر|الشحن|الخصم|الاجمالي|الإجمالي|التاريخ|بيدج|الاسم|اسم\s*العميل)|$)/
   );
   const addressBlock = addrM ? addrM[1].trim() : "";
   const { governorate, city } = extractLocation(addressBlock);
@@ -230,14 +281,17 @@ export function parsePasteMessage(raw: string): ParsedPaste {
     .filter(Boolean)
     .join("، ");
 
-  const productName = firstLineValue(text, /نوع\s*المنتج\s*[:：]\s*([^\n]+)/);
-
-  const productTerms = splitProductTerms(productName);
+  // محدود بالـlabel اللي بعده: «نوع المنتج : … عدد القطع: 4» ماياخدش «عدد القطع».
+  const productName = labelValue(text, "نوع\\s*المنتج");
+  const productSegments = parseProductSegments(productName);
+  // التوافق: الأنواع بلا كميات (بتفصل «و» كمان) للمسارات اللي لسه بتستخدمها.
+  const productTerms = productSegments.flatMap(seg => splitProductTerms(seg.text));
 
   let quantity = 1;
+  let quantityGiven = false;
   for (const l of ["عدد\\s*القطع", "الكمية", "العدد"]) {
     const n = labelNumber(text, l);
-    if (n != null && n >= 1) { quantity = Math.floor(n); break; }
+    if (n != null && n >= 1) { quantity = Math.floor(n); quantityGiven = true; break; }
   }
 
   const colorLine = firstLineValue(text, /اللون\s*[:：]\s*([^\n]+)/);
@@ -278,8 +332,10 @@ export function parsePasteMessage(raw: string): ParsedPaste {
   }
 
   return {
-    adName, customerName, customerPhone: phone, governorate, city, customerAddress,
-    productName, productTerms, colorSizePairs, quantity, color, size,
+    adName, customerName, customerPhone: phone, customerPhone2: phone2,
+    governorate, city, customerAddress,
+    productName, productTerms, productSegments, colorSizePairs,
+    quantity, quantityGiven, color, size,
     itemsSubtotal: subtotal, discount, shipping, totalAmount, totalMismatch,
   };
 }

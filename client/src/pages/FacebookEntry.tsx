@@ -37,6 +37,8 @@ import {
 type CustomerForm = {
   customerName: string;
   customerPhone: string;
+  /** رقم إضافي (اختياري) — منفصل عن العنوان. */
+  customerPhone2: string;
   governorate: string;
   customerAddress: string;
   city: string;
@@ -47,7 +49,7 @@ type CustomerForm = {
 };
 
 const EMPTY_CUSTOMER: CustomerForm = {
-  customerName: "", customerPhone: "", governorate: "", customerAddress: "",
+  customerName: "", customerPhone: "", customerPhone2: "", governorate: "", customerAddress: "",
   city: "", notes: "", adName: "", shipping: "0", discount: "0",
 };
 
@@ -172,6 +174,7 @@ export default function FacebookEntry() {
         ...c,
         customerName: p.customerName || c.customerName,
         customerPhone: p.customerPhone || c.customerPhone,
+        customerPhone2: p.customerPhone2 || c.customerPhone2,
         // المحافظة **يقين أو فراغ** — لو التحليل مش متأكد بيسيبها والموظف يختار.
         governorate: p.governorate || c.governorate,
         city: p.city || c.city,
@@ -211,7 +214,8 @@ export default function FacebookEntry() {
       setItems(built);
 
       if (!p.governorate) toast.info("لم نتعرف على المحافظة — اختر المحافظة");
-      setExpectedPieces(p.quantity || null);
+      // عدد القطع بيتقارن بالسلة بس لو العميل كتبه فعلًا — مش القيمة الافتراضية 1.
+      setExpectedPieces(p.quantityGiven ? p.quantity : null);
       setTotalMismatch(Boolean(p.totalMismatch));
       setTotalConfirmed(false);
 
@@ -256,6 +260,7 @@ export default function FacebookEntry() {
     addOrderMutation.mutate({
       customerName: cust.customerName.trim(),
       customerPhone: cust.customerPhone.trim(),
+      customerPhone2: cust.customerPhone2.trim() || undefined,
       governorate: cust.governorate.trim(),
       customerAddress: cust.customerAddress.trim(),
       city: cust.city.trim() || undefined,
@@ -275,6 +280,7 @@ export default function FacebookEntry() {
     setEditCust({
       customerName: order.customerName ?? "",
       customerPhone: order.customerPhone ?? "",
+      customerPhone2: order.customerPhone2 ?? "",
       governorate: order.governorate ?? "",
       customerAddress: order.customerAddress ?? "",
       city: order.city ?? "",
@@ -314,6 +320,7 @@ export default function FacebookEntry() {
       orderId: editingOrder.id,
       customerName: editCust.customerName.trim(),
       customerPhone: editCust.customerPhone.trim(),
+      customerPhone2: editCust.customerPhone2.trim() || undefined,
       governorate: editCust.governorate.trim(),
       city: editCust.city.trim() || undefined,
       customerAddress: editCust.customerAddress.trim(),
@@ -355,6 +362,10 @@ export default function FacebookEntry() {
       <div>
         <Label className="text-xs flex items-center gap-1"><Phone className="h-3.5 w-3.5" /> رقم الهاتف *</Label>
         <Input value={c.customerPhone} onChange={e => set({ ...c, customerPhone: e.target.value })} className="mt-1" inputMode="tel" />
+      </div>
+      <div>
+        <Label className="text-xs flex items-center gap-1"><Phone className="h-3.5 w-3.5" /> رقم هاتف إضافي (اختياري)</Label>
+        <Input value={c.customerPhone2} onChange={e => set({ ...c, customerPhone2: e.target.value })} className="mt-1" inputMode="tel" data-testid="phone2" />
       </div>
       <GovernorateCitySelect
         governorate={c.governorate}

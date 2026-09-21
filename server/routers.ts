@@ -15,9 +15,14 @@ import {
   testChannelConnection,
 } from "./easyorder.service";
 import { parseFacebookOrder } from "../shared/facebookOrderParser";
-import { matchImportItem } from "./productMatching";
+import { matchImportItem, isExactCatalogTerm } from "./productMatching";
 import { parsePasteMessage } from "./pasteParser";
-import { buildDraftLines, distributeSubtotal } from "../shared/orderLines";
+import {
+  buildDraftLines,
+  distributeSubtotal,
+  expandSegments,
+  allocateQuantities,
+} from "../shared/orderLines";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -5249,6 +5254,8 @@ export const appRouter = router({
         z.object({
           customerName: z.string().min(1),
           customerPhone: z.string().min(5),
+          /** رقم إضافي لو العميل كتب رقمين («رقم الفون(٢)») — منفصل عن العنوان. */
+          customerPhone2: z.string().max(20).optional(),
           governorate: z.string().min(1),
           customerAddress: z.string().min(1),
           /** City / area within the governorate, when the message mentioned one. */
@@ -5380,6 +5387,9 @@ export const appRouter = router({
             businessId,
             customerName: input.customerName,
             customerPhone: normalizedCustomerPhone,
+            customerPhone2: input.customerPhone2?.trim()
+              ? normalizeEgyptianPhone(input.customerPhone2) || input.customerPhone2.trim()
+              : null,
             governorate: input.governorate,
             customerAddress: input.customerAddress,
             city: input.city ?? null,
@@ -5527,6 +5537,7 @@ export const appRouter = router({
           orderId: z.number().int().min(1),
           customerName: z.string().min(1),
           customerPhone: z.string().min(5),
+          customerPhone2: z.string().max(20).optional(),
           governorate: z.string().min(1),
           // createOrder has always accepted a city; updateOrder never did, so a city typed
           // at creation could be read but never corrected.
@@ -5606,6 +5617,7 @@ export const appRouter = router({
           .set({
             customerName: input.customerName,
             customerPhone: input.customerPhone,
+            customerPhone2: input.customerPhone2?.trim() || null,
             governorate: input.governorate,
             city: input.city ?? null,
             customerAddress: input.customerAddress,
@@ -5702,11 +5714,28 @@ export const appRouter = router({
         // **سطر لكل نوع مذكور.** «عين حورس وذكر التحصين» + «عدد القطع: 2» = قطعتين
         // مختلفتين، وكانوا بيتحوّلوا لسطر واحد فالنوع التاني بيضيع. عدد القطع أكبر من
         // الأنواع → سطور ناقصة الموظف بيكمّلها (مش توزيع بالتخمين).
-        const draft = buildDraftLines(
-          parsed.productTerms,
-          parsed.quantity,
-          parsed.colorSizePairs
-        );
+        //
+        // مصدرين للسطور:
+        //   • أزواج لون/مقاس متعددة («بيج مقاس 10 اسود مقاس 6») → سطر لكل زوج.
+        //   • غير كده: أجزاء سطر المنتج بكمياتها («٢ ساده، 1 نقش وعين حورس»)، و«و»
+        //     بتتفصل **ضد كتالوج النشاط** بمطابقة دقيقة، والكميات الناقصة من باقي
+        //     «عدد القطع».
+        const draft =
+          parsed.colorSizePairs.length > 1
+            ? buildDraftLines(parsed.productTerms, parsed.quantity, parsed.colorSizePairs)
+            : (() => {
+                const expanded = expandSegments(parsed.productSegments, t =>
+                  isExactCatalogTerm(t, catalog)
+                );
+                const lines = allocateQuantities(expanded, parsed.quantity, parsed.quantityGiven);
+                // زوج لون/مقاس واحد بيتطبّق على السطر الوحيد بس — مايتنسخش على كل نوع.
+                const pair = parsed.colorSizePairs[0];
+                if (pair && lines.length === 1) {
+                  lines[0].color = pair.color || undefined;
+                  lines[0].size = pair.size || undefined;
+                }
+                return lines;
+              })();
         const { unitPrices } = distributeSubtotal(
           draft.map(l => l.quantity),
           parsed.itemsSubtotal
