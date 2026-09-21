@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import fs from "fs";
-import { analyzePasteV2, extractSegmentPrice, signParseToken, verifyParseToken } from "./orderParse.service";
-import { createSegmentResolver, parseAiOutput, sanitizeSegments, readResolverConfig } from "./ai/segmentResolver";
+import {
+  analyzePasteV2, extractSegmentPrice, signParseToken, verifyParseToken,
+  canonicalFingerprint, canonicalParse, compareLinesToCanonical, PARSE_TOKEN_TTL_MS,
+} from "./orderParse.service";
+import { createSegmentResolver, parseAiOutput, sanitizeSegments, readResolverConfig, rateLimitedResolver } from "./ai/segmentResolver";
+import { aiRateKey, AI_RATE_LIMIT_MAX, AI_RATE_LIMIT_WINDOW_MS, __resetAiRateLimitForTests } from "./ai/aiRateLimit";
 import type { MatchCatalog } from "./productMatching";
 import { AI_MAX_SEGMENT_CHARS, AI_MAX_SEGMENTS } from "../shared/orderParse";
 
@@ -170,15 +174,86 @@ describe("🔒 AI fallback — للأجزاء الغامضة فقط، والسي
   });
 });
 
-describe("🔒 parse token", () => {
-  it("🔑 يتحقق لنفس الموظف/النشاط/النص، ويرفض أي تغيير", () => {
-    const rawText = REAL;
-    const tok = signParseToken({ employeeId: 7, businessId: 3, rawHash: require("crypto").createHash("sha256").update(rawText).digest("hex") });
-    expect(verifyParseToken(tok, { employeeId: 7, businessId: 3, rawText })).not.toBeNull();
-    expect(verifyParseToken(tok, { employeeId: 8, businessId: 3, rawText })).toBeNull();
-    expect(verifyParseToken(tok, { employeeId: 7, businessId: 4, rawText })).toBeNull();
-    expect(verifyParseToken(tok, { employeeId: 7, businessId: 3, rawText: rawText + " " })).toBeNull();
-    expect(verifyParseToken(tok.slice(0, -2) + "zz", { employeeId: 7, businessId: 3, rawText })).toBeNull();
+describe("🔒 parse token — موقّع ببصمة النتيجة القانونية وصلاحية ساعتين", () => {
+  const rawText = REAL;
+  const rawHash = require("crypto").createHash("sha256").update(rawText).digest("hex");
+  it("🔑 يتحقق لنفس الموظف/النشاط/النص/البصمة، ويرفض أي تغيير بسبب واضح", async () => {
+    const v2 = await analyzePasteV2(rawText, CATALOG);
+    const fp = canonicalFingerprint(v2);
+    const tok = signParseToken({ employeeId: 7, businessId: 3, rawHash, fp });
+    expect(verifyParseToken(tok, { employeeId: 7, businessId: 3, rawText, fingerprint: fp }).ok).toBe(true);
+    expect(verifyParseToken(tok, { employeeId: 8, businessId: 3, rawText, fingerprint: fp })).toMatchObject({ ok: false, reason: "identity" });
+    expect(verifyParseToken(tok, { employeeId: 7, businessId: 4, rawText, fingerprint: fp })).toMatchObject({ ok: false, reason: "identity" });
+    expect(verifyParseToken(tok, { employeeId: 7, businessId: 3, rawText: rawText + " ", fingerprint: fp })).toMatchObject({ ok: false, reason: "text" });
+    expect(verifyParseToken(tok.slice(0, -2) + "zz", { employeeId: 7, businessId: 3, rawText, fingerprint: fp })).toMatchObject({ ok: false, reason: "signature" });
+    // تعديل معرّف في النتيجة (المتصفح) → بصمة مختلفة → مرفوض
+    const tampered = structuredClone(v2); tampered.lines[0].match!.variantId = 104;
+    expect(verifyParseToken(tok, { employeeId: 7, businessId: 3, rawText, fingerprint: canonicalFingerprint(tampered) })).toMatchObject({ ok: false, reason: "result" });
+    // تعديل سعر/كمية في النتيجة الموقّعة برضه بيغيّر البصمة
+    const t2 = structuredClone(v2); t2.lines[0].unitPrice = 1;
+    expect(canonicalFingerprint(t2)).not.toBe(fp);
+    const t3 = structuredClone(v2); t3.lines[1].quantity = 5;
+    expect(canonicalFingerprint(t3)).not.toBe(fp);
+  });
+  it("🔒 الصلاحية ساعتان بالميلي ثانية: قبلها صالح، بعدها منتهي (fake timers)", () => {
+    expect(PARSE_TOKEN_TTL_MS).toBe(2 * 60 * 60 * 1000);
+    vi.useFakeTimers();
+    try {
+      const t0 = new Date("2026-09-22T10:00:00Z").getTime();
+      vi.setSystemTime(t0);
+      const tok = signParseToken({ employeeId: 7, businessId: 3, rawHash, fp: "x" });
+      vi.setSystemTime(t0 + PARSE_TOKEN_TTL_MS - 1);
+      expect(verifyParseToken(tok, { employeeId: 7, businessId: 3, rawText }).ok).toBe(true);
+      vi.setSystemTime(t0 + PARSE_TOKEN_TTL_MS + 1);
+      expect(verifyParseToken(tok, { employeeId: 7, businessId: 3, rawText })).toMatchObject({ ok: false, reason: "expired" });
+    } finally { vi.useRealTimers(); }
+  });
+  it("🔒 السر إلزامي من البيئة — بلا fallback", () => {
+    const saved = process.env.JWT_SECRET; delete process.env.JWT_SECRET;
+    try { expect(() => signParseToken({ employeeId: 1, businessId: 1, rawHash: "h", fp: "f" })).toThrow(/JWT_SECRET/); }
+    finally { process.env.JWT_SECRET = saved; }
+    const src = fs.readFileSync("server/orderParse.service.ts", "utf8");
+    expect(src).not.toMatch(/JWT_SECRET\s*(\?\?|\|\|)\s*["']/);
+  });
+  it("🔑 السطور المقفولة = واثق حتميًا أو AI متحقَّق؛ غير المقفول يختاره الموظف", async () => {
+    const v2 = await analyzePasteV2("نوع المنتج: ٢ سادة، 1 نجمة داوود\nعدد القطع: 3\nالسعر: 600", CATALOG);
+    const canon = canonicalParse(v2).lines;
+    expect(canon.map(l => l.locked)).toEqual([true, false]);
+    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }, { productId: 10, variantId: 104 }], canon)).toBeNull();
+    expect(compareLinesToCanonical([{ productId: 10, variantId: 102 }, { productId: 10, variantId: 104 }], canon)).toContain("تغيّر عن المطابقة الموقّعة");
+    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }, { productId: undefined }], canon)).toContain("اختر نوع النقش للسطر رقم 2");
+    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }], canon)).toContain("عدد السطور");
+  });
+});
+
+describe("🔒 حد استدعاء الـAI لكل (موظف + نشاط)", () => {
+  it("🔒 بعد 20 محاولة في 10 دقائق مفيش request جديد للمزوّد، والنتيجة حتمية؛ النافذة بتتجدد", async () => {
+    __resetAiRateLimitForTests();
+    vi.useFakeTimers();
+    try {
+      const t0 = new Date("2026-09-22T12:00:00Z").getTime();
+      vi.setSystemTime(t0);
+      const provider = vi.fn(async (segments: string[]) => segments.map(s => ({ segmentText: s, intendedText: "عين حورس", quantity: null, unitPrice: null, confidence: 0.8 })));
+      const limited = rateLimitedResolver(provider, aiRateKey(7, 3))!;
+      const TEXT = "نوع المنتج: ٢ سادة، 1 عين حرس\nعدد القطع: 3\nالسعر: 600";
+      for (let i = 0; i < AI_RATE_LIMIT_MAX; i++) expect((await analyzePasteV2(TEXT, CATALOG, { resolver: limited })).parseSource).toBe("mixed");
+      expect(provider).toHaveBeenCalledTimes(AI_RATE_LIMIT_MAX);
+      const over = await analyzePasteV2(TEXT, CATALOG, { resolver: limited });
+      expect(provider).toHaveBeenCalledTimes(AI_RATE_LIMIT_MAX); // مفيش نداء جديد
+      expect(over.parseSource).toBe("deterministic"); expect(over.lines[1].confidence).toBe("unresolved");
+      // موظف/نشاط تاني مفتاح مستقل
+      const other = rateLimitedResolver(provider, aiRateKey(8, 3))!;
+      await analyzePasteV2(TEXT, CATALOG, { resolver: other });
+      expect(provider).toHaveBeenCalledTimes(AI_RATE_LIMIT_MAX + 1);
+      // بعد انقضاء النافذة يرجع مسموح
+      vi.setSystemTime(t0 + AI_RATE_LIMIT_WINDOW_MS + 1);
+      await analyzePasteV2(TEXT, CATALOG, { resolver: limited });
+      expect(provider).toHaveBeenCalledTimes(AI_RATE_LIMIT_MAX + 2);
+      // التحليل الحتمي (كل السطور محلولة) مابيعدّش ولا بينادي
+      const before = provider.mock.calls.length;
+      await analyzePasteV2(REAL, CATALOG, { resolver: limited });
+      expect(provider.mock.calls.length).toBe(before);
+    } finally { vi.useRealTimers(); __resetAiRateLimitForTests(); }
   });
 });
 
@@ -188,10 +263,14 @@ describe("🔒 حراس المصدر", () => {
     const i = routers.indexOf("const pasteOrigin = input.rawText != null || input.parseToken != null");
     expect(i).toBeGreaterThan(0);
     const block = routers.slice(i, i + 2500);
-    expect(block).toContain("verifyParseToken(input.parseToken, { employeeId: ctx.employee.id, businessId, rawText: input.rawText })");
-    expect(block).toContain("analyzePasteV2(input.rawText, catalog, {})");
+    expect(block).toContain("fingerprint: canonicalFingerprint(input.parseResult)");
+    expect(block).toContain("analyzePasteV2(input.rawText, catalog, {})"); // حتمي — بلا resolver
+    expect(block).toContain("compareLinesToCanonical(input.selectedProducts, canon.lines)");
     expect(block).toContain("pasteSaveBlockers(");
     expect(block).toContain("employeeCatalogBusinessIds(empScope(ctx))");
+    // مفيش أي اتصال بالـAI وقت الحفظ
+    const addOrderBlock = routers.slice(routers.indexOf("addOrder: requireEmployeePermission"), routers.indexOf("myOrders: requireEmployeePermission"));
+    expect(addOrderBlock).not.toMatch(/activeSegmentResolver|rateLimitedResolver|createSegmentResolver|resolver:/);
   });
   it("🔒 order_items بلا أعمدة جديدة، وسجل التحليل fail-safe", () => {
     const schema = fs.readFileSync("drizzle/schema.ts", "utf8");

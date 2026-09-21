@@ -198,7 +198,41 @@ export async function analyzePasteV2(
   };
 }
 
-// ── parse token: ربط الحفظ بالنص الملصوق نفسه (يمنع تعديل/حذف الـmetadata لتجاوز التحقق) ──
+// ── النتيجة القانونية وبصمتها ──
+
+/**
+ * السطر ده معرّفاته **مقفولة** وقت الحفظ: اتحل بثقة حتمية أو بمطابقة AI اتحقق منها
+ * السيرفر على كتالوج النشاط. السطر الغامض (تقريبي) أو غير المحلول هو اللي الموظف
+ * بيختار نوعه (من كتالوج نشاطه بس).
+ */
+export function lineIdsLocked(line: Pick<ParsedLine, "confidence" | "aiAssisted" | "match">): boolean {
+  return !!line.match && (line.confidence === "confident" || line.aiAssisted);
+}
+
+/** الجزء الملزِم من النتيجة (اللي التوكن بيوقّع عليه) — بلا الحقول الشخصية. */
+export function canonicalParse(v2: ParseResultV2) {
+  const f = v2.fields;
+  return {
+    parserVersion: v2.parserVersion,
+    parseSource: v2.parseSource,
+    totals: {
+      pieces: f.pieces.value, itemsTotal: f.itemsTotal.value, shipping: f.shipping.value,
+      discount: f.discount.value, finalTotal: f.finalTotal.value,
+    },
+    lines: v2.lines.map(l => ({
+      segmentText: l.segmentText, quantity: l.quantity, unitPrice: l.unitPrice, priceSource: l.priceSource,
+      productId: l.match?.productId ?? null, variantId: l.match?.variantId ?? null,
+      confidence: l.confidence, aiAssisted: l.aiAssisted, locked: lineIdsLocked(l),
+    })),
+  };
+}
+
+/** بصمة النتيجة القانونية — أي تعديل في معرّف/كمية/سعر/إجمالي بيغيّرها. */
+export function canonicalFingerprint(v2: ParseResultV2): string {
+  return createHash("sha256").update(JSON.stringify(canonicalParse(v2)), "utf8").digest("hex");
+}
+
+// ── parse token: ربط الحفظ بالنص الملصوق **والنتيجة القانونية** (يمنع تعديل/حذف الـmetadata) ──
 
 export function rawTextHash(rawText: string): string {
   return createHash("sha256").update(String(rawText ?? "").replace(/\r/g, ""), "utf8").digest("hex");
@@ -208,41 +242,85 @@ export interface ParseTokenPayload {
   employeeId: number;
   businessId: number;
   rawHash: string;
+  /** بصمة النتيجة القانونية (canonicalFingerprint). */
+  fp: string;
   iat: number;
 }
 
-const TOKEN_TTL_MS = 6 * 60 * 60 * 1000;
+/** صلاحية توكن التحليل: ساعتان بالميلي ثانية. */
+export const PARSE_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
 
+/** السر إلزامي من البيئة — مفيش قيمة افتراضية ولا fallback في الكود. */
 function secret(): string {
   const s = process.env.JWT_SECRET;
-  if (!s) throw new Error("JWT_SECRET غير مضبوط");
+  if (!s) throw new Error("JWT_SECRET غير مضبوط — لا يمكن توقيع/التحقق من توكن التحليل");
   return s;
 }
 
-export function signParseToken(p: Omit<ParseTokenPayload, "iat">): string {
-  const payload = Buffer.from(JSON.stringify({ ...p, iat: Date.now() } satisfies ParseTokenPayload)).toString("base64url");
+export function signParseToken(p: Omit<ParseTokenPayload, "iat"> & { iat?: number }): string {
+  const body: ParseTokenPayload = { employeeId: p.employeeId, businessId: p.businessId, rawHash: p.rawHash, fp: p.fp, iat: p.iat ?? Date.now() };
+  const payload = Buffer.from(JSON.stringify(body)).toString("base64url");
   const sig = createHmac("sha256", secret()).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
-/** يرجّع الحمولة لو التوقيع سليم وغير منتهٍ ومطابق للموظف/النشاط/النص — وإلا null. */
+export type ParseTokenFailure = "malformed" | "signature" | "identity" | "text" | "result" | "expired";
+
+/**
+ * يتحقق من التوقيع والموظف والنشاط والنص وبصمة النتيجة والصلاحية.
+ * بيرجّع الحمولة أو سبب الفشل (للرسالة) — مش null مبهم.
+ */
 export function verifyParseToken(
   token: string,
-  expect: { employeeId: number; businessId: number; rawText: string }
-): ParseTokenPayload | null {
+  expect: { employeeId: number; businessId: number; rawText: string; fingerprint?: string; now?: number }
+): { ok: true; payload: ParseTokenPayload } | { ok: false; reason: ParseTokenFailure } {
   const [payload, sig] = String(token ?? "").split(".");
-  if (!payload || !sig) return null;
+  if (!payload || !sig) return { ok: false, reason: "malformed" };
   const good = createHmac("sha256", secret()).update(payload).digest("base64url");
   const a = Buffer.from(sig), b = Buffer.from(good);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false, reason: "signature" };
   let p: ParseTokenPayload;
   try {
     p = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
   } catch {
-    return null;
+    return { ok: false, reason: "malformed" };
   }
-  if (p.employeeId !== expect.employeeId || p.businessId !== expect.businessId) return null;
-  if (p.rawHash !== rawTextHash(expect.rawText)) return null;
-  if (!Number.isFinite(p.iat) || Date.now() - p.iat > TOKEN_TTL_MS) return null;
-  return p;
+  if (p.employeeId !== expect.employeeId || p.businessId !== expect.businessId) return { ok: false, reason: "identity" };
+  if (p.rawHash !== rawTextHash(expect.rawText)) return { ok: false, reason: "text" };
+  if (expect.fingerprint != null && p.fp !== expect.fingerprint) return { ok: false, reason: "result" };
+  const now = expect.now ?? Date.now();
+  if (!Number.isFinite(p.iat) || now - p.iat > PARSE_TOKEN_TTL_MS) return { ok: false, reason: "expired" };
+  return { ok: true, payload: p };
+}
+
+export const PARSE_TOKEN_MESSAGES: Record<ParseTokenFailure, string> = {
+  malformed: "توكن التحليل غير صالح — أعد التحليل ثم احفظ",
+  signature: "توكن التحليل غير صالح — أعد التحليل ثم احفظ",
+  identity: "توكن التحليل لا يخص هذا الموظف/النشاط — أعد التحليل ثم احفظ",
+  text: "الرسالة تغيّرت بعد التحليل — أعد التحليل ثم احفظ",
+  result: "نتيجة التحليل تغيّرت في المتصفح — أعد التحليل ثم احفظ",
+  expired: "انتهت صلاحية التحليل (ساعتان) — أعد التحليل ثم احفظ",
+};
+
+/**
+ * مقارنة السطور المُرسلة بالنتيجة القانونية الموقّعة:
+ *   • نفس العدد والترتيب.
+ *   • سطر مقفول (حتمي واثق أو AI متحقَّق منه) → نفس productId/variantId بالظبط.
+ *   • سطر غير مقفول → أي منتج/تركيبة (ملكيتها للنشاط بتتفحص بعدها بـrequireAllOwned).
+ *   • كل سطر لازم يكون ليه productId (مفيش غير محلول وقت الحفظ).
+ * بيرجّع رسالة المنع أو null.
+ */
+export function compareLinesToCanonical(
+  submitted: { productId?: number | null; variantId?: number | null }[],
+  canonical: ReturnType<typeof canonicalParse>["lines"]
+): string | null {
+  if (submitted.length !== canonical.length)
+    return `عدد السطور (${submitted.length}) لا يطابق نتيجة التحليل (${canonical.length}) — أعد التحليل`;
+  for (let i = 0; i < canonical.length; i++) {
+    const s = submitted[i], c = canonical[i];
+    if (s.productId == null) return `اختر نوع النقش للسطر رقم ${i + 1}`;
+    if (c.locked && (s.productId !== c.productId || (s.variantId ?? null) !== c.variantId))
+      return `السطر رقم ${i + 1} («${c.segmentText}») تغيّر عن المطابقة الموقّعة — أعد التحليل`;
+  }
+  return null;
 }

@@ -6,6 +6,7 @@ import {
   AI_TIMEOUT_MS,
   type AiSegment,
 } from "../../shared/orderParse";
+import { allowAiCall } from "./aiRateLimit";
 
 /**
  * AI fallback لأجزاء سطر المنتج الغامضة — **بس**.
@@ -117,5 +118,36 @@ export function createSegmentResolver(cfg: ResolverConfig = readResolverConfig()
       }
     }
     return null;
+  };
+}
+
+// ── اختيار المزوّد وقت التشغيل + حد الاستدعاء ──
+
+let factoryOverride: (() => SegmentResolver | null) | null = null;
+/** للاختبار فقط: يستبدل مصنع المزوّد (mock) بدل الاتصال بالبيئة. null = رجوع للبيئة. */
+export function __setSegmentResolverFactoryForTests(f: (() => SegmentResolver | null) | null): void {
+  factoryOverride = f;
+}
+
+/** المزوّد الفعلي (من البيئة أو الـmock) — null = حتمي فقط. */
+export function activeSegmentResolver(): { resolver: SegmentResolver | null; provider: string | null } {
+  if (factoryOverride) return { resolver: factoryOverride(), provider: "test" };
+  const cfg = readResolverConfig();
+  const resolver = createSegmentResolver(cfg);
+  return { resolver, provider: resolver ? `${cfg.provider}:${cfg.model}` : null };
+}
+
+/**
+ * يلفّ المزوّد بحد الاستدعاء لكل (موظف + نشاط): العدّ بيحصل **لحظة النداء الفعلي** بس
+ * (يعني لما فيه أجزاء غير محلولة)، ولما الحد يتخطى بيرجع null والتحليل يكمل حتميًا.
+ */
+export function rateLimitedResolver(inner: SegmentResolver | null, key: string): SegmentResolver | null {
+  if (!inner) return null;
+  return async (segments, terms) => {
+    if (!allowAiCall(key)) {
+      console.warn(`[orderParse:ai] rate limit reached for ${key} — deterministic only`);
+      return null;
+    }
+    return inner(segments, terms);
   };
 }

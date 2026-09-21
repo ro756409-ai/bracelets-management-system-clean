@@ -5,6 +5,9 @@ import { appRouter } from "./routers";
 import { getDb, createEmployee, createProductWithVariants, getOrderItemsForOrders } from "./db";
 import { employees, orders, orderItems, orderParseAudits, products, productVariants } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
+import { __setSegmentResolverFactoryForTests } from "./ai/segmentResolver";
+import { __resetAiRateLimitForTests } from "./ai/aiRateLimit";
+import { signParseToken, canonicalFingerprint, rawTextHash, PARSE_TOKEN_TTL_MS } from "./orderParse.service";
 
 /**
  * Hybrid Order Parser — end-to-end على MySQL عبر appRouter/createCaller:
@@ -61,6 +64,7 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
     ids.empIds.push(empA, empB);
   });
   afterAll(async () => {
+    __setSegmentResolverFactoryForTests(null); __resetAiRateLimitForTests();
     const d = await getDb(); if (!d) return;
     if (ids.orderIds.length) {
       try { await d.delete(orderParseAudits).where(inArray(orderParseAudits.orderId, ids.orderIds)); } catch { /* الجدول ممكن يكون مش موجود */ }
@@ -102,7 +106,11 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
     const res = await caller(empA).facebookEntry.parsePaste({ text: REAL });
     const base = { ...CUST, totalAmount: 750, shippingCost: 50, discount: 0, rawText: REAL, parseToken: res.parseToken!, parseResult: res.v2 } as any;
     const lines = linesOf(res.v2);
-    const qty = await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: lines.slice(0, 2), totalAmount: 575 }));
+    // حذف سطر → عدد السطور مش مطابق للنتيجة الموقّعة (قبل أي حساب)
+    const fewer = await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: lines.slice(0, 2), totalAmount: 575 }));
+    expect(fewer.code).toBe("BAD_REQUEST"); expect(fewer.message).toContain("عدد السطور");
+    // نفس السطور بكمية معدّلة (2→1) → مجموع الكميات 3 ≠ عدد القطع 4
+    const qty = await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: lines.map((l: any, i: number) => (i === 0 ? { ...l, quantity: 1 } : l)), totalAmount: 575 }));
     expect(qty.code).toBe("BAD_REQUEST"); expect(qty.message).toContain("عدد القطع");
     const price = await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: lines.map((l: any) => ({ ...l, unitPrice: 160 })), totalAmount: 690 }));
     expect(price.code).toBe("BAD_REQUEST"); expect(price.message).toContain("لا يساوي إجمالي المنتجات");
@@ -119,12 +127,27 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
   it("🔒 لا تجاوز بحذف/تعديل الـmetadata: rawText بلا توكن، توكن لنص مختلف، توكن موظف آخر — كلها مرفوضة", async () => {
     const res = await caller(empA).facebookEntry.parsePaste({ text: REAL });
     const lines = linesOf(res.v2);
-    const base = { ...CUST, selectedProducts: lines, totalAmount: 750, shippingCost: 50 } as any;
+    const base = { ...CUST, selectedProducts: lines, totalAmount: 750, shippingCost: 50, parseResult: res.v2 } as any;
     expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL }))).message).toContain("بيانات التحليل ناقصة");
     expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, parseToken: res.parseToken }))).message).toContain("بيانات التحليل ناقصة");
-    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL.replace("700", "400"), parseToken: res.parseToken }))).message).toContain("توكن التحليل غير صالح");
+    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL, parseToken: res.parseToken, parseResult: undefined }))).message).toContain("بيانات التحليل ناقصة");
+    // نفس التوكن مع rawText مختلف
+    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL.replace("700", "400"), parseToken: res.parseToken }))).message).toContain("الرسالة تغيّرت");
+    // توكن موظف/نشاط آخر
     const resB = await caller(empB).facebookEntry.parsePaste({ text: REAL });
-    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL, parseToken: resB.parseToken }))).message).toContain("توكن التحليل غير صالح");
+    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL, parseToken: resB.parseToken, parseResult: resB.v2 }))).message).toContain("لا يخص هذا الموظف");
+    // تعديل النتيجة في المتصفح (معرّف سطر) → البصمة مختلفة
+    const tampered = structuredClone(res.v2); tampered.lines[0].match!.variantId = vA[3];
+    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL, parseToken: res.parseToken, parseResult: tampered }))).message).toContain("نتيجة التحليل تغيّرت");
+    // تغيير معرّف سطر مقفول في السطور المُرسلة (النتيجة سليمة) → مرفوض
+    const swapped = lines.map((l: any, i: number) => (i === 0 ? { ...l, variantId: vA[3] } : l));
+    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: swapped, rawText: REAL, parseToken: res.parseToken }))).message).toContain("تغيّر عن المطابقة الموقّعة");
+    // توكن منتهي (iat قبل ساعتين وثانية) بنفس البصمة
+    const expired = signParseToken({ employeeId: empA, businessId: A.businessId, rawHash: rawTextHash(REAL), fp: canonicalFingerprint(res.v2), iat: Date.now() - PARSE_TOKEN_TTL_MS - 1000 });
+    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL, parseToken: expired }))).message).toContain("انتهت صلاحية");
+    // ولا أوردر اتكتب
+    const count = await (await getDb())!.select({ id: orders.id }).from(orders).where(eq(orders.businessId, A.businessId));
+    expect(count.length).toBe(1);
   });
 
   it("🔒 عزل: نفس أسماء الأنواع في نشاط B — تحليل B يطابق تركيبات B فقط، وA لا يقدر يحفظ بتركيبة B", async () => {
@@ -146,6 +169,71 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
     expect(r.success).toBe(true);
     const o = await trackOrder(r.orderNumber);
     expect((await (await getDb())!.select().from(orderParseAudits).where(eq(orderParseAudits.orderId, o.id))).length).toBe(0);
+  });
+
+  const AI_TEXT = `الاسم: عميل الذكاء\nالعنوان: القاهرة شارع 9\nرقم الفون(1): 01044444444\nنوع المنتج: ٢ سادة، 1 عين حرس\nعدد القطع: 3\nالسعر: 600 الشحن: 50 الإجمالي: 650`;
+
+  it("🔑 deterministic unresolved → AI يحلّه (بمطابقة السيرفر داخل النشاط) → الواجهة تستلمه محلولًا → addOrder ينجح بنفس المعرّفات، بلا نداء AI ثانٍ، وaudit واحد", async () => {
+    const provider = { calls: 0 };
+    __setSegmentResolverFactoryForTests(() => async (segments) => {
+      provider.calls++;
+      return segments.map(sg => ({ segmentText: sg, intendedText: "عين حورس", quantity: null, unitPrice: null, confidence: 0.85 }));
+    });
+    try {
+      const res = await caller(empA).facebookEntry.parsePaste({ text: AI_TEXT });
+      expect(provider.calls).toBe(1);
+      expect(res.v2.parseSource).toBe("mixed");
+      const line = res.v2.lines[1];
+      expect(line).toMatchObject({ segmentText: "عين حرس", aiAssisted: true, confidence: "ambiguous", match: { productId: prodA, variantId: vA[2] } });
+      expect(res.v2.unresolvedSegments).toEqual([]);
+      const lines = linesOf(res.v2);
+      expect(lines.every((l: any) => l.productId === prodA)).toBe(true);
+      const r = await caller(empA).facebookEntry.addOrder({
+        ...CUST, customerPhone: "01044444444", selectedProducts: lines, totalAmount: 650, shippingCost: 50, discount: 0,
+        rawText: AI_TEXT, parseToken: res.parseToken!, parseResult: res.v2,
+      } as any);
+      expect(r.success).toBe(true); expect(r.needsReview).toBe(false);
+      expect(provider.calls).toBe(1); // الحفظ مااتصلش بالـAI
+      const o = await trackOrder(r.orderNumber);
+      const items = (await getOrderItemsForOrders([o.id])).get(o.id) ?? [];
+      expect(items.map(i => [i.productId, i.variantId, i.quantity, Number(i.unitPrice)])).toEqual([[prodA, vA[0], 2, 200], [prodA, vA[2], 1, 200]]);
+      const audits = await (await getDb())!.select().from(orderParseAudits).where(eq(orderParseAudits.orderId, o.id));
+      expect(audits.length).toBe(1);
+      expect(audits[0].parseSource).toBe("mixed");
+      expect(JSON.parse(audits[0].resultJson).client.lines[1].aiAssisted).toBe(true);
+    } finally { __setSegmentResolverFactoryForTests(null); }
+  });
+
+  it("🔒 تعديل مطابقة الـAI في المتصفح (السطور أو النتيجة) → addOrder يرفض", async () => {
+    __setSegmentResolverFactoryForTests(() => async (segments) => segments.map(sg => ({ segmentText: sg, intendedText: "عين حورس", quantity: null, unitPrice: null, confidence: 0.85 })));
+    try {
+      const res = await caller(empA).facebookEntry.parsePaste({ text: AI_TEXT });
+      const lines = linesOf(res.v2);
+      const base = { ...CUST, customerPhone: "01044444445", totalAmount: 650, shippingCost: 50, rawText: AI_TEXT, parseToken: res.parseToken!, parseResult: res.v2 } as any;
+      const swapped = lines.map((l: any, i: number) => (i === 1 ? { ...l, variantId: vA[3] } : l)); // نوع تاني مملوك — لكن السطر مقفول
+      expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: swapped }))).message).toContain("تغيّر عن المطابقة الموقّعة");
+      const foreign = lines.map((l: any, i: number) => (i === 1 ? { ...l, productId: prodB, variantId: vB[2] } : l)); // نشاط آخر
+      expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: foreign }))).code).not.toBe("ok");
+      const tampered = structuredClone(res.v2); tampered.lines[1].match = { productId: prodB, productName: "x", variantId: vB[2], variantName: "x" };
+      expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: linesOf(tampered), parseResult: tampered }))).message).toContain("نتيجة التحليل تغيّرت");
+    } finally { __setSegmentResolverFactoryForTests(null); }
+  });
+
+  it("🔑 مزوّد AI غير متاح (يرمي): التحليل الحتمي يرجع unresolved، الموظف يختار النوع من نشاطه، والحفظ ينجح", async () => {
+    __setSegmentResolverFactoryForTests(() => async () => { throw new Error("provider down"); });
+    try {
+      const res = await caller(empA).facebookEntry.parsePaste({ text: AI_TEXT });
+      expect(res.v2.parseSource).toBe("deterministic");
+      expect(res.v2.lines[1]).toMatchObject({ segmentText: "عين حرس", confidence: "unresolved", match: null });
+      const lines = linesOf(res.v2).map((l: any, i: number) => (i === 1 ? { ...l, productId: prodA, variantId: vA[2] } : l)); // اختيار الموظف
+      const r = await caller(empA).facebookEntry.addOrder({
+        ...CUST, customerPhone: "01044444446", selectedProducts: lines, totalAmount: 650, shippingCost: 50, discount: 0,
+        rawText: AI_TEXT, parseToken: res.parseToken!, parseResult: res.v2,
+      } as any);
+      expect(r.success).toBe(true);
+      const o = await trackOrder(r.orderNumber);
+      expect(((await getOrderItemsForOrders([o.id])).get(o.id) ?? []).map(i => i.variantId)).toEqual([vA[0], vA[2]]);
+    } finally { __setSegmentResolverFactoryForTests(null); }
   });
 
   it("🛡️ قبل Migration 0038 (الجدول غير موجود): أوردر اللصق يتحفظ عادي، بلا 500", async () => {

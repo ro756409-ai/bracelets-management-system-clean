@@ -142,6 +142,8 @@ export function LegacyEngravingPicker({
     return scoped.length ? scoped : types.length ? types : allLegacyTypes;
   };
 
+  /** سطر جاي من التحليل ومعرّفاته موقّعة (نفس قاعدة السيرفر lineIdsLocked). */
+  const locked = (it: PickedItem) => !!it.segmentText && !!it.productId && (it.confidence === "confident" || !!it.aiAssisted);
   const rowTone = (it: PickedItem) =>
     it.needsPick || it.needsVariantReview || it.confidence === "unresolved"
       ? "bg-destructive/5"
@@ -225,6 +227,20 @@ export function LegacyEngravingPicker({
                             {typeOptions(it).map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
                           </SelectContent>
                         </Select>
+                      </div>
+                    ) : locked(it) ? (
+                      <div className="min-w-0">
+                        {/* سطر مقفول: مطابقة حتمية واثقة أو AI اتحقق منها السيرفر — موقّعة في التوكن.
+                            تغيير النوع هنا كان هيترفض وقت الحفظ؛ لتغييره عدّل الرسالة وأعد التحليل. */}
+                        <div className="flex h-8 items-center gap-1 truncate font-medium" data-testid={`legacy-line-type-${idx}`} title="مطابقة موقّعة — لتغيير النوع عدّل الرسالة وأعد التحليل">
+                          {it.aiAssisted && <Sparkles className="h-3.5 w-3.5 shrink-0 text-[var(--warning)]" />}
+                          <span className="truncate">{it.optionLabel ?? it.productName}</span>
+                        </div>
+                        {it.confidence === "ambiguous" && (
+                          <div className="mt-1 flex items-center gap-1 text-[11px] text-[var(--warning)]" data-testid={`legacy-line-review-${idx}`}>
+                            <span className="truncate">{it.pickReason ?? "راجع النوع"}{it.segmentText ? ` — من الرسالة: «${it.segmentText}»` : ""}</span>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="min-w-0">

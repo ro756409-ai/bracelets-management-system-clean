@@ -2,8 +2,18 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabledForBusiness } from "./bosta.service";
 import { isOwnedLogoUrl } from "../shared/branding";
-import { analyzePasteV2, signParseToken, verifyParseToken, rawTextHash as rawTextHashOf } from "./orderParse.service";
-import { createSegmentResolver, readResolverConfig } from "./ai/segmentResolver";
+import {
+  analyzePasteV2,
+  signParseToken,
+  verifyParseToken,
+  rawTextHash as rawTextHashOf,
+  canonicalFingerprint,
+  canonicalParse,
+  compareLinesToCanonical,
+  PARSE_TOKEN_MESSAGES,
+} from "./orderParse.service";
+import { activeSegmentResolver, rateLimitedResolver } from "./ai/segmentResolver";
+import { aiRateKey } from "./ai/aiRateLimit";
 import { PRICE_SOURCE, pasteSaveBlockers, parseResultV2Schema } from "../shared/orderParse";
 import {
   getCarrierAccountStatus,
@@ -5326,26 +5336,40 @@ export const appRouter = router({
         // بنفس analyzePasteV2 على كتالوج النشاط الحالي (حتمي، بلا AI) — والقواعد تتطبّق
         // على اللي اتحلّل هنا مش على اللي العميل قاله. الأوردر اليدوي (بلا الاتنين)
         // بيفضل بقواعده الحالية.
-        const pasteOrigin = input.rawText != null || input.parseToken != null;
+        const pasteOrigin = input.rawText != null || input.parseToken != null || input.parseResult != null;
         let verifiedParse: Awaited<ReturnType<typeof analyzePasteV2>> | null = null;
         if (pasteOrigin) {
-          if (!input.rawText || !input.parseToken)
+          // 1) rawText + parseToken + parseResult لازم سوا — حذف أي واحد مش «أوردر يدوي».
+          if (!input.rawText || !input.parseToken || !input.parseResult)
             throw new TRPCError({ code: "BAD_REQUEST", message: "بيانات التحليل ناقصة — أعد تحليل الرسالة ثم احفظ" });
-          const tok = verifyParseToken(input.parseToken, { employeeId: ctx.employee.id, businessId, rawText: input.rawText });
-          if (!tok)
-            throw new TRPCError({ code: "BAD_REQUEST", message: "توكن التحليل غير صالح أو الرسالة تغيّرت — أعد التحليل ثم احفظ" });
+          // 2) التوقيع + الموظف + النشاط + النص + بصمة النتيجة القانونية + الصلاحية (ساعتان).
+          const tok = verifyParseToken(input.parseToken, {
+            employeeId: ctx.employee.id, businessId, rawText: input.rawText, fingerprint: canonicalFingerprint(input.parseResult),
+          });
+          if (!tok.ok) throw new TRPCError({ code: "BAD_REQUEST", message: PARSE_TOKEN_MESSAGES[tok.reason] });
+          // 3) إعادة التحليل الحتمي للحقول الصريحة والحسابات (بلا أي AI هنا) — لازم تطابق
+          //    الإجماليات الموقّعة، وإلا الرسالة/الكتالوج اتغيّروا ويلزم تحليل جديد.
           const catalogIds = await employeeCatalogBusinessIds(empScope(ctx));
           const catalog = catalogIds.length ? await getMatchCatalog(undefined, catalogIds) : { products: [], variants: [] };
           verifiedParse = await analyzePasteV2(input.rawText, catalog, {});
-          const f = verifiedParse.fields;
+          const canon = canonicalParse(input.parseResult);
+          const fresh = canonicalParse(verifiedParse);
+          if (JSON.stringify(fresh.totals) !== JSON.stringify(canon.totals))
+            throw new TRPCError({ code: "BAD_REQUEST", message: "أرقام الرسالة تغيّرت عن نتيجة التحليل — أعد التحليل ثم احفظ" });
+          // 4) السطور المُرسلة ضد النتيجة الموقّعة: نفس العدد والترتيب؛ السطر المقفول (حتمي
+          //    واثق أو AI متحقَّق منه) بنفس المعرّفات؛ غير المقفول يختاره الموظف من كتالوج
+          //    نشاطه (الملكية بتتفحص تحت). مفيش سطر غير محلول.
+          const mismatch = compareLinesToCanonical(input.selectedProducts, canon.lines);
+          if (mismatch) throw new TRPCError({ code: "BAD_REQUEST", message: mismatch });
+          // 5) القواعد الحسابية على الإجماليات المتحقَّق منها.
           const num = (v: unknown) => (typeof v === "number" ? v : null);
           const blockers = pasteSaveBlockers(
             input.selectedProducts.map(p => ({ quantity: p.quantity ?? 1, unitPrice: p.unitPrice ?? 0, resolved: p.productId != null })),
             {
-              pieces: num(f.pieces.value),
-              itemsTotal: num(f.itemsTotal.value),
-              shipping: input.shippingCost ?? num(f.shipping.value) ?? 0,
-              discount: input.discount ?? num(f.discount.value) ?? 0,
+              pieces: num(fresh.totals.pieces),
+              itemsTotal: num(fresh.totals.itemsTotal),
+              shipping: input.shippingCost ?? num(fresh.totals.shipping) ?? 0,
+              discount: input.discount ?? num(fresh.totals.discount) ?? 0,
             },
             input.totalAmount
           );
@@ -5504,6 +5528,7 @@ export const appRouter = router({
             businessId,
             orderId: newOrderId,
             parserVersion: verifiedParse.parserVersion,
+            // مصدر التحليل من النتيجة الموقّعة (بتشمل مطابقات الـAI)؛ إعادة التحليل هنا حتمية.
             parseSource: input.parseResult?.parseSource ?? verifiedParse.parseSource,
             rawText: input.rawText,
             resultJson: JSON.stringify({
@@ -5789,16 +5814,20 @@ export const appRouter = router({
         // مسؤول عن النطاق بس. الاختبارات بتستدعي نفس الدالة، فمفيش نسخة تانية للمنطق.
         const legacy = analyzePaste(input.text, catalog);
         // ParseResultV2: الثقة لكل حقل/سطر، الأسعار بالقرش، وAI للأجزاء الغامضة فقط
-        // (الافتراضي ORDER_PARSER_AI=none). الحقول الشخصية حتمية دايمًا.
-        const aiCfg = readResolverConfig();
+        // (الافتراضي ORDER_PARSER_AI=none)، بحد استدعاء لكل (موظف + نشاط) — التجاوز =
+        // نتيجة حتمية بلا نداء. الحقول الشخصية حتمية دايمًا.
+        const ai = activeSegmentResolver();
+        const aiKey = businessIds.length === 1 ? aiRateKey(ctx.employee.id, businessIds[0]) : null;
         const v2 = await analyzePasteV2(input.text, catalog, {
-          resolver: createSegmentResolver(aiCfg),
-          aiProvider: aiCfg.provider === "none" ? null : `${aiCfg.provider}:${aiCfg.model}`,
+          resolver: aiKey ? rateLimitedResolver(ai.resolver, aiKey) : null,
+          aiProvider: ai.provider,
         });
-        // توكن موقّع بيربط الحفظ بالنص ده وبالموظف والنشاط — addOrder بيعيد التحقق منه.
+        // توكن موقّع بيربط الحفظ بالنص ده + الموظف + النشاط + **بصمة النتيجة القانونية**
+        // (المعرّفات والكميات والأسعار والإجماليات ومطابقات الـAI المتحقَّق منها) —
+        // addOrder بيتحقق منه ومابيتصلش بالـAI تاني.
         const parseToken =
           businessIds.length === 1
-            ? signParseToken({ employeeId: ctx.employee.id, businessId: businessIds[0], rawHash: rawTextHashOf(input.text) })
+            ? signParseToken({ employeeId: ctx.employee.id, businessId: businessIds[0], rawHash: rawTextHashOf(input.text), fp: canonicalFingerprint(v2) })
             : null;
         return { ...legacy, v2, parseToken };
       }),
