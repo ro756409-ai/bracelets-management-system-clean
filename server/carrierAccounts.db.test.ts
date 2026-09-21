@@ -73,6 +73,14 @@ describe("🔒 حراس المصدر — Bosta لكل نشاط", () => {
     expect(client).toContain("apiKeyLast4");
     expect(client).not.toMatch(/encryptedApiKey|\.apiKey\b(?!Last4)/);
   });
+  it("🔒 فحص الهاتف المكرر مقيّد بنشاط الأوردر في الاستعلام نفسه", () => {
+    const src = fs.readFileSync("server/bosta.service.ts", "utf8");
+    const i = src.indexOf("let duplicatePhoneWarning");
+    const block = src.slice(i, src.indexOf(".limit(1)", i));
+    expect(block).toContain("eq(orders.businessId, order.businessId)");
+    expect(block).toContain("eq(orders.customerPhone, order.customerPhone)");
+  });
+
   it("🔑 clampDeposit: >0 و≤ COD", () => {
     expect(clampDeposit(50, 750)).toBe(50);
     expect(clampDeposit(50, 40)).toBe(40);
@@ -256,6 +264,41 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
     const body = calls.find(c => c.url.endsWith("/deliveries")).body;
     expect(body.specs.packageDetails.description).toBe("أسورة نحاس - ذكر التحصين ×2، أسورة نحاس - سادة ×1");
     expect(body.specs.packageDetails.itemsCount).toBe(3);
+  });
+
+  it("🔒 تحذير الهاتف المكرر: داخل نشاط الأوردر فقط — رقم أوردر نشاط آخر لا يظهر أبدًا", async () => {
+    const d = (await getDb())!;
+    const PHONE = "01055555555";
+    // B (نشاط/مؤسسة تانية) عنده أوردر بنفس الهاتف ومشحون بوسطة
+    const ob = await insertOrderWithItems({
+      orderNumber: `BPH-B-${tag}`.slice(0, 20), businessId: B.businessId, customerName: "عميل B", customerPhone: PHONE,
+      governorate: "القاهرة", customerAddress: "شارع طويل رقم 10", productName: "p", quantity: 1, totalAmount: "300.00",
+      source: "facebook", status: "confirmed",
+    } as any, [{ productId: prodB, productName: "p", quantity: 1, variantId: varB, unitPrice: 300 }]);
+    ids.orderIds.push(ob);
+    await d.update(orders).set({ bostaShipmentId: `BSHIP-${tag}`, bostaStatus: "sent" }).where(eq(orders.id, ob));
+    const mkA = async (n: string) => {
+      const id = await insertOrderWithItems({
+        orderNumber: `BPH-A${n}-${tag}`.slice(0, 20), businessId: A.businessId, customerName: "عميل A", customerPhone: PHONE,
+        governorate: "القاهرة", customerAddress: "شارع طويل رقم 10", productName: "p", quantity: 1, totalAmount: "750.00",
+        source: "facebook", status: "confirmed",
+      } as any, [{ productId: prodA, productName: "p", quantity: 1, variantId: varA, unitPrice: 750 }]);
+      ids.orderIds.push(id); return id;
+    };
+    // أول أوردر A بنفس الهاتف: مفيش تكرار جوه A → بلا تحذير، ورقم أوردر B لا يظهر في أي مكان
+    const a1 = await mkA("1");
+    const r1 = await createBostaShipment(a1, {}, makeFetch(KEY_A, []));
+    expect(r1.success).toBe(true); expect(r1.warning).toBeUndefined();
+    const [row1] = await d.select().from(orders).where(eq(orders.id, a1));
+    expect(row1.bostaLastError ?? "").not.toContain(`BPH-B`);
+    // تاني أوردر A بنفس الهاتف: التحذير يذكر أوردر A الأول فقط
+    const a2 = await mkA("2");
+    const r2 = await createBostaShipment(a2, {}, makeFetch(KEY_A, []));
+    expect(r2.success).toBe(true);
+    expect(r2.warning).toContain(`BPH-A1-${tag}`.slice(0, 20));
+    expect(r2.warning).not.toContain("BPH-B");
+    const [row2] = await d.select().from(orders).where(eq(orders.id, a2));
+    expect(row2.bostaLastError ?? "").not.toContain("BPH-B");
   });
 
   it("🔒 إرسال مزدوج → شحنة واحدة", async () => {

@@ -284,11 +284,15 @@ export async function createBostaShipment(
 
   // تحذير (ليس منع): إذا كان نفس رقم التليفون له شحنة بوسطة في أوردر آخر
   // يسمح بإرسال أوردرات متعددة لنفس العميل مع تسجيل تنبيه للمراجعة
+  //
+  // **داخل نشاط الأوردر نفسه فقط.** البحث بالهاتف وحده كان بيطلع رقم أوردر نشاط تاني
+  // (مؤسسة تانية) في التحذير وفي `bostaLastError` — تسريب عبر الأنشطة.
   let duplicatePhoneWarning: string | undefined;
   const duplicateRows = await db.select({ id: orders.id, orderNumber: orders.orderNumber })
     .from(orders)
     .where(
       and(
+        eq(orders.businessId, order.businessId),
         eq(orders.customerPhone, order.customerPhone),
         isNotNull(orders.bostaShipmentId),
         ne(orders.id, orderId)
