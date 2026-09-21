@@ -15,14 +15,8 @@ import {
   testChannelConnection,
 } from "./easyorder.service";
 import { parseFacebookOrder } from "../shared/facebookOrderParser";
-import { matchImportItem, isExactCatalogTerm } from "./productMatching";
-import { parsePasteMessage } from "./pasteParser";
-import {
-  buildDraftLines,
-  distributeSubtotal,
-  expandSegments,
-  allocateQuantities,
-} from "../shared/orderLines";
+import { matchImportItem } from "./productMatching";
+import { analyzePaste } from "./pasteLines";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -5697,88 +5691,9 @@ export const appRouter = router({
         const catalog = businessIds.length
           ? await getMatchCatalog(undefined, businessIds)
           : { products: [], variants: [] };
-        const parsed = parsePasteMessage(input.text);
-        const shape = (m: ReturnType<typeof matchImportItem>) =>
-          m.matched
-            ? {
-                productId: m.productId,
-                productName: m.productName,
-                variantId: m.variantId ?? null,
-                sku: m.sku ?? null,
-                color: m.color ?? null,
-                size: m.size ?? null,
-                unitPrice: m.unitPrice,
-              }
-            : null;
-
-        // **سطر لكل نوع مذكور.** «عين حورس وذكر التحصين» + «عدد القطع: 2» = قطعتين
-        // مختلفتين، وكانوا بيتحوّلوا لسطر واحد فالنوع التاني بيضيع. عدد القطع أكبر من
-        // الأنواع → سطور ناقصة الموظف بيكمّلها (مش توزيع بالتخمين).
-        //
-        // مصدرين للسطور:
-        //   • أزواج لون/مقاس متعددة («بيج مقاس 10 اسود مقاس 6») → سطر لكل زوج.
-        //   • غير كده: أجزاء سطر المنتج بكمياتها («٢ ساده، 1 نقش وعين حورس»)، و«و»
-        //     بتتفصل **ضد كتالوج النشاط** بمطابقة دقيقة، والكميات الناقصة من باقي
-        //     «عدد القطع».
-        const draft =
-          parsed.colorSizePairs.length > 1
-            ? buildDraftLines(parsed.productTerms, parsed.quantity, parsed.colorSizePairs)
-            : (() => {
-                const expanded = expandSegments(parsed.productSegments, t =>
-                  isExactCatalogTerm(t, catalog)
-                );
-                const lines = allocateQuantities(expanded, parsed.quantity, parsed.quantityGiven);
-                // زوج لون/مقاس واحد بيتطبّق على السطر الوحيد بس — مايتنسخش على كل نوع.
-                const pair = parsed.colorSizePairs[0];
-                if (pair && lines.length === 1) {
-                  lines[0].color = pair.color || undefined;
-                  lines[0].size = pair.size || undefined;
-                }
-                return lines;
-              })();
-        const { unitPrices } = distributeSubtotal(
-          draft.map(l => l.quantity),
-          parsed.itemsSubtotal
-        );
-        const lines = draft.map((l, i) => {
-          // **كل سطر بلونه ومقاسه بتوعه.** المطابقة بتحصل على
-          // (اسم المنتج + اللون المطبّع + المقاس المطبّع) — مش على `variant.name`
-          // ولا الـSKU، عشان منتج الملابس تركيباته بتتحدد باللون والمقاس بس.
-          const m = l.term || l.color || l.size
-            ? matchImportItem(
-                {
-                  name: l.term,
-                  // النوع المذكور (نوع الحفر مثلًا) بيتبعت كـvariantText كمان، عشان
-                  // يتطابق على اسم التركيبة جوه المنتج لو المنتج اتحدد بطريقة تانية.
-                  variantText: l.term || undefined,
-                  color: l.color ?? null,
-                  size: l.size ?? null,
-                },
-                catalog
-              )
-            : null;
-          return {
-            term: l.term,
-            color: l.color ?? null,
-            size: l.size ?? null,
-            quantity: l.quantity,
-            unitPrice: unitPrices[i] ?? 0,
-            match: m ? shape(m) : null,
-            matchReason: m && !m.matched ? m.reason : l.term ? null : "اختر المنتج والنوع يدويًا",
-          };
-        });
-
-        // المطابقة المفردة القديمة — متسيبة للتوافق مع أي متصل قديم.
-        const match = matchImportItem(
-          { name: parsed.productName, color: parsed.color, size: parsed.size },
-          catalog
-        );
-        return {
-          parsed,
-          lines,
-          match: shape(match),
-          matchReason: match.matched ? null : match.reason,
-        };
+        // التحليل والمطابقة كلهم في مسار إنتاج واحد (server/pasteLines.ts) — الراوتر
+        // مسؤول عن النطاق بس. الاختبارات بتستدعي نفس الدالة، فمفيش نسخة تانية للمنطق.
+        return analyzePaste(input.text, catalog);
       }),
 
     // جلب variants منتج معين (للكفر ووتر بروف)

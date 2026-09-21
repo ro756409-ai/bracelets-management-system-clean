@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { parsePasteMessage, parseProductSegments } from "./pasteParser";
-import { expandSegments, allocateQuantities, distributeSubtotal } from "../shared/orderLines";
+import { expandSegments, allocateQuantities } from "../shared/orderLines";
 import { isExactCatalogTerm, matchImportItem, type MatchCatalog } from "./productMatching";
+import { analyzePaste } from "./pasteLines";
 
 /**
  * حالة Production حقيقية فشل فيها الـparser — النص حرفيًا كما لصقه الموظف.
@@ -97,38 +98,52 @@ const CATALOG: MatchCatalog = {
 };
 const known = (t: string) => isExactCatalogTerm(t, CATALOG);
 
-describe("🔑 فصل «و» ضد الكتالوج + الكميات", () => {
-  const p = parsePasteMessage(REAL);
-  const expanded = expandSegments(p.productSegments, known);
-  const lines = allocateQuantities(expanded, p.quantity, p.quantityGiven);
+describe("🔑 مسار الإنتاج الحقيقي (analyzePaste) — نفس اللي الـendpoint بيرجّعه", () => {
+  // **مفيش إعادة تركيب للمنطق هنا.** `analyzePaste` هي الدالة اللي
+  // `facebookEntry.parsePaste` بيستدعيها حرفيًا (حارس المصدر بيثبت ده)، فأي خطأ في
+  // توصيل الـparser بالمطابقة بالتوزيع بيظهر هنا مش بيتخبّى ورا نسخة في الاختبار.
+  const r = analyzePaste(REAL, CATALOG);
 
   it("🔑 3 أسطر: سادة ×2، نقش ×1، عين حورس ×1", () => {
-    expect(lines.map(l => [l.term, l.quantity])).toEqual([
+    expect(r.lines.map(l => [l.term, l.quantity])).toEqual([
       ["ساده", 2],
       ["نقش", 1],
       ["عين حورس", 1],
     ]);
   });
   it("🔑 مجموع الكميات 4", () =>
-    expect(lines.reduce((s, l) => s + l.quantity, 0)).toBe(4));
+    expect(r.lines.reduce((s, l) => s + l.quantity, 0)).toBe(4));
 
-  it("🔑 التوزيع: 350 + 175 + 175 = 700 بالظبط، سعر الوحدة 175", () => {
-    const { lineTotals, unitPrices } = distributeSubtotal(
-      lines.map(l => l.quantity),
-      p.itemsSubtotal
-    );
-    expect(lineTotals).toEqual([350, 175, 175]);
-    expect(unitPrices).toEqual([175, 175, 175]);
-    expect(lineTotals.reduce((a, b) => a + b, 0)).toBe(700);
+  it("🔑 سعر الوحدة 175 وإجمالي الأسطر 350 + 175 + 175 = 700", () => {
+    expect(r.lines.map(l => l.unitPrice)).toEqual([175, 175, 175]);
+    expect(r.lines.map(l => l.unitPrice * l.quantity)).toEqual([350, 175, 175]);
+    expect(r.lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0)).toBe(700);
   });
 
-  it("🔑 المطابقة: كل سطر بتركيبته تحت «أسورة نحاس»", () => {
-    const m = lines.map(l => matchImportItem({ name: l.term, variantText: l.term }, CATALOG));
-    expect(m.every(x => x.matched)).toBe(true);
-    const ok = m as Extract<(typeof m)[number], { matched: true }>[];
-    expect(ok.map(x => x.variantId)).toEqual([1, 5, 6]);
-    expect(ok.every(x => x.productId === 13)).toBe(true);
-    expect(ok.every(x => x.productName === "أسورة نحاس")).toBe(true);
+  it("🔑 كل سطر بتركيبته تحت «أسورة نحاس» — مش منتج مستقل", () => {
+    expect(r.lines.map(l => l.match?.variantId)).toEqual([1, 5, 6]);
+    expect(r.lines.every(l => l.match?.productId === 13)).toBe(true);
+    expect(r.lines.every(l => l.match?.productName === "أسورة نحاس")).toBe(true);
+    expect(r.lines.some(l => /\d/.test(l.term))).toBe(false);
+  });
+
+  it("🔑 الحقول من نفس المسار", () => {
+    expect(r.parsed.customerPhone2).toBe("01094366135");
+    expect(r.parsed.shipping).toBe(50);
+    expect(r.parsed.totalAmount).toBe(750);
+    expect(r.parsed.governorate).toBe("القليوبية");
+  });
+
+  it("🔒 تركيبة مش متطابقة → السطر بيفضل بكميته وسعره للمراجعة", () => {
+    const x = analyzePaste(
+      "نوع المنتج : ٢ ساده، 1 حاجة مش موجودة عدد القطع: 3\nالسعر: 450",
+      CATALOG
+    );
+    expect(x.lines).toHaveLength(2);
+    const missing = x.lines.find(l => !l.match)!;
+    expect(missing.quantity).toBe(1);
+    expect(missing.unitPrice).toBe(150);
+    expect(missing.matchReason).toBeTruthy();
   });
 });
 
