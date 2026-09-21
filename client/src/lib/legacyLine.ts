@@ -39,7 +39,8 @@ export function applyTypeToLine(line: PickedItem, variant: CatalogVariant, produ
     needsPick: false,
     needsVariantReview: false,
     pickReason: null,
-    // النوع اتحدد يدويًا → مفيش غموض باقٍ في السطر.
+    // النوع اتحدد يدويًا → مفيش غموض باقٍ في السطر. `aiAssisted` بيفضل زي ما هو (أصل السطر)،
+    // والسيرفر بيسجّل في audit إن الموظف قبل الاقتراح أو صحّحه.
     confidence: "confident",
   };
 }

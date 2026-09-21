@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "fs";
 import {
   analyzePasteV2, extractSegmentPrice, signParseToken, verifyParseToken,
-  canonicalFingerprint, canonicalParse, compareLinesToCanonical, PARSE_TOKEN_TTL_MS,
+  canonicalFingerprint, canonicalParse, compareLinesToCanonical, classifyResolution, PARSE_TOKEN_TTL_MS,
 } from "./orderParse.service";
 import { createSegmentResolver, parseAiOutput, sanitizeSegments, readResolverConfig, rateLimitedResolver } from "./ai/segmentResolver";
 import { aiRateKey, AI_RATE_LIMIT_MAX, AI_RATE_LIMIT_WINDOW_MS, __resetAiRateLimitForTests } from "./ai/aiRateLimit";
@@ -215,14 +215,23 @@ describe("🔒 parse token — موقّع ببصمة النتيجة القانو
     const src = fs.readFileSync("server/orderParse.service.ts", "utf8");
     expect(src).not.toMatch(/JWT_SECRET\s*(\?\?|\|\|)\s*["']/);
   });
-  it("🔑 السطور المقفولة = واثق حتميًا أو AI متحقَّق؛ غير المقفول يختاره الموظف", async () => {
+  it("🔑 الموظف هو المراجع النهائي: تغيير النوع (حتمي أو AI) مسموح بنيويًا، والبصمة لا تتأثر بقراره؛ الرفض للعدد/غير المحلول فقط", async () => {
     const v2 = await analyzePasteV2("نوع المنتج: ٢ سادة، 1 نجمة داوود\nعدد القطع: 3\nالسعر: 600", CATALOG);
-    const canon = canonicalParse(v2).lines;
-    expect(canon.map(l => l.locked)).toEqual([true, false]);
-    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }, { productId: 10, variantId: 104 }], canon)).toBeNull();
-    expect(compareLinesToCanonical([{ productId: 10, variantId: 102 }, { productId: 10, variantId: 104 }], canon)).toContain("تغيّر عن المطابقة الموقّعة");
-    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }, { productId: undefined }], canon)).toContain("اختر نوع النقش للسطر رقم 2");
-    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }], canon)).toContain("عدد السطور");
+    const canon = canonicalParse(v2);
+    expect(JSON.stringify(canon)).not.toContain("locked");
+    const fp = canonicalFingerprint(v2);
+    // قبول الاقتراح أو تصحيحه لنوع تاني مملوك — الاتنين بيعدّوا المقارنة البنيوية
+    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }, { productId: 10, variantId: 104 }], canon.lines)).toBeNull();
+    expect(compareLinesToCanonical([{ productId: 10, variantId: 102 }, { productId: 10, variantId: 104 }], canon.lines)).toBeNull();
+    expect(canonicalFingerprint(v2)).toBe(fp); // القرار النهائي مش جزء من النتيجة الموقّعة
+    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }, { productId: undefined }], canon.lines)).toContain("اختر نوع النقش للسطر رقم 2");
+    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }], canon.lines)).toContain("عدد السطور");
+    // تصنيف القرار للسجل
+    expect(classifyResolution({ productId: 10, variantId: 103, aiAssisted: true }, { productId: 10, variantId: 103 })).toBe("ai_accepted");
+    expect(classifyResolution({ productId: 10, variantId: 103, aiAssisted: true }, { productId: 10, variantId: 104 })).toBe("employee_corrected");
+    expect(classifyResolution({ productId: 10, variantId: 101, aiAssisted: false }, { productId: 10, variantId: 101 })).toBe("deterministic_accepted");
+    expect(classifyResolution({ productId: 10, variantId: 101, aiAssisted: false }, { productId: 10, variantId: 102 })).toBe("employee_corrected");
+    expect(classifyResolution({ productId: null, variantId: null, aiAssisted: false }, { productId: 10, variantId: 104 })).toBe("employee_selected");
   });
 });
 

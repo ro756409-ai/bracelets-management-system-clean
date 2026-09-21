@@ -64,6 +64,10 @@ describe("🔒 حراس المصدر — الواجهة", () => {
     expect(picker).toContain("applyTypeToLine(value[idx], v, p)");
     expect(picker).toContain('data-confidence={it.confidence ?? "confident"}');
     expect(picker).toContain("من الرسالة: «");
+    // اقتراح AI مش حقيقة نهائية: أصفر + «اقتراح AI — راجع الاختيار» + القائمة تفضل مفتوحة (مفيش قفل)
+    expect(picker).toContain("اقتراح AI — راجع الاختيار");
+    expect(picker).toContain('it.confidence === "ambiguous" || it.aiAssisted');
+    expect(picker).not.toMatch(/locked\(/);
   });
   it("🔒 الصفحة: القالب المبسّط يبني السطور من v2 ويبعت rawText + parseToken + parseResult؛ القالب الكامل على res.lines كما هو", () => {
     expect(page).toContain("if (isLegacy && res.v2) {");

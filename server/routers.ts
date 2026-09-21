@@ -10,6 +10,7 @@ import {
   canonicalFingerprint,
   canonicalParse,
   compareLinesToCanonical,
+  classifyResolution,
   PARSE_TOKEN_MESSAGES,
 } from "./orderParse.service";
 import { activeSegmentResolver, rateLimitedResolver } from "./ai/segmentResolver";
@@ -5338,6 +5339,7 @@ export const appRouter = router({
         // بيفضل بقواعده الحالية.
         const pasteOrigin = input.rawText != null || input.parseToken != null || input.parseResult != null;
         let verifiedParse: Awaited<ReturnType<typeof analyzePasteV2>> | null = null;
+        let canonLines: ReturnType<typeof canonicalParse>["lines"] | null = null;
         if (pasteOrigin) {
           // 1) rawText + parseToken + parseResult لازم سوا — حذف أي واحد مش «أوردر يدوي».
           if (!input.rawText || !input.parseToken || !input.parseResult)
@@ -5356,11 +5358,12 @@ export const appRouter = router({
           const fresh = canonicalParse(verifiedParse);
           if (JSON.stringify(fresh.totals) !== JSON.stringify(canon.totals))
             throw new TRPCError({ code: "BAD_REQUEST", message: "أرقام الرسالة تغيّرت عن نتيجة التحليل — أعد التحليل ثم احفظ" });
-          // 4) السطور المُرسلة ضد النتيجة الموقّعة: نفس العدد والترتيب؛ السطر المقفول (حتمي
-          //    واثق أو AI متحقَّق منه) بنفس المعرّفات؛ غير المقفول يختاره الموظف من كتالوج
-          //    نشاطه (الملكية بتتفحص تحت). مفيش سطر غير محلول.
+          // 4) السطور المُرسلة ضد النتيجة الموقّعة: نفس العدد والترتيب ومفيش سطر غير محلول.
+          //    النوع نفسه قرار الموظف (قبول الاقتراح — حتمي أو AI — أو تصحيحه)؛ ملكية
+          //    المنتج/التركيبة للنشاط وتبعية التركيبة لمنتجها بيتفحصوا تحت لكل سطر.
           const mismatch = compareLinesToCanonical(input.selectedProducts, canon.lines);
           if (mismatch) throw new TRPCError({ code: "BAD_REQUEST", message: mismatch });
+          canonLines = canon.lines;
           // 5) القواعد الحسابية على الإجماليات المتحقَّق منها.
           const num = (v: unknown) => (typeof v === "number" ? v : null);
           const blockers = pasteSaveBlockers(
@@ -5534,10 +5537,19 @@ export const appRouter = router({
             resultJson: JSON.stringify({
               verified: verifiedParse,
               client: input.parseResult ?? null,
-              saved: itemsWithQty.map(p => ({
-                productId: p.productId ?? null, variantId: p.variantId ?? null, quantity: p.quantity,
-                unitPrice: p.unitPrice ?? null, priceSource: p.priceSource ?? null,
-              })),
+              // لكل سطر: الاقتراح الموقّع (حتمي/AI) مقابل القرار النهائي للموظف ومصدره.
+              saved: itemsWithQty.map((p, i) => {
+                const c = canonLines?.[i];
+                const suggested = { productId: c?.productId ?? null, variantId: c?.variantId ?? null, aiAssisted: !!c?.aiAssisted };
+                const final = { productId: p.productId ?? null, variantId: p.variantId ?? null };
+                return {
+                  segmentText: c?.segmentText ?? null,
+                  suggestedProductId: suggested.productId, suggestedVariantId: suggested.variantId, suggestedByAi: suggested.aiAssisted,
+                  finalProductId: final.productId, finalVariantId: final.variantId,
+                  resolutionSource: classifyResolution(suggested, final),
+                  quantity: p.quantity, unitPrice: p.unitPrice ?? null, priceSource: p.priceSource ?? null,
+                };
+              }),
               totals: { totalAmount: input.totalAmount, shipping: input.shippingCost ?? null, discount: input.discount ?? null },
             }),
           });

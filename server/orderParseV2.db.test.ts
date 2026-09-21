@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import jwt from "jsonwebtoken";
 import { eq, inArray, sql } from "drizzle-orm";
 import { appRouter } from "./routers";
-import { getDb, createEmployee, createProductWithVariants, getOrderItemsForOrders } from "./db";
+import { getDb, createEmployee, createProductWithVariants, getOrderItemsForOrders, getOrderItems } from "./db";
+import { buildShipmentContents } from "../shared/orderContent";
 import { employees, orders, orderItems, orderParseAudits, products, productVariants } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { __setSegmentResolverFactoryForTests } from "./ai/segmentResolver";
@@ -139,9 +140,6 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
     // تعديل النتيجة في المتصفح (معرّف سطر) → البصمة مختلفة
     const tampered = structuredClone(res.v2); tampered.lines[0].match!.variantId = vA[3];
     expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL, parseToken: res.parseToken, parseResult: tampered }))).message).toContain("نتيجة التحليل تغيّرت");
-    // تغيير معرّف سطر مقفول في السطور المُرسلة (النتيجة سليمة) → مرفوض
-    const swapped = lines.map((l: any, i: number) => (i === 0 ? { ...l, variantId: vA[3] } : l));
-    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: swapped, rawText: REAL, parseToken: res.parseToken }))).message).toContain("تغيّر عن المطابقة الموقّعة");
     // توكن منتهي (iat قبل ساعتين وثانية) بنفس البصمة
     const expired = signParseToken({ employeeId: empA, businessId: A.businessId, rawHash: rawTextHash(REAL), fp: canonicalFingerprint(res.v2), iat: Date.now() - PARSE_TOKEN_TTL_MS - 1000 });
     expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL, parseToken: expired }))).message).toContain("انتهت صلاحية");
@@ -200,18 +198,59 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
       const audits = await (await getDb())!.select().from(orderParseAudits).where(eq(orderParseAudits.orderId, o.id));
       expect(audits.length).toBe(1);
       expect(audits[0].parseSource).toBe("mixed");
-      expect(JSON.parse(audits[0].resultJson).client.lines[1].aiAssisted).toBe(true);
+      const rj = JSON.parse(audits[0].resultJson);
+      expect(rj.client.lines[1].aiAssisted).toBe(true);
+      // الموظف قبل اقتراح الـAI كما هو → ai_accepted، والسطر الحتمي → deterministic_accepted
+      expect(rj.saved[1]).toMatchObject({ suggestedProductId: prodA, suggestedVariantId: vA[2], suggestedByAi: true, finalProductId: prodA, finalVariantId: vA[2], resolutionSource: "ai_accepted" });
+      expect(rj.saved[0]).toMatchObject({ suggestedVariantId: vA[0], finalVariantId: vA[0], resolutionSource: "deterministic_accepted" });
     } finally { __setSegmentResolverFactoryForTests(null); }
   });
 
-  it("🔒 تعديل مطابقة الـAI في المتصفح (السطور أو النتيجة) → addOrder يرفض", async () => {
+  it("🔑 AI يقترح خطأ والموظف يصحّحه لنوع آخر داخل نفس النشاط (بسعر يدوي) → يُحفظ employee_corrected بنفس التوكن، وبوسطة تأخذ النوع النهائي", async () => {
+    __setSegmentResolverFactoryForTests(() => async (segments) => segments.map(sg => ({ segmentText: sg, intendedText: "عين حورس", quantity: null, unitPrice: null, confidence: 0.85 })));
+    try {
+      const res = await caller(empA).facebookEntry.parsePaste({ text: AI_TEXT });
+      expect(res.v2.lines[1]).toMatchObject({ aiAssisted: true, confidence: "ambiguous", match: { variantId: vA[2] } });
+      // الموظف يغيّر «عين حورس» (اقتراح) إلى «ذكر التحصين» ويعدّل الأسعار يدويًا: 175×2 + 250 = 600
+      const lines = linesOf(res.v2).map((l: any, i: number) =>
+        i === 1 ? { ...l, variantId: vA[3], unitPrice: 250, priceSource: "manual" } : { ...l, unitPrice: 175, priceSource: "manual" }
+      );
+      const r = await caller(empA).facebookEntry.addOrder({
+        ...CUST, customerPhone: "01044444447", selectedProducts: lines, totalAmount: 650, shippingCost: 50, discount: 0,
+        rawText: AI_TEXT, parseToken: res.parseToken!, parseResult: res.v2, // نفس النتيجة الموقّعة — الاقتراح الأصلي محفوظ فيها
+      } as any);
+      expect(r.success).toBe(true);
+      const o = await trackOrder(r.orderNumber);
+      const items = (await getOrderItemsForOrders([o.id])).get(o.id) ?? [];
+      expect(items.map(i => [i.variantId, i.quantity, Number(i.unitPrice)])).toEqual([[vA[0], 2, 175], [vA[3], 1, 250]]); // السعر اليدوي محفوظ
+      const [audit] = await (await getDb())!.select().from(orderParseAudits).where(eq(orderParseAudits.orderId, o.id));
+      const rj = JSON.parse(audit.resultJson);
+      expect(rj.client.lines[1].match.variantId).toBe(vA[2]); // الاقتراح الأصلي لم يتغيّر
+      expect(rj.saved[1]).toMatchObject({ suggestedVariantId: vA[2], suggestedByAi: true, finalVariantId: vA[3], resolutionSource: "employee_corrected", priceSource: "manual" });
+      // وصف بوسطة من نفس مسار الإنتاج (getOrderItems + buildShipmentContents) = النوع النهائي، مش اقتراح الـAI
+      const desc = buildShipmentContents((await getOrderItems(o.id)).map(it => ({ productName: it.productName, variantName: it.variantName, quantity: it.quantity, size: it.size, color: it.color }))).description;
+      expect(desc).toBe("أسورة نحاس - سادة ×2، أسورة نحاس - ذكر التحصين ×1");
+      expect(desc).not.toContain("عين حورس");
+    } finally { __setSegmentResolverFactoryForTests(null); }
+  });
+
+  it("🔒 تصحيح الموظف لتركيبة من نشاط آخر، أو تركيبة لا تتبع منتج السطر → رفض", async () => {
+    __setSegmentResolverFactoryForTests(() => async (segments) => segments.map(sg => ({ segmentText: sg, intendedText: "عين حورس", quantity: null, unitPrice: null, confidence: 0.85 })));
+    try {
+      const res = await caller(empA).facebookEntry.parsePaste({ text: AI_TEXT });
+      const base = { ...CUST, customerPhone: "01044444448", totalAmount: 650, shippingCost: 50, rawText: AI_TEXT, parseToken: res.parseToken!, parseResult: res.v2 } as any;
+      const lines = linesOf(res.v2);
+      expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: lines.map((l: any, i: number) => (i === 1 ? { ...l, variantId: vB[3] } : l)) }))).code).not.toBe("ok"); // تركيبة B على منتج A
+      expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: lines.map((l: any, i: number) => (i === 1 ? { ...l, productId: prodB, variantId: vB[3] } : l)) }))).code).not.toBe("ok"); // منتج B
+    } finally { __setSegmentResolverFactoryForTests(null); }
+  });
+
+  it("🔒 تعديل اقتراح الـAI داخل parseResult (suggested IDs) أو استخدام تركيبة نشاط آخر → addOrder يرفض", async () => {
     __setSegmentResolverFactoryForTests(() => async (segments) => segments.map(sg => ({ segmentText: sg, intendedText: "عين حورس", quantity: null, unitPrice: null, confidence: 0.85 })));
     try {
       const res = await caller(empA).facebookEntry.parsePaste({ text: AI_TEXT });
       const lines = linesOf(res.v2);
       const base = { ...CUST, customerPhone: "01044444445", totalAmount: 650, shippingCost: 50, rawText: AI_TEXT, parseToken: res.parseToken!, parseResult: res.v2 } as any;
-      const swapped = lines.map((l: any, i: number) => (i === 1 ? { ...l, variantId: vA[3] } : l)); // نوع تاني مملوك — لكن السطر مقفول
-      expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: swapped }))).message).toContain("تغيّر عن المطابقة الموقّعة");
       const foreign = lines.map((l: any, i: number) => (i === 1 ? { ...l, productId: prodB, variantId: vB[2] } : l)); // نشاط آخر
       expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: foreign }))).code).not.toBe("ok");
       const tampered = structuredClone(res.v2); tampered.lines[1].match = { productId: prodB, productName: "x", variantId: vB[2], variantName: "x" };

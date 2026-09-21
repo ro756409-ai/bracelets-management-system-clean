@@ -201,12 +201,21 @@ export async function analyzePasteV2(
 // ── النتيجة القانونية وبصمتها ──
 
 /**
- * السطر ده معرّفاته **مقفولة** وقت الحفظ: اتحل بثقة حتمية أو بمطابقة AI اتحقق منها
- * السيرفر على كتالوج النشاط. السطر الغامض (تقريبي) أو غير المحلول هو اللي الموظف
- * بيختار نوعه (من كتالوج نشاطه بس).
+ * الموظف هو المراجع النهائي: أي سطر — حتمي واثق أو اقتراح AI — يقدر يغيّر نوعه لأي
+ * تركيبة **مملوكة لنفس النشاط ونفس المنتج**. الأمان من فحص الملكية على السيرفر
+ * (requireAllOwned + التركيبة تتبع منتجها)، مش من قفل القائمة. الاقتراح الأصلي بيفضل
+ * مسجّلًا في النتيجة الموقّعة (parseResult) وفي audit كـsuggested/final + resolutionSource.
  */
-export function lineIdsLocked(line: Pick<ParsedLine, "confidence" | "aiAssisted" | "match">): boolean {
-  return !!line.match && (line.confidence === "confident" || line.aiAssisted);
+export type ResolutionSource = "ai_accepted" | "deterministic_accepted" | "employee_corrected" | "employee_selected";
+
+export function classifyResolution(
+  suggested: { productId: number | null; variantId: number | null; aiAssisted: boolean },
+  final: { productId: number | null; variantId: number | null }
+): ResolutionSource {
+  if (suggested.productId == null) return "employee_selected";
+  const same = suggested.productId === final.productId && (suggested.variantId ?? null) === (final.variantId ?? null);
+  if (!same) return "employee_corrected";
+  return suggested.aiAssisted ? "ai_accepted" : "deterministic_accepted";
 }
 
 /** الجزء الملزِم من النتيجة (اللي التوكن بيوقّع عليه) — بلا الحقول الشخصية. */
@@ -222,7 +231,7 @@ export function canonicalParse(v2: ParseResultV2) {
     lines: v2.lines.map(l => ({
       segmentText: l.segmentText, quantity: l.quantity, unitPrice: l.unitPrice, priceSource: l.priceSource,
       productId: l.match?.productId ?? null, variantId: l.match?.variantId ?? null,
-      confidence: l.confidence, aiAssisted: l.aiAssisted, locked: lineIdsLocked(l),
+      confidence: l.confidence, aiAssisted: l.aiAssisted,
     })),
   };
 }
@@ -303,12 +312,11 @@ export const PARSE_TOKEN_MESSAGES: Record<ParseTokenFailure, string> = {
 };
 
 /**
- * مقارنة السطور المُرسلة بالنتيجة القانونية الموقّعة:
- *   • نفس العدد والترتيب.
- *   • سطر مقفول (حتمي واثق أو AI متحقَّق منه) → نفس productId/variantId بالظبط.
- *   • سطر غير مقفول → أي منتج/تركيبة (ملكيتها للنشاط بتتفحص بعدها بـrequireAllOwned).
+ * مقارنة السطور المُرسلة بالنتيجة القانونية الموقّعة — **البنية** مش المعرّفات:
+ *   • نفس العدد والترتيب (السطور من الرسالة، والتقسيم بالقرش جزء منها).
  *   • كل سطر لازم يكون ليه productId (مفيش غير محلول وقت الحفظ).
- * بيرجّع رسالة المنع أو null.
+ * اختيار النوع (قبول الاقتراح أو تصحيحه) قرار الموظف؛ ملكيته للنشاط وتبعيته لمنتجه
+ * بيتفحصوا على السيرفر بعد كده. بيرجّع رسالة المنع أو null.
  */
 export function compareLinesToCanonical(
   submitted: { productId?: number | null; variantId?: number | null }[],
@@ -317,10 +325,7 @@ export function compareLinesToCanonical(
   if (submitted.length !== canonical.length)
     return `عدد السطور (${submitted.length}) لا يطابق نتيجة التحليل (${canonical.length}) — أعد التحليل`;
   for (let i = 0; i < canonical.length; i++) {
-    const s = submitted[i], c = canonical[i];
-    if (s.productId == null) return `اختر نوع النقش للسطر رقم ${i + 1}`;
-    if (c.locked && (s.productId !== c.productId || (s.variantId ?? null) !== c.variantId))
-      return `السطر رقم ${i + 1} («${c.segmentText}») تغيّر عن المطابقة الموقّعة — أعد التحليل`;
+    if (submitted[i].productId == null) return `اختر نوع النقش للسطر رقم ${i + 1}`;
   }
   return null;
 }
