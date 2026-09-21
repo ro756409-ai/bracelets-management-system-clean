@@ -617,6 +617,8 @@ import {
   generateVariantSkus,
   getOwnedProductNames,
   buildOrderHeaderName,
+  insertOrderWithItems,
+  updateOrderWithItems,
   findTakenSkusInBusiness,
   isSkuTakenInBusiness,
   updateProduct,
@@ -5374,9 +5376,30 @@ export const appRouter = router({
 
         const normalizedCustomerPhone =
           normalizeEgyptianPhone(input.customerPhone) || input.customerPhone;
-        const [res] = await db
-          .insert(orders)
-          .values({
+        // البنود بتتجهّز قبل أي كتابة، وبعدين الهيدر والبنود في **transaction واحدة**
+        // (`insertOrderWithItems`): نجاح كامل أو rollback كامل. قبل كده كانوا في
+        // transactionين، فلو البنود فشلت (deadlock بين أوردرين متزامنين مثلًا) كان بيفضل
+        // أوردر يتيم بلا بنود. رقم الأوردر اتولّد بره عشان إعادة المحاولة تستخدم نفسه.
+        const itemRows = itemsWithQty.map(p => ({
+          productId: p.productId,
+          productName: p.productName,
+          quantity: p.quantity,
+          unitPrice: p.unitPrice,
+          // Each item carries its OWN variant now (previously only the first product could
+          // have one, which made multi-engraving orders impossible to represent).
+          variantId: p.variantId,
+          // من التركيبة نفسها؛ ولو البند بلا تركيبة بنرجع لحقول الهيدر (منتج بسيط).
+          size:
+            (p.variantId != null ? variantById.get(p.variantId)?.size : null) ??
+            (p.productId === headerProductId ? (input.size ?? undefined) : undefined) ??
+            undefined,
+          color:
+            (p.variantId != null ? variantById.get(p.variantId)?.color : null) ??
+            (p.productId === headerProductId ? (input.color ?? undefined) : undefined) ??
+            undefined,
+        }));
+        await insertOrderWithItems(
+          {
             orderNumber,
             businessId,
             customerName: input.customerName,
@@ -5410,33 +5433,9 @@ export const appRouter = router({
               : null,
             // Verbatim pasted message for audit, when the paste parser was used.
             externalRawPayload: input.rawText ?? null,
-          })
-          .$returningId();
-        // تخزين البنود المتعددة
-        const newOrderId = (res as any)?.id;
-        if (newOrderId) {
-          await replaceOrderItems(
-            newOrderId,
-            itemsWithQty.map(p => ({
-              productId: p.productId,
-              productName: p.productName,
-              quantity: p.quantity,
-              unitPrice: p.unitPrice,
-              // Each item carries its OWN variant now (previously only the first product could
-              // have one, which made multi-engraving orders impossible to represent).
-              variantId: p.variantId,
-              // من التركيبة نفسها؛ ولو البند بلا تركيبة بنرجع لحقول الهيدر (منتج بسيط).
-              size:
-                (p.variantId != null ? variantById.get(p.variantId)?.size : null) ??
-                (p.productId === headerProductId ? (input.size ?? undefined) : undefined) ??
-                undefined,
-              color:
-                (p.variantId != null ? variantById.get(p.variantId)?.color : null) ??
-                (p.productId === headerProductId ? (input.color ?? undefined) : undefined) ??
-                undefined,
-            }))
-          );
-        }
+          } as any,
+          itemRows
+        );
         return { success: true, orderNumber, needsReview };
       }),
 
@@ -5606,9 +5605,12 @@ export const appRouter = router({
           1;
         const productNames = buildOrderHeaderName(itemsWithQty);
         const firstProductId = itemsWithQty[0].productId;
-        await db
-          .update(orders)
-          .set({
+        // الهيدر والبنود في transaction واحدة، وصف الأوردر مقفول بالـPK أولًا
+        // (`updateOrderWithItems`): تحديثين متزامنين بيتسلسلوا، والبنود بتطلع من تحديث
+        // واحد كامل. الأرقام بتتكتب زي ما هي (مفيش تطبيع هنا من زمان).
+        await updateOrderWithItems(
+          input.orderId,
+          {
             customerName: input.customerName,
             customerPhone: input.customerPhone,
             customerPhone2: input.customerPhone2?.trim() || null,
@@ -5625,11 +5627,7 @@ export const appRouter = router({
             variantId: input.variantId ?? null,
             size: input.size ?? null,
             color: input.color ?? null,
-          })
-          .where(eq(orders.id, input.orderId));
-        // تحديث البنود المتعددة
-        await replaceOrderItems(
-          input.orderId,
+          },
           itemsWithQty.map(p => ({
             productId: p.productId,
             productName: p.productName,
@@ -5646,7 +5644,8 @@ export const appRouter = router({
               p.productId === firstProductId
                 ? (input.color ?? undefined)
                 : undefined,
-          }))
+          })),
+          { normalizePhones: false }
         );
         return { success: true };
       }),

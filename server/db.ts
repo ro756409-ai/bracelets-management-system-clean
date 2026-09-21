@@ -1491,6 +1491,47 @@ function withNormalizedPhoneFields<
   return normalized;
 }
 
+// ── إعادة المحاولة عند الـdeadlock — على حدود الـtransaction كاملة ──
+
+/** خطأ deadlock من MySQL — ممكن يكون ملفوف جوه أخطاء Drizzle/tRPC (`cause`). */
+export function isDeadlockError(err: unknown): boolean {
+  for (let e: any = err, depth = 0; e && depth < 6; e = e.cause, depth++) {
+    if (e.code === "ER_LOCK_DEADLOCK" || e.errno === 1213) return true;
+  }
+  return false;
+}
+
+const TX_MAX_ATTEMPTS = 3;
+
+/**
+ * يشغّل transaction كاملة، ولو MySQL قتلتها كضحية deadlock يعيدها **من الأول** — حد
+ * أقصى 3 محاولات بـbackoff صغير عشوائي.
+ *
+ * الإعادة على مستوى الـtransaction كلها مش على خطوة جوّاها: الـdeadlock بيعمل rollback
+ * لكل اللي اتكتب في المحاولة، فالمحاولة الجاية بتبدأ من حالة نضيفة — مفيش هيدر ولا
+ * بنود مكررة. إعادة إدخال البنود لوحدها كانت هتفترض إن الهيدر لسه موجود وهو اترجع.
+ *
+ * أخطاء غير الـdeadlock بتطلع فورًا بلا إعادة. `lock wait timeout` (1205) مش هنا عن
+ * قصد: ده انتظار طويل (~50 ثانية) مش دايرة، وإعادته كانت هتضاعف الانتظار.
+ */
+export async function withDeadlockRetry<T>(run: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      if (!isDeadlockError(err) || attempt >= TX_MAX_ATTEMPTS) throw err;
+      await new Promise(r => setTimeout(r, 15 * attempt + Math.random() * 25));
+    }
+  }
+}
+
+/** `db.transaction(fn)` بإعادة المحاولة عند الـdeadlock. */
+export async function runOrderTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return withDeadlockRetry(() => db.transaction(fn));
+}
+
 type OrderItemWrite = {
   productId?: number;
   productName: string;
@@ -1578,7 +1619,8 @@ async function createOrderInTransaction(
     .update(orders)
     .set({ serialNumber: generateSerialNumber(insertId) })
     .where(eq(orders.id, insertId));
-  if (items) await replaceOrderItemsInTransaction(tx, insertId, items);
+  if (items)
+    await replaceOrderItemsInTransaction(tx, insertId, items, { isNewOrder: true });
   if (
     normalizedData.projectedShippingProviderId &&
     normalizedData.projectedShippingType &&
@@ -1600,18 +1642,75 @@ async function createOrderInTransaction(
 export async function createOrder(
   data: InsertOrder
 ): Promise<number | undefined> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  return db.transaction(tx => createOrderInTransaction(tx, data));
+  return runOrderTransaction(tx => createOrderInTransaction(tx, data));
 }
 
+/** الهيدر والبنود في transaction واحدة — نجاح كامل أو rollback كامل. */
 export async function createOrderWithItems(
   data: InsertOrder,
   items: OrderItemWrite[]
 ): Promise<number | undefined> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  return db.transaction(tx => createOrderInTransaction(tx, data, items));
+  return runOrderTransaction(tx => createOrderInTransaction(tx, data, items));
+}
+
+/**
+ * إنشاء أوردر بإدخال **خام** للهيدر (بلا منطق Go-Live/serialNumber اللي في
+ * `createOrderInTransaction`) + بنوده — في transaction واحدة بإعادة محاولة.
+ *
+ * لشاشة الإدخال اليدوي (`facebookEntry.addOrder`): الهيدر عندها بيتكتب بإدخال مباشر من
+ * زمان، وتوجيهها لـ`createOrderInTransaction` كان هيغيّر سلوكها (بعد Go-Live محاسبي
+ * كانت هترفض أوردرات نشاط مالوش مزوّد شحن واحد بالظبط). اللي اتغيّر بس إن الهيدر
+ * والبنود بقوا **ذرّيين**: قبل كده كانوا في transactionين، فلو البنود فشلت (deadlock
+ * مثلًا) كان بيفضل أوردر يتيم بلا بنود.
+ */
+export async function insertOrderWithItems(
+  values: InsertOrder,
+  items: OrderItemWrite[]
+): Promise<number> {
+  return runOrderTransaction(async tx => {
+    const [res] = await tx.insert(orders).values(values).$returningId();
+    const id = Number((res as any)?.id);
+    if (!id) throw new Error("تعذّر إنشاء الأوردر");
+    await replaceOrderItemsInTransaction(tx, id, items, { isNewOrder: true });
+    return id;
+  });
+}
+
+/**
+ * تحديث هيدر أوردر موجود + استبدال بنوده — في transaction واحدة بإعادة محاولة.
+ *
+ * بيقفل صف الأوردر بالـprimary key **أولًا**، وبعدين بيحدّث الهيدر ويعيد كتابة البنود.
+ * تحديثين متزامنين لنفس الأوردر بيتسلسلوا عند القفل ده، فالبنود بتطلع من تحديث واحد
+ * كامل — مش خليط من الاتنين. قبل كده الهيدر والبنود كانوا في transactionين منفصلين.
+ *
+ * `normalizePhones`: `db.updateOrder` بيطبّع أرقام الهاتف وتحديث شاشة الإدخال لأ —
+ * الخيار بيحافظ على سلوك كل مستدعي زي ما هو.
+ */
+export async function updateOrderWithItems(
+  id: number,
+  patch: Partial<InsertOrder>,
+  items: OrderItemWrite[],
+  opts: { normalizePhones?: boolean } = {}
+): Promise<void> {
+  await runOrderTransaction(async tx => {
+    const [current] = await tx
+      .select({ id: orders.id, status: orders.status })
+      .from(orders)
+      .where(eq(orders.id, id))
+      .limit(1)
+      .for("update");
+    if (!current) throw new Error("الأوردر غير موجود");
+    if (patch.status && !isValidOrderStatusTransition(current.status, patch.status)) {
+      throw new Error(
+        `لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${patch.status}" مباشرة`
+      );
+    }
+    await tx
+      .update(orders)
+      .set(opts.normalizePhones ? withNormalizedPhoneFields(patch) : patch)
+      .where(eq(orders.id, id));
+    await replaceOrderItemsInTransaction(tx, id, items);
+  });
 }
 
 /**
@@ -1670,7 +1769,7 @@ export async function importOrdersAtomic(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (rows.length === 0) return { insertedIds: [] };
-  return db.transaction(async tx => {
+  return withDeadlockRetry(() => db.transaction(async tx => {
     const [maxRow] = await tx
       .select({ maxNum: sql<string>`MAX(CAST(${orders.orderNumber} AS UNSIGNED))` })
       .from(orders);
@@ -1686,7 +1785,7 @@ export async function importOrdersAtomic(
       if (id) insertedIds.push(id);
     }
     return { insertedIds };
-  });
+  }));
 }
 
 /**
@@ -4548,8 +4647,22 @@ export function buildOrderHeaderName(
 async function replaceOrderItemsInTransaction(
   tx: any,
   orderId: number,
-  items: OrderItemWrite[]
+  items: OrderItemWrite[],
+  /**
+   * `isNewOrder`: الأوردر اتعمل في **نفس** الـtransaction دي. مفيش بنود قديمة، فمفيش
+   * قراءة `FOR UPDATE` ولا `DELETE` على `order_items`.
+   *
+   * ده سبب الـdeadlock اللي اتكشف: `SELECT … FROM order_items WHERE orderId=? FOR UPDATE`
+   * لأوردر جديد مالوش صفوف بياخد **gap lock** على آخر فهرس `orderId`. أوردرين جداد في
+   * نفس اللحظة بياخدوا gap lock على نفس الفجوة (مابيتعارضوش مع بعض)، وبعدين كل واحد
+   * عايز INSERT فيها (insert-intention بيتعارض مع gap lock التاني) → دايرة، وMySQL
+   * بتقتل واحد. من غير القراءة دي، الـINSERTين مابيتعارضوش أصلًا.
+   */
+  opts: { isNewOrder?: boolean } = {}
 ): Promise<void> {
+  // قفل الأوردر الأب بالـprimary key **أولًا** — قفل صف مش فجوة. كل كاتب لبنود أوردر
+  // (هنا، ومحرّر البنود، وconfirmOrder) بياخد القفل ده قبل ما يلمس order_items، فكتابتين
+  // على نفس الأوردر بيتسلسلوا عنده بدل ما يتقاطعوا جوه order_items.
   const [order] = await tx
     .select()
     .from(orders)
@@ -4557,11 +4670,13 @@ async function replaceOrderItemsInTransaction(
     .limit(1)
     .for("update");
   if (!order) throw new Error("الأوردر غير موجود");
-  const existing = await tx
-    .select()
-    .from(orderItems)
-    .where(eq(orderItems.orderId, orderId))
-    .for("update");
+  const existing: OrderItem[] = opts.isNewOrder
+    ? []
+    : await tx
+        .select()
+        .from(orderItems)
+        .where(eq(orderItems.orderId, orderId))
+        .for("update");
   if (
     existing.some(
       (item: OrderItem) =>
@@ -4627,7 +4742,9 @@ async function replaceOrderItemsInTransaction(
     customerShipping,
     items.map(item => BigInt(item.quantity))
   );
-  await tx.delete(orderItems).where(eq(orderItems.orderId, orderId));
+  // أوردر جديد مالوش بنود — الـDELETE كان هياخد نفس الـgap lock اللي فوق.
+  if (!opts.isNewOrder)
+    await tx.delete(orderItems).where(eq(orderItems.orderId, orderId));
   await tx.insert(orderItems).values(
     items.map((item, index) => {
       const rawGross =
@@ -4724,7 +4841,9 @@ export async function replaceOrderItemsFromEditor(
     if (!line.productName.trim()) throw new Error("اسم المنتج مطلوب في كل بند");
   }
 
-  return db.transaction(async tx => {
+  // الـtransaction كلها بتتعاد عند الـdeadlock — سجل التعديل جوّاها بيترجع مع الـrollback
+  // فمابيتكررش.
+  return withDeadlockRetry(() => db.transaction(async tx => {
     // الاسم من الكتالوج مش من الشاشة.
     //
     // الموظف بيغيّر «نوع الحفر» من القايمة، فبيتبعت `variantId` جديد ومعاه نفس الاسم
@@ -4930,16 +5049,14 @@ export async function replaceOrderItemsFromEditor(
       shippingFees: fromMinorUnits(shippingMinor, 2),
       totalAmount: fromMinorUnits(totalMinor, 2),
     };
-  });
+  }));
 }
 
 export async function replaceOrderItems(
   orderId: number,
   items: OrderItemWrite[]
 ): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  await db.transaction(tx =>
+  await runOrderTransaction(tx =>
     replaceOrderItemsInTransaction(tx, orderId, items)
   );
 }

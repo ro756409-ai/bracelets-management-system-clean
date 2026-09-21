@@ -27,9 +27,8 @@
 import { normalizeEgyptianPhone } from "../shared/phone";
 import {
   getDb,
-  createOrder,
-  updateOrder,
-  replaceOrderItems,
+  createOrderWithItems,
+  updateOrderWithItems,
   generateOrderNumber,
   getOrderByExternalId,
   getMatchCatalog,
@@ -428,8 +427,12 @@ export async function upsertEasyOrder(
         };
       }
 
-      await updateOrder(existing.id, orderFields as any);
-      await replaceOrderItems(existing.id, itemRows);
+      // الهيدر والبنود في transaction واحدة (صف الأوردر مقفول أولًا). قبل كده كانوا
+      // خطوتين منفصلتين، ففشل البنود كان بيسيب هيدر متحدّث وبنود قديمة. التطبيع
+      // والتحقق من انتقال الحالة زي `updateOrder` بالظبط.
+      await updateOrderWithItems(existing.id, orderFields as any, itemRows, {
+        normalizePhones: true,
+      });
       return {
         outcome: "updated",
         orderId: existing.id,
@@ -440,14 +443,18 @@ export async function upsertEasyOrder(
     }
 
     const orderNumber = await generateOrderNumber();
-    const orderId = await createOrder({
-      ...orderFields,
-      orderNumber,
-      status: "new",
-      createdAt: normalized.createdAt ?? new Date(),
-    } as any);
-
-    if (orderId) await replaceOrderItems(orderId, itemRows);
+    // الهيدر (بنفس منطق `createOrder`) والبنود في transaction واحدة. قبل كده البنود
+    // كانت transaction تانية بعد ما الهيدر اتكتب — فلو فشلت (deadlock، أو بنود فاضية)
+    // كان بيفضل أوردر يتيم بلا بنود والنتيجة «failed» برضه.
+    const orderId = await createOrderWithItems(
+      {
+        ...orderFields,
+        orderNumber,
+        status: "new",
+        createdAt: normalized.createdAt ?? new Date(),
+      } as any,
+      itemRows
+    );
 
     return { outcome: "created", orderId, orderNumber, needsReview, reviewReason };
   } catch (err: any) {
