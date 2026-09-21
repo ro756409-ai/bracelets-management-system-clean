@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { draftKey, readEmployeeScope, sanitizeDraftItems } from "@/lib/employeeScope";
+import { activeDraftKey } from "@/lib/activeBusiness";
+import { useBusinessContext } from "@/contexts/BusinessContext";
 import { summarizeCart, saveBlockers } from "@shared/orderLines";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,9 +68,11 @@ export default function FacebookEntry() {
   const isLegacy = entryMode === "bracelets_legacy";
   // مفتاح المسودة مربوط بالحساب (tenant/نشاط/موظف) **والقالب** — مسودة حساب تاني على
   // نفس الجهاز عمرها ما تترجّع هنا، وتغيير القالب مايرجّعش مسودة بشكل تاني.
+  // + النشاط الفعّال: تبديل النشاط مايرجّعش مسودة نشاط تاني.
+  const { currentBusinessId: activeBusinessId } = useBusinessContext();
   const DRAFT_KEY = useMemo(
-    () => `${draftKey(readEmployeeScope())}:${entryMode}`,
-    [entryMode]
+    () => activeDraftKey(draftKey(readEmployeeScope()), activeBusinessId, entryMode),
+    [entryMode, activeBusinessId]
   );
   const [cust, setCust] = useState<CustomerForm>(EMPTY_CUSTOMER);
   const [items, setItems] = useState<PickedItem[]>([]);

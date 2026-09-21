@@ -246,11 +246,11 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
               >
                 <PanelRight className="h-4 w-4 text-sidebar-foreground/60" />
               </button>
-              {!isCollapsed && (
-                <div className="min-w-0">
-                  <BrandLogo variant="horizontal" size="md" showEnglishName mode="dark" />
-                </div>
-              )}
+              {/* هوية النشاط الفعّال (اسم البراند + اللوجو من القاعدة) — وهي نفسها مبدّل
+                  الأنشطة لو المالك عنده أكتر من نشاط. مطوية → اللوجو/الحرف بس. */}
+              <div className="min-w-0 flex-1">
+                <BusinessSwitcher variant="sidebar" collapsed={isCollapsed} />
+              </div>
             </div>
           </SidebarHeader>
 
@@ -374,10 +374,11 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
         <header className="sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-border bg-background/95 px-4 backdrop-blur">
           <div className="flex min-w-0 items-center gap-3">
             {isMobile && <SidebarTrigger className="h-9 w-9 rounded-lg" />}
+            {/* الموبايل: هوية النشاط (لوجو/حرف + اسم) في الشريط العلوي؛ الديسكتوب: في رأس السايدبار. */}
+            {isMobile && <BusinessSwitcher variant="topbar" />}
             {isMobile && (
-              <span className="truncate font-semibold text-foreground">{activeMenuItem?.label ?? "القائمة"}</span>
+              <span className="truncate text-sm text-muted-foreground">{activeMenuItem?.label ?? "القائمة"}</span>
             )}
-            <BusinessSwitcher />
           </div>
           {lowStockCount > 0 && (
             <button

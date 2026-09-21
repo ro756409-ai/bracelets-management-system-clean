@@ -133,6 +133,7 @@ import {
   parseOrderEntryMode,
   type OrderEntryMode,
 } from "../shared/orderEntryMode";
+import { BRANDING_NAMESPACE, BRANDING_LOGO_KEY, parseLogoUrl } from "../shared/branding";
 import {
   ORDER_CONTENT_HEADER_FIELDS,
   orderContentChangedAfterShipment,
@@ -4691,6 +4692,63 @@ export async function setOrderEntryMode(
     .onDuplicateKeyUpdate({
       set: { valueJson: JSON.stringify(mode), isActive: true, updatedBy: actorUserId },
     });
+}
+
+// ==================== هوية النشاط (اللوجو) ====================
+
+/** مراجع لوجو مجموعة أنشطة دفعة واحدة — Map(businessId → url|null). مابترميش. */
+export async function getBusinessLogoUrls(businessIds: number[]): Promise<Map<number, string | null>> {
+  const out = new Map<number, string | null>();
+  if (businessIds.length === 0) return out;
+  try {
+    const db = await getDb();
+    if (!db) return out;
+    const rows = await db
+      .select({ businessId: businessConfigurationValues.businessId, valueJson: businessConfigurationValues.valueJson })
+      .from(businessConfigurationValues)
+      .where(
+        and(
+          inArray(businessConfigurationValues.businessId, businessIds),
+          eq(businessConfigurationValues.namespace, BRANDING_NAMESPACE),
+          eq(businessConfigurationValues.configKey, BRANDING_LOGO_KEY),
+          eq(businessConfigurationValues.isActive, true)
+        )
+      );
+    for (const r of rows) out.set(r.businessId, parseLogoUrl(r.valueJson));
+  } catch (err) {
+    console.error("[branding] read failed — falling back to no logo", err);
+  }
+  return out;
+}
+
+/** يلحق `logoUrl` بصفوف الأنشطة (null = مفيش لوجو → الواجهة بتعرض أول حرف). */
+export async function withBusinessLogos<T extends { id: number }>(rows: T[]): Promise<(T & { logoUrl: string | null })[]> {
+  const logos = await getBusinessLogoUrls(rows.map(r => r.id));
+  return rows.map(r => ({ ...r, logoUrl: logos.get(r.id) ?? null }));
+}
+
+/**
+ * يحدّد/يمسح لوجو النشاط (upsert على القيد الفريد). المرجع لازم يكون اتفحص قبلها
+ * (`isOwnedLogoUrl`) في إجراء المالك بعد `scopeBusinessId`. null = حذف اللوجو.
+ */
+export async function setBusinessLogoUrl(businessId: number, logoUrl: string | null, actorUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const valueJson = JSON.stringify(logoUrl);
+  await db
+    .insert(businessConfigurationValues)
+    .values({
+      businessId,
+      namespace: BRANDING_NAMESPACE,
+      configKey: BRANDING_LOGO_KEY,
+      displayName: "لوجو النشاط",
+      valueJson,
+      sortOrder: 0,
+      isActive: true,
+      createdBy: actorUserId,
+      updatedBy: actorUserId,
+    })
+    .onDuplicateKeyUpdate({ set: { valueJson, isActive: true, updatedBy: actorUserId } });
 }
 
 /**

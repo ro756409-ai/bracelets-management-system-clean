@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/table";
 import { Plus, Edit, Building2, ToggleLeft, ToggleRight } from "lucide-react";
 import { SetupJourney } from "@/components/SetupJourney";
+import { BusinessAvatar } from "@/components/BusinessAvatar";
+import { BusinessLogoField } from "@/components/BusinessLogoField";
 import {
   Select,
   SelectContent,
@@ -241,7 +243,12 @@ export default function Businesses() {
               {businesses?.map((business: any) => (
                 <TableRow key={business.id}>
                   <TableCell>{business.id}</TableCell>
-                  <TableCell className="font-medium">{business.name}</TableCell>
+                  <TableCell className="font-medium">
+                    <span className="flex items-center gap-2">
+                      <BusinessAvatar name={business.name} logoUrl={business.logoUrl ?? null} className="h-7 w-7" textClassName="text-xs" />
+                      {business.name}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-muted-foreground font-mono text-sm" dir="ltr">
                     {business.slug}
                   </TableCell>
@@ -293,8 +300,15 @@ export default function Businesses() {
             <DialogTitle>تعديل النشاط</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 mt-4">
+            {editingBusiness && (
+              <BusinessLogoField
+                businessId={editingBusiness.id}
+                name={formData.name || editingBusiness.name}
+                logoUrl={businesses?.find((b: any) => b.id === editingBusiness.id)?.logoUrl ?? null}
+              />
+            )}
             <div>
-              <Label>اسم النشاط</Label>
+              <Label>اسم النشاط (البراند)</Label>
               <Input
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}

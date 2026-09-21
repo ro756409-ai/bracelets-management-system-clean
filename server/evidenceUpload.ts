@@ -42,7 +42,7 @@ function requireAuthenticated(req: Request) {
  * (بلا توكن/غير صالح، موظف موقوف، بلا tenant، DB مش متاحة) → null والمتصل يرفض.
  * أدمن/مدير → كل أنشطة التينانت؛ موظف عادي → نشاطه فقط لو تابع للتينانت.
  */
-async function resolveScope(
+export async function resolveScope(
   req: Request
 ): Promise<{ tenantId: number; allowed: number[] } | null> {
   const secret = process.env.JWT_SECRET;
@@ -68,7 +68,7 @@ async function resolveScope(
   return { tenantId: emp.tenantId, allowed };
 }
 
-function hasValidSignature(mimeType: string, buffer: Buffer): boolean {
+export function hasValidSignature(mimeType: string, buffer: Buffer): boolean {
   if (mimeType === "application/pdf")
     return buffer.subarray(0, 5).toString("ascii") === "%PDF-";
   if (mimeType === "image/jpeg")

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabledForBusiness } from "./bosta.service";
+import { isOwnedLogoUrl } from "../shared/branding";
 import {
   getCarrierAccountStatus,
   probeBostaKey,
@@ -629,6 +630,8 @@ import {
   updateOrderWithItems,
   getOrderEntryMode,
   setOrderEntryMode,
+  withBusinessLogos,
+  setBusinessLogoUrl,
   findTakenSkusInBusiness,
   isSkuTakenInBusiness,
   updateProduct,
@@ -6398,16 +6401,17 @@ export const appRouter = router({
   businesses: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const businessIds = await sessionBusinessIds(ctx);
-      return getAllBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
+      return withBusinessLogos(await getAllBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined));
     }),
     // قايمة الأنشطة بتتقري في كل تحميل صفحة من `BusinessContext`، ولازم تشتغل لأي جلسة
     // مصرّح لها (مالك أو موظف) — مش المالك بس. المحاسب موظف غير إداري (auth.me = null)،
     // فلو فضلت protectedProcedure، بيوصل صفحات الحسابات لكن مايلاقيش نشاط يختاره فتبان
     // فاضية. النطاق على `ctx.tenantId` (مش المستخدم)، فالعزل بين الشركات محفوظ زي ما هو —
     // ودي أسماء أنشطة بس، مفيش أي بيانات مالية.
+    // بترجّع الهوية كمان (`logoUrl`) — الهيدر والمبدّل بيتبنوا منها لكل نشاط في النطاق.
     activeList: authenticatedProcedure.query(async ({ ctx }) => {
       const businessIds = await sessionBusinessIds(ctx);
-      return getActiveBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined);
+      return withBusinessLogos(await getActiveBusinesses(businessIds ? denyWhenEmpty(businessIds) : undefined));
     }),
     /*
       المجموعات والأنشطة — مقصورة على نطاق الجلسة.
@@ -6493,6 +6497,19 @@ export const appRouter = router({
         await scopeBusinessId(ctx, id);
         await updateBusiness(id, data);
         return { success: true };
+      }),
+    /**
+     * لوجو النشاط — المالك/الأدمن بس (adminProcedure)، بعد فحص النطاق. المرجع لازم يكون
+     * ملفًا مرفوعًا عبر `/api/branding/upload` بنفس التينانت — مش أي رابط.
+     */
+    setLogo: adminProcedure
+      .input(z.object({ businessId: z.number().int().min(1), logoUrl: z.string().max(300).nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        if (input.logoUrl != null && (ctx.tenantId == null || !isOwnedLogoUrl(input.logoUrl, ctx.tenantId)))
+          throw new TRPCError({ code: "BAD_REQUEST", message: "مرجع اللوجو غير صالح — ارفع الصورة من إعدادات النشاط" });
+        await setBusinessLogoUrl(businessId!, input.logoUrl, ctx.user.id);
+        return { ok: true };
       }),
     /** قالب شاشة الإدخال للنشاط — للمالك. النطاق بيتفحص، والموظف مالوش المسار ده. */
     orderEntryMode: adminProcedure

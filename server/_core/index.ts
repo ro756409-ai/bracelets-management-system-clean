@@ -19,6 +19,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { startMaintenanceScheduler } from "../scheduler";
 import { registerEvidenceUploadRoutes } from "../evidenceUpload";
+import { registerBrandingRoutes } from "../brandingUpload";
 import {
   logError,
   makeHealthHandler,
@@ -59,6 +60,8 @@ async function startServer() {
   // صحّة عامة — للـload balancer/المراقبة. مفيش بيانات حسّاسة.
   app.get("/api/health", makeHealthHandler(getDb));
   registerEvidenceUploadRoutes(app);
+  // لوجو النشاط (رفع للمالك/الأدمن، وعرض لكل جلسة في نفس التينانت).
+  registerBrandingRoutes(app);
   // Local owner/admin auth (POST /api/auth/login)
   registerLocalAuthRoutes(app);
   // Excel import routes

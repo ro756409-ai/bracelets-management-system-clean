@@ -17,8 +17,11 @@ import { Truck, CheckCircle, Unplug, RefreshCw } from "lucide-react";
  * آخر 4 أحرف بس. النشاط من سياق الجلسة، والسيرفر بيعيد فحص النطاق (`scopeBusinessId`).
  */
 export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const { currentBusinessId } = useBusinessContext();
+  // النشاط الفعّال من السياق: نشاط واحد بيتحدد تلقائيًا (فالنموذج بيفتح مباشرة)؛ أكتر من
+  // نشاط بلا اختيار → اختيار النشاط هنا أولًا (بيغيّر النشاط الفعّال للتطبيق كله)، ثم النموذج.
+  const { currentBusinessId, businesses, setCurrentBusinessId, activeBusiness } = useBusinessContext();
   const businessId = currentBusinessId ?? 0;
+  const needsPick = !businessId && businesses.length > 1;
   const utils = trpc.useUtils();
   const status = trpc.carrierAccounts.status.useQuery({ businessId }, { enabled: open && businessId > 0 });
 
@@ -52,11 +55,22 @@ export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOp
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md" dir="rtl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Truck className="h-5 w-5 text-[var(--info)]" /> ربط حساب Bosta</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><Truck className="h-5 w-5 text-[var(--info)]" /> ربط حساب Bosta{activeBusiness ? ` — ${activeBusiness.name}` : ""}</DialogTitle>
         </DialogHeader>
 
-        {!businessId ? (
-          <p className="text-sm text-muted-foreground">اختر نشاطًا واحدًا من أعلى الصفحة أولًا.</p>
+        {needsPick ? (
+          <div className="space-y-2" data-testid="bosta-pick-business">
+            <Label className="text-xs">اختر النشاط الذي تريد ربط حساب بوسطة به</Label>
+            <Select value="" onValueChange={v => setCurrentBusinessId(Number(v))}>
+              <SelectTrigger data-testid="bosta-business-select"><SelectValue placeholder="اختر النشاط" /></SelectTrigger>
+              <SelectContent>
+                {businesses.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">الربط يُحفظ للنشاط المختار فقط — مفتاح نشاط لا يُستخدم لنشاط آخر.</p>
+          </div>
+        ) : !businessId ? (
+          <p className="text-sm text-muted-foreground">لا يوجد نشاط متاح لهذه الجلسة.</p>
         ) : connected ? (
           <div className="space-y-3 text-sm" data-testid="bosta-connected">
             <div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-[var(--success)]" /> مربوط — المفتاح ينتهي بـ <Badge variant="secondary" dir="ltr">…{s?.apiKeyLast4}</Badge></div>

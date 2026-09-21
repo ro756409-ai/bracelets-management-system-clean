@@ -1,19 +1,24 @@
-import { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode, useMemo, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { trpc } from '@/lib/trpc';
+import { resolveActiveBusinessId, resetForBusinessSwitch } from '@/lib/activeBusiness';
 
-interface Business {
+export interface Business {
   id: number;
   name: string;
   slug: string;
   groupId: number | null;
   isActive: boolean;
+  /** لوجو النشاط (مرجع ملف مُتحقّق) أو null → الواجهة بتعرض أول حرف من الاسم. */
+  logoUrl: string | null;
 }
 
 interface BusinessGroup {
   id: number;
   name: string;
   slug: string;
-  businesses: Business[];
+  /** أنشطة المجموعة (تنظيم بصري) — الهوية الكاملة (logoUrl) في `businesses` مش هنا. */
+  businesses: Omit<Business, "logoUrl">[];
 }
 
 interface BusinessContextType {
@@ -27,6 +32,8 @@ interface BusinessContextType {
   /** Legacy: single businessId (undefined = all) - for backward compat */
   currentBusinessId: number | undefined;
   setCurrentBusinessId: (id: number | undefined) => void;
+  /** النشاط الفعّال (اسم/لوجو) — undefined = «كل الأنشطة» أو لسه ماتحددش. */
+  activeBusiness: Business | undefined;
   isLoading: boolean;
 }
 
@@ -96,20 +103,41 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     return stored ? Number(stored) : undefined; // undefined = كل الأنشطة
   });
 
-  const setCurrentBusinessId = (id: number | undefined) => {
+  const queryClient = useQueryClient();
+  const applyBusinessId = (id: number | undefined) => {
     setCurrentBusinessIdState(id);
     if (id != null) localStorage.setItem(BUSINESS_STORAGE_KEY, String(id));
     else localStorage.removeItem(BUSINESS_STORAGE_KEY);
   };
+  // تبديل يدوي = مسح cache ومسودات النشاط السابق وإعادة تحميل كل شيء بالنطاق الجديد.
+  const setCurrentBusinessId = (id: number | undefined) => {
+    if (id === currentBusinessId) return;
+    applyBusinessId(id);
+    resetForBusinessSwitch(queryClient, id);
+  };
 
-  // نشاط اتأرشف/اتشال أو مش من نطاق الجلسة → رجوع آمن لـ«كل الأنشطة» (مايفضلش اختيار شبح).
+  /**
+   * النشاط الفعّال بيتقرّر من القايمة اللي السيرفر سمح بيها:
+   *   • نشاط واحد (مالك بنشاط واحد / موظف بنشاطه) → يتحدد **تلقائيًا** بلا ضغطة.
+   *   • نشاط اتأرشف/اتشال أو مش من نطاق الجلسة → رجوع آمن لـ«كل الأنشطة».
+   * أول تحديد تلقائي مش «تبديل» — مفيش مسح cache (تحديث الصفحة العادي مايضيّعش حاجة).
+   */
+  const autoApplied = useRef(false);
   useEffect(() => {
-    if (currentBusinessId == null || businesses.length === 0) return;
-    if (!businesses.some(b => b.id === currentBusinessId)) {
-      setCurrentBusinessIdState(undefined);
-      localStorage.removeItem(BUSINESS_STORAGE_KEY);
+    if (businesses.length === 0) return;
+    const next = resolveActiveBusinessId(businesses, currentBusinessId);
+    if (next !== currentBusinessId) {
+      applyBusinessId(next);
+      // نشاط سابق كان محدد واتغيّر لغيره (أرشفة/تغيير نطاق) → نظافة كاملة زي التبديل اليدوي.
+      if (autoApplied.current && currentBusinessId != null) resetForBusinessSwitch(queryClient, next);
     }
+    autoApplied.current = true;
   }, [businesses, currentBusinessId]);
+
+  const activeBusiness = useMemo(
+    () => (currentBusinessId != null ? businesses.find(b => b.id === currentBusinessId) : undefined),
+    [businesses, currentBusinessId]
+  );
 
   // النطاق الفعلي اللي بتستهلكه كل الشاشات — نفس العقد (number[] | undefined).
   // نشاط محدد → [id]، كل الأنشطة → undefined (كل أنشطة الـtenant، بيقصّها السيرفر للمسموح).
@@ -128,6 +156,7 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       currentBusinessIds,
       currentBusinessId,
       setCurrentBusinessId,
+      activeBusiness,
       isLoading,
     }}>
       {children}

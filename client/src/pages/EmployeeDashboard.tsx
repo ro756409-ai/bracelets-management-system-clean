@@ -23,7 +23,8 @@ import {
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import jsQR from "jsqr";
-import { BrandMark } from "@/components/BrandMark";
+import { BusinessAvatar } from "@/components/BusinessAvatar";
+import { useBusinessContext } from "@/contexts/BusinessContext";
 import { StatCard, ConfirmDialog, WhatsAppButton } from "@/components/shared";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getMissingConfirmationFields } from "@/lib/orderConfirmationValidation";
@@ -709,6 +710,8 @@ export default function EmployeeDashboard() {
   ];
 
   const employeeName = meData?.name ?? empSession?.name ?? "الموظف";
+  // نشاط الموظف — بيتحدد تلقائيًا من `businesses.activeList` (نطاق الجلسة على السيرفر).
+  const { activeBusiness } = useBusinessContext();
 
   // "المتبقي" = الأوردرات اللي لسه محتاجة إجراء من الموظف. مؤكد/ملغي خلصوا، فمش بيتحسبوا.
   // ده الرقم الوحيد اللي بيقول للموظف "فاضلك كام" — كان مش معروض في أي مكان.
@@ -810,9 +813,13 @@ export default function EmployeeDashboard() {
             كانوا بيخنقوا الاسم لـ٤٢px على شاشة ٣٧٥ — بقى "سارة ..." وخلاص. */}
         <div className="mx-auto flex max-w-2xl flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3 lg:max-w-6xl">
           <div className="flex min-w-0 items-center gap-3">
-            <BrandMark className="w-9 h-9 shrink-0" />
+            {/* هوية نشاط الموظف (من نطاق الجلسة على السيرفر — نشاطه بس) */}
+            <BusinessAvatar name={activeBusiness?.name} logoUrl={activeBusiness?.logoUrl} className="w-9 h-9" />
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold leading-tight text-white">{employeeName}</p>
+              <p className="truncate text-sm font-bold leading-tight text-white">
+                {employeeName}
+                {activeBusiness && <span className="mr-1.5 text-xs font-normal text-white/75" data-testid="employee-business-name">· {activeBusiness.name}</span>}
+              </p>
               {/* "فاضلك كام" — أهم رقم في شاشة التأكيدات، وكان مش معروض في أي مكان.
                   مكانه جنب الاسم عشان يتشاف من غير ما الموظف ينزل بصره. */}
               <p className="text-xs text-white/75">

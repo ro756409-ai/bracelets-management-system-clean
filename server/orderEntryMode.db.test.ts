@@ -69,8 +69,8 @@ describe("🔒 حراس المصدر", () => {
     expect(entry).toContain("trpc.facebookEntry.entryConfig.useQuery()");
     expect(entry).not.toMatch(/localStorage\.getItem\([^)]*mode/i);
     expect(entry).not.toMatch(/searchParams|URLSearchParams/);
-    // مفتاح المسودة بيشمل القالب
-    expect(entry).toContain("`${draftKey(readEmployeeScope())}:${entryMode}`");
+    // مفتاح المسودة بيشمل القالب (والنشاط الفعّال — تبديل النشاط مايرجّعش مسودة نشاط تاني)
+    expect(entry).toContain("activeDraftKey(draftKey(readEmployeeScope()), activeBusinessId, entryMode)");
   });
   it("🔑 نفس الحفظ الذرّي في القالبين", () => {
     expect(entry).toContain("trpc.facebookEntry.addOrder.useMutation");
