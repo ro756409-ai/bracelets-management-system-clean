@@ -16,7 +16,11 @@ import {
   recordWebhookEvent,
   NOT_CONNECTED_MESSAGE,
   PROVIDER_BOSTA,
+  MIGRATION_0037_MISSING_MESSAGE,
+  isMissingTableError,
 } from "./carrierAccounts.service";
+import { sql } from "drizzle-orm";
+import { SHIPMENT_DESCRIPTION_LIMIT } from "../shared/orderContent";
 import { createBostaShipment, clampDeposit, fetchBostaAwb } from "./bosta.service";
 import { handleBostaWebhook } from "./bostaWebhook";
 import { deriveWebhookSecret } from "./crypto/secretBox";
@@ -81,6 +85,9 @@ describe("🔒 حراس المصدر — Bosta لكل نشاط", () => {
 const CAN = Boolean(process.env.TEST_DATABASE_URL && process.env.JWT_SECRET);
 
 /** fetch وهمي: بيقبل مفتاح واحد بس، وبيسجّل كل النداءات. */
+// معرّفات شحن فريدة عبر الملف كله — زي بوسطة الحقيقية؛ تكرارها كان بيخلّي البحث
+// بالـshipmentId يلاقي أوردر نشاط تاني.
+let shipSeq = 0;
 function makeFetch(validKey: string, calls: any[]) {
   return (async (url: any, init: any) => {
     const auth = String(init?.headers?.Authorization ?? "");
@@ -90,7 +97,7 @@ function makeFetch(validKey: string, calls: any[]) {
     if (String(url).includes("/pickup-locations"))
       return new Response(JSON.stringify({ data: [{ _id: "LOC1", locationName: "المخزن الرئيسي" }, { _id: "LOC2", locationName: "الورشة" }] }), { status: 200 });
     if (String(url).endsWith("/deliveries"))
-      return new Response(JSON.stringify({ _id: `SHIP-${calls.length}`, trackingNumber: `TRK${calls.length}` }), { status: 200 });
+      { const n = ++shipSeq; return new Response(JSON.stringify({ _id: `SHIP-${process.pid}-${n}`, trackingNumber: `TRK${process.pid}-${n}` }), { status: 200 }); }
     if (String(url).includes("/awb"))
       return new Response(Buffer.from("%PDF-fake"), { status: 200, headers: { "content-type": "application/pdf" } });
     return new Response("{}", { status: 404 });
@@ -207,6 +214,50 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
     expect((await fetchBostaAwb(A.businessId, ["SHIP-1"], makeFetch(KEY_A, []))).ok).toBe(true);
   });
 
+  it("📦 payload بوسطة: بدلة أطفال بيج/10 + أسود/6 → اللون والمقاس والكمية لكل قطعة، وعدد القطع 2", async () => {
+    // اسم البند بيتوحّد من الكتالوج وقت الحفظ (Phase A) — فالمنتج نفسه لازم اسمه «بدلة أطفال».
+    const suit = await createProductWithVariants(A.businessId, { name: "بدلة أطفال" }, [{ name: "AFK", sku: `AFK-${tag}`, currentStock: 50, price: "450" }]);
+    ids.productIds.push(suit.productId);
+    const oid = await insertOrderWithItems({
+      orderNumber: `BCS-${tag}`.slice(0, 20), businessId: A.businessId, customerName: "عميل بدلة", customerPhone: "01000000002",
+      governorate: "الجيزة", customerAddress: "شارع الهرم رقم 5", productName: "بدلة أطفال", quantity: 2, totalAmount: "900.00",
+      source: "facebook", status: "confirmed",
+    } as any, [
+      { productId: suit.productId, productName: "بدلة أطفال", quantity: 1, color: "بيج", size: "10", unitPrice: 450 },
+      { productId: suit.productId, productName: "بدلة أطفال", quantity: 1, color: "أسود", size: "6", unitPrice: 450 },
+    ]);
+    ids.orderIds.push(oid);
+    const calls: any[] = [];
+    expect((await createBostaShipment(oid, {}, makeFetch(KEY_A, calls))).success).toBe(true);
+    const body = calls.find(c => c.url.endsWith("/deliveries")).body;
+    // الحقل اللي بيظهر على البوليصة: specs.packageDetails.description (+ itemsCount)
+    expect(body.specs.packageDetails.description).toBe("بدلة أطفال (مقاس 10، لون بيج) ×1، بدلة أطفال (مقاس 6، لون أسود) ×1");
+    expect(body.specs.packageDetails.itemsCount).toBe(2);
+    expect(body.specs.packageDetails.description.length).toBeLessThanOrEqual(SHIPMENT_DESCRIPTION_LIMIT);
+  });
+
+  it("📦 payload بوسطة: أساور بنقشين مختلفين وكميات → كل نقش بكميته، وعدد القطع 3", async () => {
+    const br = await createProductWithVariants(A.businessId, { name: "أسورة نحاس" }, [
+      { name: "ذكر التحصين", sku: `BR1-${tag}`, currentStock: 50, price: "250" },
+      { name: "سادة", sku: `BR2-${tag}`, currentStock: 50, price: "250" },
+    ]);
+    ids.productIds.push(br.productId);
+    const oid = await insertOrderWithItems({
+      orderNumber: `BCB-${tag}`.slice(0, 20), businessId: A.businessId, customerName: "عميل أساور", customerPhone: "01000000003",
+      governorate: "القاهرة", customerAddress: "شارع النيل رقم 7", productName: "أسورة نحاس", quantity: 3, totalAmount: "800.00",
+      source: "facebook", status: "confirmed",
+    } as any, [
+      { productId: br.productId, productName: "أسورة نحاس", quantity: 2, variantId: br.variantIds[0], unitPrice: 250 },
+      { productId: br.productId, productName: "أسورة نحاس", quantity: 1, variantId: br.variantIds[1], unitPrice: 250 },
+    ]);
+    ids.orderIds.push(oid);
+    const calls: any[] = [];
+    expect((await createBostaShipment(oid, {}, makeFetch(KEY_A, calls))).success).toBe(true);
+    const body = calls.find(c => c.url.endsWith("/deliveries")).body;
+    expect(body.specs.packageDetails.description).toBe("أسورة نحاس - ذكر التحصين ×2، أسورة نحاس - سادة ×1");
+    expect(body.specs.packageDetails.itemsCount).toBe(3);
+  });
+
   it("🔒 إرسال مزدوج → شحنة واحدة", async () => {
     const oid = await mkOrder(A.businessId, prodA, varA, "5");
     const calls: any[] = [];
@@ -301,5 +352,92 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
     // A (عنده صف disconnected) → ممنوع رغم التاريخ
     expect((await getCarrierAccountStatus(A.businessId)).canSend).toBe(false);
     delete process.env.BOSTA_API_KEY;
+  });
+
+  it("🔑 الانتقال (صريح): نشاط جديد بلا صف لا يستخدم BOSTA_API_KEY حتى لو موجود — ولا نداء واحد", async () => {
+    process.env.BOSTA_API_KEY = "GLOBAL-KEY";
+    const C = await createCoreTestFixture("bosta-c2");
+    try {
+      const oid = await insertOrderWithItems({
+        orderNumber: `BCC-${tag}`.slice(0, 20), businessId: C.businessId, customerName: "عميل جديد", customerPhone: "01000000004",
+        governorate: "القاهرة", customerAddress: "شارع جديد رقم 1", productName: "منتج", quantity: 1, totalAmount: "100.00",
+        source: "facebook", status: "confirmed",
+      } as any, [{ productName: "منتج", quantity: 1, unitPrice: 100 }]);
+      ids.orderIds.push(oid);
+      const calls: any[] = [];
+      const r = await createBostaShipment(oid, {}, makeFetch("GLOBAL-KEY", calls));
+      expect(r.success).toBe(false); expect(r.error).toBe(NOT_CONNECTED_MESSAGE); expect(calls).toEqual([]);
+      expect((await owner(C.tenantId).carrierAccounts.status({ businessId: C.businessId })).status).toBe("not_connected");
+    } finally { delete process.env.BOSTA_API_KEY; await C.cleanup(); }
+  });
+
+  it("🔑 CARRIER_SECRETS_KEY غايب: الإرسال Legacy (بمفتاح البيئة) شغّال، والربط الجديد بس اللي بيترفض", async () => {
+    process.env.BOSTA_API_KEY = "GLOBAL-KEY"; process.env.BOSTA_WEBHOOK_SECRET = `env-secret-${tag}`;
+    const savedKey = process.env.CARRIER_SECRETS_KEY; delete process.env.CARRIER_SECRETS_KEY;
+    try {
+      // B: تاريخ شحن + بلا صف → legacy، ومفيش أي لمسة للمفتاح الرئيسي
+      const ob = await mkOrder(B.businessId, prodB, varB, "11");
+      const calls: any[] = [];
+      const r = await createBostaShipment(ob, {}, makeFetch("GLOBAL-KEY", calls));
+      expect(r.success).toBe(true);
+      const req = calls.find(c => c.url.endsWith("/deliveries"));
+      expect(req.auth).toBe("GLOBAL-KEY"); expect(req.body.businessLocationId).toBeUndefined();
+      expect(req.body.webhookCustomHeaders["x-bosta-secret"]).toBe(`env-secret-${tag}`);
+      // webhook بالسر العام يوصل لأوردر B (نشاط بلا صف) من غير مفتاح رئيسي
+      let status = 0; const res: any = { status: (s: number) => { status = s; return res; }, json: () => res };
+      await handleBostaWebhook({ headers: { "x-bosta-secret": `env-secret-${tag}` }, body: { _id: r.shipmentId, state: { code: 30 }, updatedAt: "2026-09-21T11:00:00Z" } } as any, res);
+      expect(status).toBe(200);
+      expect((await (await getDb())!.select().from(orders).where(eq(orders.id, ob)))[0].status).toBe("delivered");
+      // الربط الجديد → رفض برسالة واضحة، بلا throw وبلا كتابة
+      const c = await connectCarrierAccount({ tenantId: B.tenantId, businessId: B.businessId, apiKey: KEY_B, pickupLocationId: null, pickupLocationName: null, allowOpenPackageDefault: true, actorId: 1, fetchImpl: makeFetch(KEY_B, []) });
+      expect(c.ok).toBe(false); expect((c as any).error).toContain("CARRIER_SECRETS_KEY");
+      expect(await resolveBostaConnection(B.businessId)).not.toBeNull(); // لسه legacy، مفيش صف اتكتب
+      expect((await getCarrierAccountStatus(B.businessId)).status).toBe("legacy");
+    } finally {
+      process.env.CARRIER_SECRETS_KEY = savedKey; delete process.env.BOSTA_API_KEY; delete process.env.BOSTA_WEBHOOK_SECRET;
+    }
+  });
+
+  it("🛡️ قبل Migration 0037 (الجدولان غير موجودين): الحالة والإرسال Legacy والـwebhook شغّالين بلا 500، والربط يرفض برسالة", async () => {
+    const d = (await getDb())!;
+    process.env.BOSTA_API_KEY = "GLOBAL-KEY"; process.env.BOSTA_WEBHOOK_SECRET = `env-secret-${tag}`;
+    // خطأ MySQL الحقيقي 1146 هو اللي الحارس بيتعرّف عليه
+    let real: unknown = null;
+    try { await d.execute(sql.raw(`SELECT 1 FROM \`no_such_table_${tag}\``)); } catch (e) { real = e; }
+    expect(isMissingTableError(real)).toBe(true);
+    // إخفاء الجدولين فعليًا (الملف ده الوحيد اللي بيستخدمهم؛ بيرجعوا في finally)
+    await d.execute(sql.raw(`RENAME TABLE business_carrier_accounts TO _premig_bca_${tag}, carrier_webhook_events TO _premig_cwe_${tag}`));
+    try {
+      // صفحات الأوردرات/قنوات البيع بتسأل الحالة دي — لازم ترجع بلا throw
+      const stB = await owner(B.tenantId).carrierAccounts.status({ businessId: B.businessId });
+      expect(stB.status).toBe("legacy"); expect(stB.canSend).toBe(true);
+      const C = await createCoreTestFixture("bosta-c3");
+      try {
+        const stC = await owner(C.tenantId).carrierAccounts.status({ businessId: C.businessId });
+        expect(stC.status).toBe("not_connected"); expect(stC.canSend).toBe(false);
+      } finally { await C.cleanup(); }
+      // الإرسال من الراوتر لنشاط عنده تاريخ (الأساور في Production) بيكمل على مفتاح البيئة
+      const ob = await mkOrder(B.businessId, prodB, varB, "12");
+      const calls: any[] = [];
+      const r = await createBostaShipment(ob, {}, makeFetch("GLOBAL-KEY", calls));
+      expect(r.success).toBe(true); expect(calls.find(c => c.url.endsWith("/deliveries")).auth).toBe("GLOBAL-KEY");
+      // webhook بالسر العام → 200 وتحديث (بلا idempotency لحد ما الجدول يتعمل — زي القديم)
+      let status = 0; const res: any = { status: (s: number) => { status = s; return res; }, json: () => res };
+      await handleBostaWebhook({ headers: { "x-bosta-secret": `env-secret-${tag}` }, body: { _id: r.shipmentId, state: { code: 30 }, updatedAt: "2026-09-21T12:00:00Z" } } as any, res);
+      expect(status).toBe(200);
+      expect((await d.select().from(orders).where(eq(orders.id, ob)))[0].status).toBe("delivered");
+      // سر مجهول لسه 401
+      let s2 = 0; const res2: any = { status: (s: number) => { s2 = s; return res2; }, json: () => res2 };
+      await handleBostaWebhook({ headers: { "x-bosta-secret": "nope" }, body: { _id: "x" } } as any, res2);
+      expect(s2).toBe(401);
+      // الربط → رسالة الـmigration، بلا throw
+      const c = await connectCarrierAccount({ tenantId: B.tenantId, businessId: B.businessId, apiKey: KEY_B, pickupLocationId: null, pickupLocationName: null, allowOpenPackageDefault: true, actorId: 1, fetchImpl: makeFetch(KEY_B, []) });
+      expect(c).toEqual({ ok: false, error: MIGRATION_0037_MISSING_MESSAGE }); // الراوتر بيحوّل !ok → BAD_REQUEST
+    } finally {
+      await d.execute(sql.raw(`RENAME TABLE _premig_bca_${tag} TO business_carrier_accounts, _premig_cwe_${tag} TO carrier_webhook_events`));
+      delete process.env.BOSTA_API_KEY; delete process.env.BOSTA_WEBHOOK_SECRET;
+    }
+    // بعد الرجوع: الصف بتاع A لسه موجود والجدول سليم
+    expect((await getCarrierAccountStatus(A.businessId)).status).toBe("disconnected");
   });
 });

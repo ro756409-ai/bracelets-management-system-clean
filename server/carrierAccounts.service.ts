@@ -112,17 +112,43 @@ export async function probeBostaKey(
   return { ok: false, error: `المفتاح مرفوض من بوسطة (${lastErr || "غير مصرّح"})` };
 }
 
+// ── قبل Migration 0037 ──
+//
+// الكود ده ممكن يتنشر قبل ما الجدولين يتعملوا. في الفجوة دي القراءة لازم تتصرّف كأن
+// **مفيش صف** (فالنشاط اللي عنده تاريخ شحن يفضل على مفتاح البيئة، والجديد ممنوع) بدل
+// ما ترمي 500 على صفحة الأوردرات أو قنوات البيع أو الـwebhook. الكتابة (الربط) بترفض
+// برسالة واضحة. مفيش أي fallback تاني: غياب الجدول ≠ ربط.
+export const MIGRATION_0037_MISSING_MESSAGE =
+  "جدول حسابات الشحن غير موجود بعد — شغّل migration 0037 (business_carrier_accounts) أولًا";
+
+export function isMissingTableError(err: unknown): boolean {
+  const e = err as { code?: string; errno?: number; cause?: { code?: string; errno?: number } } | null;
+  return e?.code === "ER_NO_SUCH_TABLE" || e?.errno === 1146 || e?.cause?.code === "ER_NO_SUCH_TABLE" || e?.cause?.errno === 1146;
+}
+
+let warnedMissingTable = false;
+function warnMissingTableOnce() {
+  if (warnedMissingTable) return;
+  warnedMissingTable = true;
+  console.warn(`[carrierAccounts] ${MIGRATION_0037_MISSING_MESSAGE} — القراءة بتتعامل كأن مفيش صف حساب`);
+}
+
 // ── القراءة ──
 
 export async function getCarrierAccountRow(businessId: number, provider = PROVIDER_BOSTA) {
   const db = await getDb();
   if (!db) return null;
-  const [row] = await db
-    .select()
-    .from(businessCarrierAccounts)
-    .where(and(eq(businessCarrierAccounts.businessId, businessId), eq(businessCarrierAccounts.provider, provider)))
-    .limit(1);
-  return row ?? null;
+  try {
+    const [row] = await db
+      .select()
+      .from(businessCarrierAccounts)
+      .where(and(eq(businessCarrierAccounts.businessId, businessId), eq(businessCarrierAccounts.provider, provider)))
+      .limit(1);
+    return row ?? null;
+  } catch (err) {
+    if (isMissingTableError(err)) { warnMissingTableOnce(); return null; }
+    throw err;
+  }
 }
 
 /** هل النشاط ده مؤهل للمفتاح العام (فترة الانتقال)؟ = عنده شحنات سابقة ومفيش صف حساب. */
@@ -262,7 +288,12 @@ export async function connectCarrierAccount(input: {
     updatedBy: input.actorId,
   };
   const { tenantId: _t, businessId: _b, provider: _p, createdBy: _c, ...update } = values;
-  await db.insert(businessCarrierAccounts).values(values).onDuplicateKeyUpdate({ set: update });
+  try {
+    await db.insert(businessCarrierAccounts).values(values).onDuplicateKeyUpdate({ set: update });
+  } catch (err) {
+    if (isMissingTableError(err)) return { ok: false, error: MIGRATION_0037_MISSING_MESSAGE };
+    throw err;
+  }
   return { ok: true, apiKeyLast4: last4 };
 }
 
@@ -289,12 +320,17 @@ export async function disconnectCarrierAccount(businessId: number, actorId: numb
 export async function findAccountByWebhookSecret(secret: string) {
   const db = await getDb();
   if (!db) return null;
-  const [row] = await db
-    .select({ businessId: businessCarrierAccounts.businessId, provider: businessCarrierAccounts.provider, status: businessCarrierAccounts.status })
-    .from(businessCarrierAccounts)
-    .where(eq(businessCarrierAccounts.webhookSecretHash, hashSecret(secret)))
-    .limit(1);
-  return row ?? null;
+  try {
+    const [row] = await db
+      .select({ businessId: businessCarrierAccounts.businessId, provider: businessCarrierAccounts.provider, status: businessCarrierAccounts.status })
+      .from(businessCarrierAccounts)
+      .where(eq(businessCarrierAccounts.webhookSecretHash, hashSecret(secret)))
+      .limit(1);
+    return row ?? null;
+  } catch (err) {
+    if (isMissingTableError(err)) { warnMissingTableOnce(); return null; }
+    throw err;
+  }
 }
 
 /** true لو الحدث جديد؛ false لو مكرر (القيد الفريد businessId+provider+eventHash). */
@@ -318,6 +354,8 @@ export async function recordWebhookEvent(input: {
     return true;
   } catch (err: any) {
     if (err?.code === "ER_DUP_ENTRY" || err?.errno === 1062 || err?.cause?.errno === 1062) return false;
+    // قبل 0037: مفيش idempotency (زي السلوك القديم بالظبط) — الحدث بيتعامل كجديد.
+    if (isMissingTableError(err)) { warnMissingTableOnce(); return true; }
     throw err;
   }
 }
