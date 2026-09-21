@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createBostaShipment, isBostaEnabled } from "./bosta.service";
+import { createBostaShipment, isBostaEnabledForBusiness } from "./bosta.service";
+import {
+  getCarrierAccountStatus,
+  probeBostaKey,
+  connectCarrierAccount,
+  disconnectCarrierAccount,
+  NOT_CONNECTED_MESSAGE,
+} from "./carrierAccounts.service";
 import { getAccountantSummary } from "./accountantSummary.service";
 import {
   createStocktake,
@@ -3336,18 +3343,18 @@ export const appRouter = router({
         z.object({
           orderId: z.number(),
           allowToOpenPackage: z.boolean().optional().default(true),
+          /** ديبوزيت مطلوب من العميل (escrowInfo) — اختياري، ≤ تحصيل الأوردر. */
+          depositAmount: z.number().min(0).max(30000).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
-        if (!isBostaEnabled())
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Bosta غير مفعل",
-          });
-        const result = await createBostaShipment(input.orderId, {
-          allowToOpenPackage: input.allowToOpenPackage,
-        });
+        // اتصال نشاط **الأوردر نفسه** — مش مربوط → رسالة واضحة، بلا أي fallback.
+        // (أوردر غير موجود بيتعامل معاه createBostaShipment برسالته — البوابة للموجود بس.)
+        const [gateOrder] = await getOrdersByIds([input.orderId]);
+        if (gateOrder && !(await isBostaEnabledForBusiness(gateOrder.businessId)))
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: NOT_CONNECTED_MESSAGE });
+        const result = await createBostaShipment(input.orderId, { allowToOpenPackage: input.allowToOpenPackage, depositAmount: input.depositAmount });
         return result;
       }),
 
@@ -3356,21 +3363,23 @@ export const appRouter = router({
         z.object({
           orderIds: z.array(z.number()),
           allowToOpenPackage: z.boolean().optional().default(true),
+          /** ديبوزيت مطلوب من العميل (escrowInfo) — اختياري، ≤ تحصيل الأوردر. */
+          depositAmount: z.number().min(0).max(30000).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
-        if (!isBostaEnabled())
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Bosta غير مفعل",
-          });
         // كل أوردر في القايمة لازم يكون في النطاق — الرفض قبل أي شحنة تتعمل.
         await requireAllOwned(ctx, "order", input.orderIds);
+        // بعد النطاق: كل أوردر بيتفحص اتصال نشاطه هو جوه createBostaShipment؛ هنا نرفض
+        // بدري لو ولا نشاط من الأنشطة المختارة مربوط.
+        const gateRows = await getOrdersByIds(input.orderIds);
+        const gateBiz = Array.from(new Set(gateRows.map(r => r.businessId)));
+        const gateOk = (await Promise.all(gateBiz.map(b => isBostaEnabledForBusiness(b)))).some(Boolean);
+        if (gateBiz.length > 0 && !gateOk)
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: NOT_CONNECTED_MESSAGE });
         const results = await Promise.allSettled(
           input.orderIds.map(id =>
-            createBostaShipment(id, {
-              allowToOpenPackage: input.allowToOpenPackage,
-            })
+            createBostaShipment(id, { allowToOpenPackage: input.allowToOpenPackage, depositAmount: input.depositAmount })
           )
         );
         let success = 0,
@@ -6332,6 +6341,60 @@ export const appRouter = router({
   }),
 
   // ==================== الأنشطة (Businesses) ====================
+  /**
+   * حسابات شركات الشحن لكل نشاط (Bosta). للمالك/المدير المخوّل بس (adminProcedure) وبنطاق
+   * `scopeBusinessId` — الموظف مالوش المسارات دي أصلًا، والمفتاح عمره ما يرجع للواجهة.
+   */
+  carrierAccounts: router({
+    status: adminProcedure
+      .input(z.object({ businessId: z.number().int().min(1) }))
+      .query(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        return getCarrierAccountStatus(businessId!);
+      }),
+    /** اختبار مفتاح قبل الحفظ — أماكن الاستلام من حساب Bosta نفسه. */
+    testConnection: adminProcedure
+      .input(z.object({ businessId: z.number().int().min(1), apiKey: z.string().min(8).max(500) }))
+      .mutation(async ({ ctx, input }) => {
+        await scopeBusinessId(ctx, input.businessId);
+        const r = await probeBostaKey(input.apiKey.trim());
+        if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error ?? "فشل الاختبار" });
+        return { ok: true, pickupLocations: r.pickupLocations ?? [] };
+      }),
+    connect: adminProcedure
+      .input(
+        z.object({
+          businessId: z.number().int().min(1),
+          apiKey: z.string().min(8).max(500),
+          pickupLocationId: z.string().max(100).nullable().optional(),
+          pickupLocationName: z.string().max(255).nullable().optional(),
+          allowOpenPackageDefault: z.boolean().optional().default(true),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        if (ctx.tenantId == null) throw new TRPCError({ code: "FORBIDDEN", message: "جلسة بلا مؤسسة" });
+        const r = await connectCarrierAccount({
+          tenantId: ctx.tenantId,
+          businessId: businessId!,
+          apiKey: input.apiKey,
+          pickupLocationId: input.pickupLocationId ?? null,
+          pickupLocationName: input.pickupLocationName ?? null,
+          allowOpenPackageDefault: input.allowOpenPackageDefault,
+          actorId: ctx.user.id,
+        });
+        if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+        return { ok: true, apiKeyLast4: r.apiKeyLast4 };
+      }),
+    disconnect: adminProcedure
+      .input(z.object({ businessId: z.number().int().min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        await disconnectCarrierAccount(businessId!, ctx.user.id);
+        return { ok: true };
+      }),
+  }),
+
   businesses: router({
     list: protectedProcedure.query(async ({ ctx }) => {
       const businessIds = await sessionBusinessIds(ctx);

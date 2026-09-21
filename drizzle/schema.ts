@@ -2343,3 +2343,58 @@ export const platformAuditLogs = mysqlTable(
 );
 export type PlatformAuditLog = typeof platformAuditLogs.$inferSelect;
 export type InsertPlatformAuditLog = typeof platformAuditLogs.$inferInsert;
+
+// ==================== حسابات شركات الشحن لكل نشاط (migration 0037) ====================
+//
+// مفتاح Bosta لكل نشاط، مشفّر AES-256-GCM بمفتاح رئيسي من البيئة (CARRIER_SECRETS_KEY).
+// أعمدة المفتاح nullable: الفصل بيمسحها فعليًا ويسيب الصف كأثر بالحالة disconnected.
+export const businessCarrierAccounts = mysqlTable(
+  "business_carrier_accounts",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    tenantId: int("tenantId").notNull(),
+    businessId: int("businessId").notNull(),
+    provider: varchar("provider", { length: 30 }).notNull(),
+    encryptedApiKey: text("encryptedApiKey"),
+    apiKeyLast4: varchar("apiKeyLast4", { length: 4 }),
+    encryptionIv: varchar("encryptionIv", { length: 64 }),
+    encryptionTag: varchar("encryptionTag", { length: 64 }),
+    // الإصدار وصيغة التوثيق اللي **نجح اختبارها فعلًا** وقت الربط — مش تخمين.
+    apiBaseUrl: varchar("apiBaseUrl", { length: 200 }),
+    apiAuthScheme: varchar("apiAuthScheme", { length: 16 }),
+    pickupLocationId: varchar("pickupLocationId", { length: 100 }),
+    pickupLocationName: varchar("pickupLocationName", { length: 255 }),
+    allowOpenPackageDefault: boolean("allowOpenPackageDefault").default(true).notNull(),
+    webhookSalt: varchar("webhookSalt", { length: 64 }).notNull(),
+    webhookSecretHash: varchar("webhookSecretHash", { length: 128 }).notNull(),
+    status: varchar("status", { length: 20 }).default("disconnected").notNull(),
+    lastVerifiedAt: timestamp("lastVerifiedAt"),
+    lastError: text("lastError"),
+    createdBy: int("createdBy").notNull(),
+    updatedBy: int("updatedBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    businessProviderUnique: uniqueIndex("bca_business_provider_unique").on(table.businessId, table.provider),
+    webhookSecretHashUnique: uniqueIndex("bca_webhook_secret_hash_unique").on(table.webhookSecretHash),
+    tenantIdx: index("bca_tenant_idx").on(table.tenantId),
+  })
+);
+
+/** أحداث webhook مستلمة — idempotency لكل نشاط: نفس الحدث مايتطبّقش مرتين. */
+export const carrierWebhookEvents = mysqlTable(
+  "carrier_webhook_events",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    businessId: int("businessId").notNull(),
+    provider: varchar("provider", { length: 30 }).notNull(),
+    eventHash: varchar("eventHash", { length: 64 }).notNull(),
+    shipmentId: varchar("shipmentId", { length: 100 }),
+    stateCode: int("stateCode"),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+  },
+  table => ({
+    eventUnique: uniqueIndex("cwe_business_provider_event_unique").on(table.businessId, table.provider, table.eventHash),
+  })
+);

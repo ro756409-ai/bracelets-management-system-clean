@@ -300,6 +300,11 @@ export default function Orders() {
   const [employeeFilter, setEmployeeFilter] = useState<string>("all");
   const [showBostaDialog, setShowBostaDialog] = useState(false);
   const [bostaAllowOpen, setBostaAllowOpen] = useState(true);
+  const [bostaDeposit, setBostaDeposit] = useState(false);
+  const [bostaDepositAmount, setBostaDepositAmount] = useState("50");
+  // إرسال جماعي = نشاط واحد محدد؛ حالة ربط بوسطة لهذا النشاط من السيرفر (بلا أي سر).
+  const bostaGateBusinessId = currentBusinessIds?.length === 1 ? currentBusinessIds[0] : 0;
+  const bostaGate = trpc.carrierAccounts.status.useQuery({ businessId: bostaGateBusinessId }, { enabled: bostaGateBusinessId > 0 });
 
   // فلتر تاريخ الطباعة (يظهر عند اختيار حالة مطبوع)
   const [printedDateFilter, setPrintedDateFilter] = useState<'all' | 'today' | 'yesterday' | 'custom'>('today');
@@ -1525,15 +1530,34 @@ export default function Orders() {
                 <p className="text-xs text-muted-foreground mt-0.5">العميل يقدر يفتح الشحنة ويشوف محتواها قبل الدفع — ويتفعّل عليها نظام فليكس شيب (العميل يتحمّل جزء من تكلفة الشحن عند رفض الاستلام بعد الفتح)</p>
               </div>
             </label>
+            <label className="flex items-start gap-3 cursor-pointer p-3 rounded-lg border border-border hover:bg-accent/50 transition-colors">
+              <input type="checkbox" checked={bostaDeposit} onChange={(e) => setBostaDeposit(e.target.checked)}
+                className="h-5 w-5 rounded border-border accent-primary mt-0.5" data-testid="bosta-deposit-toggle" />
+              <div className="flex-1">
+                <span className="text-sm font-medium">طلب ديبوزيت من العميل</span>
+                <p className="text-xs text-muted-foreground mt-0.5">بوسطة تبعت للعميل رابط دفع للمبلغ ده قبل الشحن، ويتخصم من التحصيل عند الاستلام.</p>
+                {bostaDeposit && (
+                  <input type="number" min="1" step="1" value={bostaDepositAmount} onChange={(e) => setBostaDepositAmount(e.target.value)}
+                    className="mt-2 h-8 w-28 rounded-md border border-border bg-background px-2 text-sm" data-testid="bosta-deposit-amount" />
+                )}
+              </div>
+            </label>
+            {bostaGate.data && !bostaGate.data.canSend && (
+              <p className="text-xs rounded-md border border-[var(--warning)] bg-[var(--warning)]/5 p-2 text-[var(--warning)]" data-testid="bosta-not-connected">{bostaGate.data.reason}</p>
+            )}
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowBostaDialog(false)}>إلغاء</Button>
             <Button
               onClick={() => {
-                bulkSendToBostaMutation.mutate({ orderIds: selectedOrderIds, allowToOpenPackage: bostaAllowOpen });
+                bulkSendToBostaMutation.mutate({
+                  orderIds: selectedOrderIds,
+                  allowToOpenPackage: bostaAllowOpen,
+                  depositAmount: bostaDeposit ? Math.max(1, Number(bostaDepositAmount) || 0) : undefined,
+                });
                 setShowBostaDialog(false);
               }}
-              disabled={bulkSendToBostaMutation.isPending}
+              disabled={bulkSendToBostaMutation.isPending || (bostaGate.data ? !bostaGate.data.canSend : false)}
             >
               {bulkSendToBostaMutation.isPending ? 'جاري الإرسال...' : 'إرسال'}
             </Button>

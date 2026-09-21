@@ -51,8 +51,8 @@ describe("🔑 مسار إرسال بوسطة بيسجّل ويرجّع السب
   const svc = fs.readFileSync("server/bosta.service.ts", "utf-8");
   const code = svc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*/g, "");
   const sendFn = code.slice(
-    code.indexOf("const response = await fetch(`${BOSTA_BASE_URL}/deliveries`"),
-    code.indexOf("export function isBostaEnabled")
+    code.indexOf("const response = await fetchImpl(`${conn.baseUrl}/deliveries`"),
+    code.indexOf("export function clampDeposit")
   );
 
   it("🔑 catch بيرجّع التفاصيل مش UNCERTAIN_MESSAGE لوحدها", () => {
@@ -63,7 +63,7 @@ describe("🔑 مسار إرسال بوسطة بيسجّل ويرجّع السب
 
   it("🔑 catch بيسجّل الـURL والسبب في اللوج", () => {
     expect(sendFn).toContain('console.error("[Bosta] Network/exception (uncertain):"');
-    expect(sendFn).toContain("url: `${BOSTA_BASE_URL}/deliveries`");
+    expect(sendFn).toContain("url: `${conn.baseUrl}/deliveries`");
   });
 
   it("🔑 رد HTTP المرفوض بيطلّع كود الحالة + رسالة بوسطة", () => {

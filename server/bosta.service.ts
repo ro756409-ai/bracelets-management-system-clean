@@ -14,6 +14,12 @@ import {
 } from "./db";
 import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import {
+  resolveBostaConnection,
+  authHeader,
+  NOT_CONNECTED_MESSAGE,
+  type BostaConnection,
+} from "./carrierAccounts.service";
+import {
   buildShipmentContents,
   SHIPMENT_STALE_WARNING,
 } from "../shared/orderContent";
@@ -58,10 +64,9 @@ export function describeFetchError(err: unknown): string {
 }
 
 // Clean up any accidental "KEY=value" format from env
-const BOSTA_BASE_URL = (process.env.BOSTA_BASE_URL || "https://app.bosta.co/api/v0")
-  .replace(/^BOSTA_BASE_URL=/i, "").trim();
-const BOSTA_API_KEY = process.env.BOSTA_API_KEY || "";
-const BOSTA_PICKUP_ADDRESS_ID = process.env.BOSTA_PICKUP_ADDRESS_ID || "";
+// المفتاح والإصدار ومكان الاستلام بقوا **لكل نشاط** (`resolveBostaConnection`) —
+// مفيش ثوابت عامة هنا. العنوان المكتوب تحت بيتستخدم فقط مع مفتاح البيئة في فترة
+// الانتقال (`legacy`)، وبيروح مع حذف `BOSTA_API_KEY` من البيئة.
 
 // Bosta delivery type 10 = Deliver (COD)
 const DELIVERY_TYPE = 10;
@@ -217,12 +222,12 @@ function validateOrder(order: {
 /**
  * Create a shipment in Bosta for the given order
  */
-export async function createBostaShipment(orderId: number, options?: { allowToOpenPackage?: boolean }): Promise<BostaShipmentResult> {
-  // Check if Bosta is configured
-  if (!BOSTA_API_KEY) {
-    return { success: false, error: "BOSTA_API_KEY غير مضبوط" };
-  }
-
+export async function createBostaShipment(
+  orderId: number,
+  options?: { allowToOpenPackage?: boolean; depositAmount?: number },
+  /** للاختبارات — النداء الحقيقي لبوسطة بيتحقن من هنا. */
+  fetchImpl: typeof fetch = fetch
+): Promise<BostaShipmentResult> {
   // Fetch order from DB
   const db = await getDb();
   if (!db) return { success: false, error: "قاعدة البيانات غير متاحة" };
@@ -231,6 +236,11 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
     return { success: false, error: "الأوردر غير موجود" };
   }
   const order = orderRows[0];
+
+  // اتصال Bosta الخاص بنشاط **الأوردر نفسه** — من جدول حسابات الشحن، بلا أي fallback
+  // لنشاط تاني. مش مربوط → رفض برسالة واضحة قبل أي كتابة.
+  const conn = await resolveBostaConnection(order.businessId);
+  if (!conn) return { success: false, error: NOT_CONNECTED_MESSAGE };
 
   // ❌ منع إرسال أوردرات مجموعة "مفروشات وأدوات منزلية" لـ Bosta نهائياً
   // الاعتماد على مجموعة العمل (business group slug = furniture) وهو الأدق
@@ -372,16 +382,31 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
     allowToOpenPackage: options?.allowToOpenPackage ?? true,
   };
 
-  // Add pickup address if configured (with full details required by Bosta)
-  if (BOSTA_PICKUP_ADDRESS_ID) {
-    (payload as Record<string, unknown>).pickupAddress = {
-      _id: BOSTA_PICKUP_ADDRESS_ID,
-      firstLine: PICKUP_ADDRESS_FIRST_LINE,
-      city: {
-        _id: PICKUP_ADDRESS_CITY_ID,
-        name: PICKUP_ADDRESS_CITY_NAME,
-      },
-    };
+  // مكان الاستلام من حساب النشاط (`businessLocationId` الموثّق). في فترة الانتقال بس
+  // (مفتاح البيئة) بنبعت الشكل القديم بالعنوان المكتوب.
+  if (conn.legacy) {
+    if (conn.pickupLocationId) {
+      (payload as Record<string, unknown>).pickupAddress = {
+        _id: conn.pickupLocationId,
+        firstLine: PICKUP_ADDRESS_FIRST_LINE,
+        city: { _id: PICKUP_ADDRESS_CITY_ID, name: PICKUP_ADDRESS_CITY_NAME },
+      };
+    }
+  } else if (conn.pickupLocationId) {
+    (payload as Record<string, unknown>).businessLocationId = conn.pickupLocationId;
+  }
+
+  // الديبوزيت (`escrowInfo.amountToBeCollected` الموثّق): أكبر من صفر ولا يتجاوز
+  // تحصيل الأوردر. مستقل عن فليكس شيب — الاتنين بيشتغلوا معًا.
+  const deposit = clampDeposit(options?.depositAmount, totalCOD);
+  if (deposit != null) {
+    (payload as Record<string, unknown>).escrowInfo = { amountToBeCollected: deposit };
+  }
+
+  // سر الـwebhook الخاص بالنشاط بيتبعت مع الشحنة — بوسطة بترجّعه في كل حدث، وده
+  // اللي الـwebhook بيحدد بيه النشاط قبل ما يلمس أي أوردر.
+  if (conn.webhookSecret) {
+    (payload as Record<string, unknown>).webhookCustomHeaders = { "x-bosta-secret": conn.webhookSecret };
   }
 
   // الحجز الذرّي — أهم سطر في الحماية من الشحنة المزدوجة.
@@ -425,11 +450,11 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
   }));
 
   try {
-    const response = await fetch(`${BOSTA_BASE_URL}/deliveries`, {
+    const response = await fetchImpl(`${conn.baseUrl}/deliveries`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: BOSTA_API_KEY,
+        ...authHeader(conn.authScheme, conn.apiKey),
       },
       body: JSON.stringify(payload),
     });
@@ -471,7 +496,7 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
     // الطلب الجاي بيترفض لحد ما التاجر يراجع بوسطة يدويًا — من غير أي retry تلقائي.
     const detail = describeFetchError(err);
     console.error("[Bosta] Network/exception (uncertain):", detail, JSON.stringify({
-      orderId, url: `${BOSTA_BASE_URL}/deliveries`,
+      orderId, url: `${conn.baseUrl}/deliveries`,
     }));
     await db!.update(orders).set({
       bostaLastError: `${UNCERTAIN_MESSAGE} — ${detail}`,
@@ -481,11 +506,17 @@ export async function createBostaShipment(orderId: number, options?: { allowToOp
   }
 }
 
-/**
- * Check if Bosta integration is enabled
- */
-export function isBostaEnabled(): boolean {
-  return Boolean(BOSTA_API_KEY);
+/** الديبوزيت: null لو مش مطلوب/غير صالح؛ وإلا ≥ 1 و ≤ تحصيل الأوردر. */
+export function clampDeposit(amount: number | undefined, cod: number): number | null {
+  if (amount == null || !Number.isFinite(amount) || amount <= 0) return null;
+  const max = Math.max(0, Math.round(cod));
+  if (max <= 0) return null;
+  return Math.min(Math.round(amount), max);
+}
+
+/** هل النشاط ده يقدر يبعت لبوسطة؟ — من اتصاله هو بس. */
+export async function isBostaEnabledForBusiness(businessId: number): Promise<boolean> {
+  return (await resolveBostaConnection(businessId)) != null;
 }
 
 // ==================== Official Bosta AWB (Air Waybill) ====================
@@ -504,17 +535,23 @@ export type BostaAwbFetchResult =
   | { ok: true; kind: "redirect"; url: string }
   | { ok: false; error: string };
 
-export async function fetchBostaAwb(shipmentIds: string[]): Promise<BostaAwbFetchResult> {
-  if (!BOSTA_API_KEY) return { ok: false, error: "BOSTA_API_KEY غير مضبوط" };
+export async function fetchBostaAwb(
+  businessId: number,
+  shipmentIds: string[],
+  fetchImpl: typeof fetch = fetch
+): Promise<BostaAwbFetchResult> {
+  // الطباعة بمفتاح نشاط الأوردر بس — مش مربوط → رفض.
+  const conn: BostaConnection | null = await resolveBostaConnection(businessId);
+  if (!conn) return { ok: false, error: NOT_CONNECTED_MESSAGE };
   if (shipmentIds.length === 0) return { ok: false, error: "لا توجد شحنات بوسطة صالحة لطباعة AWB لها" };
 
   const query = encodeURIComponent(shipmentIds.join(","));
-  const url = `${BOSTA_BASE_URL}/deliveries/business/awb?deliveries=${query}`;
+  const url = `${conn.baseUrl}/deliveries/business/awb?deliveries=${query}`;
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       method: "GET",
-      headers: { Authorization: BOSTA_API_KEY },
+      headers: authHeader(conn.authScheme, conn.apiKey),
     });
 
     const contentType = response.headers.get("content-type") || "";
@@ -590,7 +627,7 @@ async function handleSingleAwb(req: Request, res: Response) {
       return res.status(400).json({ error: "لم يتم إرسال هذا الأوردر لبوسطة بعد" });
     }
 
-    const result = await fetchBostaAwb([order.bostaShipmentId]);
+    const result = await fetchBostaAwb(order.businessId, [order.bostaShipmentId]);
     return sendAwbResult(res, result);
   } catch (err) {
     console.error("[Bosta AWB] single order error:", err);
@@ -618,6 +655,11 @@ async function handleBulkAwb(req: Request, res: Response) {
     if (owned.length !== ids.length) {
       return res.status(403).json({ error: "بعض الأوردرات خارج نطاق حسابك" });
     }
+    // طباعة جماعية بمفتاح نشاط واحد — أوردرات من أنشطة مختلفة ماينفعش تتطبع بنداء واحد.
+    const businessIds = Array.from(new Set(owned.map((o) => o.businessId)));
+    if (businessIds.length !== 1) {
+      return res.status(400).json({ error: "اختر أوردرات من نشاط واحد لطباعة البوليصة" });
+    }
     const shipmentIds = owned
       .map((o) => o.bostaShipmentId)
       .filter((v): v is string => Boolean(v));
@@ -628,7 +670,7 @@ async function handleBulkAwb(req: Request, res: Response) {
       });
     }
 
-    const result = await fetchBostaAwb(shipmentIds);
+    const result = await fetchBostaAwb(businessIds[0], shipmentIds);
     return sendAwbResult(res, result);
   } catch (err) {
     console.error("[Bosta AWB] bulk error:", err);

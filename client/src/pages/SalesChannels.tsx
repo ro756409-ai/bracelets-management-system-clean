@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { SetupJourney } from "@/components/SetupJourney";
 import { IntegrationsMarketplace } from "@/components/IntegrationsMarketplace";
+import { BostaConnectDialog } from "@/components/BostaConnectDialog";
 import { toast } from "sonner";
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -264,7 +265,10 @@ export default function SalesChannels() {
   };
 
   // ربط منصة من السوق: بيفتح نموذج الإضافة بالمنصة محددة مسبقًا (المدعوم فعليًا فقط).
-  const handleConnectPlatform = (platform: string) => handleOpenCreate(platform);
+  const [bostaOpen, setBostaOpen] = useState(false);
+  // بوسطة شركة شحن مش قناة بيع — ليها نموذج ربط مستقل (مفتاح + مكان استلام) لكل نشاط.
+  const handleConnectPlatform = (platform: string) =>
+    platform === "bosta" ? setBostaOpen(true) : handleOpenCreate(platform);
 
   // المنصات اللي عندها قناة نشطة بالفعل — عشان السوق يعرض "مربوط".
   const connectedPlatforms = new Set<string>(
@@ -390,6 +394,7 @@ export default function SalesChannels() {
           <p className="text-sm text-muted-foreground">اكتشف المنصات والخدمات اللي تقدر تربطها بأنشطتك.</p>
         </div>
         <IntegrationsMarketplace connectedPlatforms={connectedPlatforms} onConnect={handleConnectPlatform} />
+        <BostaConnectDialog open={bostaOpen} onOpenChange={setBostaOpen} />
       </div>
 
       {/* قنوات البيع المربوطة */}

@@ -62,6 +62,8 @@ export default function OrderDetails() {
 
   const orderId = params?.id ? parseInt(params.id) : 0;
   const [isEditing, setIsEditing] = useState(false);
+  const [bostaDeposit, setBostaDeposit] = useState(false);
+  const [bostaDepositAmount, setBostaDepositAmount] = useState("50");
   const [showItemsEditor, setShowItemsEditor] = useState(false);
   const [editData, setEditData] = useState<any>({});
   const { values: GOVERNORATES } = useGovernorateOptions();
@@ -71,6 +73,14 @@ export default function OrderDetails() {
     { id: orderId },
     { enabled: orderId > 0 }
   );
+
+  // حالة ربط بوسطة **لنشاط الأوردر نفسه** — بلا أي سر؛ الأزرار بتتعطّل برسالة واضحة.
+  const bostaGate = trpc.carrierAccounts.status.useQuery(
+    { businessId: (order as any)?.businessId ?? 0 },
+    { enabled: isAdmin && Boolean((order as any)?.businessId) }
+  );
+  const bostaCanSend = bostaGate.data?.canSend ?? true;
+  const bostaReason = bostaGate.data?.reason ?? null;
 
   const { data: products } = trpc.products.list.useQuery();
   // اسم الموظف المسؤول — نفس الـlookup المحلي المستخدم في صفحة الأوردرات (الـAPI بيرجع رقم فقط).
@@ -264,17 +274,32 @@ export default function OrderDetails() {
                     size="sm"
                     className="text-[var(--info)] border-[var(--info)]/40"
                     onClick={() => window.open(`/api/orders/${order.id}/bosta-awb`, "_blank", "noopener,noreferrer")}
+                    disabled={!bostaCanSend}
+                    title={bostaCanSend ? undefined : bostaReason ?? undefined}
                   >
                     <Printer className="h-4 w-4 ml-1" /> طباعة AWB
                   </Button>
                 </>
               ) : (
+                <>
+                <label className="flex items-center gap-1 text-xs">
+                  <input type="checkbox" checked={bostaDeposit} onChange={e => setBostaDeposit(e.target.checked)} data-testid="bosta-deposit-toggle" />
+                  ديبوزيت
+                  {bostaDeposit && (
+                    <input type="number" min="1" value={bostaDepositAmount} onChange={e => setBostaDepositAmount(e.target.value)}
+                      className="h-7 w-16 rounded border border-border bg-background px-1 text-xs" data-testid="bosta-deposit-amount" />
+                  )}
+                </label>
                 <Button
                   variant="outline"
                   size="sm"
                   className={order.bostaLastError ? "text-destructive border-destructive/40" : "text-[var(--info)] border-[var(--info)]/40"}
-                  onClick={() => sendToBostaMutation.mutate({ orderId: order.id })}
-                  disabled={sendToBostaMutation.isPending}
+                  onClick={() => sendToBostaMutation.mutate({
+                    orderId: order.id,
+                    depositAmount: bostaDeposit ? Math.max(1, Number(bostaDepositAmount) || 0) : undefined,
+                  })}
+                  disabled={sendToBostaMutation.isPending || !bostaCanSend}
+                  title={bostaCanSend ? undefined : bostaReason ?? undefined}
                 >
                   {sendToBostaMutation.isPending ? (
                     <RefreshCw className="h-4 w-4 ml-1 animate-spin" />
@@ -283,6 +308,7 @@ export default function OrderDetails() {
                   )}
                   {order.bostaLastError ? "إعادة إرسال Bosta" : "إرسال لـ Bosta"}
                 </Button>
+                </>
               )
             )}
             <Button onClick={() => setIsEditing(true)} variant="outline">

@@ -64,17 +64,22 @@ describe("🔑 Bosta webhook — الشركة من الشحنة مش من الـ
   const code = codeOnly(fs.readFileSync("server/bostaWebhook.ts", "utf-8"));
 
   it("🔑 السر بيتقارن constant-time، والغياب بيرفض", () => {
-    expect(code).toContain("safeCompare(receivedSecret, expectedSecret)");
+    // السر بيتحوّل لـhash وبيتدوّر عليه في جدول حسابات الشحن (النشاط من السر)، والسر
+    // العام (فترة الانتقال) بيتقارن constant-time.
+    expect(code).toContain("findAccountByWebhookSecret(receivedSecret)");
+    expect(code).toContain("safeCompare(receivedSecret, envSecret)");
     expect(code).toContain("timingSafeEqual");
     // من غير سر مضبوط في البيئة — رفض، مش تمرير.
-    expect(code).toContain('if (!expectedSecret)');
+    // غياب الهيدر = 401 فورًا؛ ومفيش مسار بيقبل طلبًا بلا سر معروف.
+    expect(code).toContain('if (typeof receivedSecret !== "string" || !receivedSecret)');
     expect(code).toContain('res.status(401)');
   });
 
   it("🔑 الأوردر بيتلاقى بالـshipmentId/trackingNumber، والـbusinessId من الأوردر", () => {
     // order.businessId — مش من الـpayload. الشحنة هي رابط الملكية، والسيرفر هو اللي
     // أنشأها وقت الإرسال.
-    expect(code).toContain("order.businessId");
+    // النشاط اتحدد من السر **قبل** أي قراءة أوردر، والأوردر بيتقرا بشرط النشاط.
+    expect(code).toContain("eq(orders.businessId, businessId), byShipment");
     expect(code).not.toContain("payload.businessId");
     expect(code).not.toContain("body.businessId");
   });
@@ -83,7 +88,7 @@ describe("🔑 Bosta webhook — الشركة من الشحنة مش من الـ
     expect(code).toContain("Order not found, ignored");
     // التحديث بيحصل بعد ما order يتلاقى — مش قبل.
     const update = code.indexOf(".update(orders)");
-    const notFound = code.indexOf("if (!order)");
+    const notFound = code.indexOf("if (!order || businessId == null)");
     expect(notFound).toBeGreaterThan(-1);
     expect(notFound).toBeLessThan(update);
   });
