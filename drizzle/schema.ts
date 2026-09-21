@@ -3,6 +3,7 @@ import {
   mysqlEnum,
   mysqlTable,
   text,
+  mediumtext,
   timestamp,
   varchar,
   decimal,
@@ -2396,5 +2397,28 @@ export const carrierWebhookEvents = mysqlTable(
   },
   table => ({
     eventUnique: uniqueIndex("cwe_business_provider_event_unique").on(table.businessId, table.provider, table.eventHash),
+  })
+);
+
+/**
+ * سجل تحليل الرسالة الملصوقة (Hybrid Order Parser) — ParseResultV2 كامل في resultJson.
+ * النص الخام موجود كمان في orders.externalRawPayload. بلا FKs (نمط المشروع).
+ */
+export const orderParseAudits = mysqlTable(
+  "order_parse_audits",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    tenantId: int("tenantId").notNull(),
+    businessId: int("businessId").notNull(),
+    orderId: int("orderId").notNull(),
+    parserVersion: varchar("parserVersion", { length: 16 }).notNull(),
+    parseSource: varchar("parseSource", { length: 16 }).notNull(),
+    rawText: text("rawText").notNull(),
+    resultJson: mediumtext("resultJson").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    orderIdx: index("opa_order_idx").on(table.orderId),
+    businessIdx: index("opa_business_idx").on(table.businessId),
   })
 );

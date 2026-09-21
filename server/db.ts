@@ -134,6 +134,7 @@ import {
   type OrderEntryMode,
 } from "../shared/orderEntryMode";
 import { BRANDING_NAMESPACE, BRANDING_LOGO_KEY, parseLogoUrl } from "../shared/branding";
+import { orderParseAudits } from "../drizzle/schema";
 import {
   ORDER_CONTENT_HEADER_FIELDS,
   orderContentChangedAfterShipment,
@@ -4692,6 +4693,39 @@ export async function setOrderEntryMode(
     .onDuplicateKeyUpdate({
       set: { valueJson: JSON.stringify(mode), isActive: true, updatedBy: actorUserId },
     });
+}
+
+// ==================== سجل تحليل الرسالة الملصوقة ====================
+
+function isMissingTableErr(err: unknown): boolean {
+  const e = err as { code?: string; errno?: number; cause?: { code?: string; errno?: number } } | null;
+  return e?.code === "ER_NO_SUCH_TABLE" || e?.errno === 1146 || e?.cause?.code === "ER_NO_SUCH_TABLE" || e?.cause?.errno === 1146;
+}
+
+/**
+ * يسجّل ناتج التحليل لأوردر اتحفظ بالفعل. **Fail-safe قبل Migration 0038**: غياب الجدول
+ * (أو أي فشل كتابة) مايمنعش الأوردر — تحذير في اللوج فقط. بيرجّع true لو اتسجّل.
+ */
+export async function insertOrderParseAudit(input: {
+  tenantId: number;
+  businessId: number;
+  orderId: number;
+  parserVersion: string;
+  parseSource: string;
+  rawText: string;
+  resultJson: string;
+}): Promise<boolean> {
+  try {
+    const db = await getDb();
+    if (!db) return false;
+    await db.insert(orderParseAudits).values(input);
+    return true;
+  } catch (err) {
+    if (isMissingTableErr(err))
+      console.warn("[orderParseAudit] جدول order_parse_audits غير موجود — شغّل migration 0038 (الأوردر اتحفظ عادي)");
+    else console.error("[orderParseAudit] فشل تسجيل التحليل (الأوردر اتحفظ عادي):", err);
+    return false;
+  }
 }
 
 // ==================== هوية النشاط (اللوجو) ====================

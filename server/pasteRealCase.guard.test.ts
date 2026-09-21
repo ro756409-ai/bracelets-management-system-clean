@@ -24,8 +24,10 @@ function endpointBlock(): string {
 }
 
 describe("🔒 الـendpoint بيفوّض لمسار إنتاج واحد", () => {
-  it("🔒 parsePaste بيرجّع analyzePaste(input.text, catalog) مباشرة", () => {
-    expect(endpointBlock()).toContain("return analyzePaste(input.text, catalog);");
+  it("🔒 parsePaste بيفوّض لـanalyzePaste(input.text, catalog) وanalyzePasteV2 على نفس الكتالوج", () => {
+    const block = endpointBlock();
+    expect(block).toContain("analyzePaste(input.text, catalog)");
+    expect(block).toContain("analyzePasteV2(input.text, catalog");
   });
   it("🔒 مفيش منطق تحليل/مطابقة مكرر جوه الـendpoint", () => {
     const block = endpointBlock();

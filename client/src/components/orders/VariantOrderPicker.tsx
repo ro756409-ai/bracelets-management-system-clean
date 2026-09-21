@@ -64,6 +64,14 @@ export interface PickedItem {
   pickReason?: string | null;
   /** التركيبة اتمسحت لأنها مش تابعة لمنتج البند (مسودة قديمة). */
   needsVariantReview?: boolean;
+  /** مصدر السعر (القالب المبسّط): message | allocated | catalog | manual — للسجل والحماية من الاستبدال. */
+  priceSource?: "message" | "allocated" | "catalog" | "manual";
+  /** ثقة التحليل في السطر (القالب المبسّط): confident | ambiguous | unresolved. */
+  confidence?: "confident" | "ambiguous" | "unresolved";
+  /** النص الأصلي من الرسالة لهذا السطر. */
+  segmentText?: string;
+  /** السطر اتحل بمساعدة AI — يُعرض للمراجعة دايمًا. */
+  aiAssisted?: boolean;
 }
 
 // ── أبعاد التركيبات (دوال نقية قابلة للاختبار) ──

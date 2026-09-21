@@ -89,6 +89,19 @@ function splitOnWaw(text: string): string[] {
 }
 
 /**
+ * جزء بعد فصل «و» ممكن يشيل كميته هو: «٢ سادة و١ عين حورس» → بعد الكمية الأولى بيفضل
+ * «سادة و1 عين حورس»، والجزء التاني «1 عين حورس» لازم يتقري ككمية 1 + «عين حورس» —
+ * وإلا مايتعرفش كاسم ويفضل السطر كله ملزوقًا. (الأرقام متطبّعة قبل ما توصل هنا.)
+ */
+function splitQty(part: string): SegmentInput {
+  let m = part.match(/^(\d+)\s*[x×*]?\s*(.+)$/);
+  if (m && m[2].trim().length > 1) return { text: m[2].trim(), qty: Number(m[1]) };
+  m = part.match(/^(.+?)\s*[x×*]\s*(\d+)$/);
+  if (m) return { text: m[1].trim(), qty: Number(m[2]) };
+  return { text: part, qty: null };
+}
+
+/**
  * يفكّ «و» **ضد الكتالوج بس**: الجزء بيتفصل على «و» لو هو نفسه مش اسم معروف **وكل**
  * الأجزاء الناتجة أسماء معروفة. غير كده بيفضل زي ما هو (سطر للمراجعة).
  *
@@ -109,10 +122,11 @@ export function expandSegments(
       out.push(seg);
       continue;
     }
-    const parts = splitOnWaw(seg.text);
-    if (parts.length > 1 && parts.every(isKnown)) {
-      out.push({ text: parts[0], qty: seg.qty });
-      for (const p of parts.slice(1)) out.push({ text: p, qty: null });
+    const parts = splitOnWaw(seg.text).map(splitQty);
+    if (parts.length > 1 && parts.every(p => isKnown(p.text))) {
+      // الكمية المكتوبة قبل الجزء كله بتروح لأول جزء؛ الأجزاء التالية بكميتها المكتوبة لو فيه.
+      out.push({ text: parts[0].text, qty: seg.qty ?? parts[0].qty });
+      for (const p of parts.slice(1)) out.push({ text: p.text, qty: p.qty });
       continue;
     }
     out.push(seg);

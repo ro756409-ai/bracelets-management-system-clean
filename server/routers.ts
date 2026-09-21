@@ -2,6 +2,9 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabledForBusiness } from "./bosta.service";
 import { isOwnedLogoUrl } from "../shared/branding";
+import { analyzePasteV2, signParseToken, verifyParseToken, rawTextHash as rawTextHashOf } from "./orderParse.service";
+import { createSegmentResolver, readResolverConfig } from "./ai/segmentResolver";
+import { PRICE_SOURCE, pasteSaveBlockers, parseResultV2Schema } from "../shared/orderParse";
 import {
   getCarrierAccountStatus,
   probeBostaKey,
@@ -632,6 +635,7 @@ import {
   setOrderEntryMode,
   withBusinessLogos,
   setBusinessLogoUrl,
+  insertOrderParseAudit,
   findTakenSkusInBusiness,
   isSkuTakenInBusiness,
   updateProduct,
@@ -5283,12 +5287,19 @@ export const appRouter = router({
                 /** Engraving type / variant for this specific item. */
                 variantId: z.number().int().optional(),
                 unitPrice: z.number().min(0).optional(),
+                /** مصدر السعر (للسجل فقط — بيتحفظ في audit مش في order_items). */
+                priceSource: z.enum(PRICE_SOURCE).optional(),
               })
             )
             .min(1),
           quantity: z.number().int().min(1).optional(),
           totalAmount: z.number().min(0),
           shippingCost: z.number().min(0).optional(),
+          discount: z.number().min(0).optional(),
+          /** توكن التحليل الموقّع من parsePaste — إجباري مع rawText (أوردر ناتج عن لصق). */
+          parseToken: z.string().max(2000).optional(),
+          /** ناتج التحليل كما عرضته الواجهة (للسجل؛ التحقق بيتم بإعادة التحليل على السيرفر). */
+          parseResult: parseResultV2Schema.optional(),
           adName: z.string().optional(),
           pageName: z.string().optional(),
           notes: z.string().optional(),
@@ -5307,6 +5318,40 @@ export const appRouter = router({
         // العزل: النشاط **إجباريًا من جلسة الموظف**، مش من input العميل ولا القيمة الافتراضية
         // (businessId=1). موظف بلا نشاط صالح → fail-closed (مفيش أوردر يتكتب).
         const businessId = await resolveEmployeeBusinessId(empScope(ctx));
+
+        // ── أوردر ناتج عن لصق: التحقق **على السيرفر** بإعادة تحليل النص نفسه ──
+        //
+        // الـmetadata الجاية من المتصفح مش مرجعًا: rawText + parseToken لازم ييجوا سوا،
+        // التوكن موقّع (موظف + نشاط + hash النص) فمش قابل للتعديل، والنص بيتحلّل تاني
+        // بنفس analyzePasteV2 على كتالوج النشاط الحالي (حتمي، بلا AI) — والقواعد تتطبّق
+        // على اللي اتحلّل هنا مش على اللي العميل قاله. الأوردر اليدوي (بلا الاتنين)
+        // بيفضل بقواعده الحالية.
+        const pasteOrigin = input.rawText != null || input.parseToken != null;
+        let verifiedParse: Awaited<ReturnType<typeof analyzePasteV2>> | null = null;
+        if (pasteOrigin) {
+          if (!input.rawText || !input.parseToken)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "بيانات التحليل ناقصة — أعد تحليل الرسالة ثم احفظ" });
+          const tok = verifyParseToken(input.parseToken, { employeeId: ctx.employee.id, businessId, rawText: input.rawText });
+          if (!tok)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "توكن التحليل غير صالح أو الرسالة تغيّرت — أعد التحليل ثم احفظ" });
+          const catalogIds = await employeeCatalogBusinessIds(empScope(ctx));
+          const catalog = catalogIds.length ? await getMatchCatalog(undefined, catalogIds) : { products: [], variants: [] };
+          verifiedParse = await analyzePasteV2(input.rawText, catalog, {});
+          const f = verifiedParse.fields;
+          const num = (v: unknown) => (typeof v === "number" ? v : null);
+          const blockers = pasteSaveBlockers(
+            input.selectedProducts.map(p => ({ quantity: p.quantity ?? 1, unitPrice: p.unitPrice ?? 0, resolved: p.productId != null })),
+            {
+              pieces: num(f.pieces.value),
+              itemsTotal: num(f.itemsTotal.value),
+              shipping: input.shippingCost ?? num(f.shipping.value) ?? 0,
+              discount: input.discount ?? num(f.discount.value) ?? 0,
+            },
+            input.totalAmount
+          );
+          if (blockers.length)
+            throw new TRPCError({ code: "BAD_REQUEST", message: blockers.join(" · ") });
+        }
         // توليد رقم أوردر فريد
         const timestamp = Date.now();
         const random = Math.floor(Math.random() * 1000)
@@ -5413,7 +5458,7 @@ export const appRouter = router({
             (p.productId === headerProductId ? (input.color ?? undefined) : undefined) ??
             undefined,
         }));
-        await insertOrderWithItems(
+        const newOrderId = await insertOrderWithItems(
           {
             orderNumber,
             businessId,
@@ -5451,6 +5496,27 @@ export const appRouter = router({
           } as any,
           itemRows
         );
+        // سجل التحليل (fail-safe قبل 0038): اللي اتحقق على السيرفر + اللي اتحفظ فعلًا
+        // + اللي الواجهة عرضته (لو اتبعت). مفيش أي عمود جديد في order_items.
+        if (verifiedParse && input.rawText) {
+          await insertOrderParseAudit({
+            tenantId: ctx.employee.tenantId as number,
+            businessId,
+            orderId: newOrderId,
+            parserVersion: verifiedParse.parserVersion,
+            parseSource: input.parseResult?.parseSource ?? verifiedParse.parseSource,
+            rawText: input.rawText,
+            resultJson: JSON.stringify({
+              verified: verifiedParse,
+              client: input.parseResult ?? null,
+              saved: itemsWithQty.map(p => ({
+                productId: p.productId ?? null, variantId: p.variantId ?? null, quantity: p.quantity,
+                unitPrice: p.unitPrice ?? null, priceSource: p.priceSource ?? null,
+              })),
+              totals: { totalAmount: input.totalAmount, shipping: input.shippingCost ?? null, discount: input.discount ?? null },
+            }),
+          });
+        }
         return { success: true, orderNumber, needsReview };
       }),
 
@@ -5721,7 +5787,20 @@ export const appRouter = router({
           : { products: [], variants: [] };
         // التحليل والمطابقة كلهم في مسار إنتاج واحد (server/pasteLines.ts) — الراوتر
         // مسؤول عن النطاق بس. الاختبارات بتستدعي نفس الدالة، فمفيش نسخة تانية للمنطق.
-        return analyzePaste(input.text, catalog);
+        const legacy = analyzePaste(input.text, catalog);
+        // ParseResultV2: الثقة لكل حقل/سطر، الأسعار بالقرش، وAI للأجزاء الغامضة فقط
+        // (الافتراضي ORDER_PARSER_AI=none). الحقول الشخصية حتمية دايمًا.
+        const aiCfg = readResolverConfig();
+        const v2 = await analyzePasteV2(input.text, catalog, {
+          resolver: createSegmentResolver(aiCfg),
+          aiProvider: aiCfg.provider === "none" ? null : `${aiCfg.provider}:${aiCfg.model}`,
+        });
+        // توكن موقّع بيربط الحفظ بالنص ده وبالموظف والنشاط — addOrder بيعيد التحقق منه.
+        const parseToken =
+          businessIds.length === 1
+            ? signParseToken({ employeeId: ctx.employee.id, businessId: businessIds[0], rawHash: rawTextHashOf(input.text) })
+            : null;
+        return { ...legacy, v2, parseToken };
       }),
 
     // جلب variants منتج معين (للكفر ووتر بروف)

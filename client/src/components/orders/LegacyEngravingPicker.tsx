@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, X, AlertTriangle } from "lucide-react";
+import { Plus, X, AlertTriangle, Sparkles } from "lucide-react";
 import {
   variantDimensions,
   type Catalog,
@@ -17,13 +17,18 @@ import {
   type CatalogVariant,
   type PickedItem,
 } from "./VariantOrderPicker";
+import { applyTypeToLine, lineTotal, setLineQuantity, setManualPrice } from "@/lib/legacyLine";
 
 /**
- * قالب الإدخال المبسّط (`bracelets_legacy`): منتج واحد ← «نوع النقش» ← الكمية ← سطر.
+ * قالب الإدخال المبسّط (`bracelets_legacy`): «نوع الحفر | الكمية | سعر الوحدة | إجمالي السطر».
  *
  * مفيش سلة عامة ولا ألوان ولا مقاسات. المنتج بيتحدد **من البيانات** — المنتج اللي
  * تركيباته مميّزة بالنوع (`name`) بس — مش باسم مكتوب في الكود ولا بمعرّف نشاط. لو
  * النشاط عنده منتج واحد كده بيتختار تلقائيًا؛ أكتر من واحد → قائمة؛ صفر → رسالة.
+ *
+ * السطور الجاية من التحليل بتحمل ثقة: confident عادي، ambiguous أصفر + سبب، unresolved
+ * بيعرض نص الرسالة الأصلي والموظف يختار النوع. السعر له مصدر ومابيتستبدلش بسعر الكتالوج
+ * عند تغيير النوع/الكمية (قواعد `@/lib/legacyLine`).
  *
  * نفس `PickedItem` ونفس `addOrder` الذرّي بتوع القالب الكامل — الفرق واجهة بس.
  */
@@ -66,6 +71,10 @@ export function LegacyEngravingPicker({
         : [],
     [catalog.variants, product]
   );
+  const allLegacyTypes = useMemo(
+    () => catalog.variants.filter(v => v.isActive !== false && legacyProducts.some(p => p.id === v.productId)),
+    [catalog.variants, legacyProducts]
+  );
 
   const [typeId, setTypeId] = useState<number | null>(null);
   const [qty, setQty] = useState(1);
@@ -76,6 +85,8 @@ export function LegacyEngravingPicker({
 
   function addLine() {
     if (!product || !chosenType) return;
+    // سطر يدوي جديد: سعر الكتالوج افتراضيًا (catalog)، أو اللي الموظف كتبه (manual).
+    const source: PickedItem["priceSource"] = price.trim() === "" ? "catalog" : "manual";
     // نفس النوع بنفس السعر → زوّد الكمية بدل سطر مكرر.
     const idx = value.findIndex(
       it => it.productId === product.id && it.variantId === chosenType.id && it.unitPrice === unitPrice
@@ -96,6 +107,8 @@ export function LegacyEngravingPicker({
           quantity: qty,
           unitPrice,
           availableStock: chosenType.currentStock ?? 0,
+          priceSource: source,
+          confidence: "confident",
         },
       ]);
     }
@@ -104,27 +117,15 @@ export function LegacyEngravingPicker({
     setPrice("");
   }
 
-  const patch = (idx: number, p: Partial<PickedItem>) =>
-    onChange(value.map((x, i) => (i === idx ? { ...x, ...p } : x)));
+  const replaceAt = (idx: number, next: PickedItem) =>
+    onChange(value.map((x, i) => (i === idx ? next : x)));
 
-  /** سطر جاي من التحليل بلا نوع محسوم → الموظف يختار النوع من نفس المكان. */
+  /** اختيار/تغيير النوع لسطر — السعر اللي له مصدر بيفضل زي ما هو. */
   function pickTypeForLine(idx: number, variantId: number) {
     const v = catalog.variants.find(x => x.id === variantId);
     const p = v ? catalog.products.find(x => x.id === v.productId) : null;
     if (!v || !p) return;
-    const it = value[idx];
-    patch(idx, {
-      productId: p.id,
-      productName: p.name,
-      variantId: v.id,
-      sku: v.sku ?? null,
-      optionLabel: v.name ?? null,
-      unitPrice: it.unitPrice || num(v.price ?? p.price),
-      availableStock: v.currentStock ?? 0,
-      needsPick: false,
-      needsVariantReview: false,
-      pickReason: null,
-    });
+    replaceAt(idx, applyTypeToLine(value[idx], v, p));
   }
 
   if (legacyProducts.length === 0) {
@@ -135,6 +136,18 @@ export function LegacyEngravingPicker({
       </div>
     );
   }
+
+  const typeOptions = (line: PickedItem): CatalogVariant[] => {
+    const scoped = line.productId ? allLegacyTypes.filter(t => t.productId === line.productId) : [];
+    return scoped.length ? scoped : types.length ? types : allLegacyTypes;
+  };
+
+  const rowTone = (it: PickedItem) =>
+    it.needsPick || it.needsVariantReview || it.confidence === "unresolved"
+      ? "bg-destructive/5"
+      : it.confidence === "ambiguous"
+        ? "bg-[var(--warning)]/10"
+        : "";
 
   return (
     <div className="space-y-3" data-testid="legacy-picker">
@@ -189,33 +202,55 @@ export function LegacyEngravingPicker({
       </div>
 
       {value.length > 0 && (
-        <div className="rounded-md border divide-y">
-          {value.map((it, idx) => (
-            <div key={idx} className={`flex flex-wrap items-center gap-2 p-2 text-sm ${it.needsPick || it.needsVariantReview ? "bg-[var(--warning)]/5" : ""}`} data-testid={`legacy-line-${idx}`}>
-              {it.needsPick || it.needsVariantReview ? (
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  <AlertTriangle className="h-4 w-4 text-[var(--warning)] shrink-0" />
-                  <span className="text-xs text-[var(--warning)]">{it.pickReason ?? "اختر نوع النقش"}{it.productName ? ` («${it.productName}»)` : ""}</span>
-                  <Select value="" onValueChange={v => pickTypeForLine(idx, Number(v))}>
-                    <SelectTrigger className="h-8 w-40" data-testid={`legacy-line-pick-${idx}`}><SelectValue placeholder="اختر النوع" /></SelectTrigger>
-                    <SelectContent>
-                      {(types.length ? types : catalog.variants.filter(v => legacyProducts.some(p => p.id === v.productId))).map(t => (
-                        <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+        <div className="rounded-md border overflow-hidden" data-testid="legacy-lines">
+          <div className="grid grid-cols-[1fr_4.5rem_5.5rem_5.5rem_2rem] gap-2 bg-muted/50 px-2 py-1.5 text-[11px] font-medium text-muted-foreground">
+            <span>نوع الحفر</span><span className="text-center">الكمية</span><span className="text-center">سعر الوحدة</span><span className="text-left">إجمالي السطر</span><span />
+          </div>
+          <div className="divide-y">
+            {value.map((it, idx) => {
+              const unresolved = it.needsPick || it.needsVariantReview || it.confidence === "unresolved";
+              return (
+                <div key={idx} className={`grid grid-cols-[1fr_4.5rem_5.5rem_5.5rem_2rem] items-center gap-2 p-2 text-sm ${rowTone(it)}`} data-testid={`legacy-line-${idx}`} data-confidence={it.confidence ?? "confident"} data-price-source={it.priceSource ?? ""}>
+                  <div className="min-w-0">
+                    {unresolved ? (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1 text-xs text-destructive">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{it.pickReason ?? "اختر نوع النقش"}</span>
+                        </div>
+                        {it.segmentText && <div className="text-xs text-muted-foreground truncate" data-testid={`legacy-line-segment-${idx}`}>من الرسالة: «{it.segmentText}»</div>}
+                        <Select value="" onValueChange={v => pickTypeForLine(idx, Number(v))}>
+                          <SelectTrigger className="h-8 w-full" data-testid={`legacy-line-pick-${idx}`}><SelectValue placeholder="اختر النوع" /></SelectTrigger>
+                          <SelectContent>
+                            {typeOptions(it).map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ) : (
+                      <div className="min-w-0">
+                        <Select value={it.variantId != null ? String(it.variantId) : ""} onValueChange={v => pickTypeForLine(idx, Number(v))}>
+                          <SelectTrigger className="h-8 w-full font-medium" data-testid={`legacy-line-type-${idx}`}><SelectValue placeholder={it.optionLabel ?? it.productName} /></SelectTrigger>
+                          <SelectContent>
+                            {typeOptions(it).map(t => <SelectItem key={t.id} value={String(t.id)}>{t.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                        {it.confidence === "ambiguous" && (
+                          <div className="mt-1 flex items-center gap-1 text-[11px] text-[var(--warning)]" data-testid={`legacy-line-review-${idx}`}>
+                            {it.aiAssisted ? <Sparkles className="h-3 w-3 shrink-0" /> : <AlertTriangle className="h-3 w-3 shrink-0" />}
+                            <span className="truncate">{it.pickReason ?? "راجع النوع"}{it.segmentText ? ` — من الرسالة: «${it.segmentText}»` : ""}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <Input type="number" min="1" value={it.quantity} onChange={e => replaceAt(idx, setLineQuantity(it, Number(e.target.value)))} className="h-8 text-center" data-testid={`legacy-line-qty-${idx}`} />
+                  <Input type="number" min="0" step="0.01" value={it.unitPrice} onChange={e => replaceAt(idx, setManualPrice(it, Number(e.target.value)))} className="h-8" title={it.priceSource === "manual" ? "سعر يدوي" : it.priceSource === "allocated" ? "موزَّع من إجمالي الرسالة" : it.priceSource === "message" ? "مذكور في الرسالة" : "سعر الكتالوج"} data-testid={`legacy-line-price-${idx}`} />
+                  <span className="font-semibold text-left tabular-nums" data-testid={`legacy-line-total-${idx}`}>{lineTotal(it).toFixed(2)}</span>
+                  <button type="button" onClick={() => onChange(value.filter((_, i) => i !== idx))} aria-label="حذف" className="text-destructive justify-self-center"><X className="h-4 w-4" /></button>
                 </div>
-              ) : (
-                <span className="font-medium flex-1 min-w-0 truncate">{it.optionLabel ?? it.productName}</span>
-              )}
-              <span className="text-muted-foreground">×</span>
-              <Input type="number" min="1" value={it.quantity} onChange={e => patch(idx, { quantity: Math.max(1, parseInt(e.target.value || "1", 10) || 1) })} className="h-8 w-16 text-center" data-testid={`legacy-line-qty-${idx}`} />
-              <span className="text-muted-foreground">@</span>
-              <Input type="number" min="0" step="0.01" value={it.unitPrice} onChange={e => patch(idx, { unitPrice: Math.max(0, Number(e.target.value) || 0) })} className="h-8 w-20" data-testid={`legacy-line-price-${idx}`} />
-              <span className="font-semibold w-20 text-left">{(it.unitPrice * it.quantity).toFixed(2)}</span>
-              <button type="button" onClick={() => onChange(value.filter((_, i) => i !== idx))} aria-label="حذف" className="text-destructive"><X className="h-4 w-4" /></button>
-            </div>
-          ))}
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

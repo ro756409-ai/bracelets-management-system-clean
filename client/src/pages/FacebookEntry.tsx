@@ -4,6 +4,8 @@ import { draftKey, readEmployeeScope, sanitizeDraftItems } from "@/lib/employeeS
 import { activeDraftKey } from "@/lib/activeBusiness";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { summarizeCart, saveBlockers } from "@shared/orderLines";
+import { pasteSaveBlockers, type ParseResultV2 } from "@shared/orderParse";
+import { linesFromParse } from "@/lib/legacyLine";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -82,6 +84,11 @@ export default function FacebookEntry() {
   const [expectedPieces, setExpectedPieces] = useState<number | null>(null);
   const [totalMismatch, setTotalMismatch] = useState(false);
   const [totalConfirmed, setTotalConfirmed] = useState(false);
+  // Hybrid parser (القالب المبسّط): ناتج التحليل V2 + التوكن الموقّع + النص اللي اتحلّل
+  // بالظبط. بيتبعتوا مع الحفظ، والسيرفر بيعيد التحليل ويتحقق بنفسه.
+  const [parseV2, setParseV2] = useState<ParseResultV2 | null>(null);
+  const [parseToken, setParseToken] = useState<string | null>(null);
+  const [analyzedText, setAnalyzedText] = useState<string | null>(null);
   const [showOrders, setShowOrders] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -109,7 +116,7 @@ export default function FacebookEntry() {
   );
   const subtotal = summary.itemsSubtotal;
   const total = summary.total;
-  const blockers = useMemo(
+  const baseBlockers = useMemo(
     () =>
       saveBlockers(items, {
         shipping: Number(cust.shipping),
@@ -123,12 +130,34 @@ export default function FacebookEntry() {
   );
   const piecesMismatch =
     isLegacy && expectedPieces != null && expectedPieces > 0 && summary.pieces !== expectedPieces;
+  // أوردر ناتج عن لصق في القالب المبسّط: قواعد الرسالة (عدد القطع، إجمالي المنتجات،
+  // الإجمالي النهائي، لا سطر غير محلول) مانعة — نفس الدالة اللي السيرفر بيطبّقها.
+  const pasteExpected = useMemo(() => {
+    if (!isLegacy || !parseV2 || !parseToken) return null;
+    const f = parseV2.fields;
+    const n = (v: unknown) => (typeof v === "number" ? v : null);
+    return { pieces: n(f.pieces.value), itemsTotal: n(f.itemsTotal.value) };
+  }, [isLegacy, parseV2, parseToken]);
+  const pasteBlockers = useMemo(
+    () =>
+      pasteExpected
+        ? pasteSaveBlockers(
+            items.map(it => ({ quantity: it.quantity, unitPrice: it.unitPrice, resolved: !!it.productId && !it.needsPick && !it.needsVariantReview })),
+            { ...pasteExpected, shipping: Number(cust.shipping) || 0, discount: Number(cust.discount) || 0 },
+            total
+          )
+        : [],
+    [pasteExpected, items, cust.shipping, cust.discount, total]
+  );
+  // كل الموانع (العامة + موانع الرسالة) — الزر والقائمة والحفظ بيقروا من هنا.
+  const blockers = useMemo(() => Array.from(new Set([...baseBlockers, ...pasteBlockers])), [baseBlockers, pasteBlockers]);
 
   const addOrderMutation = trpc.facebookEntry.addOrder.useMutation({
     onSuccess: data => {
       toast.success(`✅ تم إضافة الأوردر — رقم: ${data.orderNumber}`);
       setCust(EMPTY_CUSTOMER);
       setItems([]);
+      setParseV2(null); setParseToken(null); setAnalyzedText(null); setPasteText("");
       localStorage.removeItem(DRAFT_KEY);
       if (showOrders) refetchOrders();
     },
@@ -155,8 +184,9 @@ export default function FacebookEntry() {
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
       if (!raw) return;
-      const d = JSON.parse(raw) as { cust: CustomerForm; items: PickedItem[] };
+      const d = JSON.parse(raw) as { cust: CustomerForm; items: PickedItem[]; parseV2?: ParseResultV2 | null; parseToken?: string | null; analyzedText?: string | null };
       if (d.cust) setCust(d.cust);
+      if (d.parseV2 && d.parseToken && d.analyzedText) { setParseV2(d.parseV2); setParseToken(d.parseToken); setAnalyzedText(d.analyzedText); setPasteText(d.analyzedText); }
       const s = sanitizeDraftItems(Array.isArray(d.items) ? d.items : [], catalog);
       setItems(s.items);
       const notes: string[] = [];
@@ -172,12 +202,13 @@ export default function FacebookEntry() {
   }, [catalogLoading, entryConfigLoading]);
 
   function saveDraft() {
-    localStorage.setItem(DRAFT_KEY, JSON.stringify({ cust, items }));
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ cust, items, parseV2, parseToken, analyzedText }));
     toast.success("تم حفظ المسودة على هذا الجهاز");
   }
   function clearForm() {
     setCust(EMPTY_CUSTOMER); setItems([]); setPasteText("");
     setExpectedPieces(null); setTotalMismatch(false); setTotalConfirmed(false);
+    setParseV2(null); setParseToken(null); setAnalyzedText(null);
     localStorage.removeItem(DRAFT_KEY);
     toast.success("تم مسح النموذج");
   }
@@ -230,7 +261,15 @@ export default function FacebookEntry() {
           pickReason: l.matchReason ?? null,
         } as PickedItem;
       });
-      setItems(built);
+      // القالب المبسّط: السطور من ParseResultV2 (ثقة لكل سطر، سعر بمصدره، تقسيم بالقرش).
+      // القالب الكامل (catalog_variants) يفضل على `res.lines` كما هو — بلا تغيير.
+      if (isLegacy && res.v2) {
+        setItems(linesFromParse(res.v2, catalog));
+        setParseV2(res.v2); setParseToken(res.parseToken ?? null); setAnalyzedText(pasteText);
+      } else {
+        setItems(built);
+        setParseV2(null); setParseToken(null); setAnalyzedText(null);
+      }
 
       if (!p.governorate) toast.info("لم نتعرف على المحافظة — اختر المحافظة");
       // عدد القطع بيتقارن بالسلة بس لو العميل كتبه فعلًا — مش القيمة الافتراضية 1.
@@ -265,6 +304,7 @@ export default function FacebookEntry() {
       quantity: it.quantity,
       variantId: it.variantId,
       unitPrice: it.unitPrice,
+      priceSource: it.priceSource,
     }));
   }
 
@@ -276,6 +316,12 @@ export default function FacebookEntry() {
     // المخزون **مش** ضمن الموانع — تنبيه بس، زي سياسة confirmOrder.
     if (blockers.length > 0) return toast.error(blockers[0]);
     const first = items[0];
+    // أوردر ناتج عن لصق (القالب المبسّط): النص المحلَّل + التوكن + الناتج للسجل.
+    // السيرفر بيعيد التحليل ويرفض لو الرسالة اتغيّرت — الحفظ مربوط بالنص اللي اتحلّل.
+    const pastePayload =
+      isLegacy && parseV2 && parseToken && analyzedText
+        ? { rawText: analyzedText, parseToken, parseResult: parseV2, discount: Number(cust.discount) || 0 }
+        : {};
     addOrderMutation.mutate({
       customerName: cust.customerName.trim(),
       customerPhone: cust.customerPhone.trim(),
@@ -291,6 +337,7 @@ export default function FacebookEntry() {
       variantId: first.variantId,
       color: first.color ?? undefined,
       size: first.size ?? undefined,
+      ...pastePayload,
     } as any);
   }
 
@@ -508,7 +555,13 @@ export default function FacebookEntry() {
                   className="h-8 w-28 text-left" data-testid="sum-shipping"
                 />
               </div>
-              {!isLegacy && (
+              {pasteExpected?.itemsTotal != null && (
+                <div className={`flex justify-between text-xs ${Math.round(summary.itemsSubtotal * 100) === Math.round(pasteExpected.itemsTotal * 100) ? "text-[var(--success)]" : "text-destructive"}`} data-testid="sum-items-expected">
+                  <span>إجمالي المنتجات في الرسالة</span>
+                  <span className="font-semibold tabular-nums">{pasteExpected.itemsTotal.toFixed(2)} ج.م {Math.round(summary.itemsSubtotal * 100) === Math.round(pasteExpected.itemsTotal * 100) ? "✓" : "≠"}</span>
+                </div>
+              )}
+              {(!isLegacy || Number(cust.discount) > 0 || !!pasteExpected) && (
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-muted-foreground">الخصم</span>
                   <Input

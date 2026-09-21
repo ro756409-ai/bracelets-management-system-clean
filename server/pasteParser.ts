@@ -71,14 +71,14 @@ const NEXT_LABEL = `(?:${LABELS.join("|")})\\s*[:：=]`;
 const SEP = "\\s*[:：=]\\s*";
 
 /** يقرا قيمة label واحدة، ويقف عند نهاية السطر أو أول label تاني. */
-function labelValue(text: string, label: string): string {
+export function labelValue(text: string, label: string): string {
   const re = new RegExp(`(?:^|\\s)${label}${SEP}((?:(?!${NEXT_LABEL})[^\\n])*)`, "m");
   const m = text.match(re);
   return m ? m[1].trim() : "";
 }
 
 /** رقم من قيمة label — أول رقم فيها بس، مش كل الأرقام ملزوقة. */
-function labelNumber(text: string, label: string): number | null {
+export function labelNumber(text: string, label: string): number | null {
   const raw = labelValue(text, label);
   if (!raw) return null;
   if (/مجان/.test(raw)) return 0;
