@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/dialog";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { GovernorateCitySelect } from "@/components/orders/GovernorateCitySelect";
+import { LegacyEngravingPicker } from "@/components/orders/LegacyEngravingPicker";
+import { DEFAULT_ORDER_ENTRY_MODE, type OrderEntryMode } from "@shared/orderEntryMode";
 import {
   VariantOrderPicker,
   variantLabel,
@@ -56,9 +58,18 @@ const EMPTY_CUSTOMER: CustomerForm = {
 export default function FacebookEntry() {
   const governorateOptions = useGovernorateOptions();
   const utils = trpc.useUtils();
-  // مفتاح المسودة مربوط بالحساب (tenant/نشاط/موظف) — مسودة حساب تاني على نفس الجهاز
-  // عمرها ما تترجّع هنا. المفتاح العام القديم اتشال.
-  const DRAFT_KEY = useMemo(() => draftKey(readEmployeeScope()), []);
+  // قالب الإدخال من السيرفر بهوية الجلسة — العميل مابيبعتش حاجة، ومايقدرش يغيّره.
+  // لحد ما يوصل بنعرض الافتراضي (نفس سلوك كل الأنشطة النهاردة).
+  const { data: entryConfig, isLoading: entryConfigLoading } =
+    trpc.facebookEntry.entryConfig.useQuery();
+  const entryMode: OrderEntryMode = entryConfig?.mode ?? DEFAULT_ORDER_ENTRY_MODE;
+  const isLegacy = entryMode === "bracelets_legacy";
+  // مفتاح المسودة مربوط بالحساب (tenant/نشاط/موظف) **والقالب** — مسودة حساب تاني على
+  // نفس الجهاز عمرها ما تترجّع هنا، وتغيير القالب مايرجّعش مسودة بشكل تاني.
+  const DRAFT_KEY = useMemo(
+    () => `${draftKey(readEmployeeScope())}:${entryMode}`,
+    [entryMode]
+  );
   const [cust, setCust] = useState<CustomerForm>(EMPTY_CUSTOMER);
   const [items, setItems] = useState<PickedItem[]>([]);
   const [pasteText, setPasteText] = useState("");
@@ -99,11 +110,15 @@ export default function FacebookEntry() {
       saveBlockers(items, {
         shipping: Number(cust.shipping),
         discount: Number(cust.discount),
-        expectedPieces: expectedPieces,
+        // القالب المبسّط: اختلاف عدد القطع تنبيه مش مانع — التحليل بيوزّع الكميات
+        // من «عدد القطع» أصلًا، والموظف بيصحّح السطر بدل ما يتقفل.
+        expectedPieces: isLegacy ? null : expectedPieces,
         totalNeedsConfirm: totalMismatch && !totalConfirmed,
       }),
-    [items, cust.shipping, cust.discount, expectedPieces, totalMismatch, totalConfirmed]
+    [items, cust.shipping, cust.discount, expectedPieces, totalMismatch, totalConfirmed, isLegacy]
   );
+  const piecesMismatch =
+    isLegacy && expectedPieces != null && expectedPieces > 0 && summary.pieces !== expectedPieces;
 
   const addOrderMutation = trpc.facebookEntry.addOrder.useMutation({
     onSuccess: data => {
@@ -131,7 +146,7 @@ export default function FacebookEntry() {
   // تدخّل معرّفات هتترفض على السيرفر بعدين. السيرفر بيعيد التحقق من كل معرّف برضه.
   const draftRestored = useRef(false);
   useEffect(() => {
-    if (draftRestored.current || catalogLoading) return;
+    if (draftRestored.current || catalogLoading || entryConfigLoading) return;
     draftRestored.current = true;
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
@@ -150,7 +165,7 @@ export default function FacebookEntry() {
       );
     } catch { localStorage.removeItem(DRAFT_KEY); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalogLoading]);
+  }, [catalogLoading, entryConfigLoading]);
 
   function saveDraft() {
     localStorage.setItem(DRAFT_KEY, JSON.stringify({ cust, items }));
@@ -451,11 +466,24 @@ export default function FacebookEntry() {
 
             {custForm(cust, setCust)}
 
-            <div className="border-t pt-3">
-              <Label className="text-sm font-semibold">الأصناف (من المخزون)</Label>
+            <div className="border-t pt-3" data-entry-mode={entryMode}>
+              <Label className="text-sm font-semibold">
+                {isLegacy ? "الأصناف — نوع النقش والكمية" : "الأصناف (من المخزون)"}
+              </Label>
               <div className="mt-2">
-                <VariantOrderPicker catalog={catalog} value={items} onChange={setItems} />
+                {/* القالب من السيرفر بهوية الجلسة: مكوّنان منفصلان، نفس endpoints ونفس الحفظ الذرّي. */}
+                {isLegacy ? (
+                  <LegacyEngravingPicker catalog={catalog} value={items} onChange={setItems} />
+                ) : (
+                  <VariantOrderPicker catalog={catalog} value={items} onChange={setItems} />
+                )}
               </div>
+              {piecesMismatch && (
+                <div className="mt-2 flex items-center gap-1 text-xs text-[var(--warning)]" data-testid="pieces-soft-warning">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  الرسالة تقول {expectedPieces} قطعة والسطور فيها {summary.pieces} — راجع الكميات لو لازم
+                </div>
+              )}
             </div>
 
             {/* ملخّص الأوردر — بيتحدّث فورًا مع أي تعديل في كمية أو سعر أو شحن أو خصم */}
@@ -476,14 +504,16 @@ export default function FacebookEntry() {
                   className="h-8 w-28 text-left" data-testid="sum-shipping"
                 />
               </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-muted-foreground">الخصم</span>
-                <Input
-                  type="number" min="0" step="0.01" value={cust.discount}
-                  onChange={e => setCust(c => ({ ...c, discount: e.target.value }))}
-                  className="h-8 w-28 text-left" data-testid="sum-discount"
-                />
-              </div>
+              {!isLegacy && (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground">الخصم</span>
+                  <Input
+                    type="number" min="0" step="0.01" value={cust.discount}
+                    onChange={e => setCust(c => ({ ...c, discount: e.target.value }))}
+                    className="h-8 w-28 text-left" data-testid="sum-discount"
+                  />
+                </div>
+              )}
               <div className="flex justify-between border-t pt-1 text-base">
                 <span className="font-semibold">الإجمالي النهائي</span>
                 <span className="font-bold" data-testid="sum-total">{summary.total.toFixed(2)} ج.م</span>

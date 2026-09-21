@@ -127,6 +127,13 @@ import {
 } from "../shared/accountingMoney";
 import { businessDateKey, businessDayRange } from "../shared/businessTime";
 import {
+  ORDER_ENTRY_NAMESPACE,
+  ORDER_ENTRY_CONFIG_KEY,
+  DEFAULT_ORDER_ENTRY_MODE,
+  parseOrderEntryMode,
+  type OrderEntryMode,
+} from "../shared/orderEntryMode";
+import {
   ORDER_CONTENT_HEADER_FIELDS,
   orderContentChangedAfterShipment,
 } from "../shared/orderContent";
@@ -4625,6 +4632,65 @@ export async function getOwnedProductNames(
     );
   for (const r of rows) out.set(r.id, r.name);
   return out;
+}
+
+// ── قالب شاشة إدخال الأوردر (لكل نشاط) ──
+
+/**
+ * قالب الإدخال للنشاط. **fail-safe بالكامل**: الجدول مش موجود، الصف مش موجود، القيمة
+ * بايظة، أو الداتابيز واقعة → الافتراضي `catalog_variants` + log. خطأ في إعداد عرض
+ * عمره ما يوقع شاشة الإدخال (درس حادثة `createdByEmployeeId`).
+ */
+export async function getOrderEntryMode(businessId: number): Promise<OrderEntryMode> {
+  try {
+    const db = await getDb();
+    if (!db) return DEFAULT_ORDER_ENTRY_MODE;
+    const [row] = await db
+      .select({ valueJson: businessConfigurationValues.valueJson })
+      .from(businessConfigurationValues)
+      .where(
+        and(
+          eq(businessConfigurationValues.businessId, businessId),
+          eq(businessConfigurationValues.namespace, ORDER_ENTRY_NAMESPACE),
+          eq(businessConfigurationValues.configKey, ORDER_ENTRY_CONFIG_KEY),
+          eq(businessConfigurationValues.isActive, true)
+        )
+      )
+      .limit(1);
+    return parseOrderEntryMode(row?.valueJson);
+  } catch (err) {
+    console.error("[orderEntryMode] read failed — falling back to default", err);
+    return DEFAULT_ORDER_ENTRY_MODE;
+  }
+}
+
+/**
+ * يحدّد قالب الإدخال للنشاط (upsert على القيد الفريد businessId+namespace+configKey).
+ * الاستدعاء من إجراء المالك بس، بعد `scopeBusinessId` — الموظف مالوش مسار ليه أصلًا.
+ */
+export async function setOrderEntryMode(
+  businessId: number,
+  mode: OrderEntryMode,
+  actorUserId: number
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .insert(businessConfigurationValues)
+    .values({
+      businessId,
+      namespace: ORDER_ENTRY_NAMESPACE,
+      configKey: ORDER_ENTRY_CONFIG_KEY,
+      displayName: "قالب شاشة إدخال الأوردر",
+      valueJson: JSON.stringify(mode),
+      sortOrder: 0,
+      isActive: true,
+      createdBy: actorUserId,
+      updatedBy: actorUserId,
+    })
+    .onDuplicateKeyUpdate({
+      set: { valueJson: JSON.stringify(mode), isActive: true, updatedBy: actorUserId },
+    });
 }
 
 /**

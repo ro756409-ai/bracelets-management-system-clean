@@ -22,6 +22,50 @@ import {
 } from "@/components/ui/table";
 import { Plus, Edit, Building2, ToggleLeft, ToggleRight } from "lucide-react";
 import { SetupJourney } from "@/components/SetupJourney";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  ORDER_ENTRY_MODES,
+  ORDER_ENTRY_MODE_LABEL,
+  type OrderEntryMode,
+} from "@shared/orderEntryMode";
+
+/**
+ * قالب شاشة إدخال الأوردر لنشاط واحد — إعداد المالك. الموظف مالوش المسار ده أصلًا
+ * (`setOrderEntryMode` إجراء أدمن بنطاق)، والقيمة بتتقرا من السيرفر مش من الواجهة.
+ */
+function OrderEntryModeSelect({ businessId }: { businessId: number }) {
+  const utils = trpc.useUtils();
+  const { data, isLoading } = trpc.businesses.orderEntryMode.useQuery({ businessId });
+  const set = trpc.businesses.setOrderEntryMode.useMutation({
+    onSuccess: () => {
+      utils.businesses.orderEntryMode.invalidate({ businessId });
+      toast.success("تم تحديث قالب الإدخال");
+    },
+    onError: err => toast.error(err.message),
+  });
+  return (
+    <Select
+      value={data?.mode ?? ""}
+      onValueChange={v => set.mutate({ businessId, mode: v as OrderEntryMode })}
+      disabled={isLoading || set.isPending}
+    >
+      <SelectTrigger className="h-8 w-56" data-testid={`entry-mode-${businessId}`}>
+        <SelectValue placeholder="..." />
+      </SelectTrigger>
+      <SelectContent>
+        {ORDER_ENTRY_MODES.map(m => (
+          <SelectItem key={m} value={m}>{ORDER_ENTRY_MODE_LABEL[m]}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 import { toast } from "sonner";
 
 export default function Businesses() {
@@ -168,6 +212,7 @@ export default function Businesses() {
                 <TableHead className="text-right">Slug</TableHead>
                 <TableHead className="text-right">الحالة</TableHead>
                 <TableHead className="text-right">تاريخ الإنشاء</TableHead>
+                <TableHead className="text-right">قالب إدخال الأوردر</TableHead>
                 <TableHead className="text-right">إجراءات</TableHead>
               </TableRow>
             </TableHeader>
@@ -207,6 +252,9 @@ export default function Businesses() {
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm">
                     {business.createdAt ? new Date(business.createdAt).toLocaleDateString("ar-EG") : "-"}
+                  </TableCell>
+                  <TableCell>
+                    <OrderEntryModeSelect businessId={business.id} />
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">

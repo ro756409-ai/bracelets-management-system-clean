@@ -17,6 +17,7 @@ import {
 import { parseFacebookOrder } from "../shared/facebookOrderParser";
 import { matchImportItem } from "./productMatching";
 import { analyzePaste } from "./pasteLines";
+import { ORDER_ENTRY_MODES, DEFAULT_ORDER_ENTRY_MODE } from "../shared/orderEntryMode";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -619,6 +620,8 @@ import {
   buildOrderHeaderName,
   insertOrderWithItems,
   updateOrderWithItems,
+  getOrderEntryMode,
+  setOrderEntryMode,
   findTakenSkusInBusiness,
   isSkuTakenInBusiness,
   updateProduct,
@@ -5682,6 +5685,20 @@ export const appRouter = router({
      * مابيكتبش حاجة. بيرجّع الحقول المستخرجة + التركيبة المحسومة (variantId/SKU) أو رسالة سبب
      * واضحة لو مفيش تركيبة مطابقة (الموظف بيملّي الباقي بدل اختيار تركيبة غلط).
      */
+    /**
+     * قالب شاشة الإدخال — من **نشاط جلسة الموظف** بس. مفيش input: العميل مالوش أي
+     * طريقة يبعت بيها قالبًا أو نشاطًا. قراءة الإعداد fail-safe (الافتراضي عند أي خطأ)،
+     * فالشاشة مابتقعش أبدًا بسبب إعداد عرض.
+     */
+    entryConfig: employeePortalProcedure.query(async ({ ctx }) => {
+      const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
+      const mode =
+        businessIds.length === 1
+          ? await getOrderEntryMode(businessIds[0])
+          : DEFAULT_ORDER_ENTRY_MODE;
+      return { mode };
+    }),
+
     parsePaste: employeePortalProcedure
       .input(z.object({ text: z.string().min(1) }))
       .query(async ({ ctx, input }) => {
@@ -6413,6 +6430,26 @@ export const appRouter = router({
         await scopeBusinessId(ctx, id);
         await updateBusiness(id, data);
         return { success: true };
+      }),
+    /** قالب شاشة الإدخال للنشاط — للمالك. النطاق بيتفحص، والموظف مالوش المسار ده. */
+    orderEntryMode: adminProcedure
+      .input(z.object({ businessId: z.number().int().min(1) }))
+      .query(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        return { mode: await getOrderEntryMode(businessId!) };
+      }),
+    setOrderEntryMode: adminProcedure
+      .input(
+        z.object({
+          businessId: z.number().int().min(1),
+          mode: z.enum(ORDER_ENTRY_MODES),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        // نفس حارس `update`: أدمن شركة أ مايقدرش يغيّر قالب نشاط شركة ب.
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        await setOrderEntryMode(businessId!, input.mode, ctx.user.id);
+        return { success: true, mode: input.mode };
       }),
     // التصنيفات
     categories: protectedProcedure
