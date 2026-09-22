@@ -65,6 +65,10 @@ function draftLines(parsed: ParsedPaste, catalog: MatchCatalog): { lines: DraftL
 
 function matchLine(term: string, color: string | null, size: string | null, catalog: MatchCatalog) {
   if (!term && !color && !size) return null;
+  // **مفيش مطابقة بالاحتواء** لنص نوع: النص لازم يكون اسمًا معروفًا بالظبط (بمكافئاته)،
+  // وإلا «ايه كرسي وتحصين» كانت بتتحسب «ذكر التحصين» لأن الاسم جوّاها وتاخد الكمية كلها.
+  // النص اللي مش اسم معروف بيفضل غير محلول والموظف يختار. (سطر بلون/مقاس بيمشي بالمسار الكامل.)
+  if (term && !color && !size && !isExactCatalogTerm(term, catalog)) return null;
   const m = matchImportItem({ name: term, variantText: term || undefined, color, size }, catalog);
   return m.matched
     ? { productId: m.productId, productName: m.productName, variantId: m.variantId ?? null, variantName: m.variantName ?? null }
@@ -312,20 +316,48 @@ export const PARSE_TOKEN_MESSAGES: Record<ParseTokenFailure, string> = {
 };
 
 /**
- * مقارنة السطور المُرسلة بالنتيجة القانونية الموقّعة — **البنية** مش المعرّفات:
- *   • نفس العدد والترتيب (السطور من الرسالة، والتقسيم بالقرش جزء منها).
- *   • كل سطر لازم يكون ليه productId (مفيش غير محلول وقت الحفظ).
- * اختيار النوع (قبول الاقتراح أو تصحيحه) قرار الموظف؛ ملكيته للنشاط وتبعيته لمنتجه
- * بيتفحصوا على السيرفر بعد كده. بيرجّع رسالة المنع أو null.
+ * السطور النهائية **مستقلة** عن نتيجة التحليل: التحليل اقتراح، والموظفة تقدر تضيف/تحذف/
+ * تقسم/تدمج/تغيّر النوع والكمية والسعر. اللي بيتفحص هنا إن كل سطر ليه منتج (مفيش سطر
+ * غير محلول وقت الحفظ)؛ الملكية والتبعية للمنتج والكميات والأسعار والإجماليات بتتفحص
+ * بعد كده على السيرفر. **مفيش رفض بسبب عدد السطور أو ترتيبها.** بيرجّع رسالة المنع أو null.
  */
-export function compareLinesToCanonical(
-  submitted: { productId?: number | null; variantId?: number | null }[],
-  canonical: ReturnType<typeof canonicalParse>["lines"]
-): string | null {
-  if (submitted.length !== canonical.length)
-    return `عدد السطور (${submitted.length}) لا يطابق نتيجة التحليل (${canonical.length}) — أعد التحليل`;
-  for (let i = 0; i < canonical.length; i++) {
-    if (submitted[i].productId == null) return `اختر نوع النقش للسطر رقم ${i + 1}`;
-  }
-  return null;
+export function finalLinesBlocker(submitted: { productId?: number | null }[]): string | null {
+  if (submitted.length === 0) return "أضف صنفًا واحدًا على الأقل";
+  const missing = submitted.map((s, i) => (s.productId == null ? i + 1 : 0)).filter(Boolean);
+  return missing.length ? `اختر نوع النقش للسطر رقم ${missing.join("، ")}` : null;
+}
+
+/**
+ * تصنيف السطور النهائية مقابل اقتراح التحليل — للسجل بس (مش للمنع):
+ *   • سطر نهائي بنفس (productId, variantId) لسطر مقترح لسه ماتستهلكش → ai_accepted أو
+ *     deterministic_accepted؛ غير كده → employee_corrected (لو التحليل كان فيه اقتراحات)
+ *     أو employee_selected (سطر جديد/بلا اقتراح).
+ *   • `structurallyEdited` = العدد أو الأنواع أو الكميات اختلفت عن الاقتراح.
+ */
+export function classifyFinalLines(
+  canonical: ReturnType<typeof canonicalParse>["lines"],
+  final: { productId?: number | null; variantId?: number | null; quantity: number }[]
+): { structurallyEdited: boolean; lines: { finalProductId: number | null; finalVariantId: number | null; suggestedProductId: number | null; suggestedVariantId: number | null; suggestedByAi: boolean; resolutionSource: ResolutionSource }[] } {
+  const pool = canonical.map(c => ({ ...c, used: false }));
+  const lines = final.map(f => {
+    const hit = pool.find(c => !c.used && c.productId != null && c.productId === (f.productId ?? null) && (c.variantId ?? null) === (f.variantId ?? null));
+    if (hit) {
+      hit.used = true;
+      return {
+        finalProductId: f.productId ?? null, finalVariantId: f.variantId ?? null,
+        suggestedProductId: hit.productId, suggestedVariantId: hit.variantId, suggestedByAi: hit.aiAssisted,
+        resolutionSource: (hit.aiAssisted ? "ai_accepted" : "deterministic_accepted") as ResolutionSource,
+      };
+    }
+    const anySuggestion = canonical.some(c => c.productId != null);
+    return {
+      finalProductId: f.productId ?? null, finalVariantId: f.variantId ?? null,
+      suggestedProductId: null, suggestedVariantId: null, suggestedByAi: false,
+      resolutionSource: (anySuggestion ? "employee_corrected" : "employee_selected") as ResolutionSource,
+    };
+  });
+  const sameCount = canonical.length === final.length;
+  const sameQty = sameCount && canonical.every((c, i) => c.quantity === final[i].quantity);
+  const structurallyEdited = !sameCount || !sameQty || lines.some(l => l.resolutionSource === "employee_corrected" || l.resolutionSource === "employee_selected");
+  return { structurallyEdited, lines };
 }

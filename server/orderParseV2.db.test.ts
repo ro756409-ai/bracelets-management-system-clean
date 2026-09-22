@@ -145,9 +145,9 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
     const res = await caller(empA).facebookEntry.parsePaste({ text: REAL });
     const base = { ...CUST, totalAmount: 750, shippingCost: 50, discount: 0, rawText: REAL, parseToken: res.parseToken!, parseResult: res.v2 } as any;
     const lines = linesOf(res.v2);
-    // حذف سطر → عدد السطور مش مطابق للنتيجة الموقّعة (قبل أي حساب)
+    // حذف سطر → مش مرفوض بسبب عدد السطور؛ المرفوض إن مجموع الكميات (3) ≠ عدد القطع (4)
     const fewer = await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: lines.slice(0, 2), totalAmount: 575 }));
-    expect(fewer.code).toBe("BAD_REQUEST"); expect(fewer.message).toContain("عدد السطور");
+    expect(fewer.code).toBe("BAD_REQUEST"); expect(fewer.message).not.toContain("عدد السطور"); expect(fewer.message).toContain("عدد القطع");
     // نفس السطور بكمية معدّلة (2→1) → مجموع الكميات 3 ≠ عدد القطع 4
     const qty = await fail(() => caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: lines.map((l: any, i: number) => (i === 0 ? { ...l, quantity: 1 } : l)), totalAmount: 575 }));
     expect(qty.code).toBe("BAD_REQUEST"); expect(qty.message).toContain("عدد القطع");
@@ -265,7 +265,10 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
       const [audit] = await (await getDb())!.select().from(orderParseAudits).where(eq(orderParseAudits.orderId, o.id));
       const rj = JSON.parse(audit.resultJson);
       expect(rj.client.lines[1].match.variantId).toBe(vA[2]); // الاقتراح الأصلي لم يتغيّر
-      expect(rj.saved[1]).toMatchObject({ suggestedVariantId: vA[2], suggestedByAi: true, finalVariantId: vA[3], resolutionSource: "employee_corrected", priceSource: "manual" });
+      // الاقتراح الأصلي (AI: عين حورس) محفوظ في client.lines؛ السطر النهائي مصحَّح لنوع تاني بسعر يدوي
+      expect(rj.resolution).toEqual({ status: "employee_corrected", structurallyEdited: true });
+      expect(rj.saved[1]).toMatchObject({ finalVariantId: vA[3], resolutionSource: "employee_corrected", priceSource: "manual" });
+      expect(rj.saved[0]).toMatchObject({ finalVariantId: vA[0], resolutionSource: "deterministic_accepted" });
       // وصف بوسطة من نفس مسار الإنتاج (getOrderItems + buildShipmentContents) = النوع النهائي، مش اقتراح الـAI
       const desc = buildShipmentContents((await getOrderItems(o.id)).map(it => ({ productName: it.productName, variantName: it.variantName, quantity: it.quantity, size: it.size, color: it.color }))).description;
       expect(desc).toBe("أسورة نحاس - سادة ×2، أسورة نحاس - ذكر التحصين ×1");
@@ -312,6 +315,72 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
       const o = await trackOrder(r.orderNumber);
       expect(((await getOrderItemsForOrders([o.id])).get(o.id) ?? []).map(i => i.variantId)).toEqual([vA[0], vA[2]]);
     } finally { __setSegmentResolverFactoryForTests(null); }
+  });
+
+  const PROD3 = `الاسم: خير محمد\nالعنوان: الوادي الجديد مركز الخارجة\nرقم الفون(1): 01112785429\nنوع المنتج: ايه كرسي وتحصين\nعدد القطع: 2\nالسعر: 400\nالشحن: 50\nالإجمالي: 450`;
+
+  it("🔑 حالة Production: «ايه كرسي وتحصين» → آية الكرسي ×1 + ذكر التحصين ×1، 200 لكل سطر، 400/50/450، order_items = 2، وصف بوسطة بالنوعين (موظفة data_entry)", async () => {
+    const res = await caller(empA).facebookEntry.parsePaste({ text: PROD3 });
+    expect(res.v2.lines.map(l => [l.match?.variantId, l.quantity, l.unitPrice])).toEqual([[vA[4], 1, 200], [vA[3], 1, 200]]);
+    const r = await caller(empA).facebookEntry.addOrder({
+      ...CUST, customerPhone: "01112785429", selectedProducts: linesOf(res.v2), totalAmount: 450, shippingCost: 50, discount: 0,
+      rawText: PROD3, parseToken: res.parseToken!, parseResult: res.v2,
+    } as any);
+    expect(r.success).toBe(true);
+    const o = await trackOrder(r.orderNumber);
+    expect([Number(o.totalAmount), Number(o.shippingFees), o.quantity]).toEqual([450, 50, 2]);
+    const items = (await getOrderItemsForOrders([o.id])).get(o.id) ?? [];
+    expect(items.map(i => [i.variantId, i.quantity, Number(i.unitPrice)])).toEqual([[vA[4], 1, 200], [vA[3], 1, 200]]);
+    const desc = buildShipmentContents((await getOrderItems(o.id)).map(it => ({ productName: it.productName, variantName: it.variantName, quantity: it.quantity, size: it.size, color: it.color })));
+    expect(desc.description).toBe("أسورة نحاس - آية الكرسي ×1، أسورة نحاس - ذكر التحصين ×1");
+  });
+
+  it("🔑 التحليل اقتراح: سطر واحد ×2 → الموظفة قسمته لسطرين مختلفين (parse lines=1، final=2) → الحفظ ينجح employee_corrected، والاقتراح الأصلي محفوظ", async () => {
+    // رسالة بتتحلّل لسطر واحد ×2 (نفس شكل خطأ Production القديم)
+    const TXT = `الاسم: خير محمد\nالعنوان: القاهرة شارع 1\nرقم الفون(1): 01112785430\nنوع المنتج: ٢ تحصين\nعدد القطع: 2\nالسعر: 400\nالشحن: 50\nالإجمالي: 450`;
+    const res = await caller(empA).facebookEntry.parsePaste({ text: TXT });
+    expect(res.v2.lines.map(l => [l.match?.variantId, l.quantity])).toEqual([[vA[3], 2]]);
+    const split = [
+      { productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vA[4], unitPrice: 200, priceSource: "manual" },
+      { productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vA[3], unitPrice: 200, priceSource: "allocated" },
+    ];
+    const r = await caller(empA).facebookEntry.addOrder({
+      ...CUST, customerPhone: "01112785430", selectedProducts: split, totalAmount: 450, shippingCost: 50, discount: 0,
+      rawText: TXT, parseToken: res.parseToken!, parseResult: res.v2,
+    } as any);
+    expect(r.success).toBe(true);
+    const o = await trackOrder(r.orderNumber);
+    const items = (await getOrderItemsForOrders([o.id])).get(o.id) ?? [];
+    expect(items.map(i => [i.variantId, i.quantity, Number(i.unitPrice)])).toEqual([[vA[4], 1, 200], [vA[3], 1, 200]]);
+    const [audit] = await (await getDb())!.select().from(orderParseAudits).where(eq(orderParseAudits.orderId, o.id));
+    const rj = JSON.parse(audit.resultJson);
+    expect(rj.client.lines).toHaveLength(1); expect(rj.client.lines[0].match.variantId).toBe(vA[3]); // الاقتراح الأصلي كما هو
+    expect(rj.resolution).toEqual({ status: "employee_corrected", structurallyEdited: true });
+    expect(rj.saved.map((s: any) => [s.finalVariantId, s.resolutionSource])).toEqual([[vA[4], "employee_corrected"], [vA[3], "deterministic_accepted"]]);
+    const desc = buildShipmentContents((await getOrderItems(o.id)).map(it => ({ productName: it.productName, variantName: it.variantName, quantity: it.quantity, size: it.size, color: it.color })));
+    expect(desc.description).toContain("آية الكرسي ×1"); expect(desc.description).toContain("ذكر التحصين ×1");
+  });
+
+  it("🔑 إضافة/حذف/تغيير variant داخل نفس النشاط ينجح (employee_corrected)؛ variant/product من نشاط آخر يُرفض", async () => {
+    const res = await caller(empA).facebookEntry.parsePaste({ text: REAL }); // 3 سطور: 2 سادة، 1 منقوش، 1 عين حورس (700)
+    const base = { ...CUST, customerPhone: "01112785431", totalAmount: 750, shippingCost: 50, discount: 0, rawText: REAL, parseToken: res.parseToken!, parseResult: res.v2 } as any;
+    // حذف سطر «منقوش» + تغيير «عين حورس» لـ«آية الكرسي» + إضافة سطر «ذكر التحصين» — نفس 4 قطع و700
+    const edited = [
+      { productId: prodA, productName: "أسورة نحاس", quantity: 2, variantId: vA[0], unitPrice: 175 },
+      { productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vA[4], unitPrice: 175 },
+      { productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vA[3], unitPrice: 175 },
+    ];
+    const r = await caller(empA).facebookEntry.addOrder({ ...base, selectedProducts: edited });
+    expect(r.success).toBe(true);
+    const o = await trackOrder(r.orderNumber);
+    expect(((await getOrderItemsForOrders([o.id])).get(o.id) ?? []).map(i => i.variantId)).toEqual([vA[0], vA[4], vA[3]]);
+    const rj = JSON.parse((await (await getDb())!.select().from(orderParseAudits).where(eq(orderParseAudits.orderId, o.id)))[0].resultJson);
+    expect(rj.resolution.status).toBe("employee_corrected");
+    // نشاط آخر → رفض (ملكية)
+    const foreignV = edited.map((l, i) => (i === 1 ? { ...l, variantId: vB[4] } : l));
+    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, customerPhone: "01112785432", selectedProducts: foreignV }))).code).not.toBe("ok");
+    const foreignP = edited.map((l, i) => (i === 1 ? { ...l, productId: prodB, variantId: vB[4] } : l));
+    expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, customerPhone: "01112785433", selectedProducts: foreignP }))).code).not.toBe("ok");
   });
 
   it("🛡️ قبل Migration 0038 (الجدول غير موجود): أوردر اللصق يتحفظ عادي، بلا 500", async () => {

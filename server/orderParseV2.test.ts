@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "fs";
 import {
   analyzePasteV2, extractSegmentPrice, signParseToken, verifyParseToken,
-  canonicalFingerprint, canonicalParse, compareLinesToCanonical, classifyResolution, PARSE_TOKEN_TTL_MS,
+  canonicalFingerprint, canonicalParse, finalLinesBlocker, classifyFinalLines, PARSE_TOKEN_TTL_MS,
 } from "./orderParse.service";
 import { createSegmentResolver, parseAiOutput, sanitizeSegments, readResolverConfig, rateLimitedResolver } from "./ai/segmentResolver";
 import { aiRateKey, AI_RATE_LIMIT_MAX, AI_RATE_LIMIT_WINDOW_MS, __resetAiRateLimitForTests } from "./ai/aiRateLimit";
@@ -105,6 +105,26 @@ describe("🔑 النص الحقيقي الثاني — «ذكر التحصين 
   it("🔒 أنواع أكتر من الكميات بلا كميات صريحة → لا تخمين: سطر لكل نوع ×1 + عدد القطع مش مطابق يمنع الحفظ", async () => {
     const r = await analyzePasteV2("نوع المنتج: سادة و منقوش\nعدد القطع: 5\nالسعر: 500", CATALOG);
     expect(r.lines.map(l => [l.match?.variantName ?? null, l.quantity])).toEqual([["سادة", 1], ["منقوش", 1], [null, 3]]); // الباقي سطر مراجعة مش تخمين
+  });
+});
+
+describe("🔑 حالة Production الثالثة — «ايه كرسي وتحصين»", () => {
+  const TXT = "نوع المنتج: ايه كرسي وتحصين\nعدد القطع: 2\nالسعر: 400\nالشحن: 50\nالإجمالي: 450";
+  it("🔑 آية الكرسي ×1 + ذكر التحصين ×1 (مش ذكر التحصين ×2)، 200 لكل سطر، 400/50/450", async () => {
+    const r = await analyzePasteV2(TXT, CATALOG);
+    expect(r.lines.map(l => [l.match?.variantName, l.quantity, l.unitPrice])).toEqual([["آية الكرسي", 1, 200], ["ذكر التحصين", 1, 200]]);
+    expect(r.fields.itemsTotal.value).toBe(400); expect(r.fields.shipping.value).toBe(50); expect(r.fields.finalTotal.value).toBe(450);
+  });
+  it("🔑 إملاءات «آيه كرسي / اية كرسي / آية الكرسي» و«التحصين / ذكر تحصين» تطابق تركيباتها", async () => {
+    for (const w of ["آيه كرسي", "اية كرسي", "آية الكرسي", "ايه الكرسي"]) expect((await analyzePasteV2(`نوع المنتج: ${w}\nعدد القطع: 1`, CATALOG)).lines[0].match?.variantId).toBe(105);
+    for (const w of ["التحصين", "ذكر تحصين", "تحصين"]) expect((await analyzePasteV2(`نوع المنتج: ${w}\nعدد القطع: 1`, CATALOG)).lines[0].match?.variantId).toBe(104);
+  });
+  it("🔒 جملة متعددة الأنواع فيها جزء مجهول: ممنوع contains-match يدّي الكمية كلها لنوع واحد", async () => {
+    const r = await analyzePasteV2("نوع المنتج: نجمة داوود وتحصين\nعدد القطع: 2\nالسعر: 400", CATALOG);
+    expect(r.lines.map(l => [l.match?.variantName ?? null, l.quantity])).toEqual([[null, 1], ["ذكر التحصين", 1]]);
+    // نص ملزوق مش معروف بالظبط → غير محلول (مش تخمين بالاحتواء)
+    const r2 = await analyzePasteV2("نوع المنتج: هدية تحصين للعيد\nعدد القطع: 1", CATALOG);
+    expect(r2.lines[0].match).toBeNull(); expect(r2.lines[0].confidence).toBe("unresolved");
   });
 });
 
@@ -250,23 +270,23 @@ describe("🔒 parse token — موقّع ببصمة النتيجة القانو
     const src = fs.readFileSync("server/orderParse.service.ts", "utf8");
     expect(src).not.toMatch(/JWT_SECRET\s*(\?\?|\|\|)\s*["']/);
   });
-  it("🔑 الموظف هو المراجع النهائي: تغيير النوع (حتمي أو AI) مسموح بنيويًا، والبصمة لا تتأثر بقراره؛ الرفض للعدد/غير المحلول فقط", async () => {
-    const v2 = await analyzePasteV2("نوع المنتج: ٢ سادة، 1 نجمة داوود\nعدد القطع: 3\nالسعر: 600", CATALOG);
+  it("🔑 السطور النهائية مستقلة عن الاقتراح: عدد/ترتيب/نوع مختلف مسموح؛ الرفض فقط لسطر بلا منتج أو بلا سطور", async () => {
+    const v2 = await analyzePasteV2("نوع المنتج: ٢ سادة\nعدد القطع: 2\nالسعر: 400", CATALOG);
     const canon = canonicalParse(v2);
-    expect(JSON.stringify(canon)).not.toContain("locked");
-    const fp = canonicalFingerprint(v2);
-    // قبول الاقتراح أو تصحيحه لنوع تاني مملوك — الاتنين بيعدّوا المقارنة البنيوية
-    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }, { productId: 10, variantId: 104 }], canon.lines)).toBeNull();
-    expect(compareLinesToCanonical([{ productId: 10, variantId: 102 }, { productId: 10, variantId: 104 }], canon.lines)).toBeNull();
-    expect(canonicalFingerprint(v2)).toBe(fp); // القرار النهائي مش جزء من النتيجة الموقّعة
-    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }, { productId: undefined }], canon.lines)).toContain("اختر نوع النقش للسطر رقم 2");
-    expect(compareLinesToCanonical([{ productId: 10, variantId: 101 }], canon.lines)).toContain("عدد السطور");
-    // تصنيف القرار للسجل
-    expect(classifyResolution({ productId: 10, variantId: 103, aiAssisted: true }, { productId: 10, variantId: 103 })).toBe("ai_accepted");
-    expect(classifyResolution({ productId: 10, variantId: 103, aiAssisted: true }, { productId: 10, variantId: 104 })).toBe("employee_corrected");
-    expect(classifyResolution({ productId: 10, variantId: 101, aiAssisted: false }, { productId: 10, variantId: 101 })).toBe("deterministic_accepted");
-    expect(classifyResolution({ productId: 10, variantId: 101, aiAssisted: false }, { productId: 10, variantId: 102 })).toBe("employee_corrected");
-    expect(classifyResolution({ productId: null, variantId: null, aiAssisted: false }, { productId: 10, variantId: 104 })).toBe("employee_selected");
+    expect(canon.lines).toHaveLength(1);
+    // اقتراح سطر واحد ×2 → الموظفة قسمته لسطرين مختلفين: مسموح بنيويًا
+    expect(finalLinesBlocker([{ productId: 10 }, { productId: 10 }])).toBeNull();
+    expect(finalLinesBlocker([{ productId: 10 }, { productId: undefined }, { productId: null }])).toBe("اختر نوع النقش للسطر رقم 2، 3");
+    expect(finalLinesBlocker([])).toContain("أضف صنفًا");
+    expect(canonicalFingerprint(v2)).toBe(canonicalFingerprint(v2)); // القرار النهائي مش جزء من النتيجة الموقّعة
+    const cls = classifyFinalLines(canon.lines, [{ productId: 10, variantId: 105, quantity: 1 }, { productId: 10, variantId: 104, quantity: 1 }]);
+    expect(cls.structurallyEdited).toBe(true);
+    expect(cls.lines.map(l => l.resolutionSource)).toEqual(["employee_corrected", "employee_corrected"]);
+    const same = classifyFinalLines(canon.lines, [{ productId: 10, variantId: 101, quantity: 2 }]);
+    expect(same.structurallyEdited).toBe(false); expect(same.lines[0].resolutionSource).toBe("deterministic_accepted");
+    const ai = classifyFinalLines([{ ...canon.lines[0], variantId: 103, aiAssisted: true }], [{ productId: 10, variantId: 103, quantity: 2 }]);
+    expect(ai.lines[0].resolutionSource).toBe("ai_accepted");
+    expect(classifyFinalLines([], [{ productId: 10, variantId: 101, quantity: 1 }]).lines[0].resolutionSource).toBe("employee_selected");
   });
 });
 
@@ -309,7 +329,8 @@ describe("🔒 حراس المصدر", () => {
     const block = routers.slice(i, i + 2500);
     expect(block).toContain("fingerprint: canonicalFingerprint(input.parseResult)");
     expect(block).toContain("analyzePasteV2(input.rawText, catalog, {})"); // حتمي — بلا resolver
-    expect(block).toContain("compareLinesToCanonical(input.selectedProducts, canon.lines)");
+    expect(block).toContain("finalLinesBlocker(input.selectedProducts)");
+    expect(block).not.toContain("compareLinesToCanonical"); // مفيش رفض بسبب عدد السطور
     expect(block).toContain("pasteSaveBlockers(");
     expect(block).toContain("employeeCatalogBusinessIds(empScope(ctx))");
     // مفيش أي اتصال بالـAI وقت الحفظ

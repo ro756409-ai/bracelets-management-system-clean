@@ -89,6 +89,9 @@ export default function FacebookEntry() {
   const [parseV2, setParseV2] = useState<ParseResultV2 | null>(null);
   const [parseToken, setParseToken] = useState<string | null>(null);
   const [analyzedText, setAnalyzedText] = useState<string | null>(null);
+  /** إدخال يدوي صريح: مفيش اقتراحات ولا توكن ولا مسودة قديمة تترجّع فوقه. */
+  const [manualMode, setManualMode] = useState(false);
+  const resetParseState = () => { setParseV2(null); setParseToken(null); setAnalyzedText(null); };
   const [showOrders, setShowOrders] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -133,7 +136,7 @@ export default function FacebookEntry() {
   // أوردر ناتج عن لصق في القالب المبسّط: قواعد الرسالة (عدد القطع، إجمالي المنتجات،
   // الإجمالي النهائي، لا سطر غير محلول) مانعة — نفس الدالة اللي السيرفر بيطبّقها.
   const pasteExpected = useMemo(() => {
-    if (!isLegacy || !parseV2 || !parseToken) return null;
+    if (!isLegacy || !parseV2 || !parseToken || manualMode) return null;
     const f = parseV2.fields;
     const n = (v: unknown) => (typeof v === "number" ? v : null);
     return { pieces: n(f.pieces.value), itemsTotal: n(f.itemsTotal.value) };
@@ -149,6 +152,18 @@ export default function FacebookEntry() {
         : [],
     [pasteExpected, items, cust.shipping, cust.discount, total]
   );
+  // تنبيه غير مانع: السطور النهائية اختلفت عن اقتراح التحليل (عدد/نوع/كمية) — قرار الموظفة.
+  const structurallyEdited = useMemo(() => {
+    if (!pasteExpected || !parseV2) return false;
+    const sug = parseV2.lines;
+    if (sug.length !== items.length) return true;
+    return sug.some((l, i) => (l.match?.productId ?? null) !== (items[i].productId || null) || (l.match?.variantId ?? null) !== (items[i].variantId ?? null) || l.quantity !== items[i].quantity);
+  }, [pasteExpected, parseV2, items]);
+  // سعر القطعة المقترح لسطر يدوي جديد (من الرسالة) — بدل صفر لما الكتالوج بلا سعر.
+  const suggestedUnitPrice = useMemo(() => {
+    const t = pasteExpected?.itemsTotal, p = pasteExpected?.pieces;
+    return t != null && p != null && p > 0 ? Math.round((t / p) * 100) / 100 : null;
+  }, [pasteExpected]);
   // كل الموانع (العامة + موانع الرسالة) — الزر والقائمة والحفظ بيقروا من هنا.
   const blockers = useMemo(() => Array.from(new Set([...baseBlockers, ...pasteBlockers])), [baseBlockers, pasteBlockers]);
 
@@ -157,7 +172,7 @@ export default function FacebookEntry() {
       toast.success(`✅ تم إضافة الأوردر — رقم: ${data.orderNumber}`);
       setCust(EMPTY_CUSTOMER);
       setItems([]);
-      setParseV2(null); setParseToken(null); setAnalyzedText(null); setPasteText("");
+      resetParseState(); setManualMode(false); setPasteText("");
       localStorage.removeItem(DRAFT_KEY);
       if (showOrders) refetchOrders();
     },
@@ -179,7 +194,8 @@ export default function FacebookEntry() {
   // تدخّل معرّفات هتترفض على السيرفر بعدين. السيرفر بيعيد التحقق من كل معرّف برضه.
   const draftRestored = useRef(false);
   useEffect(() => {
-    if (draftRestored.current || catalogLoading || entryConfigLoading) return;
+    // مسودة قديمة ماتندمجش مع تحليل جديد أو إدخال يدوي بدأ: الاسترجاع مرة واحدة وقبل أي عمل.
+    if (draftRestored.current || catalogLoading || entryConfigLoading || items.length > 0 || parseV2 || manualMode) return;
     draftRestored.current = true;
     try {
       const raw = localStorage.getItem(DRAFT_KEY);
@@ -208,14 +224,24 @@ export default function FacebookEntry() {
   function clearForm() {
     setCust(EMPTY_CUSTOMER); setItems([]); setPasteText("");
     setExpectedPieces(null); setTotalMismatch(false); setTotalConfirmed(false);
-    setParseV2(null); setParseToken(null); setAnalyzedText(null);
+    resetParseState(); setManualMode(false);
     localStorage.removeItem(DRAFT_KEY);
     toast.success("تم مسح النموذج");
+  }
+  /** «إدخال يدوي»: يمسح اقتراحات التحليل الحالية فقط (بيانات العميل تفضل)، بلا توكن ولا مسودة. */
+  function startManualEntry() {
+    draftRestored.current = true;
+    setItems([]); resetParseState(); setManualMode(true);
+    setExpectedPieces(null); setTotalMismatch(false); setTotalConfirmed(false);
+    toast.info("إدخال يدوي — أضف الأنواع والكميات ثم احفظ");
   }
 
   // لصق رسالة العميل → تحليل تلقائي وملء الحقول (قابلة للتعديل يدويًا بعدها).
   async function parseAndFill() {
     if (!pasteText.trim()) return;
+    // كل تحليل بيستبدل البنود بالكامل ويلغي نتيجة/توكن الرسالة السابقة — مفيش append ولا مسودة تترجّع فوقه.
+    draftRestored.current = true;
+    setManualMode(false);
     setParsing(true);
     try {
       const res = await utils.facebookEntry.parsePaste.fetch({ text: pasteText });
@@ -268,7 +294,7 @@ export default function FacebookEntry() {
         setParseV2(res.v2); setParseToken(res.parseToken ?? null); setAnalyzedText(pasteText);
       } else {
         setItems(built);
-        setParseV2(null); setParseToken(null); setAnalyzedText(null);
+        resetParseState();
       }
 
       if (!p.governorate) toast.info("لم نتعرف على المحافظة — اختر المحافظة");
@@ -319,7 +345,7 @@ export default function FacebookEntry() {
     // أوردر ناتج عن لصق (القالب المبسّط): النص المحلَّل + التوكن + الناتج للسجل.
     // السيرفر بيعيد التحليل ويرفض لو الرسالة اتغيّرت — الحفظ مربوط بالنص اللي اتحلّل.
     const pastePayload =
-      isLegacy && parseV2 && parseToken && analyzedText
+      isLegacy && !manualMode && parseV2 && parseToken && analyzedText
         ? { rawText: analyzedText, parseToken, parseResult: parseV2, discount: Number(cust.discount) || 0 }
         : {};
     addOrderMutation.mutate({
@@ -524,7 +550,17 @@ export default function FacebookEntry() {
               <div className="mt-2">
                 {/* القالب من السيرفر بهوية الجلسة: مكوّنان منفصلان، نفس endpoints ونفس الحفظ الذرّي. */}
                 {isLegacy ? (
-                  <LegacyEngravingPicker catalog={catalog} value={items} onChange={setItems} />
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {structurallyEdited ? (
+                        <span className="text-xs text-muted-foreground" data-testid="structural-edit-notice">تم تعديل اقتراح التحليل يدويًا</span>
+                      ) : <span />}
+                      <Button type="button" variant="outline" size="sm" className="h-11 min-h-[44px]" onClick={startManualEntry} data-testid="manual-entry">
+                        إدخال يدوي
+                      </Button>
+                    </div>
+                    <LegacyEngravingPicker catalog={catalog} value={items} onChange={setItems} suggestedUnitPrice={suggestedUnitPrice} />
+                  </div>
                 ) : (
                   <VariantOrderPicker catalog={catalog} value={items} onChange={setItems} />
                 )}
@@ -598,11 +634,12 @@ export default function FacebookEntry() {
               </div>
             )}
 
-            <div className="flex items-center gap-2">
+            {/* زر الحفظ sticky أسفل الشاشة على الموبايل (بخلفية) — مايغطيش الحقول لأن الكارت فيه مسافة سفلية */}
+            <div className="sticky bottom-0 -mx-4 flex items-center gap-2 border-t bg-background/95 px-4 py-3 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-0" data-testid="save-bar">
               <Button
                 onClick={submit}
                 disabled={addOrderMutation.isPending || blockers.length > 0}
-                className="flex-1"
+                className="h-11 min-h-[44px] flex-1"
                 data-testid="save-order"
               >
                 {addOrderMutation.isPending ? (

@@ -57,4 +57,29 @@ describe("🔑 bracelets_legacy — الشاشة", () => {
     expect(screen.getByTestId("vop-product")).toBeTruthy();
     expect(screen.queryByTestId("legacy-lines")).toBeNull();
   });
+
+  it("📱 Mobile-first: كروت مش جدول، كل عنصر لمس ≥ 44px، ولا يرمي عند 360/390/430px", () => {
+    for (const w of [360, 390, 430]) {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: w });
+      window.dispatchEvent(new Event("resize"));
+      const { container, unmount } = render(<LegacyEngravingPicker catalog={catalog} value={lines} onChange={() => {}} />);
+      expect(container.querySelector("table")).toBeNull();
+      // كل زر/حقل/قائمة داخل الكروت بارتفاع لمس 44px
+      const controls = container.querySelectorAll('[data-testid^="legacy-line-"] button, [data-testid^="legacy-line-"] input, [data-testid^="legacy-line-"] [role="combobox"]');
+      expect(controls.length).toBeGreaterThan(0);
+      controls.forEach(el => expect(el.className).toContain("min-h-[44px]"));
+      // مفيش عرض ثابت بالبكسل أكبر من الشاشة (لا overflow أفقي مبرمج)
+      container.querySelectorAll<HTMLElement>("*").forEach(el => {
+        const m = /(?:^|\s)w-\[(\d+)px\]/.exec(el.className || "");
+        if (m) expect(Number(m[1])).toBeLessThanOrEqual(w);
+      });
+      expect(screen.getByTestId("legacy-line-delete-0").getAttribute("aria-label")).toBe("حذف");
+      unmount();
+    }
+  });
+  it("🔑 سعر القطعة المقترح من الرسالة بدل صفر لما الكتالوج بلا سعر", () => {
+    const noPrice: Catalog = { products: [{ id: 10, name: "منتج", sku: null, price: null }], variants: [{ id: 101, productId: 10, name: "نوع أ", sku: null, price: null, isActive: true }] };
+    render(<LegacyEngravingPicker catalog={noPrice} value={[]} onChange={() => {}} suggestedUnitPrice={200} />);
+    expect((screen.getByTestId("legacy-price") as HTMLInputElement).placeholder).toBe("200");
+  });
 });
