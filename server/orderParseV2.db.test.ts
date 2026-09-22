@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import jwt from "jsonwebtoken";
 import { eq, inArray, sql } from "drizzle-orm";
 import { appRouter } from "./routers";
-import { getDb, createEmployee, createProductWithVariants, getOrderItemsForOrders, getOrderItems } from "./db";
+import { getDb, createEmployee, createProductWithVariants, getOrderItemsForOrders, getOrderItems, setOrderEntryMode } from "./db";
 import { buildShipmentContents } from "../shared/orderContent";
 import { employees, orders, orderItems, orderParseAudits, products, productVariants } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
@@ -56,6 +56,7 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
       { name: "منقوش", sku: `${p}-N-${tag}`, currentStock: 100, price: "160" },
       { name: "عين حورس", sku: `${p}-H-${tag}`, currentStock: 100, price: "160" },
       { name: "ذكر التحصين", sku: `${p}-T-${tag}`, currentStock: 100, price: "160" },
+      { name: "آية الكرسي", sku: `${p}-K-${tag}`, currentStock: 100, price: "160" },
     ]);
     const a = await mk(A.businessId, "HA"); const b = await mk(B.businessId, "HB");
     prodA = a.productId; vA = a.variantIds; prodB = b.productId; vB = b.variantIds;
@@ -103,7 +104,44 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
     expect(rj.verified.allocationPolicy).toBeTruthy();
   });
 
+  const REAL2 = `بيدج: عتبة  التاريخ:
+الاسم: سعد حماده
+العنوان: المنيا مركز بني مزار ساكن في الحاج شرق النيل
+رقم الفون(١): 01055414877
+نوع المنتج: ذكر التحصين و آية الكرسي والساده  عدد القطع: 3
+السعر: 570  الشحن: 50  الاجمالي: 620`;
+
+  it("🔑 النص الحقيقي الثاني: 3 order items (ذكر التحصين، آية الكرسي، سادة ×1) بسعر 190، 570/50/620، ووصف بوسطة بالأنواع الثلاثة", async () => {
+    const res = await caller(empA).facebookEntry.parsePaste({ text: REAL2 });
+    expect(res.v2.lines.map(l => [l.match?.variantId, l.quantity, l.unitPrice])).toEqual([[vA[3], 1, 190], [vA[4], 1, 190], [vA[0], 1, 190]]);
+    const r = await caller(empA).facebookEntry.addOrder({
+      customerName: "سعد حماده", customerPhone: "01055414877", governorate: "المنيا", city: "بني مزار", customerAddress: "مركز بني مزار ساكن في الحاج شرق النيل", adName: "عتبة",
+      selectedProducts: linesOf(res.v2), totalAmount: 620, shippingCost: 50, discount: 0,
+      rawText: REAL2, parseToken: res.parseToken!, parseResult: res.v2,
+    } as any);
+    expect(r.success).toBe(true);
+    const o = await trackOrder(r.orderNumber);
+    expect(Number(o.totalAmount)).toBe(620); expect(Number(o.shippingFees)).toBe(50); expect(o.quantity).toBe(3);
+    const items = (await getOrderItemsForOrders([o.id])).get(o.id) ?? [];
+    expect(items.map(i => [i.variantId, i.quantity, Number(i.unitPrice)])).toEqual([[vA[3], 1, 190], [vA[4], 1, 190], [vA[0], 1, 190]]);
+    expect(items.reduce((s, i) => s + Number(i.unitPrice) * i.quantity, 0)).toBe(570);
+    const desc = buildShipmentContents((await getOrderItems(o.id)).map(it => ({ productName: it.productName, variantName: it.variantName, quantity: it.quantity, size: it.size, color: it.color })));
+    expect(desc.description).toBe("أسورة نحاس - ذكر التحصين ×1، أسورة نحاس - آية الكرسي ×1، أسورة نحاس - سادة ×1");
+    expect(desc.itemsCount).toBe(3);
+  });
+
+  it("🔑 قالب الإدخال من نشاط الجلسة فقط: A=bracelets_legacy يراه موظف A، وB بلا صف يبقى catalog_variants، والموظف لا يغيّره", async () => {
+    await setOrderEntryMode(A.businessId, "bracelets_legacy", 1);
+    expect((await caller(empA).facebookEntry.entryConfig()).mode).toBe("bracelets_legacy");
+    expect((await caller(empB).facebookEntry.entryConfig()).mode).toBe("catalog_variants");
+    // الموظف مش أدمن → مايقدرش يغيّر القالب (ولا لنشاطه ولا لغيره)
+    expect((await fail(() => caller(empA).businesses.setOrderEntryMode({ businessId: A.businessId, mode: "catalog_variants" } as any))).code).not.toBe("ok");
+    expect((await fail(() => caller(empA).businesses.setOrderEntryMode({ businessId: B.businessId, mode: "bracelets_legacy" } as any))).code).not.toBe("ok");
+    expect((await caller(empB).facebookEntry.entryConfig()).mode).toBe("catalog_variants");
+  });
+
   it("🔒 موانع سيرفرية (مش من الواجهة): كميات ≠ عدد القطع، سعر غير موزّع، إجمالي نهائي غلط، نوع غير محلول", async () => {
+    const countBefore = (await (await getDb())!.select({ id: orders.id }).from(orders).where(eq(orders.businessId, A.businessId))).length;
     const res = await caller(empA).facebookEntry.parsePaste({ text: REAL });
     const base = { ...CUST, totalAmount: 750, shippingCost: 50, discount: 0, rawText: REAL, parseToken: res.parseToken!, parseResult: res.v2 } as any;
     const lines = linesOf(res.v2);
@@ -122,10 +160,11 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
     // ولا أوردر اتكتب من المحاولات دي
     const d = (await getDb())!;
     const count = await d.select({ id: orders.id }).from(orders).where(eq(orders.businessId, A.businessId));
-    expect(count.length).toBe(1);
+    expect(count.length).toBe(countBefore);
   });
 
   it("🔒 لا تجاوز بحذف/تعديل الـmetadata: rawText بلا توكن، توكن لنص مختلف، توكن موظف آخر — كلها مرفوضة", async () => {
+    const countBefore = (await (await getDb())!.select({ id: orders.id }).from(orders).where(eq(orders.businessId, A.businessId))).length;
     const res = await caller(empA).facebookEntry.parsePaste({ text: REAL });
     const lines = linesOf(res.v2);
     const base = { ...CUST, selectedProducts: lines, totalAmount: 750, shippingCost: 50, parseResult: res.v2 } as any;
@@ -145,7 +184,7 @@ describe.runIf(CAN)("🔑 Hybrid Order Parser — DB", () => {
     expect((await fail(() => caller(empA).facebookEntry.addOrder({ ...base, rawText: REAL, parseToken: expired }))).message).toContain("انتهت صلاحية");
     // ولا أوردر اتكتب
     const count = await (await getDb())!.select({ id: orders.id }).from(orders).where(eq(orders.businessId, A.businessId));
-    expect(count.length).toBe(1);
+    expect(count.length).toBe(countBefore);
   });
 
   it("🔒 عزل: نفس أسماء الأنواع في نشاط B — تحليل B يطابق تركيبات B فقط، وA لا يقدر يحفظ بتركيبة B", async () => {

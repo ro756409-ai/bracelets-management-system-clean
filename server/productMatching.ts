@@ -385,11 +385,27 @@ export const VARIANT_NAME_ALIASES: string[][] = [
   ["سادة", "سادا", "ساده"],
 ];
 
-/** كل الأسماء المكافئة لاسم (هو نفسه + أعضاء مجموعته لو في مجموعة). */
+/** «ال» التعريف في أول الاسم: العميل بيكتب «والساده» والتركيبة اسمها «سادة». */
+function stripAl(n: string): string {
+  return n.replace(/^ال(?=\S)/, "");
+}
+
+/** كل الأسماء المكافئة لاسم (هو نفسه، بلا «ال»، + أعضاء مجموعته لو في مجموعة). */
 function variantNameCandidates(name: string): string[] {
   const n = normalizeArabic(name);
-  const group = VARIANT_NAME_ALIASES.find(g => g.some(x => normalizeArabic(x) === n));
-  return group ? Array.from(new Set([n, ...group.map(normalizeArabic)])) : [n];
+  const forms = new Set([n, stripAl(n)]);
+  for (const f of Array.from(forms)) {
+    const group = VARIANT_NAME_ALIASES.find(g => g.some(x => normalizeArabic(x) === f));
+    if (group) for (const x of group) forms.add(normalizeArabic(x));
+  }
+  return Array.from(forms);
+}
+
+/** اسم التركيبة كما في الكتالوج يطابق أحد المكافئات (مع/بلا «ال»)؟ تطابق دقيق مش احتواء. */
+function variantNameMatches(cands: Set<string>, variantName: string | null | undefined): boolean {
+  if (!variantName) return false;
+  const v = normalizeArabic(variantName);
+  return cands.has(v) || cands.has(stripAl(v));
 }
 
 /**
@@ -401,7 +417,7 @@ export function resolveVariantByExactName<V extends MatchableVariant>(
   variants: V[]
 ): { hit: V | null; ambiguous: boolean } {
   const cands = new Set(variantNameCandidates(name));
-  const hits = variants.filter(v => v.name && cands.has(normalizeArabic(v.name)));
+  const hits = variants.filter(v => variantNameMatches(cands, v.name));
   const ids = Array.from(new Set(hits.map(v => v.id)));
   if (ids.length === 1) return { hit: hits[0], ambiguous: false };
   return { hit: null, ambiguous: ids.length > 1 };
@@ -415,10 +431,10 @@ export function resolveVariantByExactName<V extends MatchableVariant>(
 export function isExactCatalogTerm(term: string, catalog: MatchCatalog): boolean {
   const t = normalizeArabic(term);
   if (!t) return false;
-  if (catalog.products.some(p => normalizeArabic(p.name) === t)) return true;
+  if (catalog.products.some(p => stripAl(normalizeArabic(p.name)) === stripAl(t))) return true;
   const active = catalog.variants.filter(v => v.isActive !== false);
   const cands = new Set(variantNameCandidates(term));
-  return active.some(v => v.name && cands.has(normalizeArabic(v.name)));
+  return active.some(v => variantNameMatches(cands, v.name));
 }
 
 // ============================================================

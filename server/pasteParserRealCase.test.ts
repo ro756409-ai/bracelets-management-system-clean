@@ -156,9 +156,13 @@ describe("🔒 «و» مابتتفصلش عشوائيًا", () => {
     const out = expandSegments([{ text: "الشمس والقمر", qty: 1 }], t => isExactCatalogTerm(t, cat));
     expect(out).toEqual([{ text: "الشمس والقمر", qty: 1 }]);
   });
-  it("🔒 جزء واحد مش معروف → مابنفصلش (سطر واحد للمراجعة)", () => {
+  it("🔑 جزء معروف + جزء مش معروف → المعروف سطر محلول والمجهول سطر للمراجعة (مش بلع الكل)", () => {
     const out = expandSegments([{ text: "نقش وحاجة مش موجودة", qty: 1 }], known);
-    expect(out).toEqual([{ text: "نقش وحاجة مش موجودة", qty: 1 }]);
+    expect(out).toEqual([{ text: "نقش", qty: 1 }, { text: "حاجة مش موجودة", qty: null }]);
+  });
+  it("🔒 ولا جزء معروف → مابنفصلش (سطر واحد للمراجعة)", () => {
+    const out = expandSegments([{ text: "حاجة وحاجة تانية", qty: 1 }], known);
+    expect(out).toEqual([{ text: "حاجة وحاجة تانية", qty: 1 }]);
   });
   it("🔒 «نقش وعين حورس» ماتتحسبش «عين حورس» بالاحتواء", () => {
     expect(known("نقش وعين حورس")).toBe(false);

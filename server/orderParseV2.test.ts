@@ -31,8 +31,17 @@ const CATALOG: MatchCatalog = {
     { id: 102, productId: 10, name: "منقوش", sku: "BR-N", price: "160", isActive: true },
     { id: 103, productId: 10, name: "عين حورس", sku: "BR-H", price: "160", isActive: true },
     { id: 104, productId: 10, name: "ذكر التحصين", sku: "BR-T", price: "160", isActive: true },
+    { id: 105, productId: 10, name: "آية الكرسي", sku: "BR-K", price: "160", isActive: true },
   ] as any,
 };
+
+const REAL2 = `بيدج: عتبة  التاريخ:
+الاسم: سعد حماده
+العنوان: المنيا مركز بني مزار ساكن في الحاج شرق النيل
+رقم الفون(١): 01055414877
+رقم الفون(٢):
+نوع المنتج: ذكر التحصين و آية الكرسي والساده  عدد القطع: 3
+السعر: 570  الشحن: 50  الاجمالي: 620`;
 
 const byName = (r: Awaited<ReturnType<typeof analyzePasteV2>>, name: string) =>
   r.lines.find(l => l.match?.variantName === name);
@@ -70,6 +79,32 @@ describe("🔑 النص الحقيقي → ParseResultV2", () => {
     expect(f.city.value).toBe("طوخ");
     expect(String(f.customerAddress.value)).toContain("مسجد الزعايرة");
     expect(f.adName.value).toBe("عتبة");
+  });
+});
+
+describe("🔑 النص الحقيقي الثاني — «ذكر التحصين و آية الكرسي والساده»", () => {
+  it("🔑 3 أنواع معروفة مفصولة بـ«و» (منها «والساده» بـ«ال») = 3 سطور ×1 — مش «آية الكرسي ×3»", async () => {
+    const r = await analyzePasteV2(REAL2, CATALOG);
+    expect(r.lines.map(l => [l.match?.variantName, l.quantity, l.confidence])).toEqual([
+      ["ذكر التحصين", 1, "confident"], ["آية الكرسي", 1, "confident"], ["سادة", 1, "confident"],
+    ]);
+    expect(r.unresolvedSegments).toEqual([]);
+  });
+  it("🔑 190 لكل سطر، 570 = مجموع السطور، شحن 50، نهائي 620، والحقول الشخصية", async () => {
+    const r = await analyzePasteV2(REAL2, CATALOG);
+    expect(r.lines.map(l => l.unitPrice)).toEqual([190, 190, 190]);
+    expect(r.fields.itemsTotal.value).toBe(570); expect(r.fields.shipping.value).toBe(50); expect(r.fields.finalTotal.value).toBe(620);
+    expect(r.fields.pieces.value).toBe(3);
+    expect(r.fields.customerName.value).toBe("سعد حماده"); expect(r.fields.customerPhone.value).toBe("01055414877");
+    expect(r.fields.governorate.value).toBe("المنيا");
+  });
+  it("🔒 «و» مع جزء مجهول: المعروف يتحل والمجهول يبقى للمراجعة — ومفيش سطر بيبلع الباقي", async () => {
+    const r = await analyzePasteV2("نوع المنتج: ذكر التحصين و نجمة داوود\nعدد القطع: 2\nالسعر: 380", CATALOG);
+    expect(r.lines.map(l => [l.match?.variantName ?? null, l.quantity, l.confidence])).toEqual([["ذكر التحصين", 1, "confident"], [null, 1, "unresolved"]]);
+  });
+  it("🔒 أنواع أكتر من الكميات بلا كميات صريحة → لا تخمين: سطر لكل نوع ×1 + عدد القطع مش مطابق يمنع الحفظ", async () => {
+    const r = await analyzePasteV2("نوع المنتج: سادة و منقوش\nعدد القطع: 5\nالسعر: 500", CATALOG);
+    expect(r.lines.map(l => [l.match?.variantName ?? null, l.quantity])).toEqual([["سادة", 1], ["منقوش", 1], [null, 3]]); // الباقي سطر مراجعة مش تخمين
   });
 });
 
