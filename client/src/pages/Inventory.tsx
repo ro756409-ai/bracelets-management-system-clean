@@ -46,6 +46,7 @@ import {
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermission";
+import { ProductVariantGroups } from "@/components/inventory/ProductVariantGroups";
 import { PageHeader } from "@/components/shared";
 import { WorkspaceTabs, StatusFilterChips, DataToolbar } from "@/components/workspace";
 import { PRIMARY_DESTINATIONS, visibleChildren } from "@/config/navigation";
@@ -1159,6 +1160,18 @@ export default function Inventory() {
             </Card>
           ) : (
             <div className="space-y-4">
+              {/* المخزون حسب المنتج — Accordion + جدول/كروت للأنواع (Mobile-first). العرض للجميع
+                  بنطاق الجلسة؛ تعديل المخزون للمالك/الأدمن فقط ويفتح نفس نافذة حركة النوع. */}
+              {(rawVariants?.length ?? 0) > 0 && (
+                <ProductVariantGroups
+                  variants={(rawVariants as any[]).map(v => ({
+                    id: v.id, productId: v.productId, productName: v.productName, name: v.name, sku: v.sku,
+                    price: v.price, currentStock: v.currentStock, minStockLevel: v.minStockLevel, isActive: v.isActive,
+                  }))}
+                  canEdit={isAdmin}
+                  onAdjust={v => { setSelectedVariantId(v.id); setShowVariantMovementDialog(true); }}
+                />
+              )}
               {rows.map(
                 ({
                   product,

@@ -2145,48 +2145,32 @@ export async function bulkAssignOrders(
     .where(inArray(orders.id, orderIds));
 }
 
-/**
- * تينانت الـLegacy (الأساور) — مخزونه محفوظ على **المنتج الأب** (products.currentStock)،
- * فبيفضل يخصم من الأب زي ما كان، **بلا لمس التركيبات**. الكشف بالـslug (مش باسم المنتج).
- */
-const LEGACY_TENANT_SLUG = "legacy-default";
-
-/**
- * خصم من مخزون المنتج الأب عند التأكيد بسياسة never-block: يخصم كامل مرة واحدة لو المتاح
- * كافٍ (بلا سالب)، وإلا يرجّع سبب المراجعة بلا أي خصم. مسار الأساور/Legacy والمنتج البسيط.
- */
-async function deductParentOnConfirm(
-  tx: any,
-  order: any,
-  qty: number,
-  updatedBy: number
-): Promise<string | null> {
-  const [p] = await tx
-    .select()
-    .from(products)
-    .where(eq(products.id, order.productId))
-    .limit(1)
-    .for("update");
-  if (!p) return null;
-  if (p.currentStock >= qty) {
-    await tx.insert(inventoryMovements).values({
-      businessId: order.businessId,
-      productId: order.productId,
-      type: "out",
-      quantity: qty,
-      reason: `تأكيد أوردر ${order.orderNumber}`,
-      orderId: order.id,
-      performedBy: updatedBy,
-    });
-    await tx
-      .update(products)
-      .set({ currentStock: sql`${products.currentStock} - ${qty}` })
-      .where(eq(products.id, order.productId));
-    return null;
+/** عجز مخزون عند التأكيد — يُرفض التأكيد كله بلا أي خصم جزئي، برسالة عربية لكل صنف. */
+export class StockShortfallError extends Error {
+  readonly code = "STOCK_SHORTFALL" as const;
+  constructor(public readonly shortfalls: { label: string; available: number; needed: number }[]) {
+    super(shortfalls.map(s => `المتاح من ${s.label} ${s.available} والمطلوب ${s.needed}`).join(" · "));
+    this.name = "StockShortfallError";
   }
-  return `عجز مخزون: المطلوب ${qty} والمتاح ${p.currentStock}`;
 }
 
+/**
+ * تأكيد الأوردر وخصم المخزون — **من بنود الأوردر (order_items)، لكل تركيبة، داخل نشاط
+ * الأوردر، في transaction واحدة.**
+ *
+ * ما كان بيحصل: الخصم من **هيدر** الأوردر (productId/quantity) — ولنشاط Legacy من مخزون
+ * المنتج الأب بينما المخزون الفعلي على التركيبات (سادة/آية الكرسي/…). فالتأكيد كان بيقرا
+ * رقمًا مش هو اللي شاشة المخزون بتعرضه، وأوردر بنوعين كان بيخصم الكمية كلها من نوع واحد.
+ *
+ * القواعد الآن:
+ *   • السطور من `order_items`؛ الأوردر القديم بلا بنود → الهيدر كسطر واحد.
+ *   • تجميع الكميات لنفس التركيبة قبل الفحص.
+ *   • كل تركيبة/منتج لازم يتبع **نشاط الأوردر** (مش businessId من العميل) — وإلا رفض.
+ *   • أقفال FOR UPDATE بترتيب ثابت، فحص الكل أولًا، ثم خصم الكل — عجز في أي صنف = رفض
+ *     كامل برسالة «المتاح من X n والمطلوب m» بلا خصم جزئي وبلا سالب.
+ *   • idempotent: قفل الأوردر + حالة confirmed + وجود حركة صادر للأوردر = مفيش خصم تاني.
+ *   • سطر بلا منتج/نوع محدد → يتأكد بلا خصم لهذا السطر + needsReview (بلا تخمين).
+ */
 export async function confirmOrder(
   orderId: number,
   updatedBy: number,
@@ -2195,12 +2179,6 @@ export async function confirmOrder(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // تأكيد ذرّي: القفل والحالة والخصم كلهم في transaction واحدة.
-  //
-  // كان الفحص `status === "confirmed"` بيتعمل قبل أي قفل، فتأكيدين متزامنين لنفس
-  // الأوردر كانوا يعدّوا الاتنين ويخصموا المخزون **مرتين**. القفل `for update` على صف
-  // الأوردر بيخلّيهم يتسلسلوا: الأول بيأكّد ويخصم، والتاني بيستنى، بيقرا الحالة
-  // "confirmed"، وبيرجع من غير خصم تاني.
   return db.transaction(async tx => {
     const [order] = await tx
       .select()
@@ -2210,9 +2188,7 @@ export async function confirmOrder(
       .for("update");
     if (!order) throw new Error("Order not found");
     if (order.businessId == null)
-      throw new Error(
-        "Order has no Business and cannot enter accounting workflow"
-      );
+      throw new Error("Order has no Business and cannot enter accounting workflow");
     const [business] = await tx
       .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
       .from(businesses)
@@ -2220,7 +2196,7 @@ export async function confirmOrder(
       .limit(1);
     const accountingInventoryActive = Boolean(business?.accountingGoLiveAt);
 
-    // خصم واحد لكل أوردر — التأكيد المتزامن/المكرر التاني بيرجع من هنا (idempotent، بلا خصم تاني).
+    // خصم واحد لكل أوردر — التأكيد المتزامن/المكرر التاني بيرجع من هنا (idempotent).
     if (order.status === "confirmed")
       return {
         needsReview: Boolean(order.needsReview),
@@ -2229,109 +2205,122 @@ export async function confirmOrder(
       };
 
     const missingFields: string[] = [];
-    if (
-      !order.governorate ||
-      order.governorate.trim() === "" ||
-      order.governorate.trim() === "غير محدد"
-    ) {
+    if (!order.governorate || order.governorate.trim() === "" || order.governorate.trim() === "غير محدد")
       missingFields.push("اسم المحافظة");
-    }
-    if (!order.customerAddress || order.customerAddress.trim().length < 5) {
+    if (!order.customerAddress || order.customerAddress.trim().length < 5)
       missingFields.push("العنوان بالتفصيل");
-    }
-    if (missingFields.length > 0) {
-      throw new Error(
-        `لا يمكن تأكيد الأوردر - بيانات ناقصة: ${missingFields.join(" و ")}`
-      );
-    }
+    if (missingFields.length > 0)
+      throw new Error(`لا يمكن تأكيد الأوردر - بيانات ناقصة: ${missingFields.join(" و ")}`);
 
-    const qty = order.quantity ?? 1;
+    // ── السطور: من البنود (المصدر)، أو الهيدر للأوردر القديم بلا بنود ──
+    const itemRows = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+    const headerOnly = itemRows.length === 0;
+    const lines = headerOnly
+      ? [{ productId: order.productId, variantId: order.variantId, quantity: order.quantity ?? 1, name: order.productName }]
+      : itemRows.map(i => ({ productId: i.productId, variantId: i.variantId, quantity: i.quantity, name: i.productName }));
 
-    // سياسة المخزون عند التأكيد: **التأكيد لا يُمنع أبدًا بسبب المخزون**. نخصم فقط لو المتاح
-    // كافٍ (خصم كامل مرة واحدة، بلا سالب، بلا خصم جزئي)؛ وإلا نؤكّد بلا خصم ونعلّم الأوردر
-    // needsReview + reviewReason. الخصم من **التركيبة** للمنتجات متعددة الخيارات (مش الأب)؛
-    // للمنتج البسيط من مخزونه. لو variantId=null نحاول حلّه بأمان (تطابق وحيد فقط، بلا تخمين).
     let resolvedVariantId: number | null = null;
-    let stockReview: string | null = null;
+    const reviews: string[] = [];
 
-    if (!accountingInventoryActive && order.productId) {
-      // كشف tenant الـLegacy (الأساور) بالـslug — مش باسم المنتج — للحفاظ على مصدر مخزونه.
-      const [tenantRow] = await tx
-        .select({ slug: tenants.slug })
-        .from(businesses)
-        .innerJoin(tenants, eq(tenants.id, businesses.tenantId))
-        .where(eq(businesses.id, order.businessId))
+    if (!accountingInventoryActive) {
+      // حارس إضافي ضد الخصم المزدوج لو الحالة اترجّعت يدويًا: حركة صادر موجودة للأوردر = اتخصم.
+      const [already] = await tx
+        .select({ id: inventoryMovements.id })
+        .from(inventoryMovements)
+        .where(and(eq(inventoryMovements.orderId, orderId), eq(inventoryMovements.type, "out")))
         .limit(1);
-      const isLegacyTenant = tenantRow?.slug === LEGACY_TENANT_SLUG;
 
-      if (isLegacyTenant) {
-        // مسار الأساور/Legacy زي ما كان: الخصم من الأب (products.currentStock)، بلا لمس
-        // product_variants إطلاقًا. سياسة never-block: عجز → مراجعة بلا خصم/سالب.
-        stockReview = await deductParentOnConfirm(tx, order, qty, updatedBy);
-      } else {
-        // الأنشطة الجديدة (منها Afandy Business 3): المنتج متعدد الخيارات يخصم من **التركيبة**.
-        const resolved = await resolveOrderVariantInTx(tx, order);
-        if (resolved.hasVariants) {
-          if (resolved.variantId == null) {
-            // ملتبس/غير موجود → بلا خصم، بلا تخمين، بلا خصم من الأب؛ يحتاج مراجعة.
-            stockReview = "الصنف/اللون/المقاس يحتاج مراجعة";
-          } else {
-            resolvedVariantId = resolved.variantId;
-            const [v] = await tx
-              .select()
-              .from(productVariants)
-              .where(eq(productVariants.id, resolved.variantId))
-              .limit(1)
-              .for("update");
-            if (!v || v.productId !== order.productId) {
-              // التركيبة غير موجودة أو لا تتبع منتج الأوردر → بلا خصم عابر؛ يحتاج مراجعة.
-              stockReview = "التركيبة لا تتبع هذا المنتج — يحتاج مراجعة";
-            } else if (v.currentStock >= qty) {
-              await tx.insert(inventoryMovements).values({
-                businessId: order.businessId,
-                productId: order.productId,
-                variantId: v.id,
-                type: "out",
-                quantity: qty,
-                reason: `تأكيد أوردر ${order.orderNumber}`,
-                orderId: order.id,
-                performedBy: updatedBy,
-              });
-              await tx
-                .update(productVariants)
-                .set({ currentStock: sql`${productVariants.currentStock} - ${qty}` })
-                .where(eq(productVariants.id, v.id));
-            } else {
-              // عجز → بلا خصم إطلاقًا (لا جزئي، لا سالب) + تعليم للمراجعة.
-              stockReview = `عجز مخزون: المطلوب ${qty} والمتاح ${v.currentStock}`;
+      if (!already) {
+        // 1) تجميع الكميات لكل تركيبة/منتج.
+        const agg = new Map<string, { productId: number; variantId: number | null; qty: number; name: string }>();
+        for (const l of lines) {
+          if (l.productId == null) {
+            reviews.push(`صنف بلا منتج محدد: ${l.name}`);
+            continue;
+          }
+          let vid = l.variantId ?? null;
+          if (vid == null && headerOnly) {
+            // أوردر قديم بالهيدر بس: حلّ التركيبة بأمان (تطابق وحيد فقط، بلا تخمين).
+            const r = await resolveOrderVariantInTx(tx, order);
+            if (r.hasVariants) {
+              if (r.variantId == null) {
+                reviews.push("الصنف/اللون/المقاس يحتاج مراجعة");
+                continue;
+              }
+              vid = r.variantId;
+              resolvedVariantId = vid;
             }
           }
-        } else {
-          // منتج بسيط في نشاط جديد → مخزون المنتج نفسه (نفس سياسة never-block).
-          stockReview = await deductParentOnConfirm(tx, order, qty, updatedBy);
+          const key = vid != null ? `v${vid}` : `p${l.productId}`;
+          const cur = agg.get(key);
+          if (cur) cur.qty += Math.max(1, l.quantity || 1);
+          else agg.set(key, { productId: l.productId, variantId: vid, qty: Math.max(1, l.quantity || 1), name: l.name });
+        }
+
+        // 2) أقفال بترتيب ثابت + فحص الملكية والمتاح للكل قبل أي خصم.
+        const entries = Array.from(agg.entries()).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, e]) => e);
+        const shortfalls: { label: string; available: number; needed: number }[] = [];
+        const plans: { e: (typeof entries)[number]; label: string; variant: boolean }[] = [];
+        for (const e of entries) {
+          if (e.variantId != null) {
+            const [v] = await tx.select().from(productVariants).where(eq(productVariants.id, e.variantId)).limit(1).for("update");
+            if (!v || v.productId !== e.productId) throw new Error(`التركيبة لا تتبع منتج هذا الصنف (${e.name}) — راجع الأوردر`);
+            const [p] = await tx.select({ businessId: products.businessId, name: products.name }).from(products).where(eq(products.id, v.productId)).limit(1);
+            if (!p || p.businessId !== order.businessId) throw new Error(`الصنف (${e.name}) لا يتبع نشاط هذا الأوردر`);
+            const label = v.name?.trim() || p.name;
+            if (v.currentStock < e.qty) shortfalls.push({ label, available: v.currentStock, needed: e.qty });
+            else plans.push({ e, label, variant: true });
+          } else {
+            const [p] = await tx.select().from(products).where(eq(products.id, e.productId)).limit(1).for("update");
+            if (!p) throw new Error(`المنتج غير موجود (${e.name})`);
+            if (p.businessId !== order.businessId) throw new Error(`الصنف (${e.name}) لا يتبع نشاط هذا الأوردر`);
+            const [anyVariant] = await tx
+              .select({ id: productVariants.id })
+              .from(productVariants)
+              .where(and(eq(productVariants.productId, p.id), eq(productVariants.isActive, true)))
+              .limit(1);
+            if (anyVariant) {
+              // منتج له تركيبات وسطره بلا تركيبة → مفيش خصم من الأب بالتخمين؛ مراجعة.
+              reviews.push(`الصنف (${e.name}) بلا نوع محدد — لم يُخصم`);
+              continue;
+            }
+            if (p.currentStock < e.qty) shortfalls.push({ label: p.name, available: p.currentStock, needed: e.qty });
+            else plans.push({ e, label: p.name, variant: false });
+          }
+        }
+        if (shortfalls.length) throw new StockShortfallError(shortfalls);
+
+        // 3) الخصم + حركة المخزون لكل صنف (كله أو لا شيء — نفس الـtransaction).
+        for (const { e, variant } of plans) {
+          await tx.insert(inventoryMovements).values({
+            businessId: order.businessId,
+            productId: e.productId,
+            variantId: variant ? e.variantId : null,
+            type: "out",
+            quantity: e.qty,
+            reason: `تأكيد أوردر ${order.orderNumber}`,
+            orderId: order.id,
+            performedBy: updatedBy,
+          });
+          if (variant)
+            await tx.update(productVariants).set({ currentStock: sql`${productVariants.currentStock} - ${e.qty}` }).where(eq(productVariants.id, e.variantId as number));
+          else
+            await tx.update(products).set({ currentStock: sql`${products.currentStock} - ${e.qty}` }).where(eq(products.id, e.productId));
         }
       }
     }
 
-    // تحديث الأوردر مرة واحدة: الحالة confirmed + حفظ الـvariant المحلول (لو كان null) +
-    // تعليم المراجعة لو فيه عجز/التباس. مانمسحش needsReview موجود مسبقًا (من الاستيراد مثلًا).
+    const stockReview = reviews.length ? reviews.join(" | ") : null;
     await tx
       .update(orders)
       .set({
         status: "confirmed",
         confirmedAt: new Date(),
         lastUpdatedBy: updatedBy,
-        ...(order.variantId == null && resolvedVariantId != null
-          ? { variantId: resolvedVariantId }
-          : {}),
-        ...(stockReview
-          ? { needsReview: true, reviewReason: stockReview }
-          : {}),
+        ...(order.variantId == null && resolvedVariantId != null ? { variantId: resolvedVariantId } : {}),
+        ...(stockReview ? { needsReview: true, reviewReason: stockReview } : {}),
         ...(order.confirmedByEmployeeId == null && updatedBy
-          ? {
-              confirmedByEmployeeId: updatedBy,
-              confirmedByEmployeeName: confirmedByName ?? null,
-            }
+          ? { confirmedByEmployeeId: updatedBy, confirmedByEmployeeName: confirmedByName ?? null }
           : {}),
       })
       .where(eq(orders.id, orderId));
@@ -2339,7 +2328,7 @@ export async function confirmOrder(
     return {
       needsReview: Boolean(stockReview) || Boolean(order.needsReview),
       reviewReason: stockReview ?? order.reviewReason ?? undefined,
-      stockShortfall: Boolean(stockReview),
+      stockShortfall: false,
     };
   });
 }

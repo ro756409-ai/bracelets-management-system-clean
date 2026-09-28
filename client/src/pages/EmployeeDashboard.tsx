@@ -262,10 +262,14 @@ export default function EmployeeDashboard() {
   const displayStats = (dateFrom || dateTo) ? computedStats : (statsData ?? computedStats);
 
   const confirmMutation = trpc.employeePortal.confirm.useMutation({
-    onSuccess: () => {
-      toast.success("تم تأكيد الأوردر");
+    onSuccess: (r) => {
+      toast.success(r?.message ?? "تم تأكيد الأوردر");
       utils.employeePortal.myOrders.invalidate();
       utils.employeePortal.stats.invalidate();
+      // الخصم حصل على السيرفر — الكتالوج/المخزون المعروض لازم يتحدّث فورًا (مفيش cache قديم).
+      utils.facebookEntry.catalog.invalidate();
+      utils.variants.invalidate();
+      utils.products.invalidate();
     },
     onError: (e) => toast.error(e.message),
     onSettled: () => setBusyOrderId(null),

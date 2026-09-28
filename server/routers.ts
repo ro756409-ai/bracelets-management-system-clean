@@ -288,6 +288,22 @@ function requireEmployeePermission(permission: Permission) {
  *
  * Returns the order so callers don't fetch it twice.
  */
+/**
+ * تأكيد الأوردر مع تحويل عجز المخزون لرفض واضح (BAD_REQUEST برسالة عربية) بدل خطأ عام.
+ * الخصم نفسه ذرّي داخل confirmOrder — الرفض = مفيش أي خصم جزئي.
+ */
+async function confirmOrderOrReject(orderId: number, updatedBy: number, confirmedByName?: string) {
+  try {
+    return await confirmOrder(orderId, updatedBy, confirmedByName);
+  } catch (err) {
+    if (err instanceof StockShortfallError)
+      throw new TRPCError({ code: "BAD_REQUEST", message: `المخزون غير كافٍ: ${err.message}` });
+    if (err instanceof Error && /لا يتبع نشاط|لا تتبع منتج|بيانات ناقصة/.test(err.message))
+      throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    throw err;
+  }
+}
+
 async function assertEmployeeOwnsOrder(
   emp: { id: number; role: string },
   orderId: number,
@@ -670,6 +686,7 @@ import {
   assignOrderToEmployee,
   bulkAssignOrders,
   confirmOrder,
+  StockShortfallError,
   postponeOrder,
   cancelOrder,
   editOrderWithInventory,
@@ -3292,7 +3309,7 @@ export const appRouter = router({
         await requireOwned(ctx, "order", input.orderId);
         const { id: actingEmpId, name: actingEmpName } =
           await resolveActingEmployeeIdAndName(ctx);
-        await confirmOrder(input.orderId, actingEmpId ?? 0, actingEmpName);
+        await confirmOrderOrReject(input.orderId, actingEmpId ?? 0, actingEmpName);
         await addActivityLog({
           action: "confirm_order",
           entityType: "order",
@@ -4106,7 +4123,7 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         // Ownership check: agents can only confirm their own assigned orders
         await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
-        const res = await confirmOrder(input.orderId, emp.id, emp.name);
+        const res = await confirmOrderOrReject(input.orderId, emp.id, emp.name);
         await addActivityLog({
           action: "confirm_order",
           entityType: "order",
@@ -4251,7 +4268,7 @@ export const appRouter = router({
 
         switch (input.status) {
           case "confirmed":
-            await confirmOrder(input.orderId, emp.id, emp.name);
+            await confirmOrderOrReject(input.orderId, emp.id, emp.name);
             break;
           case "cancelled":
             if (!input.cancelReason) {

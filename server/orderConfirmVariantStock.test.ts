@@ -64,38 +64,41 @@ async function inspectOrdersColumns(d: any): Promise<{ cols: Set<string>; extras
   return { cols, extras };
 }
 
-describe("🔑 حراس المصدر — سياسة تأكيد/خصم المخزون", () => {
+describe("🔑 حراس المصدر — سياسة تأكيد/خصم المخزون (من البنود، لكل تركيبة، ذرّي، يرفض العجز)", () => {
   const fn = db.slice(db.indexOf("export async function confirmOrder"), db.indexOf("export async function postponeOrder"));
-  it("🔑 التأكيد لا يرمي بسبب المخزون؛ خصم عند الكفاية فقط", () => {
-    expect(fn).toContain("v.currentStock >= qty"); // خصم التركيبة داخل confirmOrder
-    expect(db).toContain("p.currentStock >= qty"); // خصم الأب داخل deductParentOnConfirm
-    // عند العجز: تعليم مراجعة بلا خصم (بلا throw)
-    expect(fn).toContain("عجز مخزون: المطلوب");
-    expect(db).toContain("عجز مخزون: المطلوب");
+  it("🔑 الخصم من بنود الأوردر (order_items) مجمّعة لكل تركيبة — مش من الهيدر", () => {
+    expect(fn).toContain("from(orderItems).where(eq(orderItems.orderId, orderId))");
+    expect(fn).toContain("cur.qty += Math.max(1, l.quantity || 1)"); // تجميع نفس التركيبة
+    expect(fn).toContain("update(productVariants)");
+    expect(fn).toContain("currentStock: sql`${productVariants.currentStock} - ${e.qty}`");
   });
-  it("🔑 يحلّ variantId=null بأمان ويحفظه؛ ملتبس/غير موجود → مراجعة بلا تخمين", () => {
+  it("🔒 العجز = رفض كامل بلا خصم جزئي، برسالة «المتاح من X n والمطلوب m»", () => {
+    expect(db).toContain("export class StockShortfallError");
+    expect(db).toContain("`المتاح من ${s.label} ${s.available} والمطلوب ${s.needed}`");
+    expect(fn).toContain("if (shortfalls.length) throw new StockShortfallError(shortfalls);");
+    // الفحص للكل قبل أي خصم: الرمي قبل حلقة الخصم
+    expect(fn.indexOf("throw new StockShortfallError")).toBeLessThan(fn.indexOf("for (const { e, variant } of plans)"));
+    expect(routers).toContain("if (err instanceof StockShortfallError)");
+    expect(routers).toContain('code: "BAD_REQUEST", message: `المخزون غير كافٍ: ${err.message}`');
+  });
+  it("🔒 الملكية من الأوردر: التركيبة تتبع منتج السطر، والمنتج يتبع نشاط الأوردر — مش من العميل", () => {
+    expect(fn).toContain("v.productId !== e.productId");
+    expect(fn).toContain("p.businessId !== order.businessId");
+    expect(fn).not.toMatch(/businessId\s*===?\s*\d/);
+  });
+  it("🔑 idempotent: قفل الأوردر + الحالة + حركة صادر موجودة = مفيش خصم تاني", () => {
+    expect(fn).toContain('.for("update")');
+    expect(fn).toContain('if (order.status === "confirmed")');
+    expect(fn).toContain('eq(inventoryMovements.type, "out")');
+  });
+  it("🔑 variantId=null على أوردر قديم بالهيدر: حلّ آمن (تطابق وحيد) وإلا مراجعة بلا تخمين ولا خصم من الأب", () => {
     expect(fn).toContain("resolveOrderVariantInTx(tx, order)");
     expect(fn).toContain("الصنف/اللون/المقاس يحتاج مراجعة");
-    expect(fn).toContain("variantId: resolvedVariantId");
+    expect(fn).toContain("بلا نوع محدد — لم يُخصم");
   });
-  it("🔑 idempotent: التأكيد المكرر بيرجع بدري بلا خصم", () => {
-    expect(fn).toContain('if (order.status === "confirmed")');
-  });
-  it("🔑 خصم من التركيبة (product_variants) مش الأب للمنتجات متعددة الخيارات", () => {
-    expect(fn).toContain("update(productVariants)");
-    expect(fn).toContain("currentStock: sql`${productVariants.currentStock} - ${qty}`");
-  });
-  it("🔑 الراوتر بيرجّع رسالة نجاح مع تنويه العجز (مش فشل)", () => {
-    expect(routers).toContain("تم تأكيد الأوردر، ويوجد عجز مخزون يحتاج مراجعة.");
-  });
-  it("🔒 فرع Legacy (الأساور) بالـslug → خصم من الأب، بلا لمس التركيبات", () => {
-    expect(db).toContain('const LEGACY_TENANT_SLUG = "legacy-default"');
-    expect(fn).toContain("isLegacyTenant");
-    expect(fn).toContain("tenantRow?.slug === LEGACY_TENANT_SLUG");
-    expect(fn).toContain("deductParentOnConfirm(tx, order, qty, updatedBy)");
-    // فرع legacy مايلمسش product_variants (الخصم من الأب فقط عبر الـhelper).
-    const legacyBlock = fn.slice(fn.indexOf("if (isLegacyTenant)"), fn.indexOf("} else {", fn.indexOf("if (isLegacyTenant)")));
-    expect(legacyBlock).not.toContain("productVariants");
+  it("🔒 مفيش فرع Legacy بالـslug يخصم من الأب — كل الأنشطة تخصم من التركيبات", () => {
+    expect(db).not.toContain("LEGACY_TENANT_SLUG");
+    expect(db).not.toContain("deductParentOnConfirm");
   });
 });
 
@@ -173,29 +176,22 @@ describe.runIf(RUN)("🔑 تأكيد/خصم — سلوكي (matjarak_test)", () 
     expect((await orderRow(oid)).status).toBe("confirmed");
   });
 
-  it("🔑 مخزون 0 طلب 1 → يتأكد، يظل 0، needsReview=true", async () => {
+  it("🔒 مخزون 0 طلب 1 → رفض برسالة واضحة، يظل 0، الأوردر يبقى new", async () => {
     const oid = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: vBeg, color: "بيج", size: "12", quantity: 1 });
-    const r = await confirmOrder(oid, 1, "t");
+    await expect(confirmOrder(oid, 1, "t")).rejects.toThrow(/المتاح من .* 0 والمطلوب 1/);
     expect((await getVariantById(vBeg))!.currentStock).toBe(0);
-    const o = await orderRow(oid);
-    expect(o.status).toBe("confirmed");
-    expect(o.needsReview).toBe(true);
-    expect(o.reviewReason).toContain("عجز مخزون");
-    expect(r.stockShortfall).toBe(true);
+    expect((await orderRow(oid)).status).toBe("new");
   });
 
-  it("🔑 مخزون 1 طلب 2 → يتأكد، يظل بلا خصم جزئي، عجز مسجّل", async () => {
+  it("🔒 مخزون 1 طلب 2 → رفض بلا خصم جزئي", async () => {
     // نضبط v10 على 1 عبر أوردر يخصم 8 (9→1) ثم نطلب 2
     const drain = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: v10, color: "اسود", size: "10", quantity: 8 });
     await confirmOrder(drain, 1, "t"); // 9 → 1
     expect((await getVariantById(v10))!.currentStock).toBe(1);
     const oid = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: v10, color: "اسود", size: "10", quantity: 2 });
-    const r = await confirmOrder(oid, 1, "t");
+    await expect(confirmOrder(oid, 1, "t")).rejects.toThrow(/والمطلوب 2/);
     expect((await getVariantById(v10))!.currentStock).toBe(1); // بلا خصم جزئي
-    const o = await orderRow(oid);
-    expect(o.status).toBe("confirmed");
-    expect(o.reviewReason).toContain("المطلوب 2 والمتاح 1");
-    expect(r.stockShortfall).toBe(true);
+    expect((await orderRow(oid)).status).toBe("new");
   });
 
   it("🔑 variantId=null غير قابل للمطابقة → يتأكد بلا خصم + needsReview بلا تخمين", async () => {
@@ -207,7 +203,7 @@ describe.runIf(RUN)("🔑 تأكيد/خصم — سلوكي (matjarak_test)", () 
     expect(o.needsReview).toBe(true);
     expect(o.reviewReason).toContain("مراجعة");
     expect((await getVariantById(v10))!.currentStock).toBe(before10); // مفيش خصم من أي تركيبة
-    expect(r.stockShortfall).toBe(true);
+    expect(r.needsReview).toBe(true);
   });
 
   it("🔑 variantId=null قابل للحل (لون+مقاس وحيد) → يُحفظ الـvariant ويُخصم", async () => {
@@ -232,16 +228,12 @@ describe.runIf(RUN)("🔑 تأكيد/خصم — سلوكي (matjarak_test)", () 
     expect(moves.length).toBe(1);
   });
 
-  it("🔒 عزل: أوردر منتج A بـvariantId لتركيبة الأسورة B → لا خصم من B، يتأكد + مراجعة", async () => {
+  it("🔒 عزل: أوردر منتج A بـvariantId لتركيبة نشاط B → رفض، لا خصم من B، الأوردر يبقى new", async () => {
     const beforeB = (await getVariantById(vB))!.currentStock;
     const oid = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: vB, color: "ذهبي", size: "M" });
-    const r = await confirmOrder(oid, 1, "t");
-    // الحارس v.productId !== order.productId → بلا خصم عابر؛ مخزون الأسورة ثابت.
+    await expect(confirmOrder(oid, 1, "t")).rejects.toThrow(/لا تتبع منتج/);
     expect((await getVariantById(vB))!.currentStock).toBe(beforeB);
-    const o = await orderRow(oid);
-    expect(o.status).toBe("confirmed");
-    expect(o.needsReview).toBe(true);
-    expect(r.stockShortfall).toBe(true);
+    expect((await orderRow(oid)).status).toBe("new");
   });
 });
 
@@ -301,24 +293,25 @@ describe.runIf(RUN)("🔒 مسار Legacy (الأساور) — خصم من ال�
     if (createdLegacyTenant) await d.delete(tenants).where(eq(tenants.id, legacyTenantId));
   });
 
-  it("🔒 أوردر أساور (حتى بـvariantId) يخصم من الأب فقط، والتركيبة ثابتة", async () => {
+  it("🔑 نشاط Legacy (الأساور) يخصم من **التركيبة** اللي شاشة المخزون بتعرضها — مش من الأب", async () => {
     const d = await getDb();
     const oid = await mkLegOrder(2);
     await confirmOrder(oid, empLeg, "t");
     const [p] = await d!.select().from(products).where(eq(products.id, prodId));
     const [v] = await d!.select().from(productVariants).where(eq(productVariants.id, varId));
-    expect(p.currentStock).toBe(98);   // الأب: 100 → 98 (خصم 2)
-    expect(v.currentStock).toBe(50);   // التركيبة ثابتة — مسار الأساور ما لمسهاش
+    expect(v.currentStock).toBe(48);   // التركيبة: 50 → 48
+    expect(p.currentStock).toBe(100);  // الأب مايتلمسش
+    const moves = await d!.select().from(inventoryMovements).where(eq(inventoryMovements.orderId, oid));
+    expect(moves.map(m => [m.variantId, m.quantity])).toEqual([[varId, 2]]);
   });
 
-  it("🔒 نفاد مخزون الأب في legacy لا يمنع التأكيد ولا يخصم سالب", async () => {
+  it("🔒 عجز في تركيبة الأساور → رفض برسالة «المتاح من سادة 48 والمطلوب 100000»، بلا خصم وبلا سالب", async () => {
     const d = await getDb();
     const oid = await mkLegOrder(100000);
-    const r = await confirmOrder(oid, empLeg, "t");
-    const [p] = await d!.select().from(products).where(eq(products.id, prodId));
+    await expect(confirmOrder(oid, empLeg, "t")).rejects.toThrow("المتاح من سادة 48 والمطلوب 100000");
+    const [v] = await d!.select().from(productVariants).where(eq(productVariants.id, varId));
     const [o] = await d!.select().from(orders).where(eq(orders.id, oid));
-    expect(o.status).toBe("confirmed");
-    expect(p.currentStock).toBe(98);   // بلا خصم (عجز) — مش سالب
-    expect(r.stockShortfall).toBe(true);
+    expect(o.status).toBe("new");
+    expect(v.currentStock).toBe(48);
   });
 });
