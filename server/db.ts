@@ -1773,7 +1773,7 @@ export async function getImportDedupOrders(
  */
 export async function importOrdersAtomic(
   businessId: number,
-  rows: Array<Omit<InsertOrder, "orderNumber" | "businessId">>
+  rows: Array<Omit<InsertOrder, "orderNumber" | "businessId"> & { items?: OrderItemWrite[] }>
 ): Promise<{ insertedIds: number[] }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1786,15 +1786,49 @@ export async function importOrdersAtomic(
     const insertedIds: number[] = [];
     for (const row of rows) {
       next += 1;
-      const id = await createOrderInTransaction(tx, {
-        ...row,
-        businessId,
-        orderNumber: String(next),
-      } as InsertOrder);
+      // بنود الأوردر (متعدد الأصناف) بتتكتب مع الهيدر في نفس الـtransaction.
+      const { items, ...data } = row;
+      const id = await createOrderInTransaction(
+        tx,
+        { ...data, businessId, orderNumber: String(next) } as InsertOrder,
+        items && items.length ? items : undefined
+      );
       if (id) insertedIds.push(id);
     }
     return { insertedIds };
   }));
+}
+
+/** مفاتيح الأوردرات الخارجية الموجودة فعلًا داخل النشاط — لكشف التكرار (idempotency) بلا تاريخ. */
+export async function getExistingExternalOrderIds(businessId: number, keys: string[]): Promise<Set<string>> {
+  const db = await getDb();
+  const ids = keys.filter(Boolean);
+  if (!db || ids.length === 0) return new Set();
+  const rows = await db
+    .select({ externalOrderId: orders.externalOrderId })
+    .from(orders)
+    .where(and(eq(orders.businessId, businessId), inArray(orders.externalOrderId, ids)));
+  return new Set(rows.map(r => r.externalOrderId).filter((x): x is string => !!x));
+}
+
+/**
+ * سبب يمنع الاستيراد كله قبل أي كتابة: النشاط بعد Go-Live المحاسبي بينما إعدادات
+ * الشحن/الدفع الافتراضية مش مكتملة — `createOrderInTransaction` كان بيرمي هنا وبترجع
+ * الدفعة كلها برسالة عامة. الآن السبب بيتقال قبل ما نبدأ.
+ */
+export async function getImportGoLiveBlocker(businessId: number): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return "قاعدة البيانات غير متاحة";
+  const [b] = await db.select({ accountingGoLiveAt: businesses.accountingGoLiveAt }).from(businesses).where(eq(businesses.id, businessId)).limit(1);
+  if (!b?.accountingGoLiveAt) return null;
+  const [providers, shippingTypes, paymentTypes] = await Promise.all([
+    db.select({ id: businessShippingProviders.id }).from(businessShippingProviders).where(and(eq(businessShippingProviders.businessId, businessId), eq(businessShippingProviders.isActive, true))),
+    db.select({ id: businessConfigurationValues.id }).from(businessConfigurationValues).where(and(eq(businessConfigurationValues.businessId, businessId), eq(businessConfigurationValues.namespace, "shipping_type"), eq(businessConfigurationValues.isActive, true))),
+    db.select({ id: businessConfigurationValues.id }).from(businessConfigurationValues).where(and(eq(businessConfigurationValues.businessId, businessId), eq(businessConfigurationValues.namespace, "payment_type"), eq(businessConfigurationValues.isActive, true))),
+  ]);
+  if (providers.length !== 1 || shippingTypes.length !== 1 || paymentTypes.length !== 1)
+    return `النشاط بعد Go-Live المحاسبي وإعداداته الافتراضية غير مكتملة (شركات شحن: ${providers.length}، أنواع شحن: ${shippingTypes.length}، طرق دفع: ${paymentTypes.length} — المطلوب واحد لكل منها) — راجع إعدادات النشاط قبل الاستيراد`;
+  return null;
 }
 
 /**

@@ -17,22 +17,23 @@ describe("🔑 ملخّص الاستيراد + دلالات التكرار (حر
     expect(src).toContain("reports,");
     expect(src).toContain('status: "imported"');
     expect(src).toContain('status: "already_existing"');
-    expect(src).toContain('status: "failed_matching"');
+    expect(src).toContain('"failed_matching" : "rejected"');
+    expect(src).toContain('status: "imported_review"');
   });
-  it("🔑 المكرر بيُتخطّى (continue) ومايُضافش لـtoInsert (مايتكتبش/مايخصمش مخزون)", () => {
-    // كل مسار duplicate بينتهي بـcontinue قبل استدعاء المطابقة/الإدخال.
-    const dupStart = src.indexOf("isDuplicateByUUID");
-    const dupBlock = src.slice(dupStart, src.indexOf("matchImportItem(", dupStart));
-    expect((dupBlock.match(/continue;/g) || []).length).toBeGreaterThanOrEqual(2);
-    expect(dupBlock).not.toContain("toInsert.push");
+  it("🔑 المكرر/المرفوض مايُضافش لـtoInsert (مايتكتبش/مايخصمش مخزون) — new/review فقط", () => {
+    expect(src).toContain('rows.filter(r => r.status === "new" || r.status === "review").map(toInsertRow)');
+    const eo = fs.readFileSync("server/easyOrderImport.ts", "utf-8");
+    expect(eo).toContain('status: "existing"'); // موجود مسبقًا أو مكرر داخل الملف
+    expect(eo).toContain("existingKeys.has(row.orderKey)");
+    expect(eo).toContain("seen.has(row.orderKey)");
   });
   it("🔑 الاستيراد status=new (مفيش خصم مخزون وقت الاستيراد)", () => {
     expect(src).toContain('status: "new"');
   });
-  it("🔑 مطابقة صارمة قبل الإدخال — أوردر غير محسوم مايتكتبش", () => {
-    expect(src).toContain("if (!match.matched)");
-    const afterFail = src.slice(src.indexOf("if (!match.matched)"), src.indexOf("if (!match.matched)") + 1100);
-    expect(afterFail).toContain("continue;");
+  it("🔑 مطابقة صارمة لكل صنف قبل الإدخال — صنف غير محسوم = الصف مرفوض ومايتكتبش", () => {
+    const eo = fs.readFileSync("server/easyOrderImport.ts", "utf-8");
+    expect(eo).toContain("const unmatched = items.filter(it => !it.match);");
+    expect(eo).toContain('status: "rejected", rejectReasons: [...row.rejectReasons, ...unmatched.map(u => u.matchReason as string)]');
   });
 });
 

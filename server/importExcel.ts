@@ -7,6 +7,10 @@ import type { InsertOrder } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
 import { findPotentialDuplicates, type ExistingOrderForDuplicateCheck } from "./duplicateDetection";
 import { matchImportItem } from "./productMatching";
+import {
+  readSheetRows, parseEasyOrderRows, markExisting, matchRowItems, summarize, rowReportLine, classifyPhone,
+  type ImportRow,
+} from "./easyOrderImport";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -446,8 +450,82 @@ function parseExcelRows(buffer: Buffer): {
   return { preview, errors };
 }
 
+/** التصنيف الكامل لصفوف الملف داخل نشاط محدد: تكرار (Order ID) + مطابقة الكتالوج. */
+async function classifyForBusiness(rows: ImportRow[], businessId: number): Promise<ImportRow[]> {
+  const catalog = await db.getMatchCatalog(businessId);
+  const existingKeys = await db.getExistingExternalOrderIds(businessId, rows.map(r => r.orderKey));
+  return markExisting(rows, existingKeys).map(r => matchRowItems(r, catalog));
+}
+
+/** النشاط المستهدف من الطلب بعد فحص النطاق على السيرفر — أو سبب الرفض. */
+async function resolveImportBusiness(req: Request): Promise<{ businessId: number } | { status: number; error: string }> {
+  // ── عزل الـtenant: ممنوع الثقة في businessId من العميل ──
+  // الجلسة اتحقّقت في requireAdminOrManager وعلّقت الهوية على req. النشاط المستهدف
+  // لازم يكون تابع لنفس الـtenant — مفيش default صامت.
+  const auth = (req as RequestWithAuth).authInfo;
+  if (!auth || auth.tenantId == null) return { status: 403, error: "جلستك مش مربوطة بنشاط — لا يمكن الاستيراد" };
+  const requestedBusinessId = req.body?.businessId ? parseInt(String(req.body.businessId), 10) : NaN;
+  if (!Number.isInteger(requestedBusinessId) || requestedBusinessId <= 0)
+    return { status: 400, error: "لازم تحدد النشاط اللي هتستورد فيه" };
+  const allowed = await db.getBusinessIdsForTenant(auth.tenantId);
+  if (!allowed || !allowed.includes(requestedBusinessId)) return { status: 403, error: "النشاط ده مش تابع لحسابك" };
+  return { businessId: requestedBusinessId };
+}
+
+type RowReport = { row: number; orderId: string; status: "imported" | "imported_review" | "already_existing" | "failed_matching" | "rejected"; reason?: string };
+
+function reportFor(row: ImportRow): RowReport {
+  const orderId = row.idRaw || row.orderKey || "";
+  if (row.status === "existing") return { row: row.rowIndex, orderId, status: "already_existing", reason: row.rejectReasons.join("؛ ") };
+  if (row.status === "rejected") {
+    const matching = row.items.some(it => it.match === null);
+    return { row: row.rowIndex, orderId, status: matching ? "failed_matching" : "rejected", reason: row.rejectReasons.join("؛ ") };
+  }
+  if (row.status === "review") return { row: row.rowIndex, orderId, status: "imported_review", reason: row.reviewReasons.join("؛ ") };
+  return { row: row.rowIndex, orderId, status: "imported" };
+}
+
+/** صف صالح → هيدر الأوردر + بنوده (order_items) للكتابة الذرّية. */
+function toInsertRow(row: ImportRow) {
+  const first = row.items[0];
+  const items = row.items.map(it => ({
+    productId: it.match!.productId,
+    productName: it.match!.productName,
+    quantity: it.quantity,
+    variantId: it.match!.variantId ?? undefined,
+    unitPrice: it.unitPrice ?? (it.match!.unitPrice != null ? Number(it.match!.unitPrice) : undefined),
+    color: it.match!.color ?? undefined,
+    size: it.match!.size ?? undefined,
+  }));
+  const alt = row.altPhone ? classifyPhone(row.altPhone) : null;
+  return {
+    customerName: row.customerName.slice(0, 100),
+    // الهاتف الصالح مطبَّع؛ غير الصالح يبقى نصًا كما هو (بلا صفر مخترع) والصف للمراجعة.
+    customerPhone: row.phone,
+    customerPhone2: alt?.valid ? alt.phone : undefined,
+    customerAddress: row.address || row.city || "—",
+    governorate: row.governorate || "غير محدد",
+    city: row.resolvedCity || undefined,
+    productId: first.match!.productId,
+    productName: row.items.length > 1 ? row.items.map(it => `${it.match!.productName} ×${it.quantity}`).join(" + ").slice(0, 200) : first.match!.productName,
+    variantId: first.match!.variantId ?? null,
+    color: first.match!.color ?? null,
+    size: first.match!.size ?? null,
+    quantity: row.totalQuantity,
+    totalAmount: row.totalAmount.toFixed(2),
+    source: "easyorder",
+    status: "new",
+    notes: row.notes || undefined,
+    importRowIndex: row.rowIndex,
+    externalOrderId: row.orderKey || undefined,
+    adName: row.utmCampaign || undefined,
+    ...(row.status === "review" ? { needsReview: true, reviewReason: row.reviewReasons.join(" | ") } : {}),
+    items,
+  } as Omit<InsertOrder, "orderNumber" | "businessId"> & { items: typeof items };
+}
+
 export function registerImportRoutes(app: Express) {
-  // Preview endpoint - parse without saving
+  // Preview endpoint - parse without saving (+ تصنيف كامل لو النشاط محدد)
   app.post(
     "/api/import/preview",
     requireAdminOrManager,
@@ -457,8 +535,18 @@ export function registerImportRoutes(app: Express) {
         if (!req.file) {
           return res.status(400).json({ error: "لم يتم رفع أي ملف" });
         }
-        const { preview, errors } = parseExcelRows(req.file.buffer);
-        return res.json({ preview, errors, total: preview.length });
+        const { rows: parsed, fileErrors } = parseEasyOrderRows(readSheetRows(req.file.buffer));
+        if (fileErrors.length) return res.status(400).json({ error: fileErrors.join(" · ") });
+        let rows = parsed;
+        let classified = false;
+        if (req.body?.businessId) {
+          const scope = await resolveImportBusiness(req);
+          if ("error" in scope) return res.status(scope.status).json({ error: scope.error });
+          rows = await classifyForBusiness(parsed, scope.businessId);
+          classified = true;
+        }
+        const errors = rows.filter(r => r.status !== "new").map(rowReportLine);
+        return res.json({ preview: rows, errors, total: rows.length, summary: summarize(rows), classified });
       } catch (err: any) {
         return res.status(400).json({ error: err.message || "خطأ في قراءة الملف" });
       }
@@ -475,170 +563,29 @@ export function registerImportRoutes(app: Express) {
         if (!req.file) {
           return res.status(400).json({ error: "لم يتم رفع أي ملف" });
         }
+        const scope = await resolveImportBusiness(req);
+        if ("error" in scope) return res.status(scope.status).json({ error: scope.error });
+        const businessId = scope.businessId;
 
-        // ── عزل الـtenant: ممنوع الثقة في businessId من العميل ──
-        // الجلسة اتحقّقت في requireAdminOrManager وعلّقت الهوية على req. النشاط المستهدف
-        // لازم يكون تابع لنفس الـtenant — نفس نمط Phase A، ومفيش default صامت (كان 1).
-        const auth = (req as RequestWithAuth).authInfo;
-        if (!auth || auth.tenantId == null) {
-          return res.status(403).json({ error: "جلستك مش مربوطة بنشاط — لا يمكن الاستيراد" });
-        }
-        const requestedBusinessId = req.body?.businessId
-          ? parseInt(String(req.body.businessId), 10)
-          : NaN;
-        if (!Number.isInteger(requestedBusinessId) || requestedBusinessId <= 0) {
-          return res
-            .status(400)
-            .json({ error: "لازم تحدد النشاط اللي هتستورد فيه" });
-        }
-        const allowed = await db.getBusinessIdsForTenant(auth.tenantId);
-        if (!allowed || !allowed.includes(requestedBusinessId)) {
-          return res
-            .status(403)
-            .json({ error: "النشاط ده مش تابع لحسابك" });
-        }
-        const businessId = requestedBusinessId;
+        const { rows: parsed, fileErrors } = parseEasyOrderRows(readSheetRows(req.file.buffer));
+        if (fileErrors.length) return res.status(400).json({ error: fileErrors.join(" · ") });
 
-        const { preview, errors } = parseExcelRows(req.file.buffer);
+        // ── المرحلة ١: التصنيف بلا أي كتابة (تكرار داخل النشاط + مطابقة كتالوج النشاط) ──
+        const rows = await classifyForBusiness(parsed, businessId);
+        const reports: RowReport[] = rows.map(reportFor);
+        const importErrors: string[] = rows.filter(r => r.status !== "new").map(rowReportLine);
+        const duplicates = rows.filter(r => r.status === "existing").length;
+        const skipped = rows.filter(r => r.status === "rejected").length;
+        const toInsert = rows.filter(r => r.status === "new" || r.status === "review").map(toInsertRow);
+        const summary = summarize(rows);
 
-        if (preview.length === 0) {
-          return res.json({ imported: 0, skipped: 0, duplicates: 0, errors });
+        if (toInsert.length === 0) {
+          return res.json({ imported: 0, imported_review: 0, skipped, duplicates, already_existing: duplicates, failed_matching: skipped, reports, errors: importErrors, summary });
         }
 
-        let skipped = 0;
-        let duplicates = 0;
-        const importErrors: string[] = [...errors];
-
-        // الكتالوج للمطابقة (منتجات + تركيباتها) — مقيّد بالنشاط ده بس (عزل).
-        const catalog = await db.getMatchCatalog(businessId);
-
-        // كشف التكرار **داخل النشاط ده فقط** ومحدود بالحجم: الصفوف اللي ممكن تطابق —
-        // نفس externalOrderId من الملف، أو المتسجّلة النهاردة. مش كل أوردرات كل الشركات.
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const fileExternalIds = preview
-          .map((r: any) => String(r.orderId || ""))
-          .filter(Boolean);
-        const existing = await db.getImportDedupOrders(
-          businessId,
-          fileExternalIds,
-          today
-        );
-        const existingOrdersById = new Map(existing.map(o => [o.id, o]));
-        const existingForDuplicateCheck: ExistingOrderForDuplicateCheck[] = existing.map(
-          o => ({
-            id: o.id,
-            customerPhone: o.customerPhone,
-            productName: o.productName,
-            externalOrderId: o.externalOrderId,
-          })
-        );
-
-        // كشف التكرار داخل الملف نفسه
-        const fileUUIDs = new Set<string>();
-        const filePhoneProductKeys = new Set<string>();
-
-        // ── المرحلة ١: التصنيف بلا أي كتابة — بنبني قايمة الصفوف الصالحة للإدخال ──
-        // ملخّص منفصل لكل صف: imported / already_existing / failed_matching + السبب.
-        const reports: Array<{
-          row: number;
-          status: "imported" | "already_existing" | "failed_matching";
-          reason?: string;
-        }> = [];
-        const toInsert: Array<Omit<InsertOrder, "orderNumber" | "businessId">> = [];
-        const toInsertRows: number[] = [];
-        for (const row of preview) {
-          const phone = row.customerPhone.replace(/\s+/g, "");
-          const uuid = row.orderId || "";
-
-          const dbMatches = findPotentialDuplicates(
-            {
-              customerPhone: row.customerPhone,
-              productName: row.productName,
-              externalOrderId: uuid || undefined,
-            },
-            existingForDuplicateCheck
-          );
-
-          const isDuplicateByUUID =
-            Boolean(uuid) &&
-            (dbMatches.some(m => m.signals.includes("sameExternalOrderId")) ||
-              fileUUIDs.has(uuid));
-          if (isDuplicateByUUID) {
-            duplicates++;
-            reports.push({ row: row.rowIndex, status: "already_existing", reason: `أوردر موجود بالفعل (نفس UUID: ${uuid})` });
-            importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر بالـ UUID (${uuid})`);
-            continue;
-          }
-
-          const phoneProductKey = `${phone}|${row.productName}`;
-          const isDuplicateByPhoneProductToday = dbMatches.some(m => {
-            if (!m.signals.includes("samePhoneAndProduct")) return false;
-            const existingOrder = existingOrdersById.get(m.orderId);
-            if (!existingOrder) return false;
-            const orderDate = new Date(existingOrder.createdAt);
-            orderDate.setHours(0, 0, 0, 0);
-            return orderDate.getTime() === today.getTime();
-          });
-          const isDuplicateByPhoneProduct =
-            isDuplicateByPhoneProductToday || filePhoneProductKeys.has(phoneProductKey);
-          if (isDuplicateByPhoneProduct) {
-            duplicates++;
-            reports.push({ row: row.rowIndex, status: "already_existing", reason: "أوردر موجود بالفعل (نفس الهاتف + المنتج اليوم)" });
-            importErrors.push(`صف ${row.rowIndex}: تم تخطيه - أوردر مكرر (نفس الهاتف + المنتج اليوم)`);
-            continue;
-          }
-
-          // مطابقة variant-aware صارمة: Variant SKU ← Product SKU ← اسم+لون+مقاس. بلا تخمين.
-          const match = matchImportItem(
-            {
-              sku: row.sku || undefined,
-              name: row.baseName || row.rawProductName,
-              color: row.color || undefined,
-              size: row.size || undefined,
-              variantText: row.variantRaw || undefined,
-            },
-            catalog
-          );
-          if (!match.matched) {
-            // سبب دقيق لكل صف: الاسم واللون والمقاس والـSKU المستلَمين + سبب الفشل.
-            const rc = match.received;
-            const detail =
-              `المنتج: "${rc.name ?? ""}"، اللون: "${rc.color ?? "—"}"، ` +
-              `المقاس: "${rc.size ?? "—"}"، SKU: "${rc.sku ?? "—"}" — ${match.reason}`;
-            reports.push({ row: row.rowIndex, status: "failed_matching", reason: detail });
-            importErrors.push(`صف ${row.rowIndex}: تعذّرت المطابقة — ${detail}`);
-            skipped++;
-            continue; // ممنوع إنشاء أوردر لمنتج/تركيبة غير محسومة
-          }
-
-          // بعد ما الصف عدّى كل الفحوص — سجّله في كشف التكرار داخل الملف وضيفه للإدخال.
-          if (uuid) fileUUIDs.add(uuid);
-          filePhoneProductKeys.add(phoneProductKey);
-          toInsertRows.push(row.rowIndex);
-
-          const adName = (row.utmCampaign || "").trim() || undefined;
-          toInsert.push({
-            customerName: row.customerName,
-            customerPhone: row.customerPhone,
-            customerAddress: row.customerAddress,
-            governorate: row.governorate,
-            productId: match.productId,
-            productName: row.productName,
-            // التركيبة المحسومة: بنحفظ variantId واللون والمقاس بوضوح.
-            variantId: match.variantId ?? null,
-            color: match.color ?? null,
-            size: match.size ?? null,
-            quantity: row.quantity,
-            totalAmount: row.totalAmount,
-            source: "easyorder",
-            status: "new",
-            notes: row.notes,
-            importRowIndex: row.rowIndex,
-            externalOrderId: row.orderId || undefined,
-            adName,
-          } as Omit<InsertOrder, "orderNumber" | "businessId">);
-        }
+        // سبب يمنع الكتابة كلها (Go-Live بلا إعدادات افتراضية) — بيتقال قبل الـtransaction لا بعدها.
+        const blocker = await db.getImportGoLiveBlocker(businessId);
+        if (blocker) return res.status(409).json({ error: blocker, imported: 0, skipped, duplicates, reports, errors: importErrors, summary });
 
         // ── المرحلة ٢: الإدخال **الكل-أو-لا-شيء** في transaction واحدة ──
         // لو أي صف فشل، الدفعة كلها بترجع — مفيش نصف استيراد بلا تقرير.
@@ -647,35 +594,37 @@ export function registerImportRoutes(app: Express) {
           const result = await db.importOrdersAtomic(businessId, toInsert);
           imported = result.insertedIds.length;
         } catch (err: any) {
+          const msg = `فشل الاستيراد — اترجعت الدفعة كلها ومفيش أوردر اتكتب: ${err?.message ?? err}`;
+          console.error("[import/execute] atomic batch failed:", err);
           return res.status(500).json({
+            error: msg,
             imported: 0,
             skipped,
             duplicates,
             already_existing: duplicates,
             failed_matching: skipped,
-            reports, // كل الصفوف المكررة/غير المطابقة (مفيش أي صف اتكتب — atomic اترجع)
-            errors: [
-              ...importErrors,
-              `فشل الاستيراد — اترجعت الدفعة كلها ومفيش أوردر اتكتب: ${err?.message ?? err}`,
-            ],
+            reports: reports.map(r => (r.status === "imported" || r.status === "imported_review" ? { ...r, status: "rejected" as const, reason: msg } : r)),
+            errors: [...importErrors, msg],
+            summary,
             allOrNothing: true,
           });
         }
 
-        // الصفوف اللي دخلت فعلًا (بعد نجاح الـtransaction) → imported.
-        for (const r of toInsertRows) reports.push({ row: r, status: "imported" });
-
+        const importedReview = rows.filter(r => r.status === "review").length;
         return res.json({
           imported,
+          imported_review: importedReview,
           skipped,
           duplicates,
-          // ملخّص منفصل واضح زي المطلوب: مستورد / موجود بالفعل / فشل مطابقة.
+          // ملخّص منفصل واضح: مستورد / موجود بالفعل / فشل مطابقة — والـreports لكل صف.
           already_existing: duplicates,
           failed_matching: skipped,
           reports,
           errors: importErrors,
+          summary,
         });
       } catch (err: any) {
+        console.error("[import/execute] failed:", err);
         return res.status(400).json({ error: err.message || "خطأ في استيراد الملف" });
       }
     }

@@ -14,27 +14,53 @@ import {
 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 
+type RowStatus = "new" | "review" | "existing" | "rejected";
 type PreviewRow = {
   rowIndex: number;
-  externalId: string;
+  idRaw: string;
+  orderKey: string;
   customerName: string;
-  customerPhone: string;
-  customerAddress: string;
+  phone: string;
+  phoneValid: boolean;
+  address: string;
   governorate: string;
+  resolvedCity: string;
   productName: string;
-  quantity: number;
-  totalAmount: string;
-  source: string;
-  notes?: string;
+  totalQuantity: number;
+  totalAmount: number;
   multiProduct: boolean;
-  allProducts: string[];
+  status: RowStatus;
+  reviewReasons: string[];
+  rejectReasons: string[];
+  items: { index: number; productName: string; quantity: number; match?: unknown }[];
 };
+type Summary = { new: number; review: number; existing: number; rejected: number };
+type RowReport = { row: number; orderId: string; status: "imported" | "imported_review" | "already_existing" | "failed_matching" | "rejected"; reason?: string };
 
 type ImportResult = {
   imported: number;
-  skipped: number;
+  imported_review?: number;
+  already_existing?: number;
+  failed_matching?: number;
+  skipped?: number;
   errors: string[];
+  reports?: RowReport[];
+  summary?: Summary;
+  error?: string;
 };
+
+const STATUS_LABEL: Record<RowStatus, string> = { new: "جديد", review: "يحتاج مراجعة", existing: "موجود مسبقًا", rejected: "مرفوض" };
+const STATUS_CLASS: Record<RowStatus, string> = {
+  new: "bg-green-50 text-green-700", review: "bg-yellow-50 text-yellow-800", existing: "bg-slate-100 text-slate-700", rejected: "bg-red-50 text-red-700",
+};
+
+/** تقرير CSV: رقم الصف، Order ID، الحالة، السبب — للتحميل. */
+function buildReportCsv(reports: RowReport[]): string {
+  const label: Record<RowReport["status"], string> = { imported: "تم الاستيراد", imported_review: "تم الاستيراد — يحتاج مراجعة", already_existing: "موجود مسبقًا", failed_matching: "فشل المطابقة", rejected: "مرفوض" };
+  const esc = (v: string) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = ["\uFEFFرقم الصف,Order ID,الحالة,السبب", ...reports.map(r => [r.row, r.orderId, label[r.status], r.reason ?? ""].map(v => esc(String(v))).join(","))];
+  return lines.join("\n");
+}
 
 type Props = {
   open: boolean;
@@ -51,6 +77,10 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
   const [showErrors, setShowErrors] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [classified, setClassified] = useState(false);
+  /** خطأ تنفيذ قابل للتصحيح — بيتعرض داخل النافذة مع بقاء الملف والمعاينة. */
+  const [execError, setExecError] = useState<{ message: string; errors: string[]; reports: RowReport[] } | null>(null);
   const [step, setStep] = useState<"upload" | "preview" | "done">("upload");
   // الاستيراد **عملية كتابة** — لازم نشاط واحد صريح، مش «كل الأنشطة». المصدر المعتمد
   // `businesses` (activeList: أنشطة نشطة مقيّدة بالـtenant/الصلاحيات على السيرفر). النطاق
@@ -87,8 +117,19 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
     setPreviewErrors([]);
     setShowErrors(false);
     setResult(null);
+    setSummary(null);
+    setClassified(false);
+    setExecError(null);
     setStep("upload");
     if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const downloadReport = (reports: RowReport[]) => {
+    const blob = new Blob([buildReportCsv(reports)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `import-report-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleClose = () => {
@@ -96,22 +137,21 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
     onClose();
   };
 
-  const handleFile = async (f: File) => {
-    setFile(f);
+  /** المعاينة — لو النشاط محدد بتيجي مصنّفة (جديد/موجود/مراجعة/مرفوض) من السيرفر. */
+  const runPreview = async (f: File, businessId: number | null) => {
     setLoading(true);
-    setPreviewData(null);
-    setPreviewErrors([]);
+    setExecError(null);
     try {
       const formData = new FormData();
       formData.append("file", f);
-      const res = await fetch("/api/import/preview", {
-        method: "POST",
-        body: formData,
-      });
+      if (businessId != null) formData.append("businessId", String(businessId));
+      const res = await fetch("/api/import/preview", { method: "POST", body: formData });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "خطأ في قراءة الملف");
       setPreviewData(data.preview);
       setPreviewErrors(data.errors || []);
+      setSummary(data.summary ?? null);
+      setClassified(Boolean(data.classified));
       setStep("preview");
     } catch (err: any) {
       toast.error(err.message || "خطأ في قراءة الملف");
@@ -119,6 +159,17 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
       setLoading(false);
     }
   };
+  const handleFile = async (f: File) => {
+    setFile(f);
+    setPreviewData(null);
+    setPreviewErrors([]);
+    await runPreview(f, selectedBusinessId);
+  };
+  // تغيير النشاط بعد المعاينة → إعادة التصنيف على كتالوج/أوردرات النشاط الجديد.
+  useEffect(() => {
+    if (step === "preview" && file && selectedBusinessId != null && !loading) void runPreview(file, selectedBusinessId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBusinessId]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -144,15 +195,19 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
         method: "POST",
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "خطأ في الاستيراد");
+      const data: ImportResult = await res.json().catch(() => ({ imported: 0, errors: [], error: `HTTP ${res.status}` }));
+      if (!res.ok) {
+        // خطأ قابل للتصحيح: السبب الفعلي + تقرير الصفوف داخل النافذة، والملف والمعاينة يفضلوا.
+        setExecError({ message: data.error || `فشل الاستيراد (HTTP ${res.status})`, errors: data.errors ?? [], reports: data.reports ?? [] });
+        return;
+      }
       setResult(data);
       setStep("done");
       if (data.imported > 0) {
         onSuccess();
       }
     } catch (err: any) {
-      toast.error(err.message || "خطأ في الاستيراد");
+      setExecError({ message: err?.message || "تعذّر الاتصال بالسيرفر", errors: [], reports: [] });
     } finally {
       setLoading(false);
     }
@@ -276,14 +331,34 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
               )}
             </div>
 
-            {/* Summary */}
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span className="text-sm font-semibold text-green-700">
-                  {previewData.length} أوردر جاهز للاستيراد
-                </span>
+            {/* Summary: جديد / موجود مسبقًا / يحتاج مراجعة / مرفوض (بعد التصنيف على النشاط) */}
+            {execError && (
+              <div className="rounded-lg border border-red-300 bg-red-50 p-3 space-y-2" data-testid="import-exec-error">
+                <p className="text-sm font-bold text-red-800">{execError.message}</p>
+                {execError.errors.length > 0 && (
+                  <div className="max-h-32 overflow-y-auto">
+                    {execError.errors.slice(0, 30).map((e, i) => <p key={i} className="text-xs text-red-700">{e}</p>)}
+                  </div>
+                )}
+                {execError.reports.length > 0 && (
+                  <Button size="sm" variant="outline" onClick={() => downloadReport(execError.reports)}>تحميل تقرير الصفوف</Button>
+                )}
               </div>
+            )}
+            <div className="flex items-center gap-2 flex-wrap" data-testid="import-summary">
+              {summary && classified ? (
+                <>
+                  <span className="rounded-lg bg-green-50 border border-green-200 px-3 py-1.5 text-sm font-semibold text-green-700">جديد: {summary.new}</span>
+                  <span className="rounded-lg bg-slate-100 border border-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-700">موجود مسبقًا: {summary.existing}</span>
+                  <span className="rounded-lg bg-yellow-50 border border-yellow-200 px-3 py-1.5 text-sm font-semibold text-yellow-800">يحتاج مراجعة: {summary.review}</span>
+                  <span className="rounded-lg bg-red-50 border border-red-200 px-3 py-1.5 text-sm font-semibold text-red-700">مرفوض: {summary.rejected}</span>
+                </>
+              ) : (
+                <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-green-600" />
+                  <span className="text-sm font-semibold text-green-700">{previewData.length} صف في الملف — اختر النشاط لعرض التصنيف</span>
+                </div>
+              )}
               {previewErrors.length > 0 && (
                 <div
                   className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-2 flex items-center gap-2 cursor-pointer"
@@ -318,7 +393,8 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
                   <thead className="sticky top-0 bg-muted/80 backdrop-blur">
                     <tr>
                       <th className="p-2 text-right font-semibold text-muted-foreground">#</th>
-                      <th className="p-2 text-right font-semibold text-muted-foreground">رقم الأوردر</th>
+                      <th className="p-2 text-right font-semibold text-muted-foreground">Order ID</th>
+                      <th className="p-2 text-right font-semibold text-muted-foreground">الحالة</th>
                       <th className="p-2 text-right font-semibold text-muted-foreground">الاسم</th>
                       <th className="p-2 text-right font-semibold text-muted-foreground">الهاتف</th>
                       <th className="p-2 text-right font-semibold text-muted-foreground">المحافظة</th>
@@ -328,31 +404,38 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
                     </tr>
                   </thead>
                   <tbody>
-                    {previewData.map((row, i) => (
-                      <tr key={i} className="border-t hover:bg-muted/30">
-                        <td className="p-2 text-muted-foreground">{row.rowIndex}</td>
-                        <td className="p-2 font-mono text-xs text-foreground">{row.externalId || '-'}</td>
-                        <td className="p-2 font-medium text-foreground">{row.customerName}</td>
-                        <td className="p-2 text-muted-foreground" dir="ltr">{row.customerPhone}</td>
-                        <td className="p-2">
-                          <Badge className="bg-blue-50 text-blue-700 border-0 text-xs">
-                            {row.governorate}
-                          </Badge>
-                        </td>
-                        <td className="p-2 text-foreground max-w-32 truncate" title={row.productName}>
-                          {row.productName}
-                          {row.multiProduct && (
-                            <Badge className="mr-1 bg-purple-50 text-purple-700 border-0 text-xs">
-                              متعدد
+                    {previewData.map((row, i) => {
+                      const reasons = [...row.rejectReasons, ...row.reviewReasons];
+                      return (
+                        <tr key={i} className="border-t hover:bg-muted/30" data-status={row.status}>
+                          <td className="p-2 text-muted-foreground">{row.rowIndex}</td>
+                          <td className="p-2 font-mono text-xs text-foreground" title={row.orderKey}>{row.idRaw || row.orderKey || '-'}</td>
+                          <td className="p-2">
+                            <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${STATUS_CLASS[row.status]}`} title={reasons.join("؛ ")}>{STATUS_LABEL[row.status]}</span>
+                            {reasons.length > 0 && <div className="mt-0.5 max-w-44 truncate text-[11px] text-muted-foreground" title={reasons.join("؛ ")}>{reasons[0]}</div>}
+                          </td>
+                          <td className="p-2 font-medium text-foreground">{row.customerName}</td>
+                          <td className={`p-2 ${row.phoneValid ? "text-muted-foreground" : "text-red-700 font-semibold"}`} dir="ltr">{row.phone}</td>
+                          <td className="p-2">
+                            <Badge className={`border-0 text-xs ${row.governorate ? "bg-blue-50 text-blue-700" : "bg-yellow-50 text-yellow-800"}`}>
+                              {row.governorate || "غير محددة"}
                             </Badge>
-                          )}
-                        </td>
-                        <td className="p-2 text-center text-foreground">{row.quantity}</td>
-                        <td className="p-2 font-semibold text-foreground">
-                          {Number(row.totalAmount).toLocaleString('ar-EG')} ج.م
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="p-2 text-foreground max-w-32 truncate" title={row.items.map(it => `${it.productName} ×${it.quantity}`).join(" + ")}>
+                            {row.productName}
+                            {row.multiProduct && (
+                              <Badge className="mr-1 bg-purple-50 text-purple-700 border-0 text-xs">
+                                {row.items.length} أصناف
+                              </Badge>
+                            )}
+                          </td>
+                          <td className="p-2 text-center text-foreground">{row.totalQuantity}</td>
+                          <td className="p-2 font-semibold text-foreground">
+                            {Number(row.totalAmount).toLocaleString('ar-EG')} ج.م
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -376,24 +459,37 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
                 تم الاستيراد تحت: <Badge variant="outline">{selectedBusinessName ?? "—"}</Badge>
               </p>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="import-result">
               <div className="bg-green-50 rounded-xl p-4 text-center">
                 <p className="text-3xl font-bold text-green-700">{result.imported}</p>
-                <p className="text-sm text-green-600 mt-1">أوردر تم استيراده</p>
+                <p className="text-sm text-green-600 mt-1">تم استيراده</p>
+              </div>
+              <div className="bg-slate-100 rounded-xl p-4 text-center">
+                <p className="text-3xl font-bold text-slate-700">{result.already_existing ?? 0}</p>
+                <p className="text-sm text-slate-600 mt-1">تم تخطيه (موجود مسبقًا)</p>
+              </div>
+              <div className="bg-yellow-50 rounded-xl p-4 text-center">
+                <p className="text-3xl font-bold text-yellow-800">{result.imported_review ?? 0}</p>
+                <p className="text-sm text-yellow-700 mt-1">يحتاج مراجعة</p>
               </div>
               <div className="bg-red-50 rounded-xl p-4 text-center">
-                <p className="text-3xl font-bold text-red-700">{result.skipped}</p>
-                <p className="text-sm text-red-600 mt-1">أوردر تم تخطيه</p>
+                <p className="text-3xl font-bold text-red-700">{result.skipped ?? 0}</p>
+                <p className="text-sm text-red-600 mt-1">فشل / مرفوض</p>
               </div>
             </div>
+            {(result.reports?.length ?? 0) > 0 && (
+              <Button variant="outline" className="w-full" onClick={() => downloadReport(result.reports!)} data-testid="download-report">
+                تحميل تقرير الصفوف (رقم الصف، Order ID، السبب)
+              </Button>
+            )}
             {result.errors.length > 0 && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 max-h-32 overflow-y-auto">
-                <p className="text-xs font-semibold text-yellow-800 mb-1">تفاصيل:</p>
-                {result.errors.slice(0, 20).map((e, i) => (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 max-h-40 overflow-y-auto">
+                <p className="text-xs font-semibold text-yellow-800 mb-1">تفاصيل الصفوف غير المستوردة أو التي تحتاج مراجعة:</p>
+                {result.errors.slice(0, 30).map((e, i) => (
                   <p key={i} className="text-xs text-yellow-700">{e}</p>
                 ))}
-                {result.errors.length > 20 && (
-                  <p className="text-xs text-yellow-600 mt-1">... و {result.errors.length - 20} أخرى</p>
+                {result.errors.length > 30 && (
+                  <p className="text-xs text-yellow-600 mt-1">... و {result.errors.length - 30} أخرى — كاملة في التقرير</p>
                 )}
               </div>
             )}
@@ -415,7 +511,7 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
               ) : (
                 <>
                   <Upload className="h-4 w-4 ml-2" />
-                  {selectedBusinessId == null ? "اختر النشاط أولًا" : `استيراد ${previewData?.length} أوردر`}
+                  {selectedBusinessId == null ? "اختر النشاط أولًا" : `استيراد ${summary ? summary.new + summary.review : previewData?.length} أوردر`}
                 </>
               )}
             </Button>

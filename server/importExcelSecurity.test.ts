@@ -17,7 +17,9 @@ function executeRoute(): string {
   // لحد نهاية المسار — أول تسجيل مسار تاني أو نهاية registerImportRoutes.
   const rest = src.slice(i);
   const end = rest.indexOf('app.post(\n    "/api/import/whatsapp');
-  return rest.slice(0, end < 0 ? 6000 : end);
+  // فحص النطاق اتجمّع في resolveImportBusiness (بيستدعيه preview وexecute) — بنضمّه للفحص.
+  const scopeFn = src.slice(src.indexOf("async function resolveImportBusiness"), src.indexOf("type RowReport"));
+  return scopeFn + rest.slice(0, end < 0 ? 8000 : end);
 }
 
 describe("🔑 D1 · استيراد Excel — عزل الـtenant", () => {
@@ -52,9 +54,11 @@ describe("🔑 D1 · dedup مقيّد بالنشاط ومحدود الحجم", (
     expect(src).not.toContain("getOrders({ limit: 100000 })");
   });
 
-  it("🔑 بيستخدم getImportDedupOrders المقيّد بالنشاط", () => {
-    expect(route).toContain("db.getImportDedupOrders(");
-    expect(route).toContain("businessId");
+  it("🔑 كشف التكرار بمفتاح Order ID داخل النشاط فقط (getExistingExternalOrderIds)", () => {
+    const classify = src.slice(src.indexOf("async function classifyForBusiness"), src.indexOf("async function resolveImportBusiness"));
+    expect(classify).toContain("db.getExistingExternalOrderIds(businessId, rows.map(r => r.orderKey))");
+    expect(classify).toContain("db.getMatchCatalog(businessId)");
+    expect(route).toContain("classifyForBusiness(parsed, businessId)");
   });
 });
 
