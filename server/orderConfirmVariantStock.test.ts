@@ -68,7 +68,7 @@ describe("🔑 حراس المصدر — سياسة تأكيد/خصم المخز
   const fn = db.slice(db.indexOf("export async function confirmOrder"), db.indexOf("export async function postponeOrder"));
   it("🔑 الخصم من بنود الأوردر (order_items) مجمّعة لكل تركيبة — مش من الهيدر", () => {
     expect(fn).toContain("from(orderItems).where(eq(orderItems.orderId, orderId))");
-    expect(fn).toContain("cur.qty += Math.max(1, l.quantity || 1)"); // تجميع نفس التركيبة
+    expect(fn).toContain("cur.qty += l.qty"); // تجميع نفس التركيبة
     expect(fn).toContain("update(productVariants)");
     expect(fn).toContain("currentStock: sql`${productVariants.currentStock} - ${e.qty}`");
   });
@@ -77,12 +77,12 @@ describe("🔑 حراس المصدر — سياسة تأكيد/خصم المخز
     expect(db).toContain("`المتاح من ${s.label} ${s.available} والمطلوب ${s.needed}`");
     expect(fn).toContain("if (shortfalls.length) throw new StockShortfallError(shortfalls);");
     // الفحص للكل قبل أي خصم: الرمي قبل حلقة الخصم
-    expect(fn.indexOf("throw new StockShortfallError")).toBeLessThan(fn.indexOf("for (const { e, variant } of plans)"));
+    expect(fn.indexOf("throw new StockShortfallError")).toBeLessThan(fn.indexOf("await tx.insert(inventoryMovements)"));
     expect(routers).toContain("if (err instanceof StockShortfallError)");
     expect(routers).toContain('code: "BAD_REQUEST", message: `المخزون غير كافٍ: ${err.message}`');
   });
   it("🔒 الملكية من الأوردر: التركيبة تتبع منتج السطر، والمنتج يتبع نشاط الأوردر — مش من العميل", () => {
-    expect(fn).toContain("v.productId !== e.productId");
+    expect(fn).toContain("v.productId !== l.productId");
     expect(fn).toContain("p.businessId !== order.businessId");
     expect(fn).not.toMatch(/businessId\s*===?\s*\d/);
   });
@@ -91,10 +91,16 @@ describe("🔑 حراس المصدر — سياسة تأكيد/خصم المخز
     expect(fn).toContain('if (order.status === "confirmed")');
     expect(fn).toContain('eq(inventoryMovements.type, "out")');
   });
-  it("🔑 variantId=null على أوردر قديم بالهيدر: حلّ آمن (تطابق وحيد) وإلا مراجعة بلا تخمين ولا خصم من الأب", () => {
-    expect(fn).toContain("resolveOrderVariantInTx(tx, order)");
-    expect(fn).toContain("الصنف/اللون/المقاس يحتاج مراجعة");
-    expect(fn).toContain("بلا نوع محدد — لم يُخصم");
+  it("🔒 مفيش تأكيد بلا خصم: سطر ناقص/قديم = رفض برسالة تحدد السطر؛ مسار التوافق للهيدر منفصل وبلا تخمين", () => {
+    expect(fn).toContain("اختر نوع الحفر للسطر رقم ${idx + 1}");
+    expect(fn).toContain("اختر المنتج للسطر رقم ${idx + 1}");
+    expect(fn).toContain('const OLD_ORDER = "الأوردر قديم ولا يحتوي تفاصيل الأصناف — راجعه قبل التأكيد"');
+    expect(fn).toContain("if (legacyMode || order.productId == null) throw new OrderConfirmBlockedError(OLD_ORDER)");
+    expect(fn).toContain("confirmHeaderOnlyCompat(order, OLD_ORDER)");
+    expect(db).not.toContain("resolveOrderVariantInTx(tx, order)"); // مفيش تخمين من اللون/المقاس
+    expect(fn).not.toContain("needsReview: true"); // مفيش «تأكيد + مراجعة بلا خصم»
+    expect(fn).toContain("throw new OrderStockInconsistencyError(orderId, String(order.status))");
+    expect(routers).toContain("if (err instanceof OrderStockInconsistencyError)");
   });
   it("🔒 مفيش فرع Legacy بالـslug يخصم من الأب — كل الأنشطة تخصم من التركيبات", () => {
     expect(db).not.toContain("LEGACY_TENANT_SLUG");
@@ -194,24 +200,20 @@ describe.runIf(RUN)("🔑 تأكيد/خصم — سلوكي (matjarak_test)", () 
     expect((await orderRow(oid)).status).toBe("new");
   });
 
-  it("🔑 variantId=null غير قابل للمطابقة → يتأكد بلا خصم + needsReview بلا تخمين", async () => {
+  it("🔒 أوردر قديم بالهيدر فقط (بلا بنود) لمنتج له تركيبات وvariantId=null → رفض «الأوردر قديم…»، بلا تخمين ولا خصم", async () => {
     const before10 = (await getVariantById(v10))!.currentStock;
-    const oid = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: null, color: null, size: null });
-    const r = await confirmOrder(oid, 1, "t");
+    const oid = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: null, color: "أسود", size: "من 5 إلى 10 سنين" });
+    await expect(confirmOrder(oid, 1, "t")).rejects.toThrow("الأوردر قديم ولا يحتوي تفاصيل الأصناف");
     const o = await orderRow(oid);
-    expect(o.status).toBe("confirmed");
-    expect(o.needsReview).toBe(true);
-    expect(o.reviewReason).toContain("مراجعة");
-    expect((await getVariantById(v10))!.currentStock).toBe(before10); // مفيش خصم من أي تركيبة
-    expect(r.needsReview).toBe(true);
+    expect(o.status).toBe("new"); expect(o.confirmedAt).toBeNull(); expect(o.variantId).toBeNull();
+    expect((await getVariantById(v10))!.currentStock).toBe(before10);
   });
 
-  it("🔑 variantId=null قابل للحل (لون+مقاس وحيد) → يُحفظ الـvariant ويُخصم", async () => {
+  it("🔑 مسار التوافق (نشاط غير legacy): هيدر بـvariantId صريح → يُخصم من التركيبة", async () => {
     const before = (await getVariantById(v10))!.currentStock;
-    const oid = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: null, color: "أسود", size: "من 5 إلى 10 سنين" });
+    const oid = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: v10, quantity: 1 });
     await confirmOrder(oid, 1, "t");
     expect((await getVariantById(v10))!.currentStock).toBe(before - 1);
-    expect((await orderRow(oid)).variantId).toBe(v10); // اتحفظ
   });
 
   it("🔑 ضغط متكرر لا يخصم مرتين ولا يكرر الحركة", async () => {
@@ -231,7 +233,7 @@ describe.runIf(RUN)("🔑 تأكيد/خصم — سلوكي (matjarak_test)", () 
   it("🔒 عزل: أوردر منتج A بـvariantId لتركيبة نشاط B → رفض، لا خصم من B، الأوردر يبقى new", async () => {
     const beforeB = (await getVariantById(vB))!.currentStock;
     const oid = await makeOrder({ businessId: A.businessId, productId: prodA, variantId: vB, color: "ذهبي", size: "M" });
-    await expect(confirmOrder(oid, 1, "t")).rejects.toThrow(/لا تتبع منتج/);
+    await expect(confirmOrder(oid, 1, "t")).rejects.toThrow(/لا يتبع المنتج/);
     expect((await getVariantById(vB))!.currentStock).toBe(beforeB);
     expect((await orderRow(oid)).status).toBe("new");
   });

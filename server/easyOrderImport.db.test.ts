@@ -7,7 +7,8 @@ import request from "supertest";
 import * as XLSX from "xlsx";
 import { eq, inArray } from "drizzle-orm";
 import { registerImportRoutes } from "./importExcel";
-import { getDb, createEmployee, createProductWithVariants, getOrderItemsForOrders } from "./db";
+import { getDb, createEmployee, createProductWithVariants, getOrderItemsForOrders, updateOrder } from "./db";
+import { validateOrder } from "./bosta.service";
 import { businesses, employees, orders, orderItems, products, productVariants } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { COOKIE_NAME } from "../shared/const";
@@ -130,6 +131,46 @@ describe.runIf(CAN)("🔑 استيراد Easy Order — DB", () => {
     expect(ex.body).toMatchObject({ imported: 0, failed_matching: 1 });
     expect(ex.body.reports[0].status).toBe("failed_matching");
     expect((await ordersOf(A.businessId)).length).toBe(before);
+  });
+
+  it("🔒 طلبان متزامنان لنفس الملف → كل Order ID مرة واحدة فقط (قفل مُسمّى لكل نشاط + إعادة فحص داخل الـtransaction)", async () => {
+    const buf = buildXlsx([row({ ID: "11", "Order ID": "race-1" }), row({ ID: "12", "Order ID": "race-2" }), row({ ID: "13", "Order ID": "race-3" })]);
+    const before = (await ordersOf(A.businessId)).length;
+    const [r1, r2] = await Promise.all([
+      post("/api/import/execute", ownerCookie(ownerA), buf, A.businessId),
+      post("/api/import/execute", ownerCookie(ownerA), buf, A.businessId),
+    ]);
+    expect([r1.status, r2.status], JSON.stringify([r1.body.error, r2.body.error])).toEqual([200, 200]);
+    expect(r1.body.imported + r2.body.imported).toBe(3);
+    expect(r1.body.already_existing + r2.body.already_existing).toBe(3);
+    const os = await ordersOf(A.businessId);
+    expect(os.length - before).toBe(3);
+    const keys = os.map(o => o.externalOrderId).filter(k => k?.startsWith("race-"));
+    expect(new Set(keys).size).toBe(keys.length); // مفيش مفتاح اتكرر
+    // الملف مرة ثالثة بعدهم → صفر
+    const r3 = await post("/api/import/execute", ownerCookie(ownerA), buf, A.businessId);
+    expect(r3.body).toMatchObject({ imported: 0, already_existing: 3 });
+  });
+
+  it("🔑 المراجعة مربوطة بالتشغيل: الأوردر المستورد بهاتف غير صالح/محافظة غير محددة لا يُشحن، وتصحيح حقل يزيل سببه فقط", async () => {
+    const buf = buildXlsx([row({ ID: "21", "Order ID": "rev-1", Phone: "96401950100", Address: "Maadi Street 77" })]);
+    await post("/api/import/execute", ownerCookie(ownerA), buf, A.businessId);
+    const d = (await getDb())!;
+    let [o] = await d.select().from(orders).where(eq(orders.externalOrderId, "rev-1"));
+    expect(o.needsReview).toBe(true);
+    expect(o.reviewReason).toBe("رقم الهاتف غير صالح: 96401950100 | المحافظة غير محددة — راجع العنوان");
+    // بوسطة ترفض قبل الشحن بسبب الحقل نفسه
+    expect(validateOrder({ customerName: o.customerName, customerPhone: o.customerPhone, governorate: o.governorate, customerAddress: o.customerAddress, totalAmount: o.totalAmount })).toContain("رقم الهاتف غير صالح");
+    // تصحيح الهاتف → يبقى سبب المحافظة فقط
+    await updateOrder(o.id, { customerPhone: "01011112222" });
+    [o] = await d.select().from(orders).where(eq(orders.id, o.id));
+    expect(o.needsReview).toBe(true); expect(o.reviewReason).toBe("المحافظة غير محددة — راجع العنوان");
+    expect(validateOrder({ customerName: o.customerName, customerPhone: o.customerPhone, governorate: o.governorate, customerAddress: o.customerAddress, totalAmount: o.totalAmount })).toContain("المحافظة غير محددة");
+    // تصحيح المحافظة → مفيش أسباب → العلم يتشال، وبوسطة توافق
+    await updateOrder(o.id, { governorate: "القاهرة", city: "المعادي" });
+    [o] = await d.select().from(orders).where(eq(orders.id, o.id));
+    expect(o.needsReview).toBe(false); expect(o.reviewReason).toBeNull();
+    expect(validateOrder({ customerName: o.customerName, customerPhone: o.customerPhone, governorate: o.governorate, customerAddress: o.customerAddress, totalAmount: o.totalAmount })).toBeNull();
   });
 
   it("🔒 Go-Live بلا إعدادات افتراضية → 409 برسالة واضحة قبل أي كتابة (بدل «خطأ في الاستيراد»)", async () => {

@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import { eq, inArray } from "drizzle-orm";
 import { appRouter } from "./routers";
 import {
-  getDb, createEmployee, createProductWithVariants, insertOrderWithItems, getVariantById, getOrderItemsForOrders,
+  getDb, createEmployee, createProductWithVariants, insertOrderWithItems, getVariantById, getOrderItemsForOrders, setOrderEntryMode,
 } from "./db";
 import { employees, orders, orderItems, orderParseAudits, products, productVariants, inventoryMovements } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
@@ -60,6 +60,8 @@ describe.runIf(CAN)("🔑 تأكيد الأوردر يخصم من التركيب
     confirmA = insId(await createEmployee({ name: "confirm A", role: "order_confirmation", isActive: true, tenantId: A.tenantId, businessId: A.businessId, username: `cfi_c_${tag}` } as any));
     confirmB = insId(await createEmployee({ name: "confirm B", role: "order_confirmation", isActive: true, tenantId: B.tenantId, businessId: B.businessId, username: `cfi_cb_${tag}` } as any));
     ids.empIds.push(entryA, confirmA, confirmB);
+    // نشاط A بقالب الأساور المبسّط — القواعد الصارمة (variant إلزامي لكل سطر).
+    await setOrderEntryMode(A.businessId, "bracelets_legacy", 1);
   });
   afterAll(async () => {
     const d = await getDb(); if (!d) return;
@@ -157,9 +159,73 @@ describe.runIf(CAN)("🔑 تأكيد الأوردر يخصم من التركيب
     ids.orderIds.push(oid);
     const beforeB = await stockOf(vB[0]);
     const r = await fail(() => caller(confirmA).employeePortal.confirm({ orderId: oid }));
-    expect(r.code).toBe("BAD_REQUEST"); expect(r.message).toContain("لا تتبع منتج");
+    expect(r.code).toBe("BAD_REQUEST"); expect(r.message).toContain("نوع الحفر في السطر رقم 1 لا يتبع المنتج");
     expect(await stockOf(vB[0])).toBe(beforeB);
     expect((await d.select().from(orders).where(eq(orders.id, oid)))[0].status).toBe("new");
+  });
+
+  /** أوردر ببنود مباشرة (تجاوز فحوص addOrder) لمحاكاة بيانات ناقصة/قديمة. */
+  const rawOrder = async (items: any[] | undefined, header: Partial<Record<string, any>> = {}) => {
+    const values = {
+      orderNumber: `CFI-R${Date.now() % 1e7}-${Math.floor(Math.random() * 1e4)}`.slice(0, 20), businessId: A.businessId, customerName: "c", customerPhone: "01000000099",
+      governorate: "القاهرة", customerAddress: "عنوان تفصيلي كافٍ", productName: "أسورة نحاس", quantity: 1, totalAmount: "190.00", source: "manual", status: "new",
+      assignedEmployeeId: confirmA, productId: prodA, ...header,
+    } as any;
+    // أوردر تاريخي بلا بنود: إدراج مباشر في orders (مسار الكتابة الحالي بيرفض بنودًا فاضية).
+    const oid = items ? await insertOrderWithItems(values, items) : insId(await (await getDb())!.insert(orders).values(values));
+    ids.orderIds.push(oid); return oid;
+  };
+  const snapshot = async () => Promise.all(vA.map(stockOf));
+  const orderState = async (oid: number) => (await (await getDb())!.select({ status: orders.status, confirmedAt: orders.confirmedAt }).from(orders).where(eq(orders.id, oid)))[0];
+
+  it("🔒 bracelets_legacy: سطر بلا variantId → «اختر نوع الحفر للسطر رقم 2»، بلا تغيير حالة ولا خصم ولا حركة — وسطر 1 الصالح لا يُخصم", async () => {
+    const before = await snapshot();
+    const oid = await rawOrder([
+      { productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vA[0], unitPrice: 190 },
+      { productId: prodA, productName: "أسورة نحاس", quantity: 1, unitPrice: 190 },
+    ]);
+    const r = await fail(() => caller(confirmA).employeePortal.confirm({ orderId: oid }));
+    expect(r.code).toBe("BAD_REQUEST"); expect(r.message).toBe("لا يمكن تأكيد الأوردر: اختر نوع الحفر للسطر رقم 2");
+    expect(await snapshot()).toEqual(before);
+    expect(await orderState(oid)).toEqual({ status: "new", confirmedAt: null });
+    expect(await movesOf(oid)).toEqual([]);
+  });
+
+  it("🔒 سطر بلا productId → «اختر المنتج للسطر رقم 1»، بلا خصم", async () => {
+    const before = await snapshot();
+    const oid = await rawOrder([{ productName: "مجهول", quantity: 1, unitPrice: 190 }, { productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vA[1], unitPrice: 190 }]);
+    const r = await fail(() => caller(confirmA).employeePortal.confirm({ orderId: oid }));
+    expect(r.message).toBe("لا يمكن تأكيد الأوردر: اختر المنتج للسطر رقم 1");
+    expect(await snapshot()).toEqual(before); expect((await orderState(oid)).status).toBe("new");
+  });
+
+  it("🔒 variant لا يتبع المنتج (منتج آخر داخل نفس النشاط) → رفض بلا خصم", async () => {
+    const other = await createProductWithVariants(A.businessId, { name: "منتج آخر" }, [{ name: "نوع", sku: `OTH-${tag}`, currentStock: 10, price: "100" }]);
+    ids.productIds.push(other.productId);
+    const before = await snapshot();
+    const oid = await rawOrder([{ productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: other.variantIds[0], unitPrice: 190 }]);
+    const r = await fail(() => caller(confirmA).employeePortal.confirm({ orderId: oid }));
+    expect(r.message).toBe("لا يمكن تأكيد الأوردر: نوع الحفر في السطر رقم 1 لا يتبع المنتج");
+    expect(await snapshot()).toEqual(before); expect(await stockOf(other.variantIds[0])).toBe(10);
+  });
+
+  it("🔒 أوردر تاريخي بلا order_items في bracelets_legacy → «الأوردر قديم…»، ولا خصم من الهيدر", async () => {
+    const before = await snapshot();
+    const oid = await rawOrder(undefined, { variantId: vA[0], quantity: 3 });
+    const r = await fail(() => caller(confirmA).employeePortal.confirm({ orderId: oid }));
+    expect(r.code).toBe("BAD_REQUEST"); expect(r.message).toBe("الأوردر قديم ولا يحتوي تفاصيل الأصناف — راجعه قبل التأكيد");
+    expect(await snapshot()).toEqual(before); expect((await orderState(oid)).status).toBe("new"); expect(await movesOf(oid)).toEqual([]);
+  });
+
+  it("🔒 حركة صرف موجودة بينما الأوردر new → inconsistency (CONFLICT)، لا نجاح صامت ولا خصم جديد", async () => {
+    const d = (await getDb())!;
+    const oid = await rawOrder([{ productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vA[1], unitPrice: 190 }]);
+    await d.insert(inventoryMovements).values({ businessId: A.businessId, productId: prodA, variantId: vA[1], type: "out", quantity: 1, reason: "حركة يتيمة", orderId: oid, performedBy: 1 });
+    const before = await snapshot();
+    const r = await fail(() => caller(confirmA).employeePortal.confirm({ orderId: oid }));
+    expect(r.code).toBe("CONFLICT"); expect(r.message).toContain("تعارض في المخزون");
+    expect(await snapshot()).toEqual(before); expect((await orderState(oid)).status).toBe("new");
+    expect((await movesOf(oid)).length).toBe(1);
   });
 
   it("🔒 موظف B لا يرى ولا يؤكد ولا يخصم من مخزون A", async () => {

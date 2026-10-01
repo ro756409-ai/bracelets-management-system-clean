@@ -203,7 +203,7 @@ export interface BostaShipmentResult {
 /**
  * Validate order data before sending to Bosta
  */
-function validateOrder(order: {
+export function validateOrder(order: {
   customerName: string;
   customerPhone: string;
   governorate: string;
@@ -211,8 +211,12 @@ function validateOrder(order: {
   totalAmount: string | number;
 }): string | null {
   if (!order.customerName?.trim()) return "اسم العميل مفقود";
-  if (!order.customerPhone?.trim() || order.customerPhone.length < 10) return "رقم الهاتف غير صحيح";
-  if (!order.governorate?.trim()) return "المحافظة مفقودة";
+  // أوردر مستورد بهاتف غير صالح أو محافظة غير محددة بيفضل «يحتاج مراجعة» — مايتبعتش لبوسطة
+  // قبل تصحيح الحقل نفسه (مش مجرد علم).
+  if (!/^01\d{9}$/.test(String(order.customerPhone ?? "").replace(/\D/g, "")))
+    return "رقم الهاتف غير صالح — صحّحه قبل الشحن";
+  if (!order.governorate?.trim() || order.governorate.trim() === "غير محدد")
+    return "المحافظة غير محددة — راجع العنوان وحدّد المحافظة قبل الشحن";
   if (!order.customerAddress?.trim()) return "العنوان مفقود";
   const total = parseFloat(String(order.totalAmount));
   if (isNaN(total) || total <= 0) return "الإجمالي غير صحيح";

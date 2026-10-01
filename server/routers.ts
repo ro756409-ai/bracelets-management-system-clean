@@ -298,8 +298,10 @@ async function confirmOrderOrReject(orderId: number, updatedBy: number, confirme
   } catch (err) {
     if (err instanceof StockShortfallError)
       throw new TRPCError({ code: "BAD_REQUEST", message: `المخزون غير كافٍ: ${err.message}` });
-    if (err instanceof Error && /لا يتبع نشاط|لا تتبع منتج|بيانات ناقصة/.test(err.message))
+    if (err instanceof OrderConfirmBlockedError)
       throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    if (err instanceof OrderStockInconsistencyError)
+      throw new TRPCError({ code: "CONFLICT", message: err.message });
     throw err;
   }
 }
@@ -687,6 +689,8 @@ import {
   bulkAssignOrders,
   confirmOrder,
   StockShortfallError,
+  OrderConfirmBlockedError,
+  OrderStockInconsistencyError,
   postponeOrder,
   cancelOrder,
   editOrderWithInventory,

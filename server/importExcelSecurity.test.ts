@@ -65,6 +65,17 @@ describe("🔑 D1 · dedup مقيّد بالنشاط ومحدود الحجم", (
 describe("🔑 D1 · الاستيراد الكل-أو-لا-شيء", () => {
   const route = executeRoute();
 
+  it("🔒 السباق: importOrdersAtomic بيقفل صف النشاط FOR UPDATE (يُحرَّر مع الـcommit) ويعيد فحص المفاتيح بقراءة قافلة داخل الـtransaction قبل أي insert", () => {
+    const dbSrc = fs.readFileSync("server/db.ts", "utf-8");
+    const fn = dbSrc.slice(dbSrc.indexOf("export async function importOrdersAtomic"), dbSrc.indexOf("export async function getExistingExternalOrderIds"));
+    expect(fn).toContain('from(businesses).where(eq(businesses.id, businessId)).limit(1).for("update")');
+    expect(fn).toContain("inArray(orders.externalOrderId, keys)");
+    const lockAt = fn.indexOf('from(businesses).where(eq(businesses.id, businessId)).limit(1).for("update")');
+    expect(lockAt).toBeLessThan(fn.indexOf("inArray(orders.externalOrderId, keys)"));
+    expect(fn.indexOf("inArray(orders.externalOrderId, keys)")).toBeLessThan(fn.indexOf("createOrderInTransaction("));
+    expect(fn).not.toContain("SELECT GET_LOCK"); // القفل المسمّى كان بيتحرر قبل الـcommit
+    expect(route).toContain("racedExisting = new Set(result.skippedExisting)");
+  });
   it("🔑 التصنيف بلا كتابة ثم importOrdersAtomic", () => {
     expect(route).toContain("db.importOrdersAtomic(");
     // على الفشل: imported = 0 وتقرير واضح، مفيش نصف استيراد.

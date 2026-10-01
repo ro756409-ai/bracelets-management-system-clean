@@ -590,9 +590,12 @@ export function registerImportRoutes(app: Express) {
         // ── المرحلة ٢: الإدخال **الكل-أو-لا-شيء** في transaction واحدة ──
         // لو أي صف فشل، الدفعة كلها بترجع — مفيش نصف استيراد بلا تقرير.
         let imported = 0;
+        let racedExisting = new Set<string>();
         try {
           const result = await db.importOrdersAtomic(businessId, toInsert);
           imported = result.insertedIds.length;
+          // مفاتيح اتكتبت بطلب متزامن سبقنا داخل القفل → موجودة مسبقًا (مش مستوردة هنا).
+          racedExisting = new Set(result.skippedExisting);
         } catch (err: any) {
           const msg = `فشل الاستيراد — اترجعت الدفعة كلها ومفيش أوردر اتكتب: ${err?.message ?? err}`;
           console.error("[import/execute] atomic batch failed:", err);
@@ -610,18 +613,25 @@ export function registerImportRoutes(app: Express) {
           });
         }
 
-        const importedReview = rows.filter(r => r.status === "review").length;
+        const finalReports = reports.map(r => {
+          const key = rows.find(x => x.rowIndex === r.row)?.orderKey ?? "";
+          return key && racedExisting.has(key) && (r.status === "imported" || r.status === "imported_review")
+            ? { ...r, status: "already_existing" as const, reason: "موجود مسبقًا (استيراد متزامن سبق هذا الطلب)" }
+            : r;
+        });
+        const importedReview = finalReports.filter(r => r.status === "imported_review").length;
+        const alreadyExisting = duplicates + racedExisting.size;
         return res.json({
           imported,
           imported_review: importedReview,
           skipped,
-          duplicates,
+          duplicates: alreadyExisting,
           // ملخّص منفصل واضح: مستورد / موجود بالفعل / فشل مطابقة — والـreports لكل صف.
-          already_existing: duplicates,
+          already_existing: alreadyExisting,
           failed_matching: skipped,
-          reports,
+          reports: finalReports,
           errors: importErrors,
-          summary,
+          summary: { ...summary, new: Math.max(0, summary.new - racedExisting.size), existing: summary.existing + racedExisting.size },
         });
       } catch (err: any) {
         console.error("[import/execute] failed:", err);
