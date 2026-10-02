@@ -4,6 +4,7 @@ import {
   mysqlTable,
   text,
   mediumtext,
+  bigint,
   timestamp,
   varchar,
   decimal,
@@ -2420,5 +2421,40 @@ export const orderParseAudits = mysqlTable(
   table => ({
     orderIdx: index("opa_order_idx").on(table.orderId),
     businessIdx: index("opa_business_idx").on(table.businessId),
+  })
+);
+
+/**
+ * صندوق وارد أحداث شركات الشحن (0039): الحدث الخام + حالة معالجته، لكل tenant/نشاط.
+ * processingStatus: received | processed | unmatched | ignored | failed.
+ * التكرار مايعملش صف جديد — بيزوّد duplicateCount على الصف الأصلي. بلا FKs.
+ */
+export const carrierWebhookInbox = mysqlTable(
+  "carrier_webhook_inbox",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    tenantId: int("tenantId"),
+    businessId: int("businessId"),
+    provider: varchar("provider", { length: 30 }).notNull(),
+    shipmentId: varchar("shipmentId", { length: 100 }),
+    trackingNumber: varchar("trackingNumber", { length: 100 }),
+    eventKey: varchar("eventKey", { length: 64 }).notNull(),
+    stateCode: int("stateCode"),
+    eventType: varchar("eventType", { length: 40 }),
+    /** وقت تغيّر الحالة عند بوسطة (ms). */
+    eventTimestamp: bigint("eventTimestamp", { mode: "number" }),
+    orderId: int("orderId"),
+    processingStatus: varchar("processingStatus", { length: 16 }).notNull().default("received"),
+    failureReason: text("failureReason"),
+    payloadJson: mediumtext("payloadJson").notNull(),
+    attempts: int("attempts").notNull().default(1),
+    duplicateCount: int("duplicateCount").notNull().default(0),
+    receivedAt: timestamp("receivedAt").defaultNow().notNull(),
+    processedAt: timestamp("processedAt"),
+  },
+  table => ({
+    eventUnique: uniqueIndex("cwi_business_provider_event_unique").on(table.businessId, table.provider, table.eventKey),
+    statusIdx: index("cwi_business_status_idx").on(table.businessId, table.processingStatus),
+    shipmentIdx: index("cwi_shipment_idx").on(table.shipmentId),
   })
 );

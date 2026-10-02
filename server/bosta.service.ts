@@ -71,6 +71,13 @@ export function describeFetchError(err: unknown): string {
 // Bosta delivery type 10 = Deliver (COD)
 const DELIVERY_TYPE = 10;
 
+/** الرابط العام لاستقبال حالات الشحن — قابل للتغيير للـStaging عبر BOSTA_WEBHOOK_URL. */
+const DEFAULT_BOSTA_WEBHOOK_URL = "https://matjarak.net/api/webhooks/bosta";
+export function bostaWebhookUrl(): string {
+  const fromEnv = process.env.BOSTA_WEBHOOK_URL?.trim();
+  return fromEnv && /^https:\/\//i.test(fromEnv) ? fromEnv : DEFAULT_BOSTA_WEBHOOK_URL;
+}
+
 // Pickup address details (fetched from GET /api/v0/pickup-locations)
 // These are static since the pickup location doesn't change
 const PICKUP_ADDRESS_FIRST_LINE = "Q7WX+F9P, Masaken at Tebin Ash Shaabeyah, El Tebbin, Cairo Governorate 4011234, Egypt";
@@ -413,7 +420,11 @@ export async function createBostaShipment(
 
   // سر الـwebhook الخاص بالنشاط بيتبعت مع الشحنة — بوسطة بترجّعه في كل حدث، وده
   // اللي الـwebhook بيحدد بيه النشاط قبل ما يلمس أي أوردر.
+  // `webhookUrl` + `webhookCustomHeaders` في طلب الإنشاء (الموثّق رسميًا) = الشحنة الجديدة
+  // بتسجّل الـwebhook لنفسها بلا أي إعداد يدوي في لوحة بوسطة. من غير سر مفيش رابط — الحدث
+  // كان هيترفض 401 أصلًا. السر مابيتطبعش في أي لوج ولا بيرجع في أي response.
   if (conn.webhookSecret) {
+    (payload as Record<string, unknown>).webhookUrl = bostaWebhookUrl();
     (payload as Record<string, unknown>).webhookCustomHeaders = { "x-bosta-secret": conn.webhookSecret };
   }
 
@@ -448,6 +459,14 @@ export async function createBostaShipment(
     return { success: false, error: UNCERTAIN_MESSAGE };
   }
 
+  // بوسطة ممكن ترجّع الشحنة كاملة (ومعاها webhookCustomHeaders) في الرد أو في رسالة خطأ —
+  // السر والمفتاح بيتشالوا من أي نص قبل ما يتطبع في اللوج أو يتخزّن/يتعرض كرسالة خطأ.
+  const redact = (text: string): string => {
+    let out = text;
+    for (const secret of [conn.webhookSecret, conn.apiKey]) if (secret) out = out.split(secret).join("[REDACTED]");
+    return out;
+  };
+
   // Log request (without API key)
   console.log("[Bosta] Sending shipment:", JSON.stringify({
     orderId,
@@ -468,7 +487,7 @@ export async function createBostaShipment(
     });
 
     const responseBody = await response.json() as Record<string, unknown>;
-    console.log("[Bosta] Response:", JSON.stringify({ orderId, status: response.status, body: responseBody }));
+    console.log("[Bosta] Response:", redact(JSON.stringify({ orderId, status: response.status, body: responseBody })));
 
     if (response.ok && responseBody._id) {
       const shipmentId = String(responseBody._id);
@@ -489,7 +508,7 @@ export async function createBostaShipment(
       const bodyMsg = (responseBody as Record<string, unknown>).message
         ?? (responseBody as Record<string, unknown>).error
         ?? JSON.stringify(responseBody);
-      const errMsg = `HTTP ${response.status} — ${String(bodyMsg)}`;
+      const errMsg = redact(`HTTP ${response.status} — ${String(bodyMsg)}`);
       await db!.update(orders).set({
         bostaLastError: errMsg,
         bostaStatus: "failed",

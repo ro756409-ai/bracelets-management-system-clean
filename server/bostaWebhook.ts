@@ -1,77 +1,31 @@
 /**
- * Bosta Webhook Handler
- * يستقبل تحديثات حالة الشحنات من Bosta تلقائياً
+ * Bosta Webhook Handler — استقبال حالات الشحن فقط (بلا أي أثر محاسبي أو مخزني).
  *
- * Webhook URL: /api/webhooks/bosta
- * Header: x-bosta-secret: <BOSTA_WEBHOOK_SECRET>
+ * Webhook URL: POST /api/webhooks/bosta
+ * Header: x-bosta-secret: <سر حساب الشحن الخاص بالنشاط>
  *
- * يحدّث bostaStatus (النص الكامل من Bosta) دائماً، ويحدّث orders.status الأساسي فقط
- * عند وصول كود حالة معروف ومؤكد (راجع BOSTA_STATUS_TO_ORDER_STATUS تحت) — الحالات غير
- * المعروفة/غير الحاسمة تحدّث bostaStatus فقط ولا تلمس status الأساسي.
+ * المصدر: توثيق Bosta الرسمي «Get Shipment Status via Webhook» — `state` رقم مباشر و
+ * `timeStamp` رقم (ms). التطبيع وخريطة الحالات في `bostaEvents.ts`.
+ *
+ * ترتيب العزل **ثابت**: السر → hash → حساب الشحن والنشاط → الأوردر بشرط
+ * (businessId + bostaShipmentId). ممنوع البحث عن الشحنة عالميًا ثم استنتاج النشاط. مسار
+ * المفتاح العام (`BOSTA_WEBHOOK_SECRET`) لفترة الانتقال بس ومقيّد بالأنشطة اللي **مالهاش**
+ * صف حساب شحن.
+ *
+ * مسار المحاسبة V2 (`processProviderWebhook`) **مابيتنادَش من هنا** في المرحلة دي: قراءة
+ * الحالة الحقيقية كانت هتفعّله لأول مرة وتولّد أثرًا ماليًا — وده خارج نطاق استقبال الحالات.
  */
 import { Request, Response, Express } from "express";
-import { timingSafeEqual, createHash } from "crypto";
+import { timingSafeEqual } from "crypto";
 import { getDb } from "./db";
 import { businesses, orders } from "../drizzle/schema";
-import type { Order } from "../drizzle/schema";
 import { eq, and } from "drizzle-orm";
-import { processProviderWebhook } from "./providerWebhookV2.service";
 import { findAccountByWebhookSecret, getCarrierAccountRow, recordWebhookEvent, PROVIDER_BOSTA } from "./carrierAccounts.service";
-
-type OrderStatus = Order["status"];
-
-// ==================== Bosta Status Mapping ====================
-// حالات Bosta الرسمية وترجمتها (تُحفظ كاملة في bostaStatus بغض النظر عن الخريطة تحت)
-const BOSTA_STATUS_MAP: Record<number, string> = {
-  10: "تم الاستلام",
-  20: "في المستودع",
-  21: "في مستودع الفرع",
-  22: "في مستودع المنطقة",
-  24: "في طريق التسليم",
-  30: "تم التسليم",
-  31: "تم التسليم جزئياً",
-  41: "مرتجع - لم يُستلم",
-  42: "مرتجع - رُفض",
-  43: "مرتجع - عنوان خاطئ",
-  44: "مرتجع - لم يُتصل به",
-  45: "مرتجع - تالف",
-  46: "مرتجع",
-  47: "مرتجع - تأجيل",
-  48: "مرتجع - طلب العميل",
-  49: "مرتجع - مشكلة في الدفع",
-  50: "في طريق الإرجاع",
-  60: "تم الإرجاع",
-};
-
-/**
- * خريطة مركزية: أكواد Bosta المؤكدة/الحاسمة فقط → orders.status الداخلي.
- *
- * "مؤكدة" يعني نتيجة نهائية واضحة، مش مرحلة عابرة. مُستبعد عمداً:
- * - 50 (في طريق الإرجاع) — لسه ما اترجعش فعلياً، مجرد نقل.
- * أي كود مش موجود هنا (بما فيها أكواد Bosta جديدة غير معروفة) يسيب status الأساسي زي ما هو.
- *
- * ملحوظة: 31 (تم التسليم جزئياً) اتحطت "delivered" كأقرب حالة متاحة في enum الحالي —
- * لو ده مش الصح تجاريًا (مثلاً محتاج يبقى preparing/no_answer أو حالة منفصلة)، عدّلها هنا.
- */
-const BOSTA_STATUS_TO_ORDER_STATUS: Record<number, OrderStatus> = {
-  10: "shipped", // تم الاستلام من عندنا
-  20: "shipped", // في المستودع
-  21: "shipped",
-  22: "shipped",
-  24: "shipped", // في طريق التسليم
-  30: "delivered", // تم التسليم
-  // 31 (partially delivered) is intentionally pending and never recognizes Revenue/COGS.
-  41: "returned",
-  42: "returned",
-  43: "returned",
-  44: "returned",
-  45: "returned",
-  46: "returned",
-  47: "returned",
-  48: "returned",
-  49: "returned",
-  60: "returned", // تم الإرجاع فعليًا
-};
+import { normalizeBostaEvent, canAdvanceOrderStatus, type NormalizedBostaEvent } from "./bostaEvents";
+import {
+  receiveInboxEvent, markInboxEvent, latestProcessedEventTimestamp, getInboxEvent,
+  type InboxRow, type InboxStatus,
+} from "./carrierWebhookInbox.service";
 
 /** مقارنة آمنة (constant-time) لتفادي تسريب معلومات عن السر عبر توقيت الاستجابة. */
 function safeCompare(a: string, b: string): boolean {
@@ -81,13 +35,93 @@ function safeCompare(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
+export interface ApplyResult {
+  status: Exclude<InboxStatus, "received" | "failed">;
+  reason?: string;
+  orderId?: number;
+  orderStatus?: string;
+}
+
+/** أسباب المراجعة اللي الـwebhook بيضيفها — بتتضاف مرة واحدة بس. */
+function appendReview(existing: string | null, reason: string): string {
+  const parts = (existing ?? "").split(" | ").map(s => s.trim()).filter(Boolean);
+  if (!parts.includes(reason)) parts.push(reason);
+  return parts.join(" | ");
+}
+
+/**
+ * تطبيق حدث موحّد على أوردر **داخل النشاط المحدد فقط**. نفس الدالة للاستقبال ولإعادة
+ * المعالجة — وهي idempotent: مابتعملش غير set لحالة/نص، فإعادتها ماتكررش أي أثر.
+ *
+ *   • شحنة مش موجودة في النشاط → unmatched (ولا أوردر بيتلمس).
+ *   • كود غير معروف أو 102–105 → ignored (يتحفظ للمراجعة، بلا تعديل).
+ *   • حدث أقدم من آخر حدث مطبَّق على نفس الشحنة → ignored.
+ *   • غير كده: نص حالة بوسطة + حالة الأوردر لو الانتقال للأمام مسموح.
+ */
+export async function applyBostaEvent(businessId: number, event: NormalizedBostaEvent, inboxId?: number): Promise<ApplyResult> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const byShipment = event.shipmentId
+    ? eq(orders.bostaShipmentId, event.shipmentId)
+    : eq(orders.bostaTrackingNumber, event.trackingNumber as string);
+  const [order] = await db.select().from(orders).where(and(eq(orders.businessId, businessId), byShipment)).limit(1);
+  if (!order) return { status: "unmatched", reason: "لا توجد شحنة مطابقة داخل هذا النشاط" };
+
+  if (event.storeOnly) {
+    return {
+      status: "ignored", orderId: order.id,
+      reason: event.kind === "unknown" ? `كود حالة غير معروف (${event.state}) — للمراجعة` : `${event.stateName} (${event.state}) — للمراجعة، بلا تعديل على الأوردر`,
+    };
+  }
+
+  // حدث قديم وصل بعد حدث أحدث لنفس الشحنة → مايرجّعش الأوردر لورا.
+  const shipmentKey = event.shipmentId ?? order.bostaShipmentId;
+  if (event.timeStamp != null && shipmentKey) {
+    const latest = await latestProcessedEventTimestamp(businessId, shipmentKey, inboxId);
+    if (latest != null && event.timeStamp < latest)
+      return { status: "ignored", orderId: order.id, reason: "حدث أقدم من آخر حالة مسجّلة لهذه الشحنة" };
+  }
+
+  const advance = event.orderStatus != null && canAdvanceOrderStatus(order.status, event.orderStatus);
+  // حالة شحن أقدم (shipped) بعد delivered/returned مابتغيّرش حتى نص الحالة.
+  const regress = event.orderStatus != null && !advance && order.status !== event.orderStatus;
+  if (regress)
+    return { status: "ignored", orderId: order.id, reason: `الأوردر في حالة «${order.status}» — حدث «${event.label}» لا يرجّعه للخلف` };
+
+  const exceptionNote = event.kind === "exception"
+    ? `استثناء بوسطة: ${event.exceptionReason ?? "بلا سبب مذكور"}${event.exceptionCode != null ? ` (كود ${event.exceptionCode})` : ""}`
+    : null;
+
+  await db
+    .update(orders)
+    .set({
+      bostaStatus: event.label,
+      ...(event.trackingNumber ? { bostaTrackingNumber: event.trackingNumber } : {}),
+      ...(advance ? { status: event.orderStatus as any } : {}),
+      ...(exceptionNote ? { bostaLastError: exceptionNote } : {}),
+      ...(event.flagsReview ? { needsReview: true, reviewReason: appendReview(order.reviewReason, `بوسطة: ${event.label}`) } : {}),
+    })
+    .where(and(eq(orders.id, order.id), eq(orders.businessId, businessId)));
+
+  return { status: "processed", orderId: order.id, orderStatus: advance ? (event.orderStatus as string) : order.status };
+}
+
+/** يطبّق الحدث ويسجّل النتيجة في صندوق الوارد؛ الفشل بيتسجّل failed بسببه. */
+async function processAndMark(businessId: number, tenantId: number | null, event: NormalizedBostaEvent, inboxId: number | null, bumpAttempts = false): Promise<ApplyResult> {
+  try {
+    const result = await applyBostaEvent(businessId, event, inboxId ?? undefined);
+    if (inboxId != null)
+      await markInboxEvent(inboxId, { status: result.status, failureReason: result.reason ?? null, orderId: result.orderId ?? null, businessId, tenantId, bumpAttempts });
+    return result;
+  } catch (err) {
+    if (inboxId != null)
+      await markInboxEvent(inboxId, { status: "failed", failureReason: err instanceof Error ? err.message : String(err), businessId, tenantId, bumpAttempts });
+    throw err;
+  }
+}
+
 // ==================== Webhook Handler ====================
-//
-// ترتيب العزل **ثابت**: السر → hash → حساب الشحن والنشاط → الأوردر بشرط
-// (businessId + bostaShipmentId). ممنوع البحث عن الشحنة عالميًا ثم استنتاج النشاط —
-// ده اللي كان بيسمح لحدث نشاط يلمس أوردر نشاط تاني. الـidempotency بقيد فريد على
-// (businessId, provider, eventHash). مسار المفتاح العام (`BOSTA_WEBHOOK_SECRET`) بيفضل
-// لفترة الانتقال بس، ومقيّد بالأنشطة اللي **مالهاش** صف حساب شحن.
 export async function handleBostaWebhook(req: Request, res: Response) {
   try {
     const receivedSecret = req.headers["x-bosta-secret"];
@@ -95,9 +129,10 @@ export async function handleBostaWebhook(req: Request, res: Response) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    // 1) السر → hash → النشاط. مفيش أي قراءة أوردر قبل السطر ده.
+    // 1) السر → hash → النشاط. مفيش أي قراءة أوردر ولا حفظ قبل السطر ده.
     const account = await findAccountByWebhookSecret(receivedSecret);
     let businessId: number | null = account?.businessId ?? null;
+    let tenantId: number | null = account?.tenantId ?? null;
     let legacy = false;
     if (!businessId) {
       const envSecret = process.env.BOSTA_WEBHOOK_SECRET;
@@ -108,98 +143,103 @@ export async function handleBostaWebhook(req: Request, res: Response) {
       }
     }
 
-    const payload = req.body ?? {};
-    console.log("[Bosta Webhook] Received:", JSON.stringify(payload).slice(0, 500));
-    const shipmentId: string | undefined = payload._id || payload.id || payload.shipmentId;
-    const trackingNumber: string | undefined = payload.trackingNumber || payload.tracking_number;
-    const stateCode: number | undefined = payload.state?.code || payload.status_code;
-    const stateValue: string | undefined = payload.state?.value || payload.status;
-    if (!shipmentId && !trackingNumber) {
-      return res.status(400).json({ error: "Missing shipment identifier" });
-    }
-    const occurredAtRaw = payload.updatedAt || payload.updated_at || payload.timestamp;
-    const occurredAt = occurredAtRaw && !Number.isNaN(new Date(occurredAtRaw).getTime()) ? new Date(occurredAtRaw) : new Date();
-
     const drizzle = await getDb();
     if (!drizzle) return res.status(500).json({ error: "DB not available" });
 
-    // 2) الأوردر داخل النشاط المحدد بس.
-    const byShipment = shipmentId ? eq(orders.bostaShipmentId, shipmentId) : eq(orders.bostaTrackingNumber, trackingNumber!);
-    let order: typeof orders.$inferSelect | undefined;
-    if (businessId != null) {
-      [order] = await drizzle.select().from(orders).where(and(eq(orders.businessId, businessId), byShipment)).limit(1);
-    } else {
-      // فترة الانتقال: السر العام بيوصل للأوردر بشرط إن نشاطه **مالوش** حساب شحن.
-      const [candidate] = await drizzle.select().from(orders).where(byShipment).limit(1);
-      if (candidate && !(await getCarrierAccountRow(candidate.businessId))) {
-        order = candidate;
+    // 2) التطبيع — payload غير صالح بيترفض برسالة واضحة (ومابيتطبعش في اللوج).
+    const payload = req.body ?? {};
+    const normalized = normalizeBostaEvent(payload);
+    if (!normalized.ok) {
+      console.warn(`[Bosta Webhook] invalid payload rejected: ${normalized.error}`);
+      return res.status(400).json({ error: normalized.error });
+    }
+    const event = normalized.event;
+
+    // فترة الانتقال: السر العام بيوصل للأوردر بشرط إن نشاطه **مالوش** حساب شحن.
+    if (legacy) {
+      const byShipment = event.shipmentId ? eq(orders.bostaShipmentId, event.shipmentId) : eq(orders.bostaTrackingNumber, event.trackingNumber as string);
+      const [candidate] = await drizzle.select({ businessId: orders.businessId }).from(orders).where(byShipment).limit(1);
+      if (candidate) {
+        if (await getCarrierAccountRow(candidate.businessId)) {
+          console.warn("[Bosta Webhook] legacy secret used for a business that has its own account — rejected");
+          return res.status(401).json({ error: "Unauthorized" });
+        }
         businessId = candidate.businessId;
-      } else if (candidate) {
-        console.warn("[Bosta Webhook] legacy secret used for a business that has its own account — rejected");
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-    }
-    if (!order || businessId == null) {
-      console.warn(`[Bosta Webhook] Order not found in business scope for shipmentId=${shipmentId} trackingNumber=${trackingNumber}`);
-      return res.status(200).json({ ok: true, message: "Order not found, ignored" });
-    }
-
-    // 3) idempotency لكل نشاط.
-    const eventHash = createHash("sha256")
-      .update(`${businessId}|${shipmentId ?? ""}|${trackingNumber ?? ""}|${stateCode ?? ""}|${occurredAt.toISOString()}|${payload.eventId ?? payload.event_id ?? ""}`)
-      .digest("hex");
-    const fresh = await recordWebhookEvent({ businessId, provider: PROVIDER_BOSTA, eventHash, shipmentId, stateCode: stateCode ?? null });
-    if (!fresh) return res.status(200).json({ ok: true, duplicate: true });
-
-    // 4) مسار المحاسبة V2 — لو جداوله ناقصة مايوقعش التحديث الأساسي.
-    if (stateCode != null) {
-      try {
-        const v2 = await processProviderWebhook({
-          providerCode: "bosta",
-          externalShipmentId: shipmentId,
-          trackingNumber,
-          providerEventId: payload.eventId || payload.event_id,
-          providerStatusCode: String(stateCode),
-          occurredAt,
-          payload,
-        });
-        if (v2.status === "processed") return res.status(200).json({ ok: true, accountingV2: true });
-      } catch (error) {
-        console.error("[Bosta Webhook] Accounting V2 processing failed (continuing with legacy status update):", error);
+        const [b] = await drizzle.select({ tenantId: businesses.tenantId }).from(businesses).where(eq(businesses.id, businessId)).limit(1);
+        tenantId = b?.tenantId ?? null;
       }
     }
 
-    const arabicStatus = (stateCode ? BOSTA_STATUS_MAP[stateCode] : undefined) || stateValue || "تم التحديث";
-    const mappedOrderStatus = stateCode ? BOSTA_STATUS_TO_ORDER_STATUS[stateCode] : undefined;
+    // 3) حفظ الحدث الخام **قبل** المعالجة + idempotency بمفتاح ثابت (shipment + state + timeStamp).
+    const received = await receiveInboxEvent({
+      tenantId, businessId, provider: PROVIDER_BOSTA,
+      shipmentId: event.shipmentId, trackingNumber: event.trackingNumber, eventKey: event.eventKey,
+      stateCode: event.state, eventType: event.type, eventTimestamp: event.timeStamp, payload,
+    });
 
-    const [business] = await drizzle.select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
-      .from(businesses).where(eq(businesses.id, businessId)).limit(1);
-    if (business?.accountingGoLiveAt && stateCode != null) {
-      return res.status(200).json({ ok: true, message: "Provider event is unmatched in Business configuration; legacy mapping skipped" });
+    let inboxId: number | null = null;
+    if (received.mode === "duplicate") {
+      const prev: InboxRow = received.row;
+      // حدث اتسجّل قبل كده: لو اتعالج (أو اتصنّف) → نجاح idempotent بلا أي تحديث. لو لسه
+      // received/failed (المعالجة ماكملتش) → نكمّلها دلوقتي على نفس الصف، مش صف جديد.
+      if (prev.processingStatus !== "received" && prev.processingStatus !== "failed")
+        return res.status(200).json({ ok: true, duplicate: true, status: prev.processingStatus });
+      inboxId = prev.id;
+    } else if (received.mode === "stored") {
+      inboxId = received.id;
+    } else if (businessId != null) {
+      // قبل Migration 0039: مفيش صندوق وارد — الـidempotency من جدول 0037.
+      const fresh = await recordWebhookEvent({ businessId, provider: PROVIDER_BOSTA, eventHash: event.eventKey, shipmentId: event.shipmentId, stateCode: event.state });
+      if (!fresh) return res.status(200).json({ ok: true, duplicate: true });
     }
 
-    // 5) التحديث مقيّد بالنشاط كمان — مش بالـid بس.
-    await drizzle
-      .update(orders)
-      .set({
-        bostaStatus: arabicStatus,
-        ...(trackingNumber ? { bostaTrackingNumber: trackingNumber } : {}),
-        ...(mappedOrderStatus ? { status: mappedOrderStatus } : {}),
-      })
-      .where(and(eq(orders.id, order.id), eq(orders.businessId, businessId)));
+    if (businessId == null) {
+      // سر عام صحيح لكن مفيش أوردر بالشحنة دي → unmatched، ومفيش أوردر بيتلمس.
+      if (inboxId != null) await markInboxEvent(inboxId, { status: "unmatched", failureReason: "لا توجد شحنة مطابقة" });
+      console.warn(`[Bosta Webhook] unmatched shipment (legacy secret) state=${event.state}`);
+      return res.status(200).json({ ok: true, status: "unmatched" });
+    }
 
-    console.log(`[Bosta Webhook] ✅ Order #${order.orderNumber} (business ${businessId}${legacy ? ", legacy secret" : ""}) → bostaStatus=${arabicStatus} (code: ${stateCode})`);
-    return res.status(200).json({ ok: true });
+    // 4) التطبيق داخل النشاط المحدد بس.
+    const result = await processAndMark(businessId, tenantId, event, inboxId, received.mode === "duplicate");
+    console.log(`[Bosta Webhook] business ${businessId}${legacy ? " (legacy secret)" : ""} state=${event.state} type=${event.type ?? "-"} → ${result.status}${result.orderStatus ? ` (order ${result.orderStatus})` : ""}`);
+    return res.status(200).json({ ok: true, status: result.status, ...(result.reason ? { reason: result.reason } : {}) });
   } catch (err) {
-    console.error("[Bosta Webhook] Error:", err);
+    console.error("[Bosta Webhook] Error:", err instanceof Error ? err.message : err);
     return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+/**
+ * إعادة معالجة حدث unmatched/failed — **داخل نشاط الحدث نفسه**. آمنة للتكرار: التطبيق
+ * مجرد set لحالة/نص بشروط التقدّم، والحدث المعالَج فعلًا (processed/ignored) مابيتعادش.
+ */
+export async function reprocessBostaInboxEvent(inboxId: number, businessId: number): Promise<{ ok: boolean; status: InboxStatus; reason?: string }> {
+  const row = await getInboxEvent(inboxId);
+  if (!row || row.businessId !== businessId || row.provider !== PROVIDER_BOSTA)
+    return { ok: false, status: "failed", reason: "الحدث غير موجود في هذا النشاط" };
+  if (row.processingStatus !== "unmatched" && row.processingStatus !== "failed")
+    return { ok: true, status: row.processingStatus as InboxStatus, reason: "الحدث تمت معالجته من قبل — لا إعادة" };
+  let payload: unknown = null;
+  try { payload = JSON.parse(row.payloadJson); } catch { /* يتعامل معاه التطبيع */ }
+  const normalized = normalizeBostaEvent(payload);
+  if (!normalized.ok) {
+    await markInboxEvent(row.id, { status: "failed", failureReason: normalized.error, bumpAttempts: true });
+    return { ok: false, status: "failed", reason: normalized.error };
+  }
+  try {
+    const result = await processAndMark(businessId, row.tenantId, normalized.event, row.id, true);
+    return { ok: true, status: result.status, reason: result.reason };
+  } catch (err) {
+    return { ok: false, status: "failed", reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
 // ==================== Register Routes ====================
 export function registerBostaWebhookRoutes(app: Express) {
-  // Bosta webhook endpoint
+  // POST فقط — أي method تاني على نفس المسار 405.
   app.post("/api/webhooks/bosta", handleBostaWebhook);
+  app.all("/api/webhooks/bosta", (_req: Request, res: Response) => res.status(405).set("Allow", "POST").json({ error: "Method Not Allowed" }));
 
   // Health check للتأكد من أن الـ endpoint شغال — قيم منطقية فقط، بدون أي كشف لقيم الأسرار
   app.get("/api/webhooks/bosta/health", (_req: Request, res: Response) => {

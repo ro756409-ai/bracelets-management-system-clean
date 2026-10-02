@@ -79,18 +79,53 @@ describe("🔑 Bosta webhook — الشركة من الشحنة مش من الـ
     // order.businessId — مش من الـpayload. الشحنة هي رابط الملكية، والسيرفر هو اللي
     // أنشأها وقت الإرسال.
     // النشاط اتحدد من السر **قبل** أي قراءة أوردر، والأوردر بيتقرا بشرط النشاط.
-    expect(code).toContain("eq(orders.businessId, businessId), byShipment");
+    expect(code).toContain("where(and(eq(orders.businessId, businessId), byShipment))");
     expect(code).not.toContain("payload.businessId");
     expect(code).not.toContain("body.businessId");
+    // داخل المعالج: السر أولًا، ثم التطبيق داخل النشاط المحدد.
+    const handler = code.slice(code.indexOf("export async function handleBostaWebhook"));
+    expect(handler.indexOf("findAccountByWebhookSecret(receivedSecret)")).toBeLessThan(handler.indexOf("processAndMark(businessId"));
   });
 
-  it("🔑 الأوردر غير الموجود بيترفض — مفيش تخمين", () => {
-    expect(code).toContain("Order not found, ignored");
+  it("🔑 الشحنة غير المطابقة = unmatched — مفيش تخمين ولا أوردر بيتلمس", () => {
+    const apply = code.slice(code.indexOf("export async function applyBostaEvent"), code.indexOf("async function processAndMark"));
     // التحديث بيحصل بعد ما order يتلاقى — مش قبل.
-    const update = code.indexOf(".update(orders)");
-    const notFound = code.indexOf("if (!order || businessId == null)");
+    const update = apply.indexOf(".update(orders)");
+    const notFound = apply.indexOf('if (!order) return { status: "unmatched"');
     expect(notFound).toBeGreaterThan(-1);
     expect(notFound).toBeLessThan(update);
+    // والتحديث نفسه مقيّد بالنشاط.
+    expect(apply).toContain("where(and(eq(orders.id, order.id), eq(orders.businessId, businessId)))");
+  });
+
+  it("🔒 اللوج: ولا سطر بيطبع الـpayload أو السر", () => {
+    const logs = code.split("\n").filter(l => /console\.(log|warn|error)/.test(l));
+    expect(logs.length).toBeGreaterThan(0);
+    for (const l of logs) {
+      expect(l).not.toMatch(/payload\b(?!\s+rejected)/);
+      expect(l).not.toContain("receivedSecret");
+      expect(l).not.toContain("envSecret");
+      expect(l).not.toContain("req.body");
+      expect(l).not.toContain("req.headers");
+    }
+  });
+
+  it("🔒 Migration 0039: جدول جديد فقط — بلا ALTER/DROP ولا لمس لجدول موجود", () => {
+    const stmts = fs.readFileSync("drizzle/0039_carrier_webhook_inbox.sql", "utf-8")
+      .split("\n").filter(l => !l.trim().startsWith("--")).join("\n")
+      .split(";").map(x => x.trim()).filter(Boolean);
+    expect(stmts).toHaveLength(3);
+    expect(stmts[0]).toMatch(/^CREATE TABLE `carrier_webhook_inbox`/);
+    expect(stmts[1]).toMatch(/^CREATE INDEX `cwi_business_status_idx` ON `carrier_webhook_inbox`/);
+    expect(stmts[2]).toMatch(/^CREATE INDEX `cwi_shipment_idx` ON `carrier_webhook_inbox`/);
+    expect(stmts.join("\n")).not.toMatch(/\b(ALTER|DROP|UPDATE|DELETE|INSERT|FOREIGN KEY)\b/i);
+    expect(stmts[0]).toContain("UNIQUE(`businessId`,`provider`,`eventKey`)");
+  });
+
+  it("🔒 استقبال الحالات فقط: الـwebhook مابينادَش مسار المحاسبة V2 ولا بيلمس المخزون", () => {
+    expect(code).not.toContain("processProviderWebhook(");
+    expect(code).not.toContain("inventoryMovements");
+    expect(code).not.toContain("currentStock");
   });
 
   it("🔑 وفيه idempotency على الحدث في مسار V2", () => {

@@ -24,6 +24,7 @@ import { SHIPMENT_DESCRIPTION_LIMIT } from "../shared/orderContent";
 import { createBostaShipment, clampDeposit, fetchBostaAwb } from "./bosta.service";
 import { handleBostaWebhook } from "./bostaWebhook";
 import { deriveWebhookSecret } from "./crypto/secretBox";
+import { registerBostaWebhookInboxDbSuite } from "./bostaWebhookInbox.dbsuite";
 
 /**
  * حساب Bosta لكل نشاط — عزل، تشفير، صلاحيات، وربط بعد نجاح الاختبار فقط.
@@ -54,16 +55,19 @@ describe("🔒 حراس المصدر — Bosta لكل نشاط", () => {
   it("🔒 إجراءات الحساب أدمن بنطاق، والمفتاح مابيرجعش", () => {
     const i = routers.indexOf("carrierAccounts: router({");
     const blk = routers.slice(i, routers.indexOf("  businesses: router({", i));
-    expect((blk.match(/adminProcedure/g) ?? []).length).toBe(4);
-    expect((blk.match(/scopeBusinessId\(ctx, input\.businessId\)/g) ?? []).length).toBe(4);
+    expect((blk.match(/adminProcedure/g) ?? []).length).toBe(5); // + webhookEvents
+    expect((blk.match(/ownerProcedure/g) ?? []).length).toBe(1); // reprocessWebhookEvent للمالك فقط
+    expect((blk.match(/scopeBusinessId\(ctx, input\.businessId\)/g) ?? []).length).toBe(6);
     expect(acct).not.toContain("apiKey: row");
     expect(acct).toContain("apiKeyLast4");
   });
   it("🔒 الـwebhook: السر → hash → النشاط → الأوردر بشرط businessId", () => {
-    const iSecret = webhook.indexOf("findAccountByWebhookSecret(receivedSecret)");
-    const iOrder = webhook.indexOf("eq(orders.businessId, businessId), byShipment");
+    const handler = webhook.slice(webhook.indexOf("export async function handleBostaWebhook"));
+    const iSecret = handler.indexOf("findAccountByWebhookSecret(receivedSecret)");
+    const iApply = handler.indexOf("processAndMark(businessId");
     expect(iSecret).toBeGreaterThan(-1);
-    expect(iOrder).toBeGreaterThan(iSecret);
+    expect(iApply).toBeGreaterThan(iSecret);
+    expect(webhook).toContain("where(and(eq(orders.businessId, businessId), byShipment))");
     expect(webhook).toContain("recordWebhookEvent(");
     expect(webhook).toContain("eq(orders.id, order.id), eq(orders.businessId, businessId)");
   });
@@ -208,6 +212,8 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
     expect(body.escrowInfo).toEqual({ amountToBeCollected: 50 });
     expect(body.businessLocationId).toBe("LOC1");
     expect(body.webhookCustomHeaders["x-bosta-secret"]).toBeTruthy();
+    // الشحنة بتسجّل الـwebhook لنفسها (الموثّق رسميًا) — بلا إعداد يدوي في لوحة بوسطة
+    expect(body.webhookUrl).toBe("https://matjarak.net/api/webhooks/bosta");
     expect(calls.find(c => c.url.endsWith("/deliveries")).auth).toMatch(new RegExp(`${KEY_A}$`));
     // ديبوزيت بس (بلا فليكس)
     const o2 = await mkOrder(A.businessId, prodA, varA, "3");
@@ -345,7 +351,8 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
       await handleBostaWebhook({ headers: { "x-bosta-secret": secret }, body } as any, res);
       return { status, json };
     };
-    const payload = { _id: `SAME-${tag}`, state: { code: 30, value: "Delivered" }, updatedAt: "2026-09-21T10:00:00Z" };
+    // شكل التوثيق الرسمي: state رقم مباشر، timeStamp رقم (ms)، type
+    const payload = { _id: `SAME-${tag}`, trackingNumber: 48089608, state: 45, type: "SEND", timeStamp: 1790000000000, isConfirmedDelivery: true };
     expect((await call(secretA, payload)).status).toBe(200);
     const [a] = await d!.select().from(orders).where(eq(orders.id, oa)); const [b] = await d!.select().from(orders).where(eq(orders.id, ob));
     expect(a.status).toBe("delivered"); expect(b.status).not.toBe("delivered"); // أوردر B لم يُلمس
@@ -356,8 +363,8 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
     // سر نشاط A مايقدرش يحدّث أوردر موجود في B فقط
     const onlyB = await mkOrder(B.businessId, prodB, varB, "9");
     await d!.update(orders).set({ bostaShipmentId: `ONLYB-${tag}`, bostaStatus: "sent" }).where(eq(orders.id, onlyB));
-    const r = await call(secretA, { _id: `ONLYB-${tag}`, state: { code: 30 } });
-    expect(r.status).toBe(200); expect(r.json?.message).toContain("not found");
+    const r = await call(secretA, { _id: `ONLYB-${tag}`, state: 45, type: "SEND", timeStamp: 1790000001000 });
+    expect(r.status).toBe(200); expect(r.json?.status).toBe("unmatched");
     expect((await d!.select().from(orders).where(eq(orders.id, onlyB)))[0].status).not.toBe("delivered");
     expect(await recordWebhookEvent({ businessId: A.businessId, provider: PROVIDER_BOSTA, eventHash: "h1" })).toBe(true);
     expect(await recordWebhookEvent({ businessId: A.businessId, provider: PROVIDER_BOSTA, eventHash: "h1" })).toBe(false);
@@ -428,7 +435,7 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
       expect(req.body.webhookCustomHeaders["x-bosta-secret"]).toBe(`env-secret-${tag}`);
       // webhook بالسر العام يوصل لأوردر B (نشاط بلا صف) من غير مفتاح رئيسي
       let status = 0; const res: any = { status: (s: number) => { status = s; return res; }, json: () => res };
-      await handleBostaWebhook({ headers: { "x-bosta-secret": `env-secret-${tag}` }, body: { _id: r.shipmentId, state: { code: 30 }, updatedAt: "2026-09-21T11:00:00Z" } } as any, res);
+      await handleBostaWebhook({ headers: { "x-bosta-secret": `env-secret-${tag}` }, body: { _id: r.shipmentId, state: 45, type: "SEND", timeStamp: 1790000002000 } } as any, res);
       expect(status).toBe(200);
       expect((await (await getDb())!.select().from(orders).where(eq(orders.id, ob)))[0].status).toBe("delivered");
       // الربط الجديد → رفض برسالة واضحة، بلا throw وبلا كتابة
@@ -466,12 +473,12 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
       expect(r.success).toBe(true); expect(calls.find(c => c.url.endsWith("/deliveries")).auth).toBe("GLOBAL-KEY");
       // webhook بالسر العام → 200 وتحديث (بلا idempotency لحد ما الجدول يتعمل — زي القديم)
       let status = 0; const res: any = { status: (s: number) => { status = s; return res; }, json: () => res };
-      await handleBostaWebhook({ headers: { "x-bosta-secret": `env-secret-${tag}` }, body: { _id: r.shipmentId, state: { code: 30 }, updatedAt: "2026-09-21T12:00:00Z" } } as any, res);
+      await handleBostaWebhook({ headers: { "x-bosta-secret": `env-secret-${tag}` }, body: { _id: r.shipmentId, state: 45, type: "SEND", timeStamp: 1790000003000 } } as any, res);
       expect(status).toBe(200);
       expect((await d.select().from(orders).where(eq(orders.id, ob)))[0].status).toBe("delivered");
       // سر مجهول لسه 401
       let s2 = 0; const res2: any = { status: (s: number) => { s2 = s; return res2; }, json: () => res2 };
-      await handleBostaWebhook({ headers: { "x-bosta-secret": "nope" }, body: { _id: "x" } } as any, res2);
+      await handleBostaWebhook({ headers: { "x-bosta-secret": "nope" }, body: { _id: "x", state: 45, type: "SEND" } } as any, res2);
       expect(s2).toBe(401);
       // الربط → رسالة الـmigration، بلا throw
       const c = await connectCarrierAccount({ tenantId: B.tenantId, businessId: B.businessId, apiKey: KEY_B, pickupLocationId: null, pickupLocationName: null, allowOpenPackageDefault: true, actorId: 1, fetchImpl: makeFetch(KEY_B, []) });
@@ -484,3 +491,7 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
     expect((await getCarrierAccountStatus(A.businessId)).status).toBe("disconnected");
   });
 });
+
+// مسار استقبال الحالات بالـpayload الرسمي — بيتسجّل هنا عشان يشتغل بالتتابع مع الـsuite اللي
+// فوق (اللي بتعمل RENAME مؤقت لجدول الحسابات)، مش بالتوازي في ملف مستقل.
+registerBostaWebhookInboxDbSuite(CAN);

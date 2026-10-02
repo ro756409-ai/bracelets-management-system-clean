@@ -14,6 +14,9 @@ import {
   PARSE_TOKEN_MESSAGES,
 } from "./orderParse.service";
 import { activeSegmentResolver, rateLimitedResolver } from "./ai/segmentResolver";
+import { listInboxEvents } from "./carrierWebhookInbox.service";
+import { BOSTA_STATES } from "./bostaEvents";
+import { reprocessBostaInboxEvent } from "./bostaWebhook";
 import { aiRateKey } from "./ai/aiRateLimit";
 import { PRICE_SOURCE, pasteSaveBlockers, parseResultV2Schema } from "../shared/orderParse";
 import {
@@ -6487,6 +6490,28 @@ export const appRouter = router({
    * `scopeBusinessId` — الموظف مالوش المسارات دي أصلًا، والمفتاح عمره ما يرجع للواجهة.
    */
   carrierAccounts: router({
+    /** أحداث webhook شركة الشحن للنشاط (للمراجعة) — بلا الـpayload الخام. */
+    webhookEvents: adminProcedure
+      .input(z.object({
+        businessId: z.number().int().min(1),
+        statuses: z.array(z.enum(["received", "processed", "unmatched", "ignored", "failed"])).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        const rows = await listInboxEvents(businessId!, { statuses: input.statuses, limit: input.limit });
+        return rows.map(r => ({
+          ...r,
+          stateLabel: r.stateCode != null && BOSTA_STATES[r.stateCode] ? BOSTA_STATES[r.stateCode].label : `حالة غير معروفة (${r.stateCode ?? "—"})`,
+        }));
+      }),
+    /** إعادة معالجة حدث unmatched/failed — **للمالك فقط**، داخل نشاطه، وبلا تكرار أثر. */
+    reprocessWebhookEvent: ownerProcedure
+      .input(z.object({ businessId: z.number().int().min(1), eventId: z.number().int().min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        return reprocessBostaInboxEvent(input.eventId, businessId!);
+      }),
     status: adminProcedure
       .input(z.object({ businessId: z.number().int().min(1) }))
       .query(async ({ ctx, input }) => {

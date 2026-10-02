@@ -322,7 +322,7 @@ export async function findAccountByWebhookSecret(secret: string) {
   if (!db) return null;
   try {
     const [row] = await db
-      .select({ businessId: businessCarrierAccounts.businessId, provider: businessCarrierAccounts.provider, status: businessCarrierAccounts.status })
+      .select({ businessId: businessCarrierAccounts.businessId, tenantId: businessCarrierAccounts.tenantId, provider: businessCarrierAccounts.provider, status: businessCarrierAccounts.status })
       .from(businessCarrierAccounts)
       .where(eq(businessCarrierAccounts.webhookSecretHash, hashSecret(secret)))
       .limit(1);

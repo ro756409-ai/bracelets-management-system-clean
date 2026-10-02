@@ -67,10 +67,17 @@ describe("Bosta integration - configuration & secrets", () => {
 });
 
 describe("Bosta accounting status safety", () => {
-  it("does not map partially delivered code 31 to delivered", () => {
-    const source = fs.readFileSync("server/bostaWebhook.ts", "utf-8");
-    const internalMap = source.slice(source.indexOf("const BOSTA_STATUS_TO_ORDER_STATUS"), source.indexOf("function safeCompare"));
-    expect(internalMap).not.toMatch(/31\s*:\s*["']delivered["']/);
+  it("only official code 45 on a SEND shipment maps to delivered; undocumented codes (e.g. 31) never do", async () => {
+    const { normalizeBostaEvent } = await import("./bostaEvents");
+    const ev = (state: number, type = "SEND") => {
+      const r = normalizeBostaEvent({ _id: "x", state, type, timeStamp: 1689252908261 });
+      if (!r.ok) throw new Error(r.error);
+      return r.event;
+    };
+    expect(ev(45).orderStatus).toBe("delivered");
+    expect(ev(31)).toMatchObject({ kind: "unknown", orderStatus: null, storeOnly: true });
+    expect(ev(30).orderStatus).toBe("shipped"); // In transit between hubs — مش تسليم
+    expect(ev(45, "RTO").orderStatus).toBeNull();
   });
 });
 

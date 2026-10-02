@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import { BostaWebhookEvents } from "@/components/BostaWebhookEvents";
 import { Truck, CheckCircle, Unplug, RefreshCw } from "lucide-react";
 
 /**
@@ -53,7 +54,7 @@ export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOp
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md" dir="rtl">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" dir="rtl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Truck className="h-5 w-5 text-[var(--info)]" /> ربط حساب Bosta{activeBusiness ? ` — ${activeBusiness.name}` : ""}</DialogTitle>
         </DialogHeader>
@@ -111,6 +112,8 @@ export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOp
             )}
           </div>
         )}
+
+        {open && businessId > 0 && !needsPick && <BostaWebhookEvents businessId={businessId} />}
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>إغلاق</Button>
