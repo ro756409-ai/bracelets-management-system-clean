@@ -120,11 +120,20 @@ const toStr = (v: unknown): string | null => {
   return null;
 };
 
-/** الوقت: رقم ms رسميًا؛ بنقبل ثواني (10 أرقام) ونص ISO كتوافق خلفي. */
+/** حدود الأعمدة — قيمة أطول/أكبر منها ماتنفعش تتخزّن ولا تطابق أي أوردر. */
+const MAX_ID_LENGTH = 100;
+const MAX_STATE_CODE = 1_000_000;
+const MAX_TIMESTAMP_MS = 1e14;
+const MAX_REASON_LENGTH = 300;
+
+/** الوقت: رقم ms رسميًا؛ بنقبل ثواني (10 أرقام) ونص ISO كتوافق خلفي. قيمة خارج المدى = بلا وقت. */
 function parseTimeStamp(p: Record<string, unknown>): number | null {
   const raw = p.timeStamp ?? p.timestamp ?? p.updatedAt ?? p.updated_at;
   const n = toNum(raw);
-  if (n != null && n > 0) return n < 1e11 ? Math.trunc(n * 1000) : Math.trunc(n);
+  if (n != null && n > 0) {
+    const ms = n < 1e11 ? Math.trunc(n * 1000) : Math.trunc(n);
+    return ms < MAX_TIMESTAMP_MS ? ms : null;
+  }
   if (typeof raw === "string") {
     const d = new Date(raw).getTime();
     if (!Number.isNaN(d)) return d;
@@ -196,15 +205,18 @@ export function normalizeBostaEvent(payload: unknown): { ok: true; event: Normal
   const shipmentId = toStr(p._id) ?? toStr(p.id) ?? toStr(p.shipmentId);
   const trackingNumber = toStr(p.trackingNumber) ?? toStr(p.tracking_number);
   if (!shipmentId && !trackingNumber) return { ok: false, error: "payload غير صالح: لا يوجد _id ولا trackingNumber" };
+  if ((shipmentId?.length ?? 0) > MAX_ID_LENGTH || (trackingNumber?.length ?? 0) > MAX_ID_LENGTH)
+    return { ok: false, error: "payload غير صالح: _id أو trackingNumber أطول من المسموح" };
   const state = parseState(p);
   if (state == null) return { ok: false, error: "payload غير صالح: الحقل state مفقود أو ليس رقمًا" };
+  if (Math.abs(state) > MAX_STATE_CODE) return { ok: false, error: "payload غير صالح: الحقل state خارج المدى" };
 
   const timeStamp = parseTimeStamp(p);
   const rawType = toStr(p.type);
   const type = rawType ? rawType.toUpperCase() : null;
   const spec = BOSTA_STATES[state];
   const cls = classify(state, type);
-  const exceptionReason = toStr(p.exceptionReason);
+  const exceptionReason = toStr(p.exceptionReason)?.slice(0, MAX_REASON_LENGTH) ?? null;
   const exceptionCode = toInt(p.exceptionCode);
   const eventKey = bostaEventKey({ shipmentId, trackingNumber, state, timeStamp });
 
@@ -213,7 +225,7 @@ export function normalizeBostaEvent(payload: unknown): { ok: true; event: Normal
   if (cls.kind === "out_for_return") label = "خرجت للإرجاع للنشاط";
   // التوثيق بيعرّف isConfirmedDelivery كعلامة «إثبات تسليم» فقط — الحالة 45 هي مصدر التسليم.
   // false صريحة = تسليم بلا إثبات: بيتسجّل delivered والنص بيوضّح ده للمراجعة.
-  if (cls.kind === "delivered" && p.isConfirmedDelivery === false) label = "تم التسليم (بلا تأكيد استلام)";
+  if (cls.kind === "delivered" && p.isConfirmedDelivery === false) label = "تم التسليم بدون تأكيد استلام";
 
   return {
     ok: true,

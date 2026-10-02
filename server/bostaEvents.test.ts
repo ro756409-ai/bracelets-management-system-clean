@@ -63,6 +63,19 @@ describe("Bosta — قراءة الـpayload الرسمي", () => {
     }
   });
 
+  it("قيم خارج حدود التخزين: معرّف أطول من 100 أو state خارج المدى = رفض؛ وقت خارج المدى = بلا وقت؛ السبب بيتقص", () => {
+    for (const bad of [{ _id: "x".repeat(101), state: 45 }, { trackingNumber: "9".repeat(101), state: 45 }, { _id: "abc", state: 1e15 }, { _id: "abc", state: -1e15 }]) {
+      const r = normalizeBostaEvent(bad);
+      expect(r.ok).toBe(false); expect((r as any).error).toContain("payload غير صالح");
+    }
+    expect(normalizeBostaEvent({ _id: "x".repeat(100), state: 45 }).ok).toBe(true);
+    expect(ev({ timeStamp: 1e300 }).timeStamp).toBeNull();
+    expect(ev({ timeStamp: -5 }).timeStamp).toBeNull();
+    expect(ev({ state: 47, exceptionReason: "س".repeat(5000) }).exceptionReason).toHaveLength(300);
+    // نوع طويل/غريب: مش إرسال، والحدث لسه صالح
+    expect(ev({ state: 45, type: "T".repeat(500) })).toMatchObject({ typeKnown: false, orderStatus: null });
+  });
+
   it("توافق خلفي آمن: state.code / status_code بيتقروا بنفس الخريطة الرسمية — مش الخريطة القديمة الغلط", () => {
     const nested = normalizeBostaEvent({ _id: "abc", type: "SEND", state: { code: 45, value: "Delivered" }, updatedAt: "2026-09-21T10:00:00Z" });
     expect(nested.ok && nested.event).toMatchObject({ state: 45, orderStatus: "delivered", timeStamp: Date.parse("2026-09-21T10:00:00Z") });
@@ -133,7 +146,7 @@ describe("Bosta — خريطة الحالات الرسمية (كل كود × ك�
   it("isConfirmedDelivery: الحالة 45 هي مصدر التسليم؛ false صريحة بتتوضّح في النص بلا تغيير للحالة", () => {
     expect(ev({ state: 45, isConfirmedDelivery: true })).toMatchObject({ orderStatus: "delivered", label: "تم التسليم", isConfirmedDelivery: true });
     expect(ev({ state: 45, isConfirmedDelivery: undefined })).toMatchObject({ orderStatus: "delivered", label: "تم التسليم", isConfirmedDelivery: null });
-    expect(ev({ state: 45, isConfirmedDelivery: false })).toMatchObject({ orderStatus: "delivered", label: "تم التسليم (بلا تأكيد استلام)", isConfirmedDelivery: false });
+    expect(ev({ state: 45, isConfirmedDelivery: false })).toMatchObject({ orderStatus: "delivered", label: "تم التسليم بدون تأكيد استلام", isConfirmedDelivery: false });
     // العلامة لوحدها مابتعملش تسليم
     expect(ev({ state: 41, isConfirmedDelivery: true }).orderStatus).toBe("shipped");
     expect(ev({ state: 47, isConfirmedDelivery: true }).orderStatus).toBeNull();

@@ -168,7 +168,7 @@ export function registerBostaWebhookInboxDbSuite(CAN: boolean) {
       // تسليم بلا إثبات: delivered والنص بيوضّح
       const u = await mkShipped(A, prodA, varA, undefined, "shipped");
       await call(secretA, official(u.sid, 45, T0 + 100, { isConfirmedDelivery: false }));
-      expect(await orderRow(u.id)).toMatchObject({ status: "delivered", bostaStatus: "تم التسليم (بلا تأكيد استلام)" });
+      expect(await orderRow(u.id)).toMatchObject({ status: "delivered", bostaStatus: "تم التسليم بدون تأكيد استلام" });
     });
 
     it("🔑 46 و60 → returned (حتى بعد التسليم)، وبلا أي حركة مخزون", async () => {
@@ -335,7 +335,7 @@ export function registerBostaWebhookInboxDbSuite(CAN: boolean) {
         expect(r.status).toBe(200); expect(r.json?.status).toBe("ignored");
       }
       const o = await orderRow(id);
-      expect(o).toMatchObject({ status: "delivered", bostaStatus: "تم التسليم (بلا تأكيد استلام)", needsReview: false, bostaLastError: null });
+      expect(o).toMatchObject({ status: "delivered", bostaStatus: "تم التسليم بدون تأكيد استلام", needsReview: false, bostaLastError: null });
       const rows = await inboxRows(sid);
       expect(rows.filter(r => r.processingStatus === "ignored")).toHaveLength(4);
       // حتى من غير ترتيب زمني: shipped بوقت أحدث بعد delivered ممنوع يرجّع الحالة
@@ -495,6 +495,40 @@ export function registerBostaWebhookInboxDbSuite(CAN: boolean) {
       expect(everything).not.toContain("سري-جدًا");
       expect(logged.join("\n")).toContain("[REDACTED]");
       expect(String((await orderRow(badId)).bostaLastError)).toContain("[REDACTED]");
+    });
+
+    it("🔒 حقول أطول من الأعمدة لا تُسقط الاستقبال، وفشل الحفظ (500) لا يطبع الـpayload في اللوج", async () => {
+      const logged: string[] = [];
+      const orig = { log: console.log, warn: console.warn, error: console.error };
+      const capture = (...a: unknown[]) => { logged.push(a.map(x => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); };
+      const MARK = `بيانات-عميل-${tag}`;
+      const d = await db();
+      const o = await mkShipped(A, prodA, varA, undefined, "shipped");
+      console.log = capture; console.warn = capture; console.error = capture;
+      let longType: any, longId: any, failed: any;
+      try {
+        // نوع أطول من العمود: الحدث يتحفظ (النوع مقصوص، الأصل في الخام) ولا يسلّم الأوردر
+        longType = await call(secretA, official(o.sid, 45, T0 + 100, { type: "T".repeat(60), businessReference: MARK }));
+        // معرّف أطول من أي معرّف شحنة ممكن: 400 بلا حفظ
+        longId = await call(secretA, official("P".repeat(150), 45, T0 + 100, { businessReference: MARK }));
+        // فشل حفظ حقيقي في القاعدة (عمود إلزامي بلا قيمة) → 500، بلا تسريب
+        await d.execute(sql.raw("ALTER TABLE carrier_webhook_inbox ADD COLUMN `_probe` int NOT NULL"));
+        try { failed = await call(secretA, official(o.sid, 46, T0 + 200, { businessReference: MARK })); }
+        finally { await d.execute(sql.raw("ALTER TABLE carrier_webhook_inbox DROP COLUMN `_probe`")); }
+      } finally { Object.assign(console, orig); }
+      expect(longType.status).toBe(200); expect(longType.json?.status).toBe("processed");
+      expect((await orderRow(o.id)).status).toBe("shipped");
+      const [stored] = await inboxRows(o.sid);
+      expect(stored.eventType).toBe("T".repeat(40)); expect(JSON.parse(stored.payloadJson).type).toBe("T".repeat(60));
+      expect(longId.status).toBe(400);
+      expect(failed.status).toBe(500); expect(failed.json).toEqual({ error: "Internal server error" });
+      expect((await orderRow(o.id)).status).toBe("shipped"); // الحدث اللي فشل حفظه مااتطبّقش
+      const all = logged.join("\n");
+      expect(all).toContain("[Bosta Webhook] Error: خطأ داخلي");
+      expect(all).not.toContain(MARK); expect(all).not.toContain("Failed query"); expect(all).not.toContain("TTTTT"); expect(all).not.toContain(secretA);
+      // بعد رجوع الجدول: بوسطة بتعيد الإرسال والحدث بيتعالج عادي
+      expect((await call(secretA, official(o.sid, 46, T0 + 200))).json?.status).toBe("processed");
+      expect((await orderRow(o.id)).status).toBe("returned");
     });
 
     it("🛡️ قبل Migration 0039 (الجدول غير موجود): الاستقبال شغّال بلا 500، والمكرر مايتطبّقش مرتين", async () => {

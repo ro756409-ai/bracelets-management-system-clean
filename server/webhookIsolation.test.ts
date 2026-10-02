@@ -98,6 +98,22 @@ describe("🔑 Bosta webhook — الشركة من الشحنة مش من الـ
     expect(apply).toContain("where(and(eq(orders.id, order.id), eq(orders.businessId, businessId)))");
   });
 
+  it("🔒 نص الخطأ الآمن: رسالة الـORM (استعلام + params = الـpayload الخام) مابتتطبعش ولا بتتخزّن", async () => {
+    const { safeErrorText } = await import("./bostaWebhook");
+    const orm = Object.assign(new Error('Failed query: insert into `carrier_webhook_inbox` (...) values (?, ?)\nparams: 6,bosta,{"_id":"S1","businessReference":"بيانات عميل"}'), { cause: { code: "ER_DATA_TOO_LONG", errno: 1406 } });
+    expect(safeErrorText(orm)).toBe("خطأ داخلي (ER_DATA_TOO_LONG)");
+    expect(safeErrorText(new Error("Failed query: update `orders` set ...\nparams: سر"))).toBe("خطأ داخلي");
+    expect(safeErrorText(Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:3306"), { code: "ECONNREFUSED" }))).toBe("خطأ داخلي (ECONNREFUSED)");
+    expect(safeErrorText(new Error("Database not available"))).toBe("Database not available");
+    expect(safeErrorText({ payload: "x" })).toBe("خطأ داخلي");
+    expect(safeErrorText(new Error("م".repeat(900))).length).toBe(200);
+    // ولا استخدام مباشر لرسالة الخطأ في المعالج — الاستخدام الوحيد داخل safeErrorText نفسها
+    expect((code.match(/err(or)?\.message/g) ?? []).length).toBe(1);
+    const helper = code.slice(code.indexOf("export function safeErrorText"), code.indexOf("export interface ApplyResult"));
+    expect(helper).toMatch(/err\.message/);
+    expect(code).not.toContain("String(err)");
+  });
+
   it("🔒 اللوج: ولا سطر بيطبع الـpayload أو السر", () => {
     const logs = code.split("\n").filter(l => /console\.(log|warn|error)/.test(l));
     expect(logs.length).toBeGreaterThan(0);
@@ -107,7 +123,10 @@ describe("🔑 Bosta webhook — الشركة من الشحنة مش من الـ
       expect(l).not.toContain("envSecret");
       expect(l).not.toContain("req.body");
       expect(l).not.toContain("req.headers");
+      expect(l).not.toMatch(/console\.\w+\([^)]*,\s*err\b/); // كائن الخطأ نفسه مابيتطبعش
     }
+    // النوع نص حر من المصدر — بيتطبع بس لو من الأنواع الموثّقة
+    expect(code).toContain('type=${event.typeKnown ? event.type : "other"}');
   });
 
   it("🔒 Migration 0039: جدول جديد فقط — بلا ALTER/DROP ولا لمس لجدول موجود", () => {

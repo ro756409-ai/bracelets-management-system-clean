@@ -35,6 +35,18 @@ function safeCompare(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
+/**
+ * نص خطأ آمن للّوج ولسجل الحدث: رسالة خطأ الـORM بتحمل نص الاستعلام **والـparams** — ومنها
+ * الـpayload الخام — فمابتتطبعش ولا بتتخزّن أبدًا. بيرجع كود الخطأ بس.
+ */
+export function safeErrorText(err: unknown): string {
+  const e = err as { code?: unknown; cause?: { code?: unknown; errno?: unknown } } | null;
+  const code = e?.cause?.code ?? e?.code ?? e?.cause?.errno;
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  if (code != null || /^Failed query/i.test(message)) return `خطأ داخلي${code != null ? ` (${String(code).slice(0, 40)})` : ""}`;
+  return message ? message.slice(0, 200) : "خطأ داخلي";
+}
+
 export interface ApplyResult {
   status: Exclude<InboxStatus, "received" | "failed">;
   reason?: string;
@@ -116,7 +128,7 @@ async function processAndMark(businessId: number, tenantId: number | null, event
     return result;
   } catch (err) {
     if (inboxId != null)
-      await markInboxEvent(inboxId, { status: "failed", failureReason: err instanceof Error ? err.message : String(err), businessId, tenantId, bumpAttempts });
+      await markInboxEvent(inboxId, { status: "failed", failureReason: safeErrorText(err), businessId, tenantId, bumpAttempts });
     throw err;
   }
 }
@@ -202,10 +214,10 @@ export async function handleBostaWebhook(req: Request, res: Response) {
 
     // 4) التطبيق داخل النشاط المحدد بس.
     const result = await processAndMark(businessId, tenantId, event, inboxId, received.mode === "duplicate");
-    console.log(`[Bosta Webhook] business ${businessId}${legacy ? " (legacy secret)" : ""} state=${event.state} type=${event.type ?? "-"} → ${result.status}${result.orderStatus ? ` (order ${result.orderStatus})` : ""}`);
+    console.log(`[Bosta Webhook] business ${businessId}${legacy ? " (legacy secret)" : ""} state=${event.state} type=${event.typeKnown ? event.type : "other"} → ${result.status}${result.orderStatus ? ` (order ${result.orderStatus})` : ""}`);
     return res.status(200).json({ ok: true, status: result.status, ...(result.reason ? { reason: result.reason } : {}) });
   } catch (err) {
-    console.error("[Bosta Webhook] Error:", err instanceof Error ? err.message : err);
+    console.error(`[Bosta Webhook] Error: ${safeErrorText(err)}`);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
@@ -231,7 +243,7 @@ export async function reprocessBostaInboxEvent(inboxId: number, businessId: numb
     const result = await processAndMark(businessId, row.tenantId, normalized.event, row.id, true);
     return { ok: true, status: result.status, reason: result.reason };
   } catch (err) {
-    return { ok: false, status: "failed", reason: err instanceof Error ? err.message : String(err) };
+    return { ok: false, status: "failed", reason: safeErrorText(err) };
   }
 }
 
