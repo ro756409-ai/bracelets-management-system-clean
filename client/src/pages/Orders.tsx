@@ -1541,6 +1541,18 @@ export default function Orders() {
                 )}
               </div>
             </label>
+            {bostaAllowOpen && bostaGate.data && (
+              <div className="rounded-lg border border-border p-3 text-xs" data-testid="bosta-bulk-image-note">
+                {(bostaGate.data as any).defaultPackageImage ? (
+                  <div className="flex items-center gap-3">
+                    <img src={(bostaGate.data as any).defaultPackageImage.publicUrl} alt="" className="h-12 w-12 rounded-md border object-cover" />
+                    <span className="text-muted-foreground">الأوردرات التي لا صور لمنتجاتها ستُرسل بالصورة الافتراضية للبراند (تظهر هنا). التفاصيل لكل أوردر في صفحته.</span>
+                  </div>
+                ) : (
+                  <span className="text-[var(--warning)]">لا توجد صورة افتراضية لشحنات هذا البراند — أي أوردر بلا صور منتجات سيُرفض إرساله مع «فتح الشحنة». اضبطها من ربط بوسطة.</span>
+                )}
+              </div>
+            )}
             {bostaGate.data && !bostaGate.data.canSend && (
               <p className="text-xs rounded-md border border-[var(--warning)] bg-[var(--warning)]/5 p-2 text-[var(--warning)]" data-testid="bosta-not-connected">{bostaGate.data.reason}</p>
             )}

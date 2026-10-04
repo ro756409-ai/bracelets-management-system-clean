@@ -20,6 +20,7 @@ import { serveStatic, setupVite } from "./vite";
 import { startMaintenanceScheduler } from "../scheduler";
 import { registerEvidenceUploadRoutes } from "../evidenceUpload";
 import { registerBrandingRoutes } from "../brandingUpload";
+import { registerPackageImageRoutes } from "../packageImageUpload";
 import {
   logError,
   makeHealthHandler,
@@ -62,6 +63,8 @@ async function startServer() {
   registerEvidenceUploadRoutes(app);
   // لوجو النشاط (رفع للمالك/الأدمن، وعرض لكل جلسة في نفس التينانت).
   registerBrandingRoutes(app);
+  // الصورة الافتراضية لشحنات بوسطة (رفع للأدمن، وعرض علني لبوسطة).
+  registerPackageImageRoutes(app);
   // Local owner/admin auth (POST /api/auth/login)
   registerLocalAuthRoutes(app);
   // Excel import routes

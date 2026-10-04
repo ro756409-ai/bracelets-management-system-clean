@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { BostaWebhookEvents } from "@/components/BostaWebhookEvents";
+import { BostaPackageImageField } from "@/components/BostaPackageImageField";
 import { Truck, CheckCircle, Unplug, RefreshCw } from "lucide-react";
 
 /**
@@ -113,6 +114,7 @@ export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOp
           </div>
         )}
 
+        {open && businessId > 0 && !needsPick && <BostaPackageImageField businessId={businessId} current={(s as any)?.defaultPackageImage ?? null} />}
         {open && businessId > 0 && !needsPick && <BostaWebhookEvents businessId={businessId} />}
 
         <DialogFooter className="gap-2">

@@ -134,6 +134,7 @@ import {
   type OrderEntryMode,
 } from "../shared/orderEntryMode";
 import { BRANDING_NAMESPACE, BRANDING_LOGO_KEY, parseLogoUrl } from "../shared/branding";
+import { PACKAGE_IMAGE_NAMESPACE, PACKAGE_IMAGE_DEFAULT_KEY, PRODUCT_IMAGE_NAMESPACE, productImageKey, parsePackageImageUrl } from "../shared/packageImages";
 import { orderParseAudits } from "../drizzle/schema";
 import {
   ORDER_CONTENT_HEADER_FIELDS,
@@ -4978,6 +4979,65 @@ export async function setBusinessLogoUrl(businessId: number, logoUrl: string | n
       updatedBy: actorUserId,
     })
     .onDuplicateKeyUpdate({ set: { valueJson, isActive: true, updatedBy: actorUserId } });
+}
+
+/** الصورة الافتراضية لشحنات بوسطة لهذا النشاط (رابط عام) أو null — لا fallback لنشاط آخر. */
+export async function getDefaultPackageImageUrl(businessId: number): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const [row] = await db
+    .select({ valueJson: businessConfigurationValues.valueJson })
+    .from(businessConfigurationValues)
+    .where(and(
+      eq(businessConfigurationValues.businessId, businessId),
+      eq(businessConfigurationValues.namespace, PACKAGE_IMAGE_NAMESPACE),
+      eq(businessConfigurationValues.configKey, PACKAGE_IMAGE_DEFAULT_KEY),
+      eq(businessConfigurationValues.isActive, true)
+    ))
+    .limit(1);
+  return parsePackageImageUrl(row?.valueJson);
+}
+
+export async function setDefaultPackageImageUrl(businessId: number, url: string | null, actorUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const valueJson = JSON.stringify(url);
+  await db
+    .insert(businessConfigurationValues)
+    .values({
+      businessId,
+      namespace: PACKAGE_IMAGE_NAMESPACE,
+      configKey: PACKAGE_IMAGE_DEFAULT_KEY,
+      displayName: "الصورة الافتراضية لشحنات بوسطة",
+      valueJson,
+      sortOrder: 0,
+      isActive: true,
+      createdBy: actorUserId,
+      updatedBy: actorUserId,
+    })
+    .onDuplicateKeyUpdate({ set: { valueJson, isActive: true, updatedBy: actorUserId } });
+}
+
+/** صور المنتجات العامة (المصدر الأول) لمنتجات **هذا النشاط** فقط: productId → url. */
+export async function getProductImageUrls(businessId: number, productIds: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const db = await getDb();
+  if (!db || productIds.length === 0) return out;
+  const rows = await db
+    .select({ configKey: businessConfigurationValues.configKey, valueJson: businessConfigurationValues.valueJson })
+    .from(businessConfigurationValues)
+    .where(and(
+      eq(businessConfigurationValues.businessId, businessId),
+      eq(businessConfigurationValues.namespace, PRODUCT_IMAGE_NAMESPACE),
+      eq(businessConfigurationValues.isActive, true),
+      inArray(businessConfigurationValues.configKey, productIds.map(productImageKey))
+    ));
+  for (const r of rows) {
+    const id = Number(r.configKey.slice("product:".length));
+    const url = parsePackageImageUrl(r.valueJson);
+    if (id && url) out.set(id, url);
+  }
+  return out;
 }
 
 /**

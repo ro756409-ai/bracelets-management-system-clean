@@ -4,9 +4,9 @@ import request from "supertest";
 import { randomBytes } from "crypto";
 import { and, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { appRouter } from "./routers";
-import { getDb, insertOrderWithItems, createProductWithVariants } from "./db";
+import { getDb, insertOrderWithItems, createProductWithVariants, setDefaultPackageImageUrl } from "./db";
 import {
-  businessCarrierAccounts, carrierWebhookEvents, carrierWebhookInbox, inventoryMovements,
+  businessCarrierAccounts, businessConfigurationValues, carrierWebhookEvents, carrierWebhookInbox, inventoryMovements,
   orders, orderItems, products, productVariants,
 } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
@@ -106,6 +106,7 @@ export function registerBostaWebhookInboxDbSuite(CAN: boolean) {
       const mk = async (fx: CoreTestFixture, sku: string) => createProductWithVariants(fx.businessId, { name: `منتج ${sku} ${tag}` }, [{ name: "سادة", sku: `${sku}-${tag}`, currentStock: 50, price: "750" }]);
       const pa = await mk(A, "WA"), pb = await mk(B, "WB"), pc = await mk(C, "WC");
       prodA = pa.productId; varA = pa.variantIds[0]; prodB = pb.productId; varB = pb.variantIds[0]; prodC = pc.productId; varC = pc.variantIds[0];
+      for (const fx of [A, B, C]) await setDefaultPackageImageUrl(fx.businessId, `https://cdn.example.com/b${fx.businessId}/package.jpg`, 1);
       productIds.push(prodA, prodB, prodC); variantIds.push(varA, varB, varC);
       for (const [fx, key] of [[A, KEY_A], [B, KEY_B]] as const) {
         const r = await connectCarrierAccount({ tenantId: fx.tenantId, businessId: fx.businessId, apiKey: key, pickupLocationId: "LOC1", pickupLocationName: "المخزن", allowOpenPackageDefault: true, actorId: 1, fetchImpl: fakeFetch(key, []) });
@@ -124,6 +125,7 @@ export function registerBostaWebhookInboxDbSuite(CAN: boolean) {
       await d.delete(carrierWebhookInbox).where(or(inArray(carrierWebhookInbox.businessId, bids), and(isNull(carrierWebhookInbox.businessId), like(carrierWebhookInbox.shipmentId, `%${tag}%`))));
       await d.delete(carrierWebhookEvents).where(inArray(carrierWebhookEvents.businessId, bids));
       await d.delete(businessCarrierAccounts).where(inArray(businessCarrierAccounts.businessId, bids));
+      await d.delete(businessConfigurationValues).where(inArray(businessConfigurationValues.businessId, bids));
       if (orderIds.length) { await d.delete(orderItems).where(inArray(orderItems.orderId, orderIds)); await d.delete(orders).where(inArray(orders.id, orderIds)); }
       if (productIds.length) { await d.delete(productVariants).where(inArray(productVariants.productId, productIds)); await d.delete(products).where(inArray(products.id, productIds)); }
       await C?.cleanup(); await B?.cleanup(); await A?.cleanup();

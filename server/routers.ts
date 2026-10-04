@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createBostaShipment, isBostaEnabledForBusiness } from "./bosta.service";
+import { createBostaShipment, isBostaEnabledForBusiness, resolveShipmentImagesForOrder, toPublicImageUrl } from "./bosta.service";
+import { isPublicImageUrl, packageImageTenant, PACKAGE_IMAGE_URL_PREFIX } from "../shared/packageImages";
 import { isOwnedLogoUrl } from "../shared/branding";
 import {
   analyzePasteV2,
@@ -698,6 +699,8 @@ import {
   setOrderEntryMode,
   withBusinessLogos,
   setBusinessLogoUrl,
+  getDefaultPackageImageUrl,
+  setDefaultPackageImageUrl,
   insertOrderParseAudit,
   findTakenSkusInBusiness,
   isSkuTakenInBusiness,
@@ -3429,11 +3432,24 @@ export const appRouter = router({
       }),
 
     // إرسال يدوي / إعادة محاولة إرسال لـ Bosta
+    /** معاينة صور الشحنة التي ستُرسل لبوسطة (المصدر: product / brand_default) أو سبب المنع — قبل الإرسال. */
+    bostaShipmentPreview: adminProcedure
+      .input(z.object({ orderId: z.number(), allowToOpenPackage: z.boolean().optional() }))
+      .query(async ({ ctx, input }) => {
+        await requireOwned(ctx, "order", input.orderId);
+        const [order] = await getOrdersByIds([input.orderId]);
+        if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
+        const status = await getCarrierAccountStatus(order.businessId);
+        const allowToOpenPackage = input.allowToOpenPackage ?? status.allowOpenPackageDefault ?? true;
+        return resolveShipmentImagesForOrder(order, allowToOpenPackage);
+      }),
+
     sendToBosta: adminProcedure
       .input(
         z.object({
           orderId: z.number(),
-          allowToOpenPackage: z.boolean().optional().default(true),
+          /** غير مُمرَّر = إعداد حساب الشحن (allowOpenPackageDefault) — نفس ما تعرضه المعاينة. */
+          allowToOpenPackage: z.boolean().optional(),
           /** ديبوزيت مطلوب من العميل (escrowInfo) — اختياري، ≤ تحصيل الأوردر. */
           depositAmount: z.number().min(0).max(30000).optional(),
         })
@@ -3453,7 +3469,8 @@ export const appRouter = router({
       .input(
         z.object({
           orderIds: z.array(z.number()),
-          allowToOpenPackage: z.boolean().optional().default(true),
+          /** غير مُمرَّر = إعداد حساب الشحن (allowOpenPackageDefault). */
+          allowToOpenPackage: z.boolean().optional(),
           /** ديبوزيت مطلوب من العميل (escrowInfo) — اختياري، ≤ تحصيل الأوردر. */
           depositAmount: z.number().min(0).max(30000).optional(),
         })
@@ -6571,7 +6588,36 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number().int().min(1) }))
       .query(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(ctx, input.businessId);
-        return getCarrierAccountStatus(businessId!);
+        const status = await getCarrierAccountStatus(businessId!);
+        const defaultRef = await getDefaultPackageImageUrl(businessId!);
+        return {
+          ...status,
+          // الصورة الافتراضية لشحنات البراند: المرجع المخزَّن + الرابط العام الذي ستجلبه بوسطة.
+          defaultPackageImage: defaultRef ? { ref: defaultRef, publicUrl: toPublicImageUrl(defaultRef) } : null,
+        };
+      }),
+    /**
+     * الصورة الافتراضية لشحنات البراند (بوسطة — السماح بفتح الشحنة). تُقبل: رابط https عام
+     * بامتداد صورة، أو ملف مرفوع عندنا **لنفس التينانت**. null = إزالة. تؤثر على الشحنات
+     * الجديدة فقط (الإرسال يقرأ الإعداد لحظة الإرسال).
+     */
+    setDefaultPackageImage: adminProcedure
+      .input(z.object({ businessId: z.number().int().min(1), imageUrl: z.string().trim().max(500).nullable() }))
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await scopeBusinessId(ctx, input.businessId);
+        if (input.imageUrl != null) {
+          // مرجع ملف مرفوع عندنا (نسبي **أو رابط كامل** بمسارنا) → لازم يكون لنفس التينانت.
+          const ownedTenant = packageImageTenant(input.imageUrl);
+          const isOurUpload = ownedTenant != null || input.imageUrl.startsWith(PACKAGE_IMAGE_URL_PREFIX);
+          if (isOurUpload) {
+            if (ownedTenant !== ctx.tenantId)
+              throw new TRPCError({ code: "FORBIDDEN", message: "الصورة لا تخص هذه الشركة" });
+          } else if (!isPublicImageUrl(input.imageUrl)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "الرابط يجب أن يكون https عامًا لصورة (png/jpg/webp) — أو ارفع الصورة من هنا" });
+          }
+        }
+        await setDefaultPackageImageUrl(businessId!, input.imageUrl, ctx.user.id);
+        return { ok: true, publicUrl: input.imageUrl ? toPublicImageUrl(input.imageUrl) : null };
       }),
     /** اختبار مفتاح قبل الحفظ — أماكن الاستلام من حساب Bosta نفسه. */
     testConnection: adminProcedure

@@ -15,6 +15,7 @@ import {
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { usePermission } from "@/hooks/usePermission";
 import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
+import { BostaShipmentImagePreview } from "@/components/BostaPackageImageField";
 import { toast } from "sonner";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -282,6 +283,7 @@ export default function OrderDetails() {
                 </>
               ) : (
                 <>
+                {isAdmin && bostaCanSend && <BostaShipmentImagePreview orderId={order.id} />}
                 <label className="flex items-center gap-1 text-xs">
                   <input type="checkbox" checked={bostaDeposit} onChange={e => setBostaDeposit(e.target.checked)} data-testid="bosta-deposit-toggle" />
                   ديبوزيت

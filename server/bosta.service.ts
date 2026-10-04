@@ -11,7 +11,13 @@ import {
   getBusinessIdsForTenant,
   getOrderItems,
   orderContentChangedAfterShipmentCreation,
+  getDefaultPackageImageUrl,
+  getProductImageUrls,
+  addActivityLog,
 } from "./db";
+import {
+  resolveDeliveryImages, PACKAGE_IMAGE_URL_PREFIX, type ResolvedPackageImage, type ResolveDeliveryImagesResult,
+} from "../shared/packageImages";
 import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import {
   resolveBostaConnection,
@@ -76,6 +82,57 @@ const DEFAULT_BOSTA_WEBHOOK_URL = "https://matjarak.net/api/webhooks/bosta";
 export function bostaWebhookUrl(): string {
   const fromEnv = process.env.BOSTA_WEBHOOK_URL?.trim();
   return fromEnv && /^https:\/\//i.test(fromEnv) ? fromEnv : DEFAULT_BOSTA_WEBHOOK_URL;
+}
+
+/** أصل الموقع العام (https) الذي تجلب منه بوسطة الصور المرفوعة عندنا — نفس أصل رابط الـWebhook. */
+export function publicBaseUrl(): string {
+  return new URL(bostaWebhookUrl()).origin;
+}
+
+/** مرجع صورة مرفوع عندنا (مسار نسبي) → رابط عام كامل؛ الرابط الخارجي يمر كما هو. */
+export function toPublicImageUrl(ref: string): string {
+  return ref.startsWith(PACKAGE_IMAGE_URL_PREFIX) ? `${publicBaseUrl()}${ref}` : ref;
+}
+
+export interface ShipmentImagePreview {
+  allowToOpenPackage: boolean;
+  required: boolean;
+  images: ResolvedPackageImage[];
+  /** الشكل الرسمي الذي سيُرسل في `deliveryImages` (null لو غير مطلوب). */
+  payload: { type: string; images: string[] }[] | null;
+  error: string | null;
+  brandDefaultUrl: string | null;
+}
+
+/**
+ * صور الشحنة لأوردر بعينه حسب ترتيب الاختيار: صورة المنتج العامة → الصورة الافتراضية
+ * للبراند (نشاط الأوردر نفسه) → منع. تُستخدم للمعاينة قبل الإرسال وفي الإرسال نفسه.
+ */
+export async function resolveShipmentImagesForOrder(
+  order: { id: number; businessId: number },
+  allowToOpenPackage: boolean
+): Promise<ShipmentImagePreview> {
+  const brandDefaultRef = await getDefaultPackageImageUrl(order.businessId);
+  const brandDefaultUrl = brandDefaultRef ? toPublicImageUrl(brandDefaultRef) : null;
+  const items = await getOrderItems(order.id);
+  const productIds = [...new Set(items.map(i => i.productId).filter((x): x is number => x != null))];
+  const productImages = await getProductImageUrls(order.businessId, productIds);
+  const result: ResolveDeliveryImagesResult = resolveDeliveryImages({
+    allowToOpenPackage,
+    items: items.map(i => ({
+      productId: i.productId ?? null,
+      imageUrl: i.productId != null && productImages.has(i.productId) ? toPublicImageUrl(productImages.get(i.productId)!) : null,
+    })),
+    brandDefaultUrl,
+  });
+  return {
+    allowToOpenPackage,
+    required: result.required,
+    images: result.ok ? [...result.images] : [],
+    payload: result.ok ? result.payload : null,
+    error: result.ok ? null : result.error,
+    brandDefaultUrl,
+  };
 }
 
 // Pickup address details (fetched from GET /api/v0/pickup-locations)
@@ -347,6 +404,12 @@ export async function createBostaShipment(
   // EasyOrder/Facebook order (the only sources that populate shippingFees).
   const totalCOD = parseFloat(String(order.totalAmount));
 
+  // الفتح الافتراضي من إعداد حساب الشحن (كان ثابتًا true بغضّ النظر عن الإعداد).
+  const allowToOpenPackage = options?.allowToOpenPackage ?? conn.allowOpenPackageDefault;
+  // صور الشحنة: منتج عام → صورة البراند الافتراضية → منع الإرسال برسالة واضحة. قبل أي نداء.
+  const shipmentImages = await resolveShipmentImagesForOrder(order, allowToOpenPackage);
+  if (shipmentImages.error) return { success: false, error: shipmentImages.error };
+
   // جلب بنود الأوردر لبناء وصف وعدد قطع دقيق من الأصناف المتعددة.
   //
   // **بالجوين على `product_variants`.** ده كان `db.select().from(orderItems)` على طول،
@@ -394,8 +457,10 @@ export async function createBostaShipment(
     },
     businessReference: order.orderNumber,
     notes: order.notes ?? undefined,
-    allowToOpenPackage: options?.allowToOpenPackage ?? true,
+    allowToOpenPackage,
   };
+  // «السماح بفتح الشحنة» يستلزم صورًا في `deliveryImages` (الشكل الرسمي، على مستوى الشحنة).
+  if (shipmentImages.payload) (payload as Record<string, unknown>).deliveryImages = shipmentImages.payload;
 
   // مكان الاستلام من حساب النشاط (`businessLocationId` الموثّق). في فترة الانتقال بس
   // (مفتاح البيئة) بنبعت الشكل القديم بالعنوان المكتوب.
@@ -501,6 +566,22 @@ export async function createBostaShipment(
         bostaLastError: duplicatePhoneWarning ?? null,
       }).where(eq(orders.id, orderId));
 
+      // سجل مصدر الصور المرسلة (product / brand_default) — بلا الـpayload ولا أي سر.
+      if (shipmentImages.payload) {
+        // (وصف سجل النشاط — لا علاقة له بوصف الشحنة الذي يُبنى من البنود فقط.)
+        const imagesLogText = `صور شحنة بوسطة للأوردر #${order.orderNumber}: ${shipmentImages.images.map(i => i.source).join(", ")}`;
+        await addActivityLog({
+          action: "bosta_shipment_images",
+          entityType: "order",
+          entityId: orderId,
+          description: imagesLogText,
+          metadata: { shipmentId, sources: shipmentImages.images.map(i => ({ source: i.source, productId: i.productId ?? null, url: i.url })) },
+          performedBy: 0,
+          performedByName: "النظام",
+          performedByRole: "system",
+          businessId: order.businessId,
+        }).catch(err => console.error("[Bosta] تعذر تسجيل مصدر الصور:", err instanceof Error ? err.message : err));
+      }
       return { success: true, shipmentId, trackingNumber, warning: duplicatePhoneWarning };
     } else {
       // بوسطة ردّت بس رفضت — الرد وصل فمفيش شحنة اتعملت (retry آمن). بنطلّع الرسالة

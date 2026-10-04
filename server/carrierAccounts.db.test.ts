@@ -4,8 +4,8 @@ import jwt from "jsonwebtoken";
 import { randomBytes } from "crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { appRouter } from "./routers";
-import { getDb, createEmployee, insertOrderWithItems, createProductWithVariants } from "./db";
-import { businessCarrierAccounts, carrierWebhookEvents, employees, orders, orderItems, products, productVariants } from "../drizzle/schema";
+import { getDb, createEmployee, insertOrderWithItems, createProductWithVariants, setDefaultPackageImageUrl } from "./db";
+import { businessCarrierAccounts, businessConfigurationValues, carrierWebhookEvents, employees, orders, orderItems, products, productVariants } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import {
   connectCarrierAccount,
@@ -25,6 +25,7 @@ import { createBostaShipment, clampDeposit, fetchBostaAwb } from "./bosta.servic
 import { handleBostaWebhook } from "./bostaWebhook";
 import { deriveWebhookSecret } from "./crypto/secretBox";
 import { registerBostaWebhookInboxDbSuite } from "./bostaWebhookInbox.dbsuite";
+import { registerBostaPackageImagesDbSuite } from "./bostaPackageImages.dbsuite";
 
 /**
  * حساب Bosta لكل نشاط — عزل، تشفير، صلاحيات، وربط بعد نجاح الاختبار فقط.
@@ -55,9 +56,9 @@ describe("🔒 حراس المصدر — Bosta لكل نشاط", () => {
   it("🔒 إجراءات الحساب أدمن بنطاق، والمفتاح مابيرجعش", () => {
     const i = routers.indexOf("carrierAccounts: router({");
     const blk = routers.slice(i, routers.indexOf("  businesses: router({", i));
-    expect((blk.match(/adminProcedure/g) ?? []).length).toBe(5); // + webhookEvents
+    expect((blk.match(/adminProcedure/g) ?? []).length).toBe(6); // + webhookEvents + setDefaultPackageImage
     expect((blk.match(/ownerProcedure/g) ?? []).length).toBe(1); // reprocessWebhookEvent للمالك فقط
-    expect((blk.match(/scopeBusinessId\(ctx, input\.businessId\)/g) ?? []).length).toBe(6);
+    expect((blk.match(/scopeBusinessId\(ctx, input\.businessId\)/g) ?? []).length).toBe(7);
     expect(acct).not.toContain("apiKey: row");
     expect(acct).toContain("apiKeyLast4");
   });
@@ -154,6 +155,9 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
     const pb = await createProductWithVariants(B.businessId, { name: `منتج B ${tag}` }, [{ name: "سادة", sku: `BB-${tag}`, currentStock: 50, price: "750" }]);
     prodA = pa.productId; varA = pa.variantIds[0]; prodB = pb.productId; varB = pb.variantIds[0];
     ids.productIds.push(prodA, prodB);
+    // «السماح بفتح الشحنة» (الافتراضي) يستلزم صورة — الصورة الافتراضية لكل براند من إعداده.
+    await setDefaultPackageImageUrl(A.businessId, "https://cdn.example.com/brand-a/package.jpg", 1);
+    await setDefaultPackageImageUrl(B.businessId, "https://cdn.example.com/brand-b/package.jpg", 1);
     empA = insId(await createEmployee({ name: "e", role: "data_entry", isActive: true, tenantId: A.tenantId, businessId: A.businessId, username: `bca_${tag}` } as any));
     ids.empIds.push(empA);
   });
@@ -162,6 +166,7 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
     for (const [k, v] of Object.entries(savedEnv)) { if (v == null) delete process.env[k]; else process.env[k] = v; }
     await d.delete(carrierWebhookEvents).where(inArray(carrierWebhookEvents.businessId, [A.businessId, B.businessId]));
     await d.delete(businessCarrierAccounts).where(inArray(businessCarrierAccounts.businessId, [A.businessId, B.businessId]));
+    await d.delete(businessConfigurationValues).where(inArray(businessConfigurationValues.businessId, [A.businessId, B.businessId]));
     if (ids.orderIds.length) { await d.delete(orderItems).where(inArray(orderItems.orderId, ids.orderIds)); await d.delete(orders).where(inArray(orders.id, ids.orderIds)); }
     if (ids.empIds.length) await d.delete(employees).where(inArray(employees.id, ids.empIds));
     if (ids.productIds.length) { await d.delete(productVariants).where(inArray(productVariants.productId, ids.productIds)); await d.delete(products).where(inArray(products.id, ids.productIds)); }
@@ -495,3 +500,4 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
 // مسار استقبال الحالات بالـpayload الرسمي — بيتسجّل هنا عشان يشتغل بالتتابع مع الـsuite اللي
 // فوق (اللي بتعمل RENAME مؤقت لجدول الحسابات)، مش بالتوازي في ملف مستقل.
 registerBostaWebhookInboxDbSuite(CAN);
+registerBostaPackageImagesDbSuite(CAN);
