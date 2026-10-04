@@ -1899,7 +1899,8 @@ export default function Orders() {
               >
                 <SelectTrigger className="h-9 w-44"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["new", "confirmed", "postponed", "no_answer", "preparing", "shipped", "delivered", "cancelled"].map(v => (
+                  {/* «مؤكد» من زر التأكيد (يخصم المخزون)، و«تم التسليم» من بوسطة أو المسار اليدوي المعتمد — لا من هنا */}
+                  {["new", "postponed", "no_answer", "preparing", "shipped", "cancelled"].map(v => (
                     <SelectItem key={v} value={v}>{STATUS_LABEL(v)}</SelectItem>
                   ))}
                 </SelectContent>

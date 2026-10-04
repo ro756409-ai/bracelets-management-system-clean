@@ -1917,19 +1917,14 @@ export async function updateOrder(id: number, data: Partial<InsertOrder>) {
       throw new OrderStatusGuardError(
         "تأكيد الأوردر يتم من زر التأكيد فقط (يخصم المخزون) — لا يُحوَّل لمؤكد بالتعديل المباشر"
       );
-    // شحنة بوسطة تُسلَّم من حالة بوسطة الرسمية (45) عبر الـWebhook فقط. التسليم اليدوي مسار
-    // مستقل للأوردرات التي ليست لها شحنة بوسطة.
-    if (current && data.status === "delivered" && current.status !== "delivered") {
-      const [shipment] = await db
-        .select({ bostaShipmentId: orders.bostaShipmentId })
-        .from(orders)
-        .where(eq(orders.id, id))
-        .limit(1);
-      if (shipment?.bostaShipmentId)
-        throw new OrderStatusGuardError(
-          "هذه شحنة بوسطة — حالة «تم التسليم» تأتي من بوسطة تلقائيًا ولا تُسجَّل يدويًا"
-        );
-    }
+    // «تم التسليم» ممنوعة من هذا المسار **لكل الأوردرات** (بوسطة، EasyOrder، بلا شركة شحن):
+    // شحنات بوسطة تُسلَّم من الحالة الرسمية 45 عبر الـWebhook (applyBostaEvent يكتب مباشرة)،
+    // والتسليم اليدوي/الاستلام من المكتب سيكون مسارًا مستقلًا بتسجيل المحاسب واعتماد المالك
+    // وسبب ووقت ومصدر ومنع تكرار — لم يُبنَ بعد، فإلى أن يُبنى التسليم اليدوي مرفوض.
+    if (current && data.status === "delivered" && current.status !== "delivered")
+      throw new OrderStatusGuardError(
+        "حالة «تم التسليم» لا تُسجَّل يدويًا: شحنات بوسطة تُسلَّم من بوسطة تلقائيًا، والتسليم اليدوي له مسار مستقل باعتماد المالك (قيد البناء)"
+      );
   }
   await db
     .update(orders)
@@ -2004,7 +1999,7 @@ async function assertDeletable(tx: any, ids: number[]) {
 export async function deleteOrder(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.transaction(async tx => {
+  await runOrderTransaction(async tx => {
     await assertDeletable(tx, [id]);
     await tx.delete(orderItems).where(eq(orderItems.orderId, id));
     await tx.delete(orders).where(eq(orders.id, id));
@@ -2222,7 +2217,7 @@ export async function deleteOrders(ids: number[]) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (ids.length === 0) return;
-  await db.transaction(async tx => {
+  await runOrderTransaction(async tx => {
     await assertDeletable(tx, ids);
     await tx.delete(orderItems).where(inArray(orderItems.orderId, ids));
     await tx.delete(orders).where(inArray(orders.id, ids));
@@ -2517,6 +2512,10 @@ export async function postponeOrder(
     .where(eq(orders.id, orderId));
 }
 
+/** أسباب حركات المخزون التي ينشئها النظام للأوردر نفسه (لا الحركات اليدوية). */
+// بلا \b: حدود الكلمات في JS لاتينية فقط ولا تعمل بعد الحروف العربية.
+const ORDER_STOCK_MOVEMENT_REASON = /^(تأكيد أوردر|تعديل أوردر|تعديل كمية أوردر|تعديل بنود أوردر|إلغاء أوردر)/;
+
 export async function cancelOrder(
   orderId: number,
   cancelReason: string,
@@ -2529,7 +2528,7 @@ export async function cancelOrder(
   // الأوردر، ثم إرجاع **ما خُصم فعلًا** (حركات out للأوردر ناقص ما سبق إرجاعه) لنفس
   // productId/variantId — مرة واحدة مهما تكرر الإلغاء أو تزامن. ولو الأوردر اتألغى
   // وفيه حركات مرجعة بالفعل، الحركة المرجعة مش بتتكرر.
-  return db.transaction(async tx => {
+  return runOrderTransaction(async tx => {
     const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
     if (!order) throw new Error("الأوردر غير موجود");
     const moves = await tx
@@ -2537,8 +2536,11 @@ export async function cancelOrder(
       .from(inventoryMovements)
       .where(eq(inventoryMovements.orderId, orderId))
       .for("update");
+    // حركات **الأوردر نفسه** فقط (تأكيد/تعديل/إلغاء سابق) — الحركة اليدوية المربوطة بالأوردر
+    // كمرجع تبقى كما هي ولا تدخل الحساب.
     const net = new Map<string, { productId: number; variantId: number | null; qty: number }>();
     for (const m of moves) {
+      if (!ORDER_STOCK_MOVEMENT_REASON.test(m.reason ?? "")) continue;
       const key = `${m.productId}:${m.variantId ?? "p"}`;
       const row = net.get(key) ?? { productId: m.productId, variantId: m.variantId ?? null, qty: 0 };
       row.qty += m.type === "out" ? m.quantity : -m.quantity;

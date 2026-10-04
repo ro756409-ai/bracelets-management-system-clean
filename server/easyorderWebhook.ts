@@ -69,7 +69,8 @@ function sourceLabelFor(channel: { id: number; platform: string }): string {
  * تطبيق حالة خارجية على أوردر موجود بالسياسة نفسها المطبَّقة على الواجهة:
  *  - «مؤكد» يمر عبر confirmOrder (يخصم المخزون) — لا يُكتب مباشرة. عجز المخزون أو أوردر غير
  *    جاهز = الأوردر يبقى كما هو ويُسجَّل الرفض (بلا 500 ولا كسر للتكامل).
- *  - «تم التسليم» لشحنة بوسطة مرفوض (التسليم من بوسطة فقط).
+ *  - «تم التسليم» مرفوض لكل الأوردرات من هنا: شحنات بوسطة تُسلَّم من الحالة 45 عبر Webhook بوسطة،
+ *    والتسليم اليدوي له مسار مستقل باعتماد المالك (قيد البناء).
  */
 async function applyExternalStatus(orderId: number, mapped: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
@@ -77,6 +78,9 @@ async function applyExternalStatus(orderId: number, mapped: string): Promise<{ o
       await confirmOrder(orderId, 0, "EasyOrder");
       return { ok: true };
     }
+    // «تم التسليم» لا تمر من أي Webhook عام — التسليم من بوسطة (45) أو من المسار اليدوي المعتمد.
+    if (mapped === "delivered")
+      return { ok: false, reason: "حالة «تم التسليم» لا تُطبَّق من EasyOrder — التسليم من شركة الشحن أو المسار اليدوي المعتمد" };
     await updateOrder(orderId, { status: mapped as any });
     return { ok: true };
   } catch (err) {
@@ -312,7 +316,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
           payload,
           providerEventId: payload.payment_ref_id,
         });
-        if ((accountingEvent as any).reason === "accounting_not_active") await applyExternalStatus(restored.id, mapped);;
+        if ((accountingEvent as any).reason === "accounting_not_active") await applyExternalStatus(restored.id, mapped);
       }
 
       await logWebhook({

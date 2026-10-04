@@ -16,6 +16,9 @@ import {
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { issueEmployeeAdvance } from "./advancesV2.service";
 import { registerWebhookRoutes } from "./easyorderWebhook";
+import { applyBostaEvent, handleBostaWebhook } from "./bostaWebhook";
+import { normalizeBostaEvent } from "./bostaEvents";
+import { carrierWebhookInbox } from "../drizzle/schema";
 import { ACCOUNTING_FROZEN_MESSAGE } from "./permissions";
 
 /**
@@ -142,14 +145,48 @@ describe.runIf(CAN)("🔒 المرحلة 0.5 — الأعطال التشغيلي
     expect((await orderRow(oid)).notes).toBe("ملاحظة");
   });
 
-  it("🔒 2) شحنة بوسطة لا تُسلَّم يدويًا؛ الأوردر بلا شحنة بوسطة يبقى له المسار اليدوي", async () => {
+  it("🔒 2) «تم التسليم» اليدوي مرفوض لكل الأوردرات: بوسطة، وبلا شركة شحن، وEasyOrder", async () => {
     const bosta = await mkOrder(A, prodA, varA, { status: "shipped", bostaShipmentId: `BS-${tag}`, bostaStatus: "sent" });
     const r = await fail(() => owner(A.tenantId).orders.update({ id: bosta, status: "delivered" as any }));
-    expect(r.code).toBe("BAD_REQUEST"); expect(r.message).toContain("بوسطة");
+    expect(r.code).toBe("BAD_REQUEST"); expect(r.message).toContain("لا تُسجَّل يدويًا");
     expect((await orderRow(bosta)).status).toBe("shipped");
     const manual = await mkOrder(A, prodA, varA, { status: "shipped" });
-    await owner(A.tenantId).orders.update({ id: manual, status: "delivered" as any });
-    expect((await orderRow(manual)).status).toBe("delivered");
+    const r2 = await fail(() => owner(A.tenantId).orders.update({ id: manual, status: "delivered" as any }));
+    expect(r2.code).toBe("BAD_REQUEST");
+    expect((await orderRow(manual)).status).toBe("shipped");
+    const eo = await mkOrder(A, prodA, varA, { status: "shipped", externalOrderId: `EO-${tag}-d`, source: "easyorder:1" });
+    const r3 = await fail(() => owner(A.tenantId).orders.update({ id: eo, status: "delivered" as any }));
+    expect(r3.code).toBe("BAD_REQUEST");
+    expect((await orderRow(eo)).status).toBe("shipped");
+    // الانتقالات التشغيلية الأخرى ما زالت تعمل من نفس المسار
+    await owner(A.tenantId).orders.update({ id: manual, status: "cancelled" as any });
+    expect((await orderRow(manual)).status).toBe("cancelled");
+  });
+
+  it("🔑 2) Bosta 45 عبر المسار الرسمي وحده يسلّم: مرة واحدة، المكرر لا يكرر التحديث، ونشاط آخر لا يصل للأوردر", async () => {
+    const db = await d();
+    const sid = `BS45-${tag}`;
+    const oid = await mkOrder(A, prodA, varA, { status: "shipped", bostaShipmentId: sid, bostaStatus: "sent" });
+    const payload = { _id: sid, trackingNumber: 48089608, state: 45, type: "SEND", timeStamp: 1790000000000, isConfirmedDelivery: true };
+    // نشاط آخر بنفس معرّف الشحنة: غير مطابق ولا يلمس أوردر A
+    const n = normalizeBostaEvent(payload); if (!n.ok) throw new Error(n.error);
+    expect((await applyBostaEvent(B.businessId, n.event)).status).toBe("unmatched");
+    expect((await orderRow(oid)).status).toBe("shipped");
+    // المسار الرسمي (Webhook بسر النشاط — هنا السر العام لنشاط بلا حساب شحن): يسلّم مرة واحدة
+    const saved = process.env.BOSTA_WEBHOOK_SECRET; process.env.BOSTA_WEBHOOK_SECRET = `p5-env-${tag}`;
+    try {
+      const call = async () => { let status = 0, json: any = null; const res: any = { status: (c: number) => { status = c; return res; }, json: (j: any) => { json = j; return res; } }; await handleBostaWebhook({ headers: { "x-bosta-secret": `p5-env-${tag}` }, body: payload } as any, res); return { status, json }; };
+      const first = await call();
+      expect(first.status).toBe(200); expect(first.json?.status).toBe("processed");
+      expect(await orderRow(oid)).toMatchObject({ status: "delivered", bostaStatus: "تم التسليم" });
+      await db.update(orders).set({ bostaStatus: "علامة" }).where(eq(orders.id, oid));
+      const dup = await call();
+      expect(dup.json).toMatchObject({ ok: true, duplicate: true });
+      expect((await orderRow(oid)).bostaStatus).toBe("علامة");
+      const rows = await db.select().from(carrierWebhookInbox).where(eq(carrierWebhookInbox.shipmentId, sid));
+      expect(rows).toHaveLength(1); expect(rows[0].duplicateCount).toBe(1);
+      await db.delete(carrierWebhookInbox).where(eq(carrierWebhookInbox.shipmentId, sid));
+    } finally { if (saved == null) delete process.env.BOSTA_WEBHOOK_SECRET; else process.env.BOSTA_WEBHOOK_SECRET = saved; }
   });
 
   // ───────────────── 3) صافي الربح ─────────────────
@@ -181,16 +218,24 @@ describe.runIf(CAN)("🔒 المرحلة 0.5 — الأعطال التشغيلي
     const before = await stockOf(varA); const pBefore = await prodStock(prodA);
     await confirmOrder(oid, 1, "owner");
     expect(await stockOf(varA)).toBe(before - 2);
+    // حركة يدوية مربوطة بالأوردر كمرجع: لا تدخل حساب الإلغاء ولا تُعكس
+    await emp(whA).employeePortal.addInventoryMovement({ productId: prodA, type: "in", quantity: 7, reason: "p5-manual-linked", orderId: oid });
+    const pMid = await prodStock(prodA);
     const r = await owner(A.tenantId).orders.cancel({ orderId: oid, cancelReason: "other" as any, notes: "p5" } as any);
     expect((await orderRow(oid)).status).toBe("cancelled");
     expect(await stockOf(varA)).toBe(before);
-    expect(await prodStock(prodA)).toBe(pBefore); // المنتج الأب لم يُلمس
-    const ins = (await movesOf(oid)).filter(m => m.type === "in");
+    expect(await prodStock(prodA)).toBe(pMid); // المنتج الأب لم يُلمس بالإلغاء، والحركة اليدوية بقيت كما هي
+    const ins = (await movesOf(oid)).filter(m => m.type === "in" && m.reason !== "p5-manual-linked");
     expect(ins).toHaveLength(1); expect(ins[0].variantId).toBe(varA); expect(ins[0].businessId).toBe(A.businessId);
     // إلغاء ثانٍ: لا إعادة ثانية
     await cancelOrder(oid, "other", "p5-again", 1);
     expect(await stockOf(varA)).toBe(before);
-    expect((await movesOf(oid)).filter(m => m.type === "in")).toHaveLength(1);
+    expect((await movesOf(oid)).filter(m => m.type === "in" && m.reason !== "p5-manual-linked")).toHaveLength(1);
+    // أوردر قديم حالته مؤكد بلا أي حركة خصم: الإلغاء لا يمنح مخزونًا
+    const legacy = await mkOrder(A, prodA, varA, { status: "confirmed" });
+    const bl = await stockOf(varA);
+    await owner(A.tenantId).orders.cancel({ orderId: legacy, cancelReason: "other" as any } as any);
+    expect(await stockOf(varA)).toBe(bl); expect(await movesOf(legacy)).toEqual([]);
     // تزامن: أوردر آخر مؤكد وإلغاءان في نفس اللحظة → إعادة واحدة
     const o2 = await mkOrder(A, prodA, varA);
     await confirmOrder(o2, 1, "owner");
@@ -304,6 +349,12 @@ describe.runIf(CAN)("🔒 المرحلة 0.5 — الأعطال التشغيلي
     expect(ok.status).toBe(200); expect(ok.body.action).toBe("status_updated");
     expect((await orderRow(oid)).status).toBe("confirmed");
     expect(await stockOf(varA)).toBe(before - 2);
+    // إعادة نفس الحدث: لا خصم ثانٍ
+    const again = await request(app).post("/api/webhooks/easyorder").set("x-webhook-secret", secret)
+      .send({ event_type: "order-status-update", order_id: `EO-${tag}-1`, old_status: "pending", new_status: "confirmed" });
+    expect(again.status).toBe(200);
+    expect(await stockOf(varA)).toBe(before - 2);
+    expect((await movesOf(oid)).filter(m => m.type === "out")).toHaveLength(1);
     // عجز: أوردر بكمية أكبر من المخزون → رفض بلا 500، ولا تغيير
     const big = await mkOrder(A, prodA, varA, { externalOrderId: `EO-${tag}-2`, source: `easyorder:${chId}` });
     await db.update(orderItems).set({ quantity: 100000 }).where(eq(orderItems.orderId, big));
@@ -312,6 +363,12 @@ describe.runIf(CAN)("🔒 المرحلة 0.5 — الأعطال التشغيلي
       .send({ event_type: "order-status-update", order_id: `EO-${tag}-2`, old_status: "pending", new_status: "confirmed" });
     expect(rej.status).toBe(200); expect(rej.body.action).toBe("status_rejected");
     expect((await orderRow(big)).status).toBe("new"); expect(await stockOf(varA)).toBe(b2);
+    // «delivered» المباشر من EasyOrder مرفوض — بلا بوسطة ومع بوسطة
+    const plain = await mkOrder(A, prodA, varA, { externalOrderId: `EO-${tag}-4`, source: `easyorder:${chId}`, status: "shipped" });
+    const rej0 = await request(app).post("/api/webhooks/easyorder").set("x-webhook-secret", secret)
+      .send({ event_type: "order-status-update", order_id: `EO-${tag}-4`, old_status: "shipped", new_status: "delivered" });
+    expect(rej0.status).toBe(200); expect(rej0.body.action).toBe("status_rejected");
+    expect((await orderRow(plain)).status).toBe("shipped");
     // «delivered» لشحنة بوسطة من EasyOrder مرفوض أيضًا
     const bosta = await mkOrder(A, prodA, varA, { externalOrderId: `EO-${tag}-3`, source: `easyorder:${chId}`, status: "shipped", bostaShipmentId: `BS2-${tag}` });
     const rej2 = await request(app).post("/api/webhooks/easyorder").set("x-webhook-secret", secret)

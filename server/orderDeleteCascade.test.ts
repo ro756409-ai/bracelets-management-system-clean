@@ -24,14 +24,14 @@ function codeOnly(src: string): string {
 describe("🔑 حذف الأوردر بيمسح أصنافه (منع الـorphans)", () => {
   it("🔑 deleteOrder: transaction + مسح order_items قبل orders", () => {
     const body = fnBody(db, "export async function deleteOrder(");
-    expect(body).toContain("db.transaction(");
+    expect(body).toMatch(/db\.transaction\(|runOrderTransaction\(/); // transaction واحدة (مع إعادة محاولة عند deadlock)
     expect(body).toContain("delete(orderItems).where(eq(orderItems.orderId, id))");
     expect(body).toContain("delete(orders).where(eq(orders.id, id))");
   });
 
   it("🔑 deleteOrders: transaction + مسح order_items بالـinArray", () => {
     const body = fnBody(db, "export async function deleteOrders(");
-    expect(body).toContain("db.transaction(");
+    expect(body).toMatch(/db\.transaction\(|runOrderTransaction\(/); // transaction واحدة (مع إعادة محاولة عند deadlock)
     expect(body).toContain("delete(orderItems).where(inArray(orderItems.orderId, ids))");
     expect(body).toContain("delete(orders).where(inArray(orders.id, ids))");
   });
