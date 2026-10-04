@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   BOSTA_DELIVERY_IMAGE_TYPE, BOSTA_MAX_DELIVERY_IMAGES, NO_PACKAGE_IMAGE_MESSAGE, PACKAGE_IMAGE_URL_PREFIX,
-  isPublicImageUrl, packageImageTenant, parsePackageImageUrl, resolveDeliveryImages,
+  imageUrlForLog, isPublicImageUrl, packageImageTenant, parsePackageImageUrl, resolveDeliveryImages,
 } from "./packageImages";
 
 /**
@@ -13,7 +13,7 @@ const P1 = "https://cdn.example.com/p1.jpg", P2 = "https://cdn.example.com/p2.pn
 describe("🖼️ resolveDeliveryImages — ترتيب الاختيار والشكل الرسمي", () => {
   it("فتح الشحنة غير مفعّل → لا صور مطلوبة ولا payload", () => {
     const r = resolveDeliveryImages({ allowToOpenPackage: false, items: [{ productId: 1, imageUrl: null }], brandDefaultUrl: null });
-    expect(r).toEqual({ ok: true, required: false, images: [], payload: null });
+    expect(r).toEqual({ ok: true, required: false, images: [], payload: null, omitted: 0 });
   });
 
   it("منتج واحد × 3 قطع (3 بنود لنفس المنتج) → صورة واحدة بلا تكرار", () => {
@@ -89,6 +89,24 @@ describe("🖼️ resolveDeliveryImages — ترتيب الاختيار والش
     expect(r.images).toHaveLength(BOSTA_MAX_DELIVERY_IMAGES);
     expect(r.payload![0].images).toHaveLength(10);
     expect(r.payload).toHaveLength(1); // عنصر واحد من النوع المدعوم فقط
+    expect(r.omitted).toBe(2);
+    // القطع ثابت: أول 10 بترتيب البنود — نفس النتيجة في كل محاولة
+    expect(r.payload![0].images).toEqual(items.slice(0, 10).map(i => i.imageUrl));
+    expect(resolveDeliveryImages({ allowToOpenPackage: true, items, brandDefaultUrl: BRAND })).toEqual(r);
+  });
+
+  it("11 منتجًا بصور + منتج بلا صورة → صورة البراند هي الـ12 فتُحذف (omitted=2) والترتيب ثابت", () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({ productId: i + 1, imageUrl: `https://cdn.example.com/p${i + 1}.jpg` }));
+    items.push({ productId: 99, imageUrl: null as any });
+    const r = resolveDeliveryImages({ allowToOpenPackage: true, items, brandDefaultUrl: BRAND });
+    if (!r.ok) throw new Error("unexpected");
+    expect(r.images).toHaveLength(10); expect(r.omitted).toBe(2);
+    expect(r.images.every(i => i.source === "product")).toBe(true);
+  });
+
+  it("بلا تجاوز → omitted = 0", () => {
+    const r = resolveDeliveryImages({ allowToOpenPackage: true, items: [{ productId: 1, imageUrl: P1 }], brandDefaultUrl: BRAND });
+    expect(r.omitted).toBe(0);
   });
 
   it("صورة البراند هي نفسها صورة المنتج → لا تكرار", () => {
@@ -113,6 +131,14 @@ describe("🔗 isPublicImageUrl — رابط عام صالح لبوسطة", () =
     ["/api/public/package-images/t5-pkg-x.png", false],
     ["not a url", false],
   ])("%s → %s", (url, ok) => expect(isPublicImageUrl(url)).toBe(ok));
+});
+
+describe("🧾 imageUrlForLog — الرابط في السجلات بلا query string", () => {
+  it("يحذف التوقيع/التوكن من الـquery ويبقي الأصل والمسار", () => {
+    expect(imageUrlForLog("https://cdn.example.com/a.jpg?X-Amz-Signature=SECRET&Expires=1")).toBe("https://cdn.example.com/a.jpg?[query-redacted]");
+    expect(imageUrlForLog("https://cdn.example.com/a.jpg")).toBe("https://cdn.example.com/a.jpg");
+    expect(imageUrlForLog("garbage")).toBe("garbage");
+  });
 });
 
 describe("🏷️ packageImageTenant / parsePackageImageUrl", () => {

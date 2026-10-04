@@ -16,7 +16,7 @@ import {
   addActivityLog,
 } from "./db";
 import {
-  resolveDeliveryImages, PACKAGE_IMAGE_URL_PREFIX, type ResolvedPackageImage, type ResolveDeliveryImagesResult,
+  resolveDeliveryImages, imageUrlForLog, PACKAGE_IMAGE_URL_PREFIX, type ResolvedPackageImage, type ResolveDeliveryImagesResult,
 } from "../shared/packageImages";
 import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import {
@@ -102,6 +102,8 @@ export interface ShipmentImagePreview {
   payload: { type: string; images: string[] }[] | null;
   error: string | null;
   brandDefaultUrl: string | null;
+  /** صور فريدة لم تُرسل لتجاوز حد بوسطة (10) — للتنبيه في المعاينة. */
+  omitted: number;
 }
 
 /**
@@ -132,6 +134,7 @@ export async function resolveShipmentImagesForOrder(
     payload: result.ok ? result.payload : null,
     error: result.ok ? null : result.error,
     brandDefaultUrl,
+    omitted: result.omitted,
   };
 }
 
@@ -575,7 +578,11 @@ export async function createBostaShipment(
           entityType: "order",
           entityId: orderId,
           description: imagesLogText,
-          metadata: { shipmentId, sources: shipmentImages.images.map(i => ({ source: i.source, productId: i.productId ?? null, url: i.url })) },
+          metadata: {
+            shipmentId,
+            sources: shipmentImages.images.map(i => ({ source: i.source, productId: i.productId ?? null, url: imageUrlForLog(i.url) })),
+            omitted: shipmentImages.omitted,
+          },
           performedBy: 0,
           performedByName: "النظام",
           performedByRole: "system",

@@ -51,7 +51,12 @@ export function registerPackageImageRoutes(app: Express) {
       if (!(await isAdminSession(req))) return res.status(403).json({ error: "رفع صورة الشحنة للمالك أو الأدمن فقط" });
       next();
     },
-    upload.single("file"),
+    (req, res, next) => upload.single("file")(req, res, (err: unknown) => {
+      // الحد 2MB من السيرفر: multer يقطع الطلب قبل أي حفظ (تخزين في الذاكرة) — رد JSON واضح بدل 500.
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "الصورة أكبر من 2MB" });
+      if (err) return res.status(400).json({ error: "ملف غير صالح" });
+      next();
+    }),
     async (req, res) => {
       try {
         const scope = await resolveScope(req);
@@ -87,7 +92,10 @@ export function registerPackageImageRoutes(app: Express) {
       if (!file) return res.sendStatus(404);
       const extension = path.extname(filename);
       const mimeType = [...allowedTypes.entries()].find(([, ext]) => ext === extension)?.[0] ?? "application/octet-stream";
-      res.type(mimeType).setHeader("Cache-Control", "public, max-age=86400").send(file);
+      res.type(mimeType)
+        .setHeader("Cache-Control", "public, max-age=86400")
+        .setHeader("X-Content-Type-Options", "nosniff")
+        .send(file);
     } catch {
       res.sendStatus(404);
     }

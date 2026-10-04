@@ -257,6 +257,90 @@ export function registerBostaPackageImagesDbSuite(CAN: boolean) {
       await d.update(businessCarrierAccounts).set({ allowOpenPackageDefault: true }).where(eq(businessCarrierAccounts.businessId, B.businessId));
     });
 
+    it("🧾 صورة براند برابط موقّع (query) → تُرسل لبوسطة كاملة، لكن سجل النشاط بلا الـquery", async () => {
+      const SIGNED = "https://cdn.example.com/brand-a/signed.jpg?X-Amz-Signature=TOPSECRET123&Expires=99";
+      await setDefaultPackageImageUrl(A.businessId, SIGNED, 1);
+      const oid = await mkOrder(A, [{ productId: prodA2, variantId: varA2, quantity: 1 }]);
+      const calls: any[] = [];
+      expect((await createBostaShipment(oid, { allowToOpenPackage: true }, fakeFetch(KEY_A, calls))).success).toBe(true);
+      expect(calls.find(c => c.url.endsWith("/deliveries"))!.body.deliveryImages[0].images).toEqual([SIGNED]);
+      const [log] = await imagesLog(oid);
+      expect(log.metadata).not.toContain("TOPSECRET123");
+      expect(JSON.parse(log.metadata!).sources[0].url).toBe("https://cdn.example.com/brand-a/signed.jpg?[query-redacted]");
+      await setDefaultPackageImageUrl(A.businessId, BRAND_A, 1);
+    });
+
+    // ── 3.5) دورة الإرسال: 400 ثم إعادة محاولة، timeout → uncertain، إرسال جماعي مختلط ──
+    it("🔁 HTTP 400 من بوسطة: لا shipmentId ولا tracking ولا shipped؛ bostaLastError مسجّل؛ إعادة المحاولة تنجح وتمسح الفشل", async () => {
+      const oid = await mkOrder(A, [{ productId: prodA2, variantId: varA2, quantity: 1 }]);
+      const reject400 = (async (url: any, init: any) => {
+        if (String(url).endsWith("/deliveries")) return new Response(JSON.stringify({ message: "Invalid dropOffAddress" }), { status: 400 });
+        return fakeFetch(KEY_A, [])(url, init);
+      }) as unknown as typeof fetch;
+      const r1 = await createBostaShipment(oid, { allowToOpenPackage: true }, reject400);
+      expect(r1.success).toBe(false); expect(r1.error).toContain("HTTP 400");
+      let row = (await (await db()).select().from(orders).where(eq(orders.id, oid)))[0];
+      expect(row.bostaShipmentId).toBeNull(); expect(row.bostaTrackingNumber).toBeNull();
+      expect(row.status).toBe("confirmed"); expect(row.bostaStatus).toBe("failed"); expect(row.bostaLastError).toContain("HTTP 400");
+      // 400 مؤكد (لم تُنشأ شحنة) → إعادة المحاولة مسموحة وتنجح
+      const calls: any[] = [];
+      const r2 = await createBostaShipment(oid, { allowToOpenPackage: true }, fakeFetch(KEY_A, calls));
+      expect(r2.success).toBe(true);
+      row = (await (await db()).select().from(orders).where(eq(orders.id, oid)))[0];
+      expect(row.bostaShipmentId).toBe(r2.shipmentId); expect(row.bostaStatus).toBe("sent");
+      // علامة الفشل تُستبدل (هنا بتحذير الهاتف المكرر لأن أوردرات الاختبار بنفس الرقم) — لا «HTTP 400» باقية
+      expect(row.bostaLastError ?? "").not.toContain("HTTP 400");
+      expect(row.status).toBe("confirmed"); // shipped تأتي من حالة بوسطة 21 عبر الـwebhook فقط
+    });
+
+    it("⏱️ timeout/انقطاع بعد الإرسال (الرد لم يصل) → uncertain، وأي إعادة محاولة عمياء مرفوضة بلا نداء (لا شحنتين)", async () => {
+      const oid = await mkOrder(A, [{ productId: prodA2, variantId: varA2, quantity: 1 }]);
+      const timeoutFetch = (async (url: any, init: any) => {
+        if (String(url).endsWith("/deliveries")) throw Object.assign(new Error("fetch failed"), { cause: Object.assign(new Error("timeout"), { code: "UND_ERR_HEADERS_TIMEOUT" }) });
+        return fakeFetch(KEY_A, [])(url, init);
+      }) as unknown as typeof fetch;
+      const r1 = await createBostaShipment(oid, { allowToOpenPackage: true }, timeoutFetch);
+      expect(r1.success).toBe(false);
+      const row = (await (await db()).select().from(orders).where(eq(orders.id, oid)))[0];
+      expect(row.bostaStatus).toBe("uncertain"); expect(row.bostaShipmentId).toBeNull();
+      const calls: any[] = [];
+      const r2 = await createBostaShipment(oid, { allowToOpenPackage: true }, fakeFetch(KEY_A, calls));
+      expect(r2.success).toBe(false); expect(calls).toHaveLength(0);
+    });
+
+    it("📊 إرسال جماعي مختلط: ناجح + فاشل (بلا صورة) + مُرسل سابقًا = إجمالي المحدد، والسليم لا يتأثر بالفاشل", async () => {
+      // B: صورة افتراضية موجودة (من اختبار سابق) → السليم ينجح؛ نزيلها مؤقتًا لأوردر ثالث لنصنع فشلًا محليًا
+      const okId = await mkOrder(B, [{ productId: prodB, variantId: varB, quantity: 1 }]);
+      const sentId = await mkOrder(B, [{ productId: prodB, variantId: varB, quantity: 1 }]);
+      const calls: any[] = [];
+      expect((await createBostaShipment(sentId, { allowToOpenPackage: true }, fakeFetch(KEY_B, calls))).success).toBe(true);
+      const prior = (await (await db()).select().from(orders).where(eq(orders.id, sentId)))[0].bostaShipmentId;
+      // الفاشل: أوردر B بمنتج بلا صورة وبلا صورة براند — نحاكيه بإزالة الصورة الافتراضية لـB قبل الإرسال الجماعي
+      await setDefaultPackageImageUrl(B.businessId, null, 1);
+      const noImgId = await mkOrder(B, [{ productId: prodB, variantId: varB, quantity: 1 }]);
+      // السليم يحتاج صورة: نعطي منتج B صورة منتج (المصدر 1) فيمر، والفاشل يستخدم منتجًا بلا صورة
+      const b2 = await createProductWithVariants(B.businessId, { name: `منتج IB2 ${tag}` }, [{ name: "سادة", sku: `IB2-${tag}`, currentStock: 50, price: "750" }]);
+      ids.productIds.push(b2.productId);
+      await setProductImage(B.businessId, prodB, "https://cdn.example.com/products/b.jpg");
+      const noImg2 = await mkOrder(B, [{ productId: b2.productId, variantId: b2.variantIds[0], quantity: 1 }]);
+      const selected = [okId, sentId, noImgId, noImg2];
+      // ملاحظة: noImgId منتجه prodB وله الآن صورة منتج → سينجح؛ noImg2 بلا أي صورة → يفشل محليًا
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = fakeFetch(KEY_B, calls);
+      let res: any;
+      try { res = await owner(B.tenantId).orders.bulkSendToBosta({ orderIds: selected, allowToOpenPackage: true }); }
+      finally { globalThis.fetch = originalFetch; }
+      expect(res.success + res.failed).toBe(selected.length);
+      expect(res.success).toBe(3); expect(res.failed).toBe(1);
+      expect(res.errors).toEqual([{ orderId: noImg2, error: NO_PACKAGE_IMAGE_MESSAGE }]);
+      const rows = await (await db()).select().from(orders).where(inArray(orders.id, selected));
+      expect(rows.find(r => r.id === sentId)!.bostaShipmentId).toBe(prior); // المُرسل سابقًا لم يُنشأ له شحنة ثانية
+      expect(rows.find(r => r.id === okId)!.bostaShipmentId).toBeTruthy();
+      expect(rows.find(r => r.id === noImg2)!.bostaShipmentId).toBeNull();
+      expect(rows.every(r => r.status === "confirmed")).toBe(true);
+      await setDefaultPackageImageUrl(B.businessId, BRAND_B, 1);
+    });
+
     // ── 4) الرفع والعرض العلني ──
     it("📤 الرفع للأدمن فقط (PNG صالح) ثم يُقدَّم علنيًا بلا جلسة؛ اسم خارج النمط → 404؛ ثم يُقبل كصورة افتراضية لنفس التينانت ويُرسل برابط كامل", async () => {
       const app = express(); app.use(cookieParser()); registerPackageImageRoutes(app);
@@ -276,6 +360,15 @@ export function registerBostaPackageImagesDbSuite(CAN: boolean) {
       // عرض علني بلا أي كوكي
       const got = await request(app).get(ref);
       expect(got.status).toBe(200); expect(got.headers["content-type"]).toContain("image/png"); expect(got.headers["cache-control"]).toContain("public");
+      expect(got.headers["x-content-type-options"]).toBe("nosniff");
+      // أكبر من 2MB → 413 JSON من السيرفر، ولا ملف يُحفظ
+      const before = fs.existsSync(path.resolve(process.cwd(), "uploads", "package-images")) ? fs.readdirSync(path.resolve(process.cwd(), "uploads", "package-images")).length : 0;
+      const huge = Buffer.concat([png, Buffer.alloc(2 * 1024 * 1024, 2)]);
+      const big = await request(app).post("/api/carrier/package-image/upload").set("Cookie", cookieFor(adminA)).attach("file", huge, { filename: "big.png", contentType: "image/png" });
+      expect(big.status).toBe(413); expect(big.body.error).toContain("2MB");
+      expect(fs.readdirSync(path.resolve(process.cwd(), "uploads", "package-images")).length).toBe(before);
+      // SVG/HTML مرفوضان كصورة
+      expect((await request(app).post("/api/carrier/package-image/upload").set("Cookie", cookieFor(adminA)).attach("file", Buffer.from("<svg/>"), { filename: "x.svg", contentType: "image/svg+xml" })).status).toBe(400);
       expect((await request(app).get(`${PACKAGE_IMAGE_URL_PREFIX}..%2F..%2Fpackage.json`)).status).toBe(404);
       expect((await request(app).get(`${PACKAGE_IMAGE_URL_PREFIX}t${A.tenantId}-pkg-ffffffff-0000-0000-0000-000000000000.png`)).status).toBe(404);
       // B لا يستطيع اعتماد ملف A؛ A يعتمده ويُرسل برابط عام كامل من أصل الموقع

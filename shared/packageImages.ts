@@ -55,9 +55,10 @@ export interface ResolveDeliveryImagesInput {
 }
 
 export type ResolveDeliveryImagesResult =
-  | { ok: true; required: false; images: []; payload: null }
-  | { ok: true; required: true; images: ResolvedPackageImage[]; payload: { type: string; images: string[] }[] }
-  | { ok: false; required: true; images: []; payload: null; error: string };
+  | { ok: true; required: false; images: []; payload: null; omitted: 0 }
+  /** `omitted`: صور فريدة تجاوزت حد بوسطة (10) ولم تُرسل — القطع ثابت: أول 10 بترتيب بنود الأوردر. */
+  | { ok: true; required: true; images: ResolvedPackageImage[]; payload: { type: string; images: string[] }[]; omitted: number }
+  | { ok: false; required: true; images: []; payload: null; omitted: 0; error: string };
 
 export const NO_PACKAGE_IMAGE_MESSAGE =
   "لا يمكن إرسال الشحنة مع «السماح بفتح الشحنة» بلا صورة: لا توجد صورة عامة للمنتجات ولا صورة افتراضية لشحنات البراند — ارفع الصورة الافتراضية من ربط بوسطة أو أرسل بلا فتح الشحنة";
@@ -70,7 +71,7 @@ export const NO_PACKAGE_IMAGE_MESSAGE =
  *  - لا شيء → خطأ واضح (منع الإرسال).
  */
 export function resolveDeliveryImages(input: ResolveDeliveryImagesInput): ResolveDeliveryImagesResult {
-  if (!input.allowToOpenPackage) return { ok: true, required: false, images: [], payload: null };
+  if (!input.allowToOpenPackage) return { ok: true, required: false, images: [], payload: null, omitted: 0 };
   const images: ResolvedPackageImage[] = [];
   const seen = new Set<string>();
   let anyProductWithoutImage = false;
@@ -87,14 +88,24 @@ export function resolveDeliveryImages(input: ResolveDeliveryImagesInput): Resolv
     seen.add(brand);
     images.push({ url: brand, source: "brand_default" });
   }
-  if (images.length === 0) return { ok: false, required: true, images: [], payload: null, error: NO_PACKAGE_IMAGE_MESSAGE };
+  if (images.length === 0) return { ok: false, required: true, images: [], payload: null, omitted: 0, error: NO_PACKAGE_IMAGE_MESSAGE };
+  // القطع ثابت (ترتيب بنود الأوردر ثم صورة البراند) — لا عشوائية بين محاولة وأخرى.
   const limited = images.slice(0, BOSTA_MAX_DELIVERY_IMAGES);
   return {
     ok: true,
     required: true,
     images: limited,
     payload: [{ type: BOSTA_DELIVERY_IMAGE_TYPE, images: limited.map(i => i.url) }],
+    omitted: images.length - limited.length,
   };
+}
+
+/** الرابط للسجلات/اللوج: بلا query string (قد يحمل توقيعًا أو توكن) — الأصل والمسار فقط. */
+export function imageUrlForLog(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.search ? `${u.origin}${u.pathname}?[query-redacted]` : `${u.origin}${u.pathname}`;
+  } catch { return url; }
 }
 
 /** رقم التينانت من مرجع ملف مرفوع عندنا (مسار نسبي أو رابط كامل)، أو null لرابط خارجي. */

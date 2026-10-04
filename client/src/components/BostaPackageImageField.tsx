@@ -97,6 +97,11 @@ export function BostaShipmentImagePreview({ orderId, allowToOpenPackage }: { ord
   return (
     <div className="space-y-1" data-testid="bosta-preview-images">
       <p className="text-xs text-muted-foreground">الصور التي ستُرسل لبوسطة ({d.images.length} من 10 كحد أقصى):</p>
+      {d.omitted > 0 && (
+        <p className="text-xs text-[var(--warning)]" data-testid="bosta-preview-omitted">
+          حد بوسطة 10 صور — {d.omitted} صورة أخرى لن تُرسل (تُؤخذ أول 10 بترتيب بنود الأوردر).
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         {d.images.map(img => (
           <figure key={img.url} className="w-16">
