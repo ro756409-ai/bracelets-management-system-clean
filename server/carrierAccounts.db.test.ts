@@ -26,6 +26,7 @@ import { handleBostaWebhook } from "./bostaWebhook";
 import { deriveWebhookSecret } from "./crypto/secretBox";
 import { registerBostaWebhookInboxDbSuite } from "./bostaWebhookInbox.dbsuite";
 import { registerBostaPackageImagesDbSuite } from "./bostaPackageImages.dbsuite";
+import { registerBostaEnvironmentDbSuite } from "./bostaEnvironment.dbsuite";
 
 /**
  * حساب Bosta لكل نشاط — عزل، تشفير، صلاحيات، وربط بعد نجاح الاختبار فقط.
@@ -501,3 +502,4 @@ describe.runIf(CAN)("🔒 Bosta لكل نشاط — سلوكي", () => {
 // فوق (اللي بتعمل RENAME مؤقت لجدول الحسابات)، مش بالتوازي في ملف مستقل.
 registerBostaWebhookInboxDbSuite(CAN);
 registerBostaPackageImagesDbSuite(CAN);
+registerBostaEnvironmentDbSuite(CAN);

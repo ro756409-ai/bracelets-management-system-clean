@@ -6,6 +6,7 @@ import jwt from "jsonwebtoken";
 import { randomBytes } from "crypto";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { and, eq, inArray } from "drizzle-orm";
 import { appRouter } from "./routers";
 import { getDb, createEmployee, insertOrderWithItems, createProductWithVariants, setDefaultPackageImageUrl } from "./db";
@@ -40,7 +41,8 @@ export function registerBostaPackageImagesDbSuite(CAN: boolean) {
     let seq = 0;
     const BRAND_A = "https://cdn.example.com/brand-a/default.jpg", BRAND_B = "https://cdn.example.com/brand-b/default.png";
     const PROD_A1 = "https://cdn.example.com/products/a1.webp";
-    const uploadedFiles: string[] = [];
+    const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mj-pkg-img-"));
+    let savedLocalDir: string | undefined;
 
     const db = async () => (await getDb())!;
     const insId = (r: any) => Number((Array.isArray(r) ? r[0] : r)?.insertId ?? r?.id);
@@ -86,6 +88,7 @@ export function registerBostaPackageImagesDbSuite(CAN: boolean) {
         BOSTA_WEBHOOK_SECRET: process.env.BOSTA_WEBHOOK_SECRET, BOSTA_WEBHOOK_URL: process.env.BOSTA_WEBHOOK_URL,
       };
       process.env.CARRIER_SECRETS_KEY = randomBytes(32).toString("base64");
+      savedLocalDir = process.env.PACKAGE_IMAGE_LOCAL_DIR; process.env.PACKAGE_IMAGE_LOCAL_DIR = localRoot;
       delete process.env.BOSTA_API_KEY; delete process.env.BOSTA_WEBHOOK_SECRET; delete process.env.BOSTA_WEBHOOK_URL;
       A = await createCoreTestFixture("img-a"); B = await createCoreTestFixture("img-b");
       const mk = async (fx: CoreTestFixture, sku: string) => createProductWithVariants(fx.businessId, { name: `منتج ${sku} ${tag}` }, [{ name: "سادة", sku: `${sku}-${tag}`, currentStock: 50, price: "750" }]);
@@ -106,7 +109,8 @@ export function registerBostaPackageImagesDbSuite(CAN: boolean) {
       const d = await getDb(); if (!d) return;
       for (const [k, v] of Object.entries(savedEnv)) { if (v == null) delete process.env[k]; else process.env[k] = v; }
       const bids = [A.businessId, B.businessId];
-      for (const f of uploadedFiles) fs.rmSync(path.resolve(process.cwd(), "uploads", "package-images", f), { force: true });
+      if (savedLocalDir == null) delete process.env.PACKAGE_IMAGE_LOCAL_DIR; else process.env.PACKAGE_IMAGE_LOCAL_DIR = savedLocalDir;
+      fs.rmSync(localRoot, { recursive: true, force: true });
       if (ids.orderIds.length) await d.delete(activityLogs).where(and(eq(activityLogs.entityType, "order"), inArray(activityLogs.entityId, ids.orderIds)));
       await d.delete(businessCarrierAccounts).where(inArray(businessCarrierAccounts.businessId, bids));
       await d.delete(businessConfigurationValues).where(inArray(businessConfigurationValues.businessId, bids));
@@ -356,17 +360,16 @@ export function registerBostaPackageImagesDbSuite(CAN: boolean) {
       const ref: string = up.body.url;
       expect(ref.startsWith(PACKAGE_IMAGE_URL_PREFIX)).toBe(true);
       expect(ref).toMatch(new RegExp(`/t${A.tenantId}-pkg-[a-f0-9-]+\\.png$`));
-      uploadedFiles.push(ref.slice(PACKAGE_IMAGE_URL_PREFIX.length));
       // عرض علني بلا أي كوكي
       const got = await request(app).get(ref);
       expect(got.status).toBe(200); expect(got.headers["content-type"]).toContain("image/png"); expect(got.headers["cache-control"]).toContain("public");
       expect(got.headers["x-content-type-options"]).toBe("nosniff");
       // أكبر من 2MB → 413 JSON من السيرفر، ولا ملف يُحفظ
-      const before = fs.existsSync(path.resolve(process.cwd(), "uploads", "package-images")) ? fs.readdirSync(path.resolve(process.cwd(), "uploads", "package-images")).length : 0;
+      const before = fs.readdirSync(localRoot).length;
       const huge = Buffer.concat([png, Buffer.alloc(2 * 1024 * 1024, 2)]);
       const big = await request(app).post("/api/carrier/package-image/upload").set("Cookie", cookieFor(adminA)).attach("file", huge, { filename: "big.png", contentType: "image/png" });
       expect(big.status).toBe(413); expect(big.body.error).toContain("2MB");
-      expect(fs.readdirSync(path.resolve(process.cwd(), "uploads", "package-images")).length).toBe(before);
+      expect(fs.readdirSync(localRoot).length).toBe(before);
       // SVG/HTML مرفوضان كصورة
       expect((await request(app).post("/api/carrier/package-image/upload").set("Cookie", cookieFor(adminA)).attach("file", Buffer.from("<svg/>"), { filename: "x.svg", contentType: "image/svg+xml" })).status).toBe(400);
       expect((await request(app).get(`${PACKAGE_IMAGE_URL_PREFIX}..%2F..%2Fpackage.json`)).status).toBe(404);

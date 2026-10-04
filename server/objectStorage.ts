@@ -136,6 +136,24 @@ export async function getObject(
   }
 }
 
+/** هل الكائن موجود؟ (HEAD — بلا تنزيل). */
+export async function objectExists(
+  filename: string,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<boolean> {
+  const config = readObjectStorageConfig(env);
+  if (!config) throw new Error("Object storage is not configured");
+  const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
+  const client = await getClient(config);
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: evidenceObjectKey(filename) }));
+    return true;
+  } catch (error: any) {
+    if (error?.name === "NotFound" || error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404) return false;
+    throw error;
+  }
+}
+
 /** للاختبار — بيصفّر العميل المخبّأ. */
 export function __resetObjectStorageClientForTests(): void {
   cachedClient = null;

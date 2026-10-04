@@ -9,6 +9,7 @@ import {
   randomSalt,
   isSecretBoxConfigured,
 } from "./crypto/secretBox";
+import { resolveDeployEnv, isDeployEnvExplicit } from "./deployEnv";
 
 /**
  * حساب Bosta **لكل نشاط** — الربط، الاختبار، الفصل، وحلّ الاتصال وقت الإرسال.
@@ -42,10 +43,61 @@ export interface BostaConnection {
   legacy: boolean;
 }
 
-const ENV_BASE_URL = (process.env.BOSTA_BASE_URL || "https://app.bosta.co/api/v0")
-  .replace(/^BOSTA_BASE_URL=/i, "")
-  .trim();
-const V2_BASE_URL = "https://app.bosta.co/api/v2";
+// ── عنوان بوسطة: مصدر واحد لكل نداء (اختبار المفتاح، إنشاء الشحنة، AWB، وأي نداء آخر) ──
+//
+// القاعدة (فشل مغلق، بلا أي fallback بين البيئات):
+//   - `BOSTA_BASE_URL` مضبوط → هذا العنوان **فقط**. فشله (401/404/شبكة/timeout) = فشل لنفس
+//     البيئة، ولا محاولة على عنوان آخر أبدًا — فمفتاح Staging لا يصل Live تحت أي ظرف.
+//   - غير مضبوط: production → Live الافتراضي مع تحذير داخلي؛ development/test → عنوان Mock
+//     لا يُحلّ DNS له أبدًا (`.invalid`)، فأي نداء بلا حقن fetch يفشل محليًا لا على Live؛
+//     staging/preview → رفض برسالة إعداد ناقص.
+// الحوض القديم (كان يجرّب `BOSTA_BASE_URL` ثم يسقط ثابتًا على Live v2) أُزيل.
+export const BOSTA_LIVE_BASE_URL = "https://app.bosta.co/api/v2";
+export const BOSTA_MOCK_BASE_URL = "https://bosta.mock.invalid/api/v2";
+export const BOSTA_ENDPOINT_MISSING_MESSAGE =
+  "عنوان بوسطة غير مضبوط لهذه البيئة (BOSTA_BASE_URL) — لا يُستخدم عنوان Live تلقائيًا خارج production";
+
+export type BostaEndpoint =
+  | { ok: true; baseUrl: string; source: "env" | "live_default" | "mock" }
+  | { ok: false; error: string };
+
+let warnedLiveDefault = false;
+export function resolveBostaEndpoint(env: NodeJS.ProcessEnv = process.env): BostaEndpoint {
+  const fromEnv = (env.BOSTA_BASE_URL ?? "").replace(/^BOSTA_BASE_URL=/i, "").trim().replace(/\/+$/, "");
+  if (fromEnv) {
+    if (!/^https:\/\/[^/]+/i.test(fromEnv)) return { ok: false, error: "BOSTA_BASE_URL يجب أن يكون رابط https صالحًا" };
+    return { ok: true, baseUrl: fromEnv, source: "env" };
+  }
+  const deploy = resolveDeployEnv(env);
+  if (deploy === "production") {
+    if (!warnedLiveDefault) {
+      warnedLiveDefault = true;
+      console.warn(`[Bosta] BOSTA_BASE_URL غير مضبوط — production تستخدم عنوان Live الافتراضي${isDeployEnvExplicit(env) ? "" : " (DEPLOY_ENV غير مضبوط أيضًا)"}`);
+    }
+    return { ok: true, baseUrl: BOSTA_LIVE_BASE_URL, source: "live_default" };
+  }
+  if (deploy === "development" || deploy === "test") return { ok: true, baseUrl: BOSTA_MOCK_BASE_URL, source: "mock" };
+  return { ok: false, error: BOSTA_ENDPOINT_MISSING_MESSAGE };
+}
+
+/** للاختبارات — يعيد تفعيل تحذير Live الافتراضي. */
+export function __resetBostaEndpointWarningForTests(): void { warnedLiveDefault = false; }
+
+/**
+ * العنوان الفعلي لاتصال محفوظ: العنوان المخزّن وقت الربط (`apiBaseUrl`) يُحترم **فقط** إذا كان
+ * على نفس أصل Live في production بلا `BOSTA_BASE_URL` (يميّز v0/v2). غير ذلك عنوان البيئة
+ * الحالي — فنسخة قاعدة بيانات Production على Staging لا تنادي Live لأن الصف يقول ذلك.
+ */
+export function effectiveBostaBaseUrl(storedBaseUrl: string | null | undefined, env: NodeJS.ProcessEnv = process.env): BostaEndpoint {
+  const ep = resolveBostaEndpoint(env);
+  if (!ep.ok) return ep;
+  if (ep.source === "live_default" && storedBaseUrl) {
+    try {
+      if (new URL(storedBaseUrl).origin === new URL(BOSTA_LIVE_BASE_URL).origin) return { ok: true, baseUrl: storedBaseUrl.replace(/\/+$/, ""), source: "live_default" };
+    } catch { /* عنوان مخزّن غير صالح → عنوان البيئة */ }
+  }
+  return ep;
+}
 
 export function authHeader(scheme: AuthScheme, apiKey: string): Record<string, string> {
   return { Authorization: scheme === "bearer" ? `Bearer ${apiKey}` : apiKey };
@@ -86,7 +138,10 @@ export async function probeBostaKey(
   apiKey: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<ProbeResult> {
-  const bases = Array.from(new Set([ENV_BASE_URL, V2_BASE_URL]));
+  // عنوان البيئة فقط — صيغتا التوثيق تُجرَّبان على **نفس** العنوان، ولا عنوان ثانٍ.
+  const ep = resolveBostaEndpoint();
+  if (!ep.ok) return { ok: false, error: ep.error };
+  const bases = [ep.baseUrl];
   const schemes: AuthScheme[] = ["raw", "bearer"];
   let lastErr = "";
   for (const baseUrl of bases) {
@@ -171,11 +226,14 @@ export async function resolveBostaConnection(businessId: number): Promise<BostaC
   const row = await getCarrierAccountRow(businessId);
   if (row) {
     if (row.status !== "connected" || !row.encryptedApiKey || !row.encryptionIv || !row.encryptionTag) return null;
+    // عنوان البيئة الحالية (فشل مغلق لو غير مضبوط) — لا العنوان المخزّن وحده.
+    const ep = effectiveBostaBaseUrl(row.apiBaseUrl);
+    if (!ep.ok) return null;
     const apiKey = decryptSecret({ ciphertext: row.encryptedApiKey, iv: row.encryptionIv, tag: row.encryptionTag });
     return {
       businessId,
       apiKey,
-      baseUrl: row.apiBaseUrl || ENV_BASE_URL,
+      baseUrl: ep.baseUrl,
       authScheme: (row.apiAuthScheme as AuthScheme) || "raw",
       pickupLocationId: row.pickupLocationId,
       allowOpenPackageDefault: row.allowOpenPackageDefault,
@@ -184,10 +242,12 @@ export async function resolveBostaConnection(businessId: number): Promise<BostaC
     };
   }
   if (await legacyEligible(businessId)) {
+    const ep = resolveBostaEndpoint();
+    if (!ep.ok) return null;
     return {
       businessId,
       apiKey: process.env.BOSTA_API_KEY as string,
-      baseUrl: ENV_BASE_URL,
+      baseUrl: ep.baseUrl,
       authScheme: "raw",
       pickupLocationId: process.env.BOSTA_PICKUP_ADDRESS_ID || null,
       allowOpenPackageDefault: true,

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabledForBusiness, resolveShipmentImagesForOrder, toPublicImageUrl } from "./bosta.service";
 import { isPublicImageUrl, packageImageTenant, PACKAGE_IMAGE_URL_PREFIX } from "../shared/packageImages";
+import { packageImageExists } from "./packageImageUpload";
 import { isOwnedLogoUrl } from "../shared/branding";
 import {
   analyzePasteV2,
@@ -6612,6 +6613,10 @@ export const appRouter = router({
           if (isOurUpload) {
             if (ownedTenant !== ctx.tenantId)
               throw new TRPCError({ code: "FORBIDDEN", message: "الصورة لا تخص هذه الشركة" });
+            // المرجع يُحفظ فقط لملف موجود فعلًا في التخزين (لا مرجع لرفع فشل أو ملف ضائع).
+            const filename = input.imageUrl.split("/").pop() ?? "";
+            if (!(await packageImageExists(filename)))
+              throw new TRPCError({ code: "BAD_REQUEST", message: "ملف الصورة غير موجود في التخزين — ارفع الصورة مجددًا" });
           } else if (!isPublicImageUrl(input.imageUrl)) {
             throw new TRPCError({ code: "BAD_REQUEST", message: "الرابط يجب أن يكون https عامًا لصورة (png/jpg/webp) — أو ارفع الصورة من هنا" });
           }

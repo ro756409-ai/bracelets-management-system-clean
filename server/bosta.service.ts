@@ -21,6 +21,7 @@ import {
 import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import {
   resolveBostaConnection,
+  resolveBostaEndpoint,
   authHeader,
   NOT_CONNECTED_MESSAGE,
   type BostaConnection,
@@ -310,6 +311,9 @@ export async function createBostaShipment(
 
   // اتصال Bosta الخاص بنشاط **الأوردر نفسه** — من جدول حسابات الشحن، بلا أي fallback
   // لنشاط تاني. مش مربوط → رفض برسالة واضحة قبل أي كتابة.
+  // عنوان بوسطة لهذه البيئة أولًا (فشل مغلق برسالة إعداد — لا Live تلقائيًا خارج production).
+  const endpoint = resolveBostaEndpoint();
+  if (!endpoint.ok) return { success: false, error: endpoint.error };
   const conn = await resolveBostaConnection(order.businessId);
   if (!conn) return { success: false, error: NOT_CONNECTED_MESSAGE };
 
@@ -655,7 +659,9 @@ export async function fetchBostaAwb(
   shipmentIds: string[],
   fetchImpl: typeof fetch = fetch
 ): Promise<BostaAwbFetchResult> {
-  // الطباعة بمفتاح نشاط الأوردر بس — مش مربوط → رفض.
+  // الطباعة بمفتاح نشاط الأوردر بس — مش مربوط → رفض. وعنوان البيئة أولًا (فشل مغلق).
+  const endpoint = resolveBostaEndpoint();
+  if (!endpoint.ok) return { ok: false, error: endpoint.error };
   const conn: BostaConnection | null = await resolveBostaConnection(businessId);
   if (!conn) return { ok: false, error: NOT_CONNECTED_MESSAGE };
   if (shipmentIds.length === 0) return { ok: false, error: "لا توجد شحنات بوسطة صالحة لطباعة AWB لها" };
