@@ -43,7 +43,9 @@ describe("🔑 حذف الأوردر بيمسح أصنافه (منع الـorpha
   });
 
   it("🔑 مسارات الحذف بتستخدم deleteOrder/deleteOrders", () => {
-    expect(routers).toContain("await deleteOrder(input.orderId)");
-    expect(routers).toContain("await deleteOrders(ids)");
+    // نفس الـhelper، ومغلّف بحارس السياسة (حذف المؤكد مرفوض → BAD_REQUEST).
+    expect(routers).toContain("withStatusGuard(() => deleteOrder(input.orderId))");
+    expect(routers).toContain("withStatusGuard(() => deleteOrders(ids))");
+    expect(routers).not.toMatch(/await deleteOrders?\(/);
   });
 });

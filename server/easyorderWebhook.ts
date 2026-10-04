@@ -36,7 +36,10 @@
  * Manual "Sync Now" is deliberately NOT wired up — it has no documented endpoint.
  */
 import { Request, Response, Express } from "express";
-import { getDb, getSalesChannelByWebhookSecret, getOrderByExternalId, updateOrder } from "./db";
+import {
+  getDb, getSalesChannelByWebhookSecret, getOrderByExternalId, updateOrder, confirmOrder,
+  StockShortfallError, OrderConfirmBlockedError, OrderStockInconsistencyError, OrderStatusGuardError,
+} from "./db";
 import { webhookLogs } from "../drizzle/schema";
 import { desc, inArray } from "drizzle-orm";
 import { upsertEasyOrder, fetchEasyOrderById, type EasyOrderPayload } from "./easyorder.service";
@@ -62,6 +65,28 @@ function sourceLabelFor(channel: { id: number; platform: string }): string {
 }
 
 /** EasyOrder status → local order status. Unknown values are logged, never guessed. */
+/**
+ * تطبيق حالة خارجية على أوردر موجود بالسياسة نفسها المطبَّقة على الواجهة:
+ *  - «مؤكد» يمر عبر confirmOrder (يخصم المخزون) — لا يُكتب مباشرة. عجز المخزون أو أوردر غير
+ *    جاهز = الأوردر يبقى كما هو ويُسجَّل الرفض (بلا 500 ولا كسر للتكامل).
+ *  - «تم التسليم» لشحنة بوسطة مرفوض (التسليم من بوسطة فقط).
+ */
+async function applyExternalStatus(orderId: number, mapped: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    if (mapped === "confirmed") {
+      await confirmOrder(orderId, 0, "EasyOrder");
+      return { ok: true };
+    }
+    await updateOrder(orderId, { status: mapped as any });
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof StockShortfallError || err instanceof OrderConfirmBlockedError || err instanceof OrderStockInconsistencyError || err instanceof OrderStatusGuardError)
+      return { ok: false, reason: err.message };
+    if (err instanceof Error && /لا يمكن تغيير حالة الأوردر/.test(err.message)) return { ok: false, reason: err.message };
+    throw err;
+  }
+}
+
 const EXTERNAL_STATUS_MAP: Record<string, string> = {
   pending: "new",
   new: "new",
@@ -209,7 +234,16 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
           providerEventId: payload.payment_ref_id,
         });
         if ((accountingEvent as any).reason === "accounting_not_active") {
-          await updateOrder(existing.id, { status: mapped as any });
+          const applied = await applyExternalStatus(existing.id, mapped);
+          if (!applied.ok) {
+            await logWebhook({
+              eventType: "order-status-update",
+              status: "error", // لا قيمة enum جديدة بلا Migration — الرسالة توضّح أنه رفض سياسة
+              externalOrderId: payload.order_id,
+              message: `لم تُطبَّق حالة "${payload.new_status}" على الأوردر #${existing.orderNumber}: ${applied.reason}`,
+            });
+            return res.json({ received: true, action: "status_rejected", reason: applied.reason });
+          }
         }
         await logWebhook({
           eventType: "order-status-update",
@@ -278,7 +312,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
           payload,
           providerEventId: payload.payment_ref_id,
         });
-        if ((accountingEvent as any).reason === "accounting_not_active") await updateOrder(restored.id, { status: mapped as any });
+        if ((accountingEvent as any).reason === "accounting_not_active") await applyExternalStatus(restored.id, mapped);;
       }
 
       await logWebhook({

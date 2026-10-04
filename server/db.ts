@@ -1889,6 +1889,14 @@ export function isValidOrderStatusTransition(
   return STATUS_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
+/** انتقال حالة ممنوع بالسياسة (مش بسبب خطأ تقني) — الراوتر بيحوّله لـBAD_REQUEST. */
+export class OrderStatusGuardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OrderStatusGuardError";
+  }
+}
+
 export async function updateOrder(id: number, data: Partial<InsertOrder>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -1902,6 +1910,25 @@ export async function updateOrder(id: number, data: Partial<InsertOrder>) {
       throw new Error(
         `لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${data.status}" مباشرة`
       );
+    }
+    // «مؤكد» بالتعديل المباشر كان بيعدّي من غير خصم المخزون، وبعدها confirmOrder بيرجع بلا
+    // خصم لأن الحالة مؤكدة فعلًا. التأكيد التشغيلي له مسار واحد: confirmOrder.
+    if (current && data.status === "confirmed" && current.status !== "confirmed")
+      throw new OrderStatusGuardError(
+        "تأكيد الأوردر يتم من زر التأكيد فقط (يخصم المخزون) — لا يُحوَّل لمؤكد بالتعديل المباشر"
+      );
+    // شحنة بوسطة تُسلَّم من حالة بوسطة الرسمية (45) عبر الـWebhook فقط. التسليم اليدوي مسار
+    // مستقل للأوردرات التي ليست لها شحنة بوسطة.
+    if (current && data.status === "delivered" && current.status !== "delivered") {
+      const [shipment] = await db
+        .select({ bostaShipmentId: orders.bostaShipmentId })
+        .from(orders)
+        .where(eq(orders.id, id))
+        .limit(1);
+      if (shipment?.bostaShipmentId)
+        throw new OrderStatusGuardError(
+          "هذه شحنة بوسطة — حالة «تم التسليم» تأتي من بوسطة تلقائيًا ولا تُسجَّل يدويًا"
+        );
     }
   }
   await db
@@ -1952,10 +1979,33 @@ export async function recomputeImportReviewReasons(orderId: number): Promise<voi
  * يتمسحوا سوا يا مايتمسحش حاجة. ده هو المكان الوحيد اللي بيحذف أوردر — أي مسار تاني
  * بينده عليه بدل ما يمسح `orders` مباشرة.
  */
+/** الحالات التي لا تُحذف: الأوردر خرج من «جديد» فعليًا (مخزون/شحن/تسليم). الإلغاء بديل الحذف. */
+const UNDELETABLE_STATUSES = ["confirmed", "preparing", "printed", "shipped", "delivered", "returned"];
+
+async function assertDeletable(tx: any, ids: number[]) {
+  if (ids.length === 0) return;
+  const rows = await tx
+    .select({ id: orders.id, orderNumber: orders.orderNumber, status: orders.status })
+    .from(orders)
+    .where(inArray(orders.id, ids));
+  const blockedByStatus = rows.filter((r: any) => UNDELETABLE_STATUSES.includes(r.status));
+  if (blockedByStatus.length)
+    throw new OrderStatusGuardError(
+      `لا يمكن حذف أوردر سبق تأكيده أو شحنه (${blockedByStatus.map((r: any) => r.orderNumber).join("، ")}) — استخدم الإلغاء`
+    );
+  const [mv] = await tx
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(inventoryMovements)
+    .where(inArray(inventoryMovements.orderId, ids));
+  if (Number(mv?.n ?? 0) > 0)
+    throw new OrderStatusGuardError("لا يمكن حذف أوردر له حركة مخزون — استخدم الإلغاء");
+}
+
 export async function deleteOrder(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.transaction(async tx => {
+    await assertDeletable(tx, [id]);
     await tx.delete(orderItems).where(eq(orderItems.orderId, id));
     await tx.delete(orders).where(eq(orders.id, id));
   });
@@ -2173,6 +2223,7 @@ export async function deleteOrders(ids: number[]) {
   if (!db) throw new Error("Database not available");
   if (ids.length === 0) return;
   await db.transaction(async tx => {
+    await assertDeletable(tx, ids);
     await tx.delete(orderItems).where(inArray(orderItems.orderId, ids));
     await tx.delete(orders).where(inArray(orders.id, ids));
   });
@@ -2474,16 +2525,56 @@ export async function cancelOrder(
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db
-    .update(orders)
-    .set({
-      status: "cancelled",
-      cancelReason: cancelReason as any,
-      cancelledAt: new Date(),
-      notes,
-      lastUpdatedBy: updatedBy,
-    })
-    .where(eq(orders.id, orderId));
+  // الإلغاء كان بيغيّر الحالة بس ويسيب الكمية المخصومة عند التأكيد ضايعة. هنا: قفل صف
+  // الأوردر، ثم إرجاع **ما خُصم فعلًا** (حركات out للأوردر ناقص ما سبق إرجاعه) لنفس
+  // productId/variantId — مرة واحدة مهما تكرر الإلغاء أو تزامن. ولو الأوردر اتألغى
+  // وفيه حركات مرجعة بالفعل، الحركة المرجعة مش بتتكرر.
+  return db.transaction(async tx => {
+    const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
+    if (!order) throw new Error("الأوردر غير موجود");
+    const moves = await tx
+      .select()
+      .from(inventoryMovements)
+      .where(eq(inventoryMovements.orderId, orderId))
+      .for("update");
+    const net = new Map<string, { productId: number; variantId: number | null; qty: number }>();
+    for (const m of moves) {
+      const key = `${m.productId}:${m.variantId ?? "p"}`;
+      const row = net.get(key) ?? { productId: m.productId, variantId: m.variantId ?? null, qty: 0 };
+      row.qty += m.type === "out" ? m.quantity : -m.quantity;
+      net.set(key, row);
+    }
+    let restored = 0;
+    for (const row of net.values()) {
+      if (row.qty <= 0) continue;
+      await tx.insert(inventoryMovements).values({
+        businessId: order.businessId,
+        productId: row.productId,
+        variantId: row.variantId,
+        type: "in",
+        quantity: row.qty,
+        reason: `إلغاء أوردر ${order.orderNumber}`,
+        orderId: order.id,
+        performedBy: updatedBy,
+      });
+      if (row.variantId != null)
+        await tx.update(productVariants).set({ currentStock: sql`${productVariants.currentStock} + ${row.qty}` }).where(eq(productVariants.id, row.variantId));
+      else
+        await tx.update(products).set({ currentStock: sql`${products.currentStock} + ${row.qty}` }).where(eq(products.id, row.productId));
+      restored += row.qty;
+    }
+    await tx
+      .update(orders)
+      .set({
+        status: "cancelled",
+        cancelReason: cancelReason as any,
+        cancelledAt: new Date(),
+        notes,
+        lastUpdatedBy: updatedBy,
+      })
+      .where(eq(orders.id, orderId));
+    return { restoredQuantity: restored };
+  });
 }
 
 // ==================== DASHBOARD STATS ====================
@@ -2867,7 +2958,11 @@ export async function addInventoryMovementInTransaction(
     .limit(1)
     .for("update");
   if (!product) throw new Error("المنتج غير موجود");
-  const movementBusinessId = data.businessId ?? product.businessId;
+  // النشاط من المنتج **دائمًا** — الحركة الممرَّرة بلا businessId كانت بتاخد default(1) من
+  // الـschema فتختفي من نشاطها الحقيقي. وأي businessId ممرَّر مختلف عن نشاط المنتج = رفض.
+  if (data.businessId != null && data.businessId !== product.businessId)
+    throw new Error("المنتج لا يتبع هذا النشاط — الحركة مرفوضة");
+  const movementBusinessId = product.businessId;
   const [business] = await tx
     .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
     .from(businesses)
@@ -2882,12 +2977,12 @@ export async function addInventoryMovementInTransaction(
       `الكمية الصادرة (${data.quantity}) أكبر من المخزون الحالي (${product.currentStock})`
     );
   }
-  await tx.insert(inventoryMovements).values(data);
+  await tx.insert(inventoryMovements).values({ ...data, businessId: movementBusinessId });
   const delta = data.type === "in" ? data.quantity : -data.quantity;
   await tx
     .update(products)
     .set({ currentStock: sql`${products.currentStock} + ${delta}` })
-    .where(eq(products.id, data.productId));
+    .where(and(eq(products.id, data.productId), eq(products.businessId, movementBusinessId)));
 }
 
 /**
@@ -3102,7 +3197,7 @@ export async function markOrderAsReturned(
   returnReason: string,
   notes: string | undefined,
   processedBy: number,
-  restoreStock: boolean = true
+  restoreStock: boolean = false
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -3143,18 +3238,13 @@ export async function markOrderAsReturned(
       .set({ status: "returned", lastUpdatedBy: processedBy })
       .where(eq(orders.id, orderId));
 
-    // عكس المخزون بس لو المنتج متحدد — والحركة نفسها ذرّية جوّه نفس الـtx.
-    if (restoreStock && order.productId != null) {
-      await addInventoryMovementInTransaction(tx, {
-        productId: order.productId,
-        type: "in",
-        quantity: order.quantity,
-        reason: `مرتجع - أوردر ${order.orderNumber}`,
-        orderId: order.id,
-        performedBy: processedBy,
-        businessId: order.businessId,
-      });
-    }
+    // السياسة المعتمدة: المنتج المرتجع **لا يعود للمخزون المتاح للبيع**. الإرجاع القديم كان
+    // يضيف كمية الرأس للمنتج الأب (لا للنوع المخصوم) فيختلق مخزونًا. أي طلب إرجاع للمخزون
+    // يُرفض برسالة واضحة لحين نموذج المرتجعات في مرحلته (مرتجعات تالفة بقيمة صفر).
+    if (restoreStock)
+      throw new OrderStatusGuardError(
+        "المنتج المرتجع لا يعود للمخزون المتاح للبيع (سياسة النشاط) — سجّل المرتجع بلا إعادة كمية"
+      );
 
     await tx.insert(returnsTable).values({
       orderId: order.id,
@@ -3168,7 +3258,7 @@ export async function markOrderAsReturned(
       totalAmount: order.totalAmount,
       returnReason,
       notes: notes ?? null,
-      stockRestored: restoreStock,
+      stockRestored: false,
       processedBy,
       businessId: order.businessId,
     });
@@ -3176,7 +3266,7 @@ export async function markOrderAsReturned(
     return {
       success: true,
       orderNumber: order.orderNumber,
-      stockRestored: restoreStock,
+      stockRestored: false,
     };
   });
 }

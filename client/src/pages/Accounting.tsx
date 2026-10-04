@@ -350,7 +350,7 @@ function OverviewSection() {
             tone="primary"
             loading={isLoading}
             value={formatMoney(data?.projected?.revenue)}
-            hint={data ? `${data.projected.orderCount} أوردر مفتوح` : undefined}
+            hint={data ? `${(data.projected?.orderCount ?? 0)} أوردر مفتوح` : undefined}
             icon={<CalendarDays className="h-5 w-5" />}
           />
           <StatCard
@@ -394,7 +394,7 @@ function OverviewSection() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <ProfitEquation isLoading={isLoading} realized={data?.realized} />
+          <ProfitEquation isLoading={isLoading} realized={data?.realized ?? undefined} />
         </CardContent>
       </Card>
       <div className="grid gap-3 lg:grid-cols-3">
@@ -447,22 +447,22 @@ function OverviewSection() {
                 {[
                   {
                     label: "تكلفة البضاعة",
-                    value: data!.realized.cogs,
+                    value: (data?.realized?.cogs ?? 0),
                     color: "var(--warning)",
                   },
                   {
                     label: "تكلفة الشحن",
-                    value: data!.realized.shippingCost,
+                    value: (data?.realized?.shippingCost ?? 0),
                     color: "var(--info)",
                   },
                   {
                     label: "المصروفات",
-                    value: data!.realized.expenses,
+                    value: (data?.realized?.expenses ?? 0),
                     color: "var(--purple)",
                   },
                   {
                     label: "Scrap / Loss",
-                    value: data!.realized.scrapLoss,
+                    value: (data?.realized?.scrapLoss ?? 0),
                     color: "var(--destructive)",
                   },
                 ].map(row => {

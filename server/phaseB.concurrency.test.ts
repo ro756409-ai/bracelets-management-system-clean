@@ -119,14 +119,17 @@ describe("🔑 P1-2/P1-3 · الحركة الذرّية والقفل — على 
     expect(fn).toContain('if (order.status === "confirmed")');
   });
 
-  it("🔑 markOrderAsReturned: transaction + قفل + عكس واحد", () => {
+  it("🔑 markOrderAsReturned: transaction + قفل + بلا أي إعادة للمخزون (سياسة المرحلة 0.5)", () => {
     const fn = db.slice(
       db.indexOf("export async function markOrderAsReturned("),
       db.indexOf("export async function getReturnsList(")
     );
     expect(fn).toContain("db.transaction");
     expect(fn).toContain('.for("update")');
-    expect(fn).toContain("addInventoryMovementInTransaction(tx");
+    // المرتجع لا يعود للمخزون المتاح للبيع: لا حركة مخزون هنا، وطلب الإعادة يُرفض صراحة.
+    expect(fn).not.toContain("addInventoryMovementInTransaction(tx");
+    expect(fn).toContain("if (restoreStock)");
+    expect(fn).toContain("throw new OrderStatusGuardError(");
     // حارس الحالة هو حارس الازدواج.
     expect(fn).toContain('allowedStatuses.includes(order.status)');
   });

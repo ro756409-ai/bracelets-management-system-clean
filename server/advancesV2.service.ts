@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { businesses, employeeAdvances, employees } from "../drizzle/schema";
+import { businesses, employeeAdvances, employees, treasuryTransactions } from "../drizzle/schema";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import {
   createBusinessEventInTransaction,
@@ -35,6 +35,9 @@ export async function issueEmployeeAdvance(input: {
       throw new Error("الموظف تابع لنشاط تاني");
     const [business] = await tx.select().from(businesses).where(eq(businesses.id, input.businessId)).limit(1);
     if (!business) throw new Error("Business not found");
+    // الموظف بلا نشاط (businessId = NULL) لازم يكون على الأقل من نفس الشركة — كان بيقبل أي tenant.
+    if (employee.tenantId != null && business.tenantId != null && employee.tenantId !== business.tenantId)
+      throw new Error("الموظف تابع لشركة أخرى — السُلفة مرفوضة");
     const amount = fromMinorUnits(toMinorUnits(input.amount));
     // نفس منطق دفع المصروف: التاجر مالوش دعوة بحسابات، والاتنين بيتعملوا لو مش موجودين.
     const sourceAccountId =
@@ -54,6 +57,23 @@ export async function issueEmployeeAdvance(input: {
       payload: { employeeId: employee.id, amount, receivableAccountId },
       actor: input.actor,
     });
+    // نفس المفتاح = نفس السُلفة: نرجّع الأصلية بلا نقدية ولا حركة مالية ثانية. الفحص **قبل**
+    // أي كتابة نقدية — كان الحدث المكرر بيتجاهل والفلوس بتخرج مرتين.
+    if (event.duplicate) {
+      const [existing] = await tx
+        .select({ id: employeeAdvances.id, financialTransactionId: employeeAdvances.financialTransactionId })
+        .from(employeeAdvances)
+        .where(and(eq(employeeAdvances.businessId, input.businessId), eq(employeeAdvances.employeeId, employee.id), eq(employeeAdvances.advanceDate, input.advanceDate), eq(employeeAdvances.amount, amount)))
+        .orderBy(employeeAdvances.id)
+        .limit(1);
+      if (!existing) throw new Error("حدث السُلفة موجود بلا سجل سُلفة — يحتاج مراجعة يدوية");
+      const [existingTreasury] = await tx
+        .select({ id: treasuryTransactions.id })
+        .from(treasuryTransactions)
+        .where(and(eq(treasuryTransactions.businessId, input.businessId), eq(treasuryTransactions.referenceType, "manual"), eq(treasuryTransactions.referenceId, employee.id), eq(treasuryTransactions.transactionDate, input.advanceDate), eq(treasuryTransactions.amount, amount)))
+        .limit(1);
+      return { id: existing.id, transactionId: existing.financialTransactionId, treasuryTransactionId: existingTreasury?.id ?? null, duplicate: true as const };
+    }
     const transaction = await postFinancialTransactionInTransaction(tx, {
       businessId: input.businessId,
       transactionType: "employee_advance",
@@ -102,6 +122,7 @@ export async function issueEmployeeAdvance(input: {
       id: Number(result?.insertId ?? result?.[0]?.insertId),
       transactionId: transaction.id,
       treasuryTransactionId: treasury.id,
+      duplicate: false as const,
     };
   });
 }

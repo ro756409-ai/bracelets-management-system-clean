@@ -271,7 +271,6 @@ export default function Orders() {
   const [returnOrderId, setReturnOrderId] = useState<number | null>(null);
   const [returnReason, setReturnReason] = useState("");
   const [returnNotes, setReturnNotes] = useState("");
-  const [returnRestoreStock, setReturnRestoreStock] = useState(true);
 
   // Order details state
   const [detailOrderId, setDetailOrderId] = useState<number | null>(null);
@@ -557,7 +556,7 @@ export default function Orders() {
       toast.success("✅ تم تسجيل المرتجع بنجاح");
       utils.orders.list.invalidate();
       setShowReturnDialog(false);
-      setReturnReason(""); setReturnNotes(""); setReturnRestoreStock(true);
+      setReturnReason(""); setReturnNotes("");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -1612,10 +1611,10 @@ export default function Orders() {
               <Label>ملاحظات إضافية</Label>
               <Textarea value={returnNotes} onChange={e => setReturnNotes(e.target.value)} placeholder="أي تفاصيل إضافية..." className="mt-1" rows={3} />
             </div>
-            <div className="flex items-center gap-3 p-3 bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-lg">
-              <input type="checkbox" id="restoreStock" checked={returnRestoreStock} onChange={e => setReturnRestoreStock(e.target.checked)}
-                className="w-4 h-4 accent-[var(--success)]" />
-              <label htmlFor="restoreStock" className="text-sm cursor-pointer">إعادة الكمية للمخزون تلقائياً</label>
+            {/* سياسة النشاط: المنتج المرتجع لا يعود للمخزون المتاح للبيع — الخيار القديم كان يضيف
+                كمية الرأس للمنتج الأب. السيرفر يرفض restoreStock=true أيضًا. */}
+            <div className="p-3 bg-muted border rounded-lg text-sm text-muted-foreground">
+              المرتجع يُسجَّل بلا إعادة كمية للمخزون (سياسة النشاط). القطع الراجعة تُتابَع في نموذج المرتجعات القادم.
             </div>
           </div>
           <DialogFooter>
@@ -1625,7 +1624,7 @@ export default function Orders() {
               disabled={!returnReason || returnMutation.isPending}
               onClick={() => {
                 if (!returnOrderId || !returnReason) return;
-                returnMutation.mutate({ orderId: returnOrderId, returnReason: returnReason as any, notes: returnNotes || undefined, restoreStock: returnRestoreStock });
+                returnMutation.mutate({ orderId: returnOrderId, returnReason: returnReason as any, notes: returnNotes || undefined, restoreStock: false });
               }}
             >
               {returnMutation.isPending ? "جاري التسجيل..." : "تأكيد المرتجع"}

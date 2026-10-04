@@ -108,6 +108,8 @@ import { normalizeEgyptianPhone } from "../shared/phone";
 import {
   ALL_PERMISSIONS,
   hasTenantPermission,
+  isAccountingModuleEnabled,
+  ACCOUNTING_FROZEN_MESSAGE,
   isAdminTierRole,
   isOwnerRole,
   hasPermission,
@@ -295,6 +297,35 @@ function requireEmployeePermission(permission: Permission) {
  * تأكيد الأوردر مع تحويل عجز المخزون لرفض واضح (BAD_REQUEST برسالة عربية) بدل خطأ عام.
  * الخصم نفسه ذرّي داخل confirmOrder — الرفض = مفيش أي خصم جزئي.
  */
+/** يحوّل رفض السياسة (حذف مؤكد، تأكيد بالتعديل، تسليم بوسطة يدوي، إرجاع للمخزون) لـBAD_REQUEST بدل 500. */
+async function withStatusGuard<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof OrderStatusGuardError)
+      throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    throw err;
+  }
+}
+
+/**
+ * تجميد المسارات المالية التي لا تمر بصلاحية من مجموعة التجميد (adminProcedure/ownerProcedure/
+ * shipping_finance.*). نفس الرسالة الموحّدة. يُرفع تلقائيًا مع ACCOUNTING_MODULE_ENABLED=true.
+ */
+const frozenWhileAccountingDisabled = async ({ next }: { next: () => Promise<any> }) => {
+  if (!isAccountingModuleEnabled())
+    throw new TRPCError({ code: "FORBIDDEN", message: ACCOUNTING_FROZEN_MESSAGE });
+  return next();
+};
+
+/** صافي الربح وهامشه لمن يملك reports.view_profit فقط — المالك/الأدمن الحقيقي أو موظف بالصلاحية. */
+async function canViewProfit(ctx: { user?: { role?: string | null } | null; employee?: { role?: string | null } | null; tenantId?: number | null }): Promise<boolean> {
+  if (ctx.employee?.role === "manager") return false; // المدير تشغيلي بحت — نفس قاعدة permissionProcedure للمالي
+  if (ctx.user?.role === "admin") return true;
+  if (ctx.tenantId == null) return false;
+  return hasTenantPermission(ctx.tenantId, ctx.employee?.role, "reports.view_profit");
+}
+
 async function confirmOrderOrReject(orderId: number, updatedBy: number, confirmedByName?: string) {
   try {
     return await confirmOrder(orderId, updatedBy, confirmedByName);
@@ -694,6 +725,7 @@ import {
   StockShortfallError,
   OrderConfirmBlockedError,
   OrderStockInconsistencyError,
+  OrderStatusGuardError,
   postponeOrder,
   cancelOrder,
   editOrderWithInventory,
@@ -946,14 +978,18 @@ export const appRouter = router({
           })
           .optional()
       )
-      .query(async ({ ctx, input }) =>
-        getBusinessEventDashboard({
+      .query(async ({ ctx, input }) => {
+        const data = await getBusinessEventDashboard({
           businessIds:
             (await scopeBusinessIds(ctx, input ?? {})) ?? [],
           dateFrom: input?.dateFrom,
           dateTo: input?.dateTo,
-        })
-      ),
+        });
+        // الربح (المحقق والمتوقع) لمن يملك reports.view_profit فقط — الحجب من السيرفر.
+        if (await canViewProfit(ctx)) return data;
+        const { realized: _r, projected: _p, ...operational } = data;
+        return { ...operational, realized: null, projected: null, profitHidden: true as const };
+      }),
     /**
      * ملخص لوحة المحاسب — تجميع قراءة فقط من دوال موجودة (شوف accountantSummary.service).
      * محمي بـaccounting.view زي باقي شاشات الحسابات؛ النطاق على أنشطة الجلسة.
@@ -1029,6 +1065,17 @@ export const appRouter = router({
           .from(accountingClosings)
           .where(eq(accountingClosings.businessId, businessId))
           .limit(1);
+        const [currentBiz] = await db
+          .select({ accountingGoLiveAt: businessesTable.accountingGoLiveAt })
+          .from(businessesTable)
+          .where(eq(businessesTable.id, businessId))
+          .limit(1);
+        // ضبط تاريخ التشغيل المحاسبي يبدّل سلوك المخزون والمرتجعات كلها — مجمَّد مع النظام.
+        if (
+          !isAccountingModuleEnabled() &&
+          (currentBiz?.accountingGoLiveAt?.getTime() ?? null) !== input.accountingGoLiveAt.getTime()
+        )
+          throw new TRPCError({ code: "FORBIDDEN", message: ACCOUNTING_FROZEN_MESSAGE });
         if (event || closing)
           throw new TRPCError({
             code: "CONFLICT",
@@ -2150,7 +2197,7 @@ export const appRouter = router({
         })
       ),
 
-    shipmentManualEvent: permissionProcedure("shipping_finance.manage")
+    shipmentManualEvent: permissionProcedure("shipping_finance.manage").use(frozenWhileAccountingDisabled)
       .input(
         z.object({
           businessId: z.number(),
@@ -2231,7 +2278,7 @@ export const appRouter = router({
         )
       ),
 
-    carrierSettlementApprove: permissionProcedure("shipping_finance.approve")
+    carrierSettlementApprove: permissionProcedure("shipping_finance.approve").use(frozenWhileAccountingDisabled)
       .input(
         z.object({
           businessId: z.number(),
@@ -2264,7 +2311,7 @@ export const appRouter = router({
         })
       ),
 
-    dailySettlementRecord: permissionProcedure("shipping_finance.manage")
+    dailySettlementRecord: permissionProcedure("shipping_finance.manage").use(frozenWhileAccountingDisabled)
       .input(
         z.object({
           businessId: z.number(),
@@ -2293,7 +2340,7 @@ export const appRouter = router({
      * إلغاء تحصيل يومي — آمن بحركة عكسية (مش حذف)، بيتطلب سبب. الأصل بيفضل voided.
      * التعديل من الواجهة = إلغاء آمن + تسجيل جديد (بيحافظ على الأثر).
      */
-    dailySettlementVoid: permissionProcedure("shipping_finance.manage")
+    dailySettlementVoid: permissionProcedure("shipping_finance.manage").use(frozenWhileAccountingDisabled)
       .input(z.object({ businessId: z.number(), settlementId: z.number(), reason: z.string().min(1).max(500) }))
       .mutation(async ({ ctx, input }) =>
         voidDailySettlement({
@@ -2415,7 +2462,7 @@ export const appRouter = router({
         })
       ),
 
-    closingLock: ownerProcedure
+    closingLock: ownerProcedure.use(frozenWhileAccountingDisabled)
       .input(z.object({ businessId: z.number(), closingId: z.number() }))
       .mutation(async ({ ctx, input }) =>
         lockClosing({
@@ -3001,6 +3048,7 @@ export const appRouter = router({
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await addInventoryMovement({
           ...input,
+          businessId: product.businessId,
           performedBy: actingEmpId,
         });
         return { success: true };
@@ -3255,7 +3303,8 @@ export const appRouter = router({
         const { id, ...data } = input;
         await requireOwned(ctx, "order", id);
         const actingEmpId = await resolveActingEmployeeId(ctx);
-        await updateOrder(id, { ...data, lastUpdatedBy: actingEmpId });
+        // «مؤكد» و«تم التسليم» لشحنة بوسطة مرفوضان هنا بالسياسة (حارس updateOrder).
+        await withStatusGuard(() => updateOrder(id, { ...data, lastUpdatedBy: actingEmpId }));
         return { success: true };
       }),
 
@@ -3700,7 +3749,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
-        await deleteOrder(input.orderId);
+        await withStatusGuard(() => deleteOrder(input.orderId));
         await addActivityLog({
           action: "delete_order",
           entityType: "order",
@@ -3722,7 +3771,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         // حذف جماعي — الرفض قبل أي مسح لو أي أوردر برّه النطاق.
         await requireAllOwned(ctx, "order", input.orderIds);
-        await deleteOrders(input.orderIds);
+        await withStatusGuard(() => deleteOrders(input.orderIds));
         await addActivityLog({
           action: "bulk_delete_orders",
           entityType: "order",
@@ -4891,13 +4940,18 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
+        if (emp.role !== "manager" && emp.role !== "warehouse")
+          throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
+        // المنتج لازم يكون داخل نطاق الموظف (tenant + نشاطه) — كان بيقبل أي productId.
+        await requireOwned(empScope(ctx), "product", input.productId);
+        const product = await getProductById(input.productId);
+        if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "المنتج غير موجود" });
         // الربط بأوردر اختياري — بيتفحص لما يتبعت بس.
         if (input.orderId != null)
           await requireOwned(empScope(ctx), "order", input.orderId);
-        if (emp.role !== "manager" && emp.role !== "warehouse")
-          throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
         await addInventoryMovement({
           ...input,
+          businessId: product.businessId,
           performedBy: emp.id,
         });
         return { success: true };
@@ -5248,7 +5302,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
         // المسار الوحيد للحذف — بيمسح الأصناف مع الأوردر (منع الـorphans).
-        await deleteOrder(input.orderId);
+        await withStatusGuard(() => deleteOrder(input.orderId));
         return { success: true };
       }),
 
@@ -5291,7 +5345,7 @@ export const appRouter = router({
         .from(orders)
         .where(eq(orders.isDuplicate, true));
       const ids = dupRows.map(r => r.id);
-      await deleteOrders(ids);
+      await withStatusGuard(() => deleteOrders(ids));
       return { deleted: ids.length };
     }),
   }),
@@ -5658,7 +5712,7 @@ export const appRouter = router({
             message: "الأوردر غير موجود أو ليس من إدخالك",
           });
         // نفس helper الحذف — بيمسح الأصناف مع الأوردر (منع الـorphans).
-        await deleteOrder(input.orderId);
+        await withStatusGuard(() => deleteOrder(input.orderId));
         return { success: true };
       }),
 
@@ -6232,19 +6286,20 @@ export const appRouter = router({
           orderId: z.number(),
           returnReason: z.string().min(1).max(80),
           notes: z.string().optional(),
-          restoreStock: z.boolean().default(true),
+          // السياسة: المرتجع لا يعود للمخزون المتاح للبيع — true تُرفض برسالة واضحة.
+          restoreStock: z.boolean().default(false),
         })
       )
       .mutation(async ({ input, ctx }) => {
         await requireOwned(ctx, "order", input.orderId);
         const userId = ctx.user?.id ?? 0;
-        return markOrderAsReturned(
+        return withStatusGuard(() => markOrderAsReturned(
           input.orderId,
           input.returnReason,
           input.notes,
           userId,
           input.restoreStock
-        );
+        ));
       }),
 
     // قائمة المرتجعات
@@ -8042,7 +8097,7 @@ export const appRouter = router({
       ),
 
     // الافتتاحي والتسوية للمالك بس — الاتنين بيغيّروا الرصيد من غير حركة حقيقية ورا.
-    openingBalance: ownerProcedure
+    openingBalance: ownerProcedure.use(frozenWhileAccountingDisabled)
       .input(
         z.object({
           businessId: z.number(),
@@ -8063,7 +8118,7 @@ export const appRouter = router({
         })
       ),
 
-    adjustment: ownerProcedure
+    adjustment: ownerProcedure.use(frozenWhileAccountingDisabled)
       .input(
         z.object({
           businessId: z.number(),
@@ -8156,7 +8211,7 @@ export const appRouter = router({
         return getPayrollSettings(businessId);
       }),
 
-    settingsSave: adminProcedure
+    settingsSave: adminProcedure.use(frozenWhileAccountingDisabled)
       .input(
         z.object({
           businessId: z.number(),
@@ -8607,7 +8662,7 @@ export const appRouter = router({
         });
       }),
 
-    itemUpdate: adminProcedure
+    itemUpdate: adminProcedure.use(frozenWhileAccountingDisabled)
       .input(
         z.object({
           id: z.number(),
