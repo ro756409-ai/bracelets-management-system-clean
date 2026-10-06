@@ -284,7 +284,10 @@ describe("🔑 المصروف بيتعدّ مرة واحدة في التقاري
       "export async function addTreasuryTransactionInTransaction"
     );
     expect(balance).toContain("treasuryTransactions.balanceAfter");
-    expect(balance).toContain("orderBy(desc(treasuryTransactions.id))");
+    // آخر صف **لكل نشاط** ثم الجمع — لا أحدث صف عام عبر الأنشطة.
+    expect(balance).toContain("MAX(${treasuryTransactions.id})");
+    expect(balance).toContain("groupBy(treasuryTransactions.businessId)");
+    expect(balance).not.toContain("orderBy(desc(treasuryTransactions.id))");
   });
 });
 

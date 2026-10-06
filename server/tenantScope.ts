@@ -102,17 +102,25 @@ async function businessIdOf(
  * على **نفس** مصدر الحقيقة اللي `scopeBusinessId` بتستخدمه — مفيش قاعدة عزل تانية.
  * `null` معناها الداتابيز مش متاحة، ونفس سلوك `scopeBusinessId`: مانمنعش لسبب غلط.
  */
+export class ScopeUnavailableError extends Error {
+  constructor() {
+    super("تعذر التحقق من ملكية السجل (قاعدة البيانات غير متاحة أو نطاق الجلسة غير محدد) — رُفض الطلب احتياطًا");
+    this.name = "ScopeUnavailableError";
+  }
+}
+
 export async function assertOwned(
   allowedBusinessIds: number[] | null,
   entity: ScopedEntity | "variant",
   id: number
 ): Promise<void> {
   const businessId = await businessIdOf(entity, id);
-  if (businessId === undefined) return; // مش قادر أتحقق
+  // fail-closed: تعذّر إثبات الملكية (DB غير متاحة أو نطاق مجهول) = رفض بخطأ واضح، لا سماح.
+  if (businessId === undefined) throw new ScopeUnavailableError();
   const label =
     entity === "variant" ? "النوع" : ENTITIES[entity as ScopedEntity].label;
   if (businessId === null) throw new RecordNotFoundError(`${label} غير موجود`);
-  if (allowedBusinessIds == null) return;
+  if (allowedBusinessIds == null) throw new ScopeUnavailableError();
   // السجل اللي مالوش نشاط مايتلمسش من جلسة نطاقها محدد.
   if (!allowedBusinessIds.includes(businessId)) throw new OutOfScopeError();
 }
@@ -128,9 +136,11 @@ export async function assertAllOwned(
   // منتج أب واحد: نقوش الأساور). من غير التمييز، المقارنة `rows.length !== ids.length`
   // كانت بترمي "غير موجود" غلط رغم إن المنتج موجود ومملوك.
   const distinctIds = [...new Set(ids)];
-  if (distinctIds.length === 0 || allowedBusinessIds == null) return;
+  if (distinctIds.length === 0) return;
+  // fail-closed كما في assertOwned: نطاق مجهول أو DB غير متاحة = رفض لا سماح.
+  if (allowedBusinessIds == null) throw new ScopeUnavailableError();
   const db = await getDb();
-  if (!db) return;
+  if (!db) throw new ScopeUnavailableError();
   const { table, label } = ENTITIES[entity];
   const rows = await db
     .select({ id: (table as any).id, businessId: (table as any).businessId })

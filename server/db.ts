@@ -5547,23 +5547,30 @@ export async function getOrderItemsForOrders(
 // قراءة. السبب إن الأرصدة التاريخية لازم تفضل ثابتة: لو حسبناها بالجمع، إدخال حركة
 // بتاريخ قديم كان هيحرّك كل الأرصدة اللي بعدها ويخلي التاجر مايقدرش يطابق كشف قديم.
 
-/** رصيد الخزنة الحالي = balanceAfter لآخر حركة. صفر لو مفيش حركات. */
+/**
+ * رصيد الخزنة الحالي = مجموع «آخر balanceAfter لكل نشاط على حدة». صفر لو مفيش حركات.
+ *
+ * السلسلة لكل نشاط مستقلة (الكاتب يقرأ آخر صف **لنفس businessId**)، فأخذ أحدث صف عام عبر
+ * عدة أنشطة كان يرجع رصيد النشاط الذي تحرّك آخرًا فقط — لا المجموع. المقصود: لكل نشاط
+ * صفه الأخير ثم الجمع.
+ */
 export async function getTreasuryBalance(
   businessIds?: number[] | null
 ): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
-  const conditions =
-    businessIds && businessIds.length > 0
-      ? [inArray(treasuryTransactions.businessId, businessIds)]
-      : [];
-  const [row] = await db
-    .select({ balanceAfter: treasuryTransactions.balanceAfter })
+  if (businessIds && businessIds.length === 0) return 0;
+  const scope = businessIds && businessIds.length > 0 ? inArray(treasuryTransactions.businessId, businessIds) : undefined;
+  const lastPerBusiness = db
+    .select({ id: sql<number>`MAX(${treasuryTransactions.id})` })
     .from(treasuryTransactions)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(desc(treasuryTransactions.id))
-    .limit(1);
-  return row ? Number(row.balanceAfter) : 0;
+    .where(scope)
+    .groupBy(treasuryTransactions.businessId);
+  const rows = await db
+    .select({ businessId: treasuryTransactions.businessId, balanceAfter: treasuryTransactions.balanceAfter })
+    .from(treasuryTransactions)
+    .where(inArray(treasuryTransactions.id, lastPerBusiness));
+  return Math.round(rows.reduce((sum, r) => sum + Number(r.balanceAfter), 0) * 100) / 100;
 }
 
 /**

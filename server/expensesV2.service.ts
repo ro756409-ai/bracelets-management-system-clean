@@ -7,6 +7,7 @@ import {
   expenseCategories,
   expensePayments,
   expenses,
+  financialTransactions,
 } from "../drizzle/schema";
 import { allocateDaily } from "../shared/accrualAllocation";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
@@ -197,6 +198,12 @@ export async function payExpense(input: {
   paidAt: Date;
   /** اختياري — الدفع بيتسجّل من غير رابط فاتورة/دليل. */
   evidenceUrl?: string;
+  /**
+   * معرّف عملية من العميل لكل ضغطة مقصودة (اختياري). بدونه المفتاح يعتمد على المدفوع الحالي،
+   * فإعادة المحاولة **بعد** نجاح الدفع ترى مدفوعًا جديدًا ومفتاحًا جديدًا. به: نفس الضغطة =
+   * نفس المفتاح = لا دفع ثانٍ، مهما تكررت.
+   */
+  operationId?: string;
   actor: Actor;
 }) {
   const db = await getDb();
@@ -220,11 +227,24 @@ export async function payExpense(input: {
       eventType: "expense.paid",
       sourceType: "expense",
       sourceReference: String(expense.id),
-      idempotencyKey: `expense:${expense.id}:payment:${expense.paidAmount}:${input.amount}`,
+      idempotencyKey: input.operationId
+        ? `expense:${expense.id}:payment:op:${input.operationId}`
+        : `expense:${expense.id}:payment:${expense.paidAmount}:${input.amount}`,
       occurredAt: input.paidAt,
       payload: { expenseId: expense.id, amount: fromMinorUnits(paymentMinor), sourceAccountId },
       actor: input.actor,
     });
+    // الحدث موجود من قبل = الدفعة سُجّلت فعلًا: لا قيد ولا خصم ثانٍ — نرجع ما سُجّل.
+    if (eventResult.duplicate) {
+      const [posted] = await tx.select({ id: financialTransactions.id }).from(financialTransactions)
+        .where(and(eq(financialTransactions.businessId, input.businessId), eq(financialTransactions.businessEventId, eventResult.event.id))).limit(1);
+      return {
+        transactionId: posted?.id ?? null,
+        treasuryTransactionId: null,
+        remainingAmount: fromMinorUnits(toMinorUnits(expense.amount) - toMinorUnits(expense.paidAmount)),
+        duplicate: true as const,
+      };
+    }
     const financial = await postFinancialTransactionInTransaction(tx, {
       businessId: input.businessId,
       transactionType: "expense_payment",
@@ -264,9 +284,10 @@ export async function payExpense(input: {
     // لو الخزنة مااتكتبتش، الدفعة كلها ترجع. الفشل الصريح أرحم من دفترين مختلفين.
     if (!treasury) throw new Error("تعذر تسجيل حركة الخزنة — الدفعة اترجعت");
     return {
-      transactionId: financial.id,
-      treasuryTransactionId: treasury.id,
+      transactionId: financial.id as number | null,
+      treasuryTransactionId: treasury.id as number | null,
       remainingAmount: fromMinorUnits(toMinorUnits(expense.amount) - paid),
+      duplicate: false as const,
     };
   });
 }

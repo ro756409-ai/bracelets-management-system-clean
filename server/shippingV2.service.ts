@@ -1,3 +1,5 @@
+import { isAccountingModuleEnabled } from "./permissions";
+import { IdempotencyConflictError } from "./accountingV2.service";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import {
   businessEvents,
@@ -44,6 +46,9 @@ export async function recordIntegrationOrderEvent(input: {
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  // الوحدة المحاسبية مجمّدة → لا أحداث مالية ولا شحنات V2 ولا ذمم COD من أي تكامل. التشغيل
+  // (تحديث حالة الأوردر) يكمل عند المنادي بنفس مسار «المحاسبة غير مفعّلة».
+  if (!isAccountingModuleEnabled()) return { ignored: true as const, reason: "accounting_not_active" };
   const prepared = await db.transaction(async tx => {
     const [order] = await tx
       .select()
@@ -296,7 +301,33 @@ export async function recordShipmentEvent(input: {
         )
       )
       .limit(1);
-    if (duplicate) return { shipmentEventId: duplicate.id, duplicate: true };
+    if (duplicate) return { shipmentEventId: duplicate.id, duplicate: true as const };
+    // idempotency بمعرّف المزوّد **قبل أي كتابة**: نفس المعرّف بنفس هوية الحدث (النوع، كود
+    // المزوّد، المبلغ المحصَّل) = إعادة إرسال → لا شيء يُكتب؛ نفس المعرّد بهوية مختلفة = تعارض
+    // يُرفض صراحةً (لا نجاح ولا تجاهل صامت).
+    const idempotencyKey = `shipment:${shipment.id}:event:${input.providerEventId ?? hash}`;
+    const [priorEvent] = await tx
+      .select()
+      .from(businessEvents)
+      .where(and(eq(businessEvents.businessId, input.businessId), eq(businessEvents.idempotencyKey, idempotencyKey)))
+      .limit(1);
+    if (priorEvent) {
+      let prior: Record<string, unknown> = {};
+      try { prior = JSON.parse(priorEvent.payloadJson); } catch { /* حمولة قديمة غير قابلة للقراءة → تعارض */ }
+      const sameIdentity =
+        priorEvent.eventType === `shipment.${input.normalizedEvent}` &&
+        prior.providerStatusCode === input.providerStatusCode &&
+        (input.normalizedEvent !== "delivered" ||
+          String(prior.collectedAmount ?? "") === String(input.collectedAmount ?? order.totalAmount));
+      if (!sameIdentity) throw new IdempotencyConflictError();
+      const [priorShipmentEvent] = await tx.select({ id: shipmentEvents.id }).from(shipmentEvents)
+        .where(eq(shipmentEvents.businessEventId, priorEvent.id)).limit(1);
+      return { shipmentEventId: priorShipmentEvent?.id ?? null, duplicate: true as const, reason: "idempotent_replay" as const };
+    }
+    // حالة الشحنة: تسليم ثانٍ بمعرّف جديد لشحنة مسلَّمة فعلًا لا يعيد الإيراد ولا ينشئ ذمة
+    // COD ثانية — يُتجاهل بسبب واضح بلا أي كتابة.
+    if (input.normalizedEvent === "delivered" && (shipment.deliveredAt != null || order.deliveredAt != null))
+      return { shipmentEventId: null, duplicate: true as const, reason: "already_delivered" as const };
 
     const items = await tx
       .select()
@@ -415,11 +446,17 @@ export async function recordShipmentEvent(input: {
       eventType: `shipment.${input.normalizedEvent}`,
       sourceType: "shipment",
       sourceReference: String(shipment.id),
-      idempotencyKey: `shipment:${shipment.id}:event:${input.providerEventId ?? hash}`,
+      idempotencyKey,
       occurredAt: input.occurredAt,
       payload: eventPayload,
       actor: input.actor,
     });
+    // سباق متزامن: الطلب الآخر أنشأ الحدث بين الفحص المسبق والإدراج → الحدث مسجّل بقيوده: لا ذمة COD ولا حدث شحنة ثانٍ.
+    if (businessEvent.duplicate) {
+      const [prior] = await tx.select({ id: shipmentEvents.id }).from(shipmentEvents)
+        .where(eq(shipmentEvents.businessEventId, businessEvent.event.id)).limit(1);
+      return { shipmentEventId: prior?.id ?? null, duplicate: true as const, reason: "idempotent_replay" as const };
+    }
     if (
       input.normalizedEvent === "delivered" &&
       order.paymentMethod?.toLowerCase() === "cod"

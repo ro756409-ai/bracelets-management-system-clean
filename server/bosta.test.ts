@@ -112,21 +112,17 @@ describe("Bosta integration - access control", () => {
 });
 
 describe("Bosta integration - duplicate & non-existent handling", () => {
-  it("admin sending a non-existent order returns failure without throwing", async () => {
+  // بلا قاعدة بيانات (هذه الاختبارات لا تملك DB) حارس الملكية **لا يسمح**: تعذّر إثبات
+  // الملكية = رفض بخطأ واضح (fail-closed) — لا تمرير إلى الخدمة ولا «فشل ناعم».
+  it("admin sending a non-existent order without a DB is refused by the ownership guard (fail-closed)", async () => {
     const caller = appRouter.createCaller(createAdminContext());
-    // طلب إرسال أوردر غير موجود يجب أن يرجع success=false وليس استثناء
-    const res = await caller.orders.sendToBosta({ orderId: 999999999 });
-    expect(res.success).toBe(false);
-    expect(res.error).toBeTruthy();
+    // بلا DB → ScopeUnavailable (fail-closed)؛ مع DB اختبار → السجل غير موجود. لا «فشل ناعم» في الحالتين.
+    await expect(caller.orders.sendToBosta({ orderId: 999999999 })).rejects.toThrow(/تعذر التحقق من ملكية السجل|غير موجود/);
   });
 
-  it("bulkSendToBosta returns aggregated success/failed counts", async () => {
+  it("bulkSendToBosta without a DB is refused the same way — no partial results", async () => {
     const caller = appRouter.createCaller(createAdminContext());
-    const res = await caller.orders.bulkSendToBosta({ orderIds: [999999999] });
-    expect(res).toHaveProperty("success");
-    expect(res).toHaveProperty("failed");
-    expect(res.failed).toBeGreaterThanOrEqual(1);
-    expect(Array.isArray(res.errors)).toBe(true);
+    await expect(caller.orders.bulkSendToBosta({ orderIds: [999999999] })).rejects.toThrow(/تعذر التحقق من ملكية السجل|غير موجود/);
   });
 });
 

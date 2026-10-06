@@ -44,6 +44,29 @@ import { webhookLogs } from "../drizzle/schema";
 import { desc, inArray } from "drizzle-orm";
 import { upsertEasyOrder, fetchEasyOrderById, type EasyOrderPayload } from "./easyorder.service";
 import { recordIntegrationOrderEvent } from "./shippingV2.service";
+import { IdempotencyConflictError } from "./accountingV2.service";
+
+/**
+ * الحدث المحاسبي للتكامل: مجمّد → `accounting_not_active` (التشغيل يكمل)؛ تعارض idempotency
+ * (نفس payment_ref_id بحمولة مختلفة) → لا حركة مالية، يُسجّل كخطأ، والتشغيل يكمل كذلك.
+ */
+async function integrationAccountingEvent(
+  input: Parameters<typeof recordIntegrationOrderEvent>[0],
+  log: (entry: { eventType: string; status: "error"; externalOrderId?: string; message: string }) => Promise<unknown>,
+  externalOrderId: string | undefined,
+  orderNumber: string
+) {
+  try {
+    return await recordIntegrationOrderEvent(input);
+  } catch (err) {
+    if (!(err instanceof IdempotencyConflictError)) throw err;
+    await log({
+      eventType: "order-status-update", status: "error", externalOrderId,
+      message: `تعارض معرّف الحدث المالي للأوردر #${orderNumber}: ${err.message} — لم تُسجَّل أي حركة مالية`,
+    });
+    return { ignored: true as const, reason: "accounting_not_active" as const };
+  }
+}
 
 type EnforcementMode = "log_only" | "enforce";
 
@@ -228,7 +251,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       const existing = payload.order_id ? await getOrderByExternalId(payload.order_id, channel.businessId) : undefined;
 
       if (existing && mapped) {
-        const accountingEvent = await recordIntegrationOrderEvent({
+        const accountingEvent = await integrationAccountingEvent({
           businessId: channel.businessId,
           orderId: existing.id,
           integrationCode: channel.platform,
@@ -236,7 +259,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
           occurredAt: new Date(),
           payload,
           providerEventId: payload.payment_ref_id,
-        });
+        }, logWebhook as any, payload.order_id, existing.orderNumber);
         if ((accountingEvent as any).reason === "accounting_not_active") {
           const applied = await applyExternalStatus(existing.id, mapped);
           if (!applied.ok) {
@@ -307,7 +330,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       // Apply the new status on top of the freshly stored order, when we understand it.
       const restored = await getOrderByExternalId(payload.order_id, channel.businessId);
       if (restored && mapped) {
-        const accountingEvent = await recordIntegrationOrderEvent({
+        const accountingEvent = await integrationAccountingEvent({
           businessId: channel.businessId,
           orderId: restored.id,
           integrationCode: channel.platform,
@@ -315,7 +338,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
           occurredAt: new Date(),
           payload,
           providerEventId: payload.payment_ref_id,
-        });
+        }, logWebhook as any, payload.order_id, restored.orderNumber);
         if ((accountingEvent as any).reason === "accounting_not_active") await applyExternalStatus(restored.id, mapped);
       }
 

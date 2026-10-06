@@ -48,6 +48,14 @@ export function payloadHash(payload: unknown): string {
   return createHash("sha256").update(stableJson(payload)).digest("hex");
 }
 
+/** نفس مفتاح الـidempotency بحمولة مختلفة — ليس نجاحًا ولا تكرارًا: تعارض يُرفض صراحةً. */
+export class IdempotencyConflictError extends Error {
+  constructor(message = "نفس معرّف العملية أُعيد استخدامه ببيانات مختلفة — رُفض لمنع تسجيل حركة خاطئة") {
+    super(message);
+    this.name = "IdempotencyConflictError";
+  }
+}
+
 export async function createBusinessEventInTransaction(
   tx: any,
   input: {
@@ -75,8 +83,7 @@ export async function createBusinessEventInTransaction(
     )
     .limit(1);
   if (existing) {
-    if (existing.payloadHash !== hash)
-      throw new Error("Idempotency key reused with a different payload");
+    if (existing.payloadHash !== hash) throw new IdempotencyConflictError();
     return { event: existing, duplicate: true } as const;
   }
 

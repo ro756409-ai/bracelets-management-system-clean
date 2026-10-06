@@ -102,6 +102,7 @@ import {
   assertOwned,
   OutOfScopeError,
   RecordNotFoundError,
+  ScopeUnavailableError,
   type ScopedEntity,
 } from "./tenantScope";
 import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
@@ -142,7 +143,19 @@ import {
   getFinancialAccounts,
   postFinancialTransaction,
   recordManualTreasuryEntry,
+  IdempotencyConflictError,
 } from "./accountingV2.service";
+
+/** نفس معرّف العملية ببيانات مختلفة → CONFLICT واضح للعميل بدل 500 غامض. */
+async function withIdempotencyGuard<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof IdempotencyConflictError)
+      throw new TRPCError({ code: "CONFLICT", message: err.message });
+    throw err;
+  }
+}
 import {
   approvePurchaseReceipt,
   approveReturnInspection,
@@ -416,6 +429,8 @@ async function requireOwned(
       throw new TRPCError({ code: "FORBIDDEN", message: error.message });
     if (error instanceof RecordNotFoundError)
       throw new TRPCError({ code: "NOT_FOUND", message: error.message });
+    if (error instanceof ScopeUnavailableError)
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
     throw error;
   }
 }
@@ -434,6 +449,8 @@ async function requireAllOwned(
       throw new TRPCError({ code: "FORBIDDEN", message: error.message });
     if (error instanceof RecordNotFoundError)
       throw new TRPCError({ code: "NOT_FOUND", message: error.message });
+    if (error instanceof ScopeUnavailableError)
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: error.message });
     throw error;
   }
 }
@@ -1511,17 +1528,21 @@ export const appRouter = router({
           paidAt: z.date(),
           // الدليل بقى اختياري — التاجر بيسجّل الدفع مباشرة من غير رابط فاتورة.
           evidenceUrl: z.string().url().optional(),
+          /** معرّف الضغطة (uuid من العميل) — إعادة الإرسال بنفسه لا تدفع مرتين. */
+          operationId: z.string().trim().min(8).max(100).optional(),
         })
       )
       .mutation(async ({ ctx, input }) =>
-        payExpense({
-          ...input,
-          businessId: await requireScopedBusinessId(
-            ctx,
-            input.businessId
-          ),
-          actor: await requireActor(ctx),
-        })
+        withIdempotencyGuard(async () =>
+          payExpense({
+            ...input,
+            businessId: await requireScopedBusinessId(
+              ctx,
+              input.businessId
+            ),
+            actor: await requireActor(ctx),
+          })
+        )
       ),
 
     adSpendCreate: permissionProcedure("ad_spend.manage")
@@ -2263,23 +2284,25 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) =>
-        recordShipmentEvent({
-          ...input,
-          businessId: await requireScopedBusinessId(
-            ctx,
-            input.businessId
-          ),
-          payload: {
-            manual: true,
-            reason: input.reason,
-            occurredAt: input.occurredAt.toISOString(),
-            providerStatusCode: input.providerStatusCode,
-            normalizedEvent: input.normalizedEvent,
-            returnedItems: input.returnedItems,
-          },
-          isManual: true,
-          actor: await requireActor(ctx),
-        })
+        withIdempotencyGuard(async () =>
+          recordShipmentEvent({
+            ...input,
+            businessId: await requireScopedBusinessId(
+              ctx,
+              input.businessId
+            ),
+            payload: {
+              manual: true,
+              reason: input.reason,
+              occurredAt: input.occurredAt.toISOString(),
+              providerStatusCode: input.providerStatusCode,
+              normalizedEvent: input.normalizedEvent,
+              returnedItems: input.returnedItems,
+            },
+            isManual: true,
+            actor: await requireActor(ctx),
+          })
+        )
       ),
 
     carrierSettlementImport: permissionProcedure("shipping_finance.manage")
