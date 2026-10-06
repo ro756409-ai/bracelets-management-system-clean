@@ -703,6 +703,8 @@ import {
   getDefaultPackageImageUrl,
   setDefaultPackageImageUrl,
   insertOrderParseAudit,
+  makeSlug,
+  isOrderNumberCollision,
   findTakenSkusInBusiness,
   isSkuTakenInBusiness,
   updateProduct,
@@ -1158,6 +1160,44 @@ export const appRouter = router({
           );
         const unique = new Map(rows.map(row => [row.configKey, row]));
         return [...unique.values()];
+      }),
+
+    /**
+     * إضافة قيمة تشغيلية بالاسم فقط (نوع شحن / نوع دفع) من داخل نموذج الأوردر — للنشاط الجديد
+     * الذي لا يملك قيمًا بعد. المفتاح الثابت يُولَّد على السيرفر؛ نفس الاسم (بعد التشذيب) لا
+     * يتكرر بل يُعاد الصف القائم (ويُعاد تفعيله لو كان موقوفًا). ضمن نطاق الجلسة فقط.
+     */
+    configurationQuickAdd: permissionProcedure("settings.manage")
+      .input(
+        z.object({
+          businessId: z.number(),
+          namespace: z.enum(["shipping_type", "payment_type"]),
+          displayName: z.string().trim().min(1).max(160),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(ctx, input.businessId);
+        const actor = await requireActor(ctx);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
+        const displayName = input.displayName.replace(/\s+/g, " ").trim();
+        const rows = await db
+          .select()
+          .from(businessConfigurationValues)
+          .where(and(eq(businessConfigurationValues.businessId, businessId), eq(businessConfigurationValues.namespace, input.namespace)));
+        const existing = rows.find(r => r.displayName.replace(/\s+/g, " ").trim().toLowerCase() === displayName.toLowerCase());
+        if (existing) {
+          if (!existing.isActive)
+            await db.update(businessConfigurationValues).set({ isActive: true, updatedBy: actor.id }).where(eq(businessConfigurationValues.id, existing.id));
+          return { ...existing, isActive: true, created: false };
+        }
+        const configKey = makeSlug(displayName, input.namespace, 100);
+        const [ins] = await db.insert(businessConfigurationValues).values({
+          businessId, namespace: input.namespace, configKey, displayName,
+          valueJson: null, sortOrder: rows.length, isActive: true, createdBy: actor.id, updatedBy: actor.id,
+        });
+        const [row] = await db.select().from(businessConfigurationValues).where(eq(businessConfigurationValues.id, Number((ins as any).insertId)));
+        return { ...row, created: true };
       }),
 
     configurationSave: permissionProcedure("settings.manage")
@@ -2841,8 +2881,8 @@ export const appRouter = router({
             message: `رمز المنتج (SKU) "${input.sku}" مستخدم بالفعل`,
           });
         }
-        await createProduct({ ...input, businessId });
-        return { success: true };
+        const id = await createProduct({ ...input, businessId });
+        return { success: true, id };
       }),
     // إنشاء منتج متعدد الخيارات: الأب + كل تركيبات Color×Size في transaction واحدة.
     // الكل-أو-لا-شيء؛ العزل بـbusinessId؛ منع تكرار اللون×المقاس؛ SKU فريد داخل النشاط.
@@ -3249,29 +3289,41 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        const orderNumber = await generateOrderNumber();
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const businessId = await requireScopedBusinessId(
           ctx,
           input.businessId
         );
-        const orderId = await createOrderWithItems(
-          {
-            ...input,
-            businessId,
-            orderNumber,
-            lastUpdatedBy: actingEmpId,
-          },
-          [
-            {
-              productId: input.productId,
-              productName: input.productName,
-              variantId: input.variantId,
-              quantity: input.quantity,
-              unitPrice: Number(input.totalAmount) / input.quantity,
-            },
-          ]
-        );
+        // رقم الأوردر «MAX+1» غير ذرّي: إنشاءان متزامنان قد يحصلان على نفس الرقم فيرفض القيد
+        // الفريد أحدهما. بدل إظهار خطأ خام للمستخدم نعيد التوليد والمحاولة مرات محدودة.
+        let orderNumber = "";
+        let orderId: number | undefined;
+        for (let attempt = 1; ; attempt++) {
+          orderNumber = await generateOrderNumber();
+          try {
+            orderId = await createOrderWithItems(
+              {
+                ...input,
+                businessId,
+                orderNumber,
+                lastUpdatedBy: actingEmpId,
+              },
+              [
+                {
+                  productId: input.productId,
+                  productName: input.productName,
+                  variantId: input.variantId,
+                  quantity: input.quantity,
+                  unitPrice: Number(input.totalAmount) / input.quantity,
+                },
+              ]
+            );
+            break;
+          } catch (err) {
+            if (!isOrderNumberCollision(err) || attempt >= 3) throw err;
+            await new Promise(r => setTimeout(r, 10 * attempt + Math.random() * 20));
+          }
+        }
         if (!orderId)
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",

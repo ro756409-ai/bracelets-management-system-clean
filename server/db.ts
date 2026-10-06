@@ -140,7 +140,7 @@ import {
   ORDER_CONTENT_HEADER_FIELDS,
   orderContentChangedAfterShipment,
 } from "../shared/orderContent";
-import { captureExpectedShippingSnapshotInTransaction } from "./shippingSnapshotV2.service";
+import { captureExpectedShippingSnapshotInTransaction, findEffectiveShippingRate } from "./shippingSnapshotV2.service";
 
 // ==================== CAIRO TIMEZONE HELPERS ====================
 const CAIRO_TIMEZONE = "Africa/Cairo";
@@ -464,7 +464,7 @@ export async function getSignupRequestById(id: number): Promise<SignupRequestSaf
 }
 
 /** slug آمن فريد: أساس ASCII من الاسم (أو fallback) + لاحقة عشوائية — server-side فقط. */
-function makeSlug(base: string, fallback: string, maxLen: number): string {
+export function makeSlug(base: string, fallback: string, maxLen: number): string {
   const ascii = base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 20);
   const rand = Math.random().toString(36).slice(2, 8);
   return `${ascii || fallback}-${rand}`.slice(0, maxLen);
@@ -988,10 +988,11 @@ export async function getProductById(id: number) {
   return result[0];
 }
 
-export async function createProduct(data: InsertProduct) {
+export async function createProduct(data: InsertProduct): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.insert(products).values(data);
+  const [result] = await db.insert(products).values(data);
+  return Number((result as any)?.insertId ?? 0);
 }
 
 export async function updateProduct(id: number, data: Partial<InsertProduct>) {
@@ -1513,6 +1514,14 @@ export function isDeadlockError(err: unknown): boolean {
 
 const TX_MAX_ATTEMPTS = 3;
 
+/** تصادم رقم أوردر (`orders_orderNumber_unique`) — سباق «MAX+1» بين إنشاءين متزامنين. */
+export function isOrderNumberCollision(err: unknown): boolean {
+  for (let e: any = err, depth = 0; e && depth < 6; e = e.cause, depth++) {
+    if ((e.code === "ER_DUP_ENTRY" || e.errno === 1062) && String(e.sqlMessage ?? e.message ?? "").includes("orders_orderNumber_unique")) return true;
+  }
+  return false;
+}
+
 /**
  * يشغّل transaction كاملة، ولو MySQL قتلتها كضحية deadlock يعيدها **من الأول** — حد
  * أقصى 3 محاولات بـbackoff صغير عشوائي.
@@ -1636,7 +1645,7 @@ async function createOrderInTransaction(
     normalizedData.projectedShippingType &&
     normalizedData.projectedPaymentType
   ) {
-    await captureExpectedShippingSnapshotInTransaction(tx, {
+    const selection = {
       businessId,
       orderId: insertId,
       businessShippingProviderId: normalizedData.projectedShippingProviderId,
@@ -1644,7 +1653,13 @@ async function createOrderInTransaction(
       shippingType: normalizedData.projectedShippingType,
       paymentType: normalizedData.projectedPaymentType,
       occurredAt: data.createdAt ?? new Date(),
-    });
+    };
+    // قبل Go-Live المحاسبي اللقطة المتوقعة **اختيارية**: نشاط جديد اختار شركة ونوع شحن ونوع دفع
+    // لكن بلا نسخة سعر بعد (نموذج الأسعار مش مطلوب تشغيليًا) ماينفعش يترفض أوردره. بعد
+    // Go-Live القاعدة صارمة كما هي: لا أوردر بلا سعر فعّال.
+    if (isAfterGoLive || (await findEffectiveShippingRate(tx, selection))) {
+      await captureExpectedShippingSnapshotInTransaction(tx, selection);
+    }
   }
   return insertId;
 }

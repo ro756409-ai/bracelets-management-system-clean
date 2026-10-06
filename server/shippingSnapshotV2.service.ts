@@ -20,6 +20,40 @@ export type ExpectedShippingSelection = {
   shipmentId?: number;
 };
 
+/** نسخة السعر الفعّالة لهذا الاختيار (شركة/محافظة/نوع شحن/نوع دفع) وقت الحدث، أو null. */
+export async function findEffectiveShippingRate(
+  tx: any,
+  input: Pick<ExpectedShippingSelection, "businessId" | "businessShippingProviderId" | "governorate" | "shippingType" | "paymentType" | "occurredAt">
+) {
+  const [rate] = await tx
+    .select()
+    .from(shippingRateVersions)
+    .where(
+      and(
+        eq(shippingRateVersions.businessId, input.businessId),
+        eq(
+          shippingRateVersions.businessShippingProviderId,
+          input.businessShippingProviderId
+        ),
+        eq(shippingRateVersions.governorate, input.governorate),
+        eq(shippingRateVersions.shippingType, input.shippingType),
+        eq(shippingRateVersions.paymentType, input.paymentType),
+        eq(shippingRateVersions.isActive, true),
+        lte(shippingRateVersions.effectiveFrom, input.occurredAt),
+        or(
+          isNull(shippingRateVersions.effectiveTo),
+          gt(shippingRateVersions.effectiveTo, input.occurredAt)
+        )
+      )
+    )
+    .orderBy(
+      desc(shippingRateVersions.priority),
+      desc(shippingRateVersions.effectiveFrom)
+    )
+    .limit(1);
+  return rate ?? null;
+}
+
 /**
  * Captures the configured expected charges while the order is still operational.
  * Recalculation is allowed only before Stock Out; after that the snapshot is immutable.
@@ -51,32 +85,7 @@ export async function captureExpectedShippingSnapshotInTransaction(
     throw new Error("Expected Shipping Snapshot cannot change after Stock Out");
   }
 
-  const [rate] = await tx
-    .select()
-    .from(shippingRateVersions)
-    .where(
-      and(
-        eq(shippingRateVersions.businessId, input.businessId),
-        eq(
-          shippingRateVersions.businessShippingProviderId,
-          input.businessShippingProviderId
-        ),
-        eq(shippingRateVersions.governorate, input.governorate),
-        eq(shippingRateVersions.shippingType, input.shippingType),
-        eq(shippingRateVersions.paymentType, input.paymentType),
-        eq(shippingRateVersions.isActive, true),
-        lte(shippingRateVersions.effectiveFrom, input.occurredAt),
-        or(
-          isNull(shippingRateVersions.effectiveTo),
-          gt(shippingRateVersions.effectiveTo, input.occurredAt)
-        )
-      )
-    )
-    .orderBy(
-      desc(shippingRateVersions.priority),
-      desc(shippingRateVersions.effectiveFrom)
-    )
-    .limit(1);
+  const rate = await findEffectiveShippingRate(tx, input);
   if (!rate) throw new Error("No effective Shipping Rate matches this order");
 
   const charges = await tx

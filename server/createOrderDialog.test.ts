@@ -43,7 +43,9 @@ describe("النشاط هو البوابة", () => {
   it("🔑 القوايم المعتمدة عليه بتتقفل لحد ما يتختار، مش بتترسم فاضية", () => {
     expect(dialog).toContain("const noBusiness = !businessId;");
     // شركة الشحن، نوع الشحن، نوع الدفع
-    expect((dialog.match(/disabled=\{noBusiness\}/g) ?? []).length).toBe(3);
+    // القوائم الثلاث نفسها + أزرار «+» الأربعة (إضافة من داخل النموذج) — كلها مقفولة قبل اختيار النشاط.
+    expect((dialog.match(/disabled=\{noBusiness\}>/g) ?? []).length).toBe(3);
+    expect((dialog.match(/disabled=\{noBusiness\} onClick/g) ?? []).length).toBe(4);
     expect((dialog.match(/noBusiness \? "اختار النشاط الأول"/g) ?? []).length).toBe(3);
   });
 });
@@ -80,9 +82,12 @@ describe("القوايم اللي مالهاش بديل — عن قصد", () => 
   });
 
   it("🔑 ولما تكون فاضية بتقول للمستخدم يسجّلها بدل ما تسيبه قدام قائمة فاضية", () => {
-    expect((dialog.match(/<EmptyConfigHint/g) ?? []).length).toBe(3);
+    // أربع قوائم (شركة/نوع شحن/نوع دفع/منتج) — والرابط يفتح نافذة الإضافة فوق النموذج،
+    // لا صفحة `/accounting-settings` (النظام المحاسبي المجمّد) كما كان.
+    expect((dialog.match(/<EmptyConfigHint/g) ?? []).length).toBe(4);
     expect(code).toContain("function EmptyConfigHint(");
-    expect(dialog).toContain('navigate("/accounting-settings")');
+    expect(dialog).not.toContain('navigate("/accounting-settings")');
+    expect(dialog).toContain('onGo={() => setQuick("provider")}');
   });
 
   it("الرسالة مابتظهرش وهي بتحمّل ولا قبل اختيار النشاط", () => {

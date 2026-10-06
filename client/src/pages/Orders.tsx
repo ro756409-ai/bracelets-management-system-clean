@@ -56,6 +56,7 @@ import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
+import { QuickShippingProviderDialog, QuickConfigValueDialog, QuickProductDialog } from "@/components/orders/QuickCreateDialogs";
 
 // QR Code renderer component
 function QRRenderer({ serialNumber, canvasId }: { serialNumber: string; canvasId: string }) {
@@ -2224,15 +2225,31 @@ export default function Orders() {
  * merchant owns — nobody can invent a shipping company or a payment type on their behalf —
  * so the honest thing is to say where the value comes from and open the door to it.
  */
+/**
+ * القائمة فاضية → رابط «أضفها الآن» يفتح نافذة الإضافة فوق النموذج (لا يغادر الصفحة).
+ * كان الرابط يذهب إلى `/accounting-settings` — صفحة النظام المحاسبي المجمّد — فالنشاط الجديد
+ * ماكانش يقدر يسجّل أي قيمة ويحفظ أوردرًا بها.
+ */
 function EmptyConfigHint({ show, label, onGo }: { show: boolean; label: string; onGo: () => void }) {
   if (!show) return null;
   return (
     <p className="mt-1 text-xs text-muted-foreground">
       مفيش {label} مسجّلة.{" "}
-      <button type="button" onClick={onGo} className="text-primary underline underline-offset-2">
-        سجّلها من الإعدادات
+      <button type="button" onClick={onGo} className="text-primary underline underline-offset-2" data-testid={`empty-hint-${label}`}>
+        أضفها الآن
       </button>
     </p>
+  );
+}
+
+/** زر «+» بجوار عنوان القائمة — الإضافة متاحة دائمًا، لا عند الفراغ فقط. */
+function AddInlineButton({ onClick, label, disabled }: { onClick: () => void; label: string; disabled?: boolean }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} aria-label={label} title={label}
+      className="inline-flex h-5 w-5 items-center justify-center rounded border text-xs text-primary hover:bg-muted disabled:opacity-40"
+      data-testid={`add-inline-${label}`}>
+      +
+    </button>
   );
 }
 
@@ -2245,7 +2262,6 @@ function CreateOrderDialog({
   variants: CatalogVariant[];
   onSuccess: () => void;
 }) {
-  const [, navigate] = useLocation();
   const { brands, selectedId: autoBrandId, isEmpty: noBrands } = useBrandOptions();
   const [form, setForm] = useState({
     customerName: "", customerPhone: "", customerAddress: "", governorate: "",
@@ -2335,7 +2351,19 @@ function CreateOrderDialog({
     });
   };
 
-  const goToSettings = () => { onClose(); navigate("/accounting-settings"); };
+  /** أي نافذة إضافة مفتوحة فوق النموذج — بياناته المكتوبة تبقى كما هي. */
+  const [quick, setQuick] = useState<null | "provider" | "shipping_type" | "payment_type" | "product">(null);
+  /** منتج أُنشئ للتو: أول ما يصل في القائمة المحدَّثة يُحسب المبلغ من سعره (كما لو اختير يدويًا). */
+  const [justCreatedProductId, setJustCreatedProductId] = useState<number | null>(null);
+  useEffect(() => {
+    if (justCreatedProductId == null) return;
+    const product = products.find(p => p.id === justCreatedProductId);
+    if (!product) return;
+    const variant = variants.find(v => v.productId === justCreatedProductId && String(v.id) === form.variantId);
+    const price = Number(variant?.price ?? product.price ?? 0);
+    setForm(f => ({ ...f, totalAmount: price ? String(price * Number(f.quantity || 1)) : f.totalAmount }));
+    setJustCreatedProductId(null);
+  }, [justCreatedProductId, products, variants, form.variantId]);
   /** Nothing below the brand select can load until a brand is chosen. */
   const noBusiness = !businessId;
 
@@ -2365,28 +2393,28 @@ function CreateOrderDialog({
             </Select>
           </div>
           <div>
-            <Label>شركة الشحن</Label>
+            <Label className="flex items-center gap-2">شركة الشحن <AddInlineButton label="إضافة شركة شحن" disabled={noBusiness} onClick={() => setQuick("provider")} /></Label>
             <Select value={form.shippingProviderId} onValueChange={shippingProviderId => setForm(f => ({ ...f, shippingProviderId }))} disabled={noBusiness}>
               <SelectTrigger className="mt-1"><SelectValue placeholder={noBusiness ? "اختار النشاط الأول" : "اختار الشركة"} /></SelectTrigger>
               <SelectContent>{shipping.data?.providers.map(row => <SelectItem key={row.id} value={String(row.id)}>{row.displayName}</SelectItem>)}</SelectContent>
             </Select>
-            <EmptyConfigHint show={!noBusiness && !shipping.isLoading && (shipping.data?.providers.length ?? 0) === 0} label="شركات شحن" onGo={goToSettings} />
+            <EmptyConfigHint show={!noBusiness && !shipping.isLoading && (shipping.data?.providers.length ?? 0) === 0} label="شركات شحن" onGo={() => setQuick("provider")} />
           </div>
           <div>
-            <Label>نوع الشحن</Label>
+            <Label className="flex items-center gap-2">نوع الشحن <AddInlineButton label="إضافة نوع شحن" disabled={noBusiness} onClick={() => setQuick("shipping_type")} /></Label>
             <Select value={form.shippingType} onValueChange={shippingType => setForm(f => ({ ...f, shippingType }))} disabled={noBusiness}>
               <SelectTrigger className="mt-1"><SelectValue placeholder={noBusiness ? "اختار النشاط الأول" : "اختار النوع"} /></SelectTrigger>
               <SelectContent>{shippingTypes.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent>
             </Select>
-            <EmptyConfigHint show={!noBusiness && !shippingTypes.isLoading && (shippingTypes.data?.length ?? 0) === 0} label="أنواع شحن" onGo={goToSettings} />
+            <EmptyConfigHint show={!noBusiness && !shippingTypes.isLoading && (shippingTypes.data?.length ?? 0) === 0} label="أنواع شحن" onGo={() => setQuick("shipping_type")} />
           </div>
           <div>
-            <Label>نوع الدفع</Label>
+            <Label className="flex items-center gap-2">نوع الدفع <AddInlineButton label="إضافة نوع دفع" disabled={noBusiness} onClick={() => setQuick("payment_type")} /></Label>
             <Select value={form.paymentType} onValueChange={paymentType => setForm(f => ({ ...f, paymentType }))} disabled={noBusiness}>
               <SelectTrigger className="mt-1"><SelectValue placeholder={noBusiness ? "اختار النشاط الأول" : "اختار النوع"} /></SelectTrigger>
               <SelectContent>{paymentTypes.data?.map(row => <SelectItem key={row.id} value={row.configKey}>{row.displayName}</SelectItem>)}</SelectContent>
             </Select>
-            <EmptyConfigHint show={!noBusiness && !paymentTypes.isLoading && (paymentTypes.data?.length ?? 0) === 0} label="أنواع دفع" onGo={goToSettings} />
+            <EmptyConfigHint show={!noBusiness && !paymentTypes.isLoading && (paymentTypes.data?.length ?? 0) === 0} label="أنواع دفع" onGo={() => setQuick("payment_type")} />
           </div>
           <div>
             <Label>المصدر <span className="text-destructive">*</span></Label>
@@ -2396,11 +2424,12 @@ function CreateOrderDialog({
             </Select>
           </div>
           <div>
-            <Label>المنتج <span className="text-destructive">*</span></Label>
+            <Label className="flex items-center gap-2">المنتج <span className="text-destructive">*</span> <AddInlineButton label="إضافة منتج" disabled={noBusiness} onClick={() => setQuick("product")} /></Label>
             <Select value={form.productId} onValueChange={handleProductChange}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="اختر المنتج" /></SelectTrigger>
-              <SelectContent>{products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name} - {Number(p.price).toLocaleString('ar-EG')} ج.م</SelectItem>)}</SelectContent>
+              <SelectContent>{products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}{p.price != null && p.price !== "" ? ` - ${Number(p.price).toLocaleString('ar-EG')} ج.م` : ""}</SelectItem>)}</SelectContent>
             </Select>
+            <EmptyConfigHint show={!noBusiness && products.length === 0} label="منتجات" onGo={() => setQuick("product")} />
           </div>
           {productVariants.length > 0 && (
             <div>
@@ -2428,6 +2457,19 @@ function CreateOrderDialog({
           <Button variant="outline" onClick={onClose}>إلغاء</Button>
           <Button onClick={handleSubmit} disabled={createMutation.isPending}>{createMutation.isPending ? "جاري الحفظ..." : "حفظ الأوردر"}</Button>
         </DialogFooter>
+        {/* نوافذ «أضف الآن» — فوق النموذج؛ بعد الحفظ تُعاد القائمة وتُختار القيمة الجديدة فورًا. */}
+        {businessId != null && (
+          <>
+            <QuickShippingProviderDialog businessId={businessId} open={quick === "provider"} onClose={() => setQuick(null)}
+              onCreated={row => setForm(f => ({ ...f, shippingProviderId: String(row.id) }))} />
+            <QuickConfigValueDialog businessId={businessId} namespace="shipping_type" open={quick === "shipping_type"} onClose={() => setQuick(null)}
+              onCreated={row => setForm(f => ({ ...f, shippingType: row.configKey }))} />
+            <QuickConfigValueDialog businessId={businessId} namespace="payment_type" open={quick === "payment_type"} onClose={() => setQuick(null)}
+              onCreated={row => setForm(f => ({ ...f, paymentType: row.configKey }))} />
+            <QuickProductDialog businessId={businessId} open={quick === "product"} onClose={() => setQuick(null)}
+              onCreated={r => { setForm(f => ({ ...f, productId: String(r.productId), variantId: r.variantId ? String(r.variantId) : "" })); setJustCreatedProductId(r.productId); }} />
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
