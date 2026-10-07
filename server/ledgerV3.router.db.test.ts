@@ -8,6 +8,7 @@ import { createContext } from "./_core/context";
 import { getDb, createEmployee, __setDbForTests } from "./db";
 import { drizzle } from "drizzle-orm/mysql2";
 import { tenantRolePermissions } from "../drizzle/schema";
+import { and, eq } from "drizzle-orm";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { splitMigrationStatements } from "../shared/ledgerV3Spec";
 import { activateLedgerV3 } from "./ledgerV3.service";
@@ -29,7 +30,7 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
   let A: CoreTestFixture, B: CoreTestFixture;
   let raw: mysql.Connection;
   const tag = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
-  let ownerA = 0, adminA = 0, accountantA = 0, clerkA = 0, ownerB = 0;
+  let ownerA = 0, adminA = 0, accountantA = 0, clerkA = 0, ownerB = 0, managerA = 0, inactiveA = 0;
   let acc: Record<string, number> = {};
   const empIds: number[] = [];
   // (كسول: جسم describe يُجمَّع حتى عند runIf(false) — لا new URL(undefined) هنا)
@@ -81,6 +82,8 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
     ownerA = await mk("lr-owner-a", "super_admin", A); adminA = await mk("lr-admin-a", "admin", A);
     accountantA = await mk("lr-acc-a", "accountant", A); clerkA = await mk("lr-clerk-a", "data_entry", A);
     ownerB = await mk("lr-owner-b", "super_admin", B);
+    managerA = await mk("lr-mgr-a", "manager", A);
+    inactiveA = insId(await createEmployee({ name: `lr-old-a`, role: "accountant", isActive: false, tenantId: A.tenantId, businessId: A.businessId, username: `lr-old-a-${tag}` } as any)); empIds.push(inactiveA);
     // المالك يمنح المحاسب view + post فقط (عبر tenant_role_permissions)
     const d = (await getDb())!;
     for (const permission of ["ledger.view", "ledger.post"]) await d.insert(tenantRolePermissions).values({ tenantId: A.tenantId, role: "accountant", permission, isAllowed: true, updatedBy: ownerA });
@@ -210,6 +213,57 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
     expect(await code(() => caller(ownerB).account.updateName({ accountId: acc.OFFICE_CASH, name: "x" }))).toBe("PRECONDITION_FAILED");
     expect(Number((await raw.query("SELECT COUNT(*) n FROM ledger_transactions") as any)[0][0].n)).toBe(before);
     expect((await caller(ownerA).accounts.list()).find((a: any) => a.code === "OFFICE_CASH").name).toBe("خزنة المكتب");
+  });
+
+  it("🧑‍💼 manager: بلا منح FORBIDDEN؛ بعد منح view/post/reverse/manage_accounts/period.lock تنجح كلها؛ إزالة المنح تسري فورًا", async () => {
+    const d = (await getDb())!;
+    const grant = async (role: string, perms: string[]) => { for (const permission of perms) await d.insert(tenantRolePermissions).values({ tenantId: A.tenantId, role, permission, isAllowed: true, updatedBy: ownerA }); };
+    const revoke = async (role: string, perms: string[]) => { for (const permission of perms) await d.delete(tenantRolePermissions).where(and(eq(tenantRolePermissions.tenantId, A.tenantId), eq(tenantRolePermissions.role, role), eq(tenantRolePermissions.permission, permission))); };
+    expect(await code(() => top(managerA, "status")())).toBe("FORBIDDEN");
+    expect(await code(() => top(managerA, "post")({ sourceBusinessId: A.businessId, kind: "expense", idempotencyKey: `r-${tag}-mgr-0`, effectiveDate: "2026-10-12", description: "x", entries: [{ accountId: acc.EXPENSE, side: "debit", amount: "1" }, { accountId: acc.OFFICE_CASH, side: "credit", amount: "1" }] }))).toBe("FORBIDDEN");
+    const perms = ["ledger.view", "ledger.post", "ledger.reverse", "ledger.manage_accounts", "ledger.period.lock"];
+    await grant("manager", perms);
+    expect((await top(managerA, "status")()).enabled).toBe(true);
+    const posted = await top(managerA, "post")({ sourceBusinessId: A.businessId, kind: "expense", idempotencyKey: `r-${tag}-mgr-1`, effectiveDate: "2026-10-12", description: "مصروف المدير", entries: [{ accountId: acc.EXPENSE, side: "debit", amount: "10" }, { accountId: acc.OFFICE_CASH, side: "credit", amount: "10" }] });
+    expect(posted.replay).toBe(false);
+    expect((await top(managerA, "reverse")({ transactionId: posted.transactionId, idempotencyKey: `r-${tag}-mgr-rev`, effectiveDate: "2026-10-12", reason: "تصحيح المدير" })).replay).toBe(false);
+    const created = await caller(managerA).account.create({ code: "ADS", name: "إعلانات", kind: "expense", normalSide: "debit" });
+    expect(created.replay).toBe(false);
+    expect((await caller(managerA).period.lock({ period: "2026-08", reason: "إقفال" })).status).toBe("locked");
+    // reopen/activate للمالك فقط حتى مع override
+    await grant("manager", ["ledger.period.reopen", "ledger.activate"]);
+    await grant("accountant", ["ledger.period.reopen", "ledger.activate"]);
+    expect(await code(() => caller(managerA).period.reopen({ period: "2026-08", reason: "محاولة المدير" }))).toBe("FORBIDDEN");
+    expect(await code(() => caller(accountantA).period.reopen({ period: "2026-08", reason: "محاولة المحاسب" }))).toBe("FORBIDDEN");
+    expect(await code(() => caller(adminA).period.reopen({ period: "2026-08", reason: "محاولة الأدمن" }))).toBe("FORBIDDEN");
+    expect((await caller(ownerA).period.reopen({ period: "2026-08", reason: "المالك يعيد الفتح" })).status).toBe("open");
+    await revoke("manager", ["ledger.period.reopen", "ledger.activate"]); await revoke("accountant", ["ledger.period.reopen", "ledger.activate"]);
+    // إزالة المنح تسري فورًا
+    await revoke("manager", perms);
+    expect(await code(() => top(managerA, "status")())).toBe("FORBIDDEN");
+    expect(await code(() => caller(managerA).account.create({ code: "ADS2", name: "x", kind: "expense", normalSide: "debit" }))).toBe("FORBIDDEN");
+  });
+
+  it("🔒 موظف موقوف لا يملك جلسة أصلًا (fail-closed)، والمحاسب الممنوح view/post فقط لا يعكس ولا يدير", async () => {
+    expect(await code(() => top(inactiveA, "status")())).toBe("UNAUTHORIZED");
+    expect(await code(() => top(accountantA, "reverse")({ transactionId: 1, idempotencyKey: `r-${tag}-acc-rev2`, effectiveDate: "2026-10-12", reason: "x" }))).toBe("FORBIDDEN");
+    expect(await code(() => caller(accountantA).account.setActive({ accountId: acc.EXPENSE, isActive: false }))).toBe("FORBIDDEN");
+  });
+
+  it("🏛️ حسابات النظام: لا تُعطَّل، والاسم فقط يتغير؛ الحساب الإضافي يُعطَّل مع بقاء رصيده وتاريخه في التقارير", async () => {
+    for (const code of ["OFFICE_CASH", "BANK_MAIN", "COD_BOSTA", "VF_CASH", "INSTAPAY", "REVENUE", "EXPENSE", "OPENING_EQUITY", "SUSPENSE"])
+      expect(await (async () => { try { await caller(ownerA).account.setActive({ accountId: acc[code], isActive: false }); return "ok"; } catch (e: any) { return e?.message?.includes("لا يُعطَّل") ? "refused" : e?.code; } })()).toBe("refused");
+    await caller(ownerA).account.updateName({ accountId: acc.OFFICE_CASH, name: "الخزنة الرئيسية" });
+    const cash = (await caller(ownerA).accounts.list()).find((a: any) => a.code === "OFFICE_CASH");
+    expect(cash).toMatchObject({ name: "الخزنة الرئيسية", code: "OFFICE_CASH", kind: "cash", normalSide: "debit", currency: "EGP", isActive: 1, isSystem: true });
+    await caller(ownerA).account.updateName({ accountId: acc.OFFICE_CASH, name: "خزنة المكتب" });
+    // RENT (إضافي) معطَّل من اختبار سابق برصيد 2,500: يظهر في القائمة والمطابقة، ويرفض الترحيل الجديد
+    const rent = (await caller(ownerA).accounts.list()).find((a: any) => a.code === "RENT");
+    expect(rent).toMatchObject({ isActive: 0, currentBalance: "2500.0000", isSystem: false });
+    const recon = await top(ownerA, "reconciliation")();
+    expect(recon.lines.find((l: any) => l.code === "RENT")).toMatchObject({ stored: "2500.0000", ok: true });
+    expect((await caller(ownerA).transactions.list({ accountId: rent.id })).total).toBeGreaterThanOrEqual(1);
+    expect(await code(() => top(ownerA, "post")({ sourceBusinessId: A.businessId, kind: "expense", idempotencyKey: `r-${tag}-rent3`, effectiveDate: "2026-10-12", description: "x", entries: [{ accountId: rent.id, side: "debit", amount: "1" }, { accountId: acc.BANK_MAIN, side: "credit", amount: "1" }] }))).toBe("BAD_REQUEST");
   });
 
   it("🔒 صفر كتابة في جداول V2 خلال كل السيناريوهات", async () => {

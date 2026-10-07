@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, authenticatedProcedure } from "./_core/trpc";
-import { hasTenantPermission, type Permission } from "./permissions";
+import { hasTenantPermission, isOwnerRole, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
   createLedgerAccount, getLedgerStatus, getLedgerTransaction, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerPeriods,
@@ -22,13 +22,17 @@ type Deps = { scopeBusinessId: (ctx: ScopeCtx, businessId?: number | null) => Pr
 
 const NO_PERMISSION = "ليست لديك صلاحية على دفتر الحسابات لهذا الإجراء";
 
-/** صلاحية ledger.* من دور الموظف الحقيقي (لا من الجلسة الصناعية ولا من اسم دور يرسله العميل). */
+/**
+ * صلاحية ledger.* = الصلاحية الفعلية المحسوبة من الدور الحقيقي للموظف + تجاوزات tenant_role_permissions
+ * (لا من الجلسة الصناعية ولا من اسم دور يرسله العميل). لا رفض بالاسم لأي دور: المدير والمحاسب يأخذان
+ * ما يمنحه المالك — عدا ما هو للمالك وحده (reopen/activate) فيبقى لـsuper_admin حتى مع وجود override.
+ */
 function ledgerProcedure(permission: Permission) {
   return authenticatedProcedure.use(async ({ ctx, next }) => {
-    const employeeRole = ctx.employee?.role ?? null;
-    if (employeeRole === "manager") throw new TRPCError({ code: "FORBIDDEN", message: NO_PERMISSION });
     // جلسة مالك بلا صف موظف (نادرة) = super_admin؛ غير ذلك الدور الحقيقي للموظف
-    const role = employeeRole ?? (ctx.user?.role === "admin" ? "super_admin" : null);
+    const role = ctx.employee?.role ?? (ctx.user?.role === "admin" ? "super_admin" : null);
+    if (LEDGER_OWNER_ONLY_PERMISSIONS.includes(permission) && !isOwnerRole(role))
+      throw new TRPCError({ code: "FORBIDDEN", message: "هذا الإجراء للمالك فقط" });
     if (!(await hasTenantPermission(ctx.tenantId, role, permission))) throw new TRPCError({ code: "FORBIDDEN", message: NO_PERMISSION });
     return next({ ctx });
   });

@@ -533,12 +533,18 @@ export async function renameLedgerAccount(input: { tenantId: number; accountId: 
   });
 }
 
-/** تعطيل/تفعيل: التعطيل يمنع القيود الجديدة فقط — التاريخ والرصيد يبقيان كما هما. */
+export const isSystemLedgerAccountCode = (code: string): boolean => IMMUTABLE_BASE.has(code);
+
+/**
+ * تعطيل/تفعيل: التعطيل يمنع القيود الجديدة فقط — التاريخ والرصيد يبقيان كما هما (يظهر في التقارير).
+ * حسابات النظام التسعة لا تُعطَّل ولا تتغير خصائصها الجوهرية (code/kind/normalSide/currency) — الاسم فقط.
+ */
 export async function setLedgerAccountActive(input: { tenantId: number; accountId: number; isActive: boolean; actor: LedgerActor }, db?: LedgerDb): Promise<void> {
   const d = await resolveDb(db);
   await ledgerTransaction(d, async tx => {
     await assertEnabled(tx, input.tenantId); await resolveActor(tx, input.tenantId, input.actor);
-    await loadOwnedAccount(tx, input.tenantId, input.accountId);
+    const account = await loadOwnedAccount(tx, input.tenantId, input.accountId);
+    if (isSystemLedgerAccountCode(account.code) && !input.isActive) throw new LedgerError("account", `حساب النظام ${account.code} لا يُعطَّل`);
     await tx.update(ledgerAccounts).set({ isActive: input.isActive ? 1 : 0 }).where(and(eq(ledgerAccounts.tenantId, input.tenantId), eq(ledgerAccounts.id, input.accountId)));
   });
 }
