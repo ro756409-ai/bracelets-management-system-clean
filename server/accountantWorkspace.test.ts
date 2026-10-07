@@ -97,7 +97,9 @@ const accStocktake = acc("AccStocktake.tsx");
 describe("🔑 النظام المحاسبي مجمّد — التوجيه لصفحة آمنة", () => {
   it("🔑 اللوجين بيوجّه accountant لصفحة «قيد التطوير» مش /accountant", () => {
     const branch = login.slice(login.indexOf("role === 'accountant'"));
-    expect(branch.slice(0, branch.indexOf("else"))).toContain('setLocation("/accounting-disabled")');
+    // دفتر V3: الهبوط على /ledger، وحارس المسار يحوّل للصفحة الآمنة لو بلا ledger.view — لا /accountant أبدًا
+    expect(branch.slice(0, branch.indexOf("else"))).toContain('setLocation("/ledger")');
+    expect(branch.slice(0, branch.indexOf("else"))).not.toContain('"/accountant"');
   });
   it("🔑 مسار /accountant بيعرض AccountingDisabled (مش AccountantWorkspace)", () => {
     const r = app.slice(app.indexOf('path={"/accountant"}'));
@@ -108,7 +110,8 @@ describe("🔑 النظام المحاسبي مجمّد — التوجيه لص�
   it("🔑 توجيه الهبوط والحجب المالي بقى للصفحة الآمنة", () => {
     const homeFn = app.slice(app.indexOf("function homeForPermissions"));
     expect(homeFn.slice(0, homeFn.indexOf("}"))).not.toContain('"/accountant"');
-    expect(app).toContain('<Redirect to="/accounting-disabled" />');
+    expect(homeFn.slice(0, homeFn.indexOf("}"))).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
+    expect(app).toContain("<Redirect to={homeForPermissions(permissions, false)} />");
   });
 });
 

@@ -123,9 +123,10 @@ describe("🔑 حراس المصدر — إخفاء وتعطيل الواجهة"
     expect(app).toContain('<FinancialRoute permission="inventory_costing.view"><GoodsReceipt /></FinancialRoute>');
     expect(app).toContain('<FinancialRoute permission="inventory_costing.view"><Stocktake /></FinancialRoute>');
   });
-  it("🔑 المحاسب مايتوجّهش لـ/accountant عند الدخول", () => {
-    expect(login).toContain('setLocation("/accounting-disabled")');
+  it("🔑 المحاسب مايتوجّهش لـ/accountant عند الدخول — يهبط على دفتر V3 (وحارس المسار يحوّله لصفحة التجميد لو بلا ledger.view)", () => {
+    expect(login).toMatch(/role === 'accountant'\) \{[\s\S]*?setLocation\("\/ledger"\)/);
     expect(login).not.toContain('setLocation("/accountant")');
+    expect(app).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
   });
 });
 

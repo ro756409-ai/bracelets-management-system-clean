@@ -1,5 +1,6 @@
 import { Link } from "wouter";
-import { Wrench } from "lucide-react";
+import { BookOpen, Wrench } from "lucide-react";
+import { usePermissions } from "@/hooks/usePermission";
 
 /**
  * صفحة آمنة تحلّ محل كل شاشات النظام المحاسبي الحالي بعد تجميده (قرار: إعادة بنائه لاحقًا
@@ -7,6 +8,7 @@ import { Wrench } from "lucide-react";
  * على السيرفر (عمليات الكتابة المحاسبية متوقّفة من `permissionProcedure`)؛ دي طبقة واجهة فوقها.
  */
 export default function AccountingDisabled() {
+  const { has } = usePermissions();
   return (
     <div
       dir="rtl"
@@ -24,9 +26,18 @@ export default function AccountingDisabled() {
           بياناتك المالية القديمة محفوظة ولم تُحذف. باقي أقسام النظام (الأوردرات،
           المخزون، الشحن) تعمل بشكل طبيعي.
         </p>
+        {has("ledger.view") && (
+          <Link
+            href="/ledger"
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+            data-testid="accounting-disabled-ledger-link"
+          >
+            <BookOpen className="h-4 w-4" /> دفتر الحسابات الجديد
+          </Link>
+        )}
         <Link
           href="/"
-          className="inline-block rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+          className={`inline-block rounded-md px-4 py-2 text-sm font-medium ${has("ledger.view") ? "border bg-card text-foreground" : "bg-primary text-primary-foreground"}`}
         >
           العودة للصفحة الرئيسية
         </Link>

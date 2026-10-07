@@ -22,8 +22,9 @@ describe("🔑 توجيه المحاسب بعد الدخول", () => {
     const body = fn.slice(0, fn.indexOf("} catch"));
     expect(body).toContain("data.employee.role === 'accountant'");
     const branch = body.slice(body.indexOf("role === 'accountant'"));
-    expect(branch.slice(0, branch.indexOf("else")))
-      .toContain('setLocation("/accounting-disabled")');
+    // دفتر V3: المحاسب يهبط على /ledger؛ حارس المسار (homeForPermissions) يحوّله للصفحة الآمنة لو بلا ledger.view
+    expect(branch.slice(0, branch.indexOf("else"))).toContain('setLocation("/ledger")');
+    expect(app).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
     expect(body).not.toContain('setLocation("/accountant")');
   });
 
@@ -72,8 +73,10 @@ describe("🔑 المحاسب محجوب عن صفحات التشغيل", () => 
   it("🔑 BlockFinancialUser بيحوّل صاحب accounting.view غير المالك لصفحة «قيد التطوير»", () => {
     const comp = app.slice(app.indexOf("function BlockFinancialUser"), app.indexOf("function EmployeeDashboardGuard"));
     expect(comp).toContain('user?.role !== "admin" && permissions.includes("accounting.view")');
-    // النظام مجمّد: التحويل بقى للصفحة الآمنة.
-    expect(comp).toContain('Redirect to="/accounting-disabled"');
+    // التحويل عبر homeForPermissions: دفتر V3 لو ممنوح ledger.view، وإلا الصفحة الآمنة (النظام القديم مجمّد).
+    expect(comp).toContain("<Redirect to={homeForPermissions(permissions, false)} />");
+    expect(app).toContain('if (perms.includes("ledger.view")) return "/ledger";');
+    expect(app).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
   });
 
   it("🔑 لوحات الموظفين التشغيلية متغلّفة بالحارس", () => {

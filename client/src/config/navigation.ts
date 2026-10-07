@@ -2,7 +2,7 @@ import {
   LayoutDashboard, ShoppingCart, PackageCheck, Boxes, Users, LineChart, Settings,
   Briefcase, Truck, RotateCcw, AlertTriangle, Printer, QrCode, Clock, Activity,
   Package, PackagePlus, ClipboardCheck, Building2, Globe, Zap,
-  BarChart3, GitMerge, Wallet, Wrench,
+  BarChart3, GitMerge, Wallet, Wrench, BookOpen, ShieldCheck,
 } from "lucide-react";
 
 /**
@@ -44,8 +44,19 @@ export type NavDestination = NavGate & {
   children?: NavLink[];
 };
 
-/** الوجهات الأساسية السبع — القلب الظاهر للمستخدم. */
+/** الوجهات الأساسية — القلب الظاهر للمستخدم (وجهة الدفتر تظهر لأصحاب ledger.view فقط). */
 export const PRIMARY_DESTINATIONS: NavDestination[] = [
+  {
+    key: "ledger",
+    label: "الحسابات",
+    icon: BookOpen,
+    path: "/ledger",
+    permission: "ledger.view",
+    children: [
+      { label: "الحسابات اليومية", path: "/ledger", icon: BookOpen, permission: "ledger.view" },
+      { label: "سجل الحركات", path: "/ledger/transactions", icon: Clock, permission: "ledger.view" },
+    ],
+  },
   {
     key: "home",
     label: "الرئيسية",
@@ -124,6 +135,7 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
     adminOnly: true,
     children: [
       { label: "إدارة الأنشطة", path: "/businesses", icon: Building2, adminOnly: true },
+      { label: "صلاحيات الأدوار", path: "/permissions", icon: ShieldCheck, adminOnly: true },
       { label: "قنوات البيع", path: "/sales-channels", icon: Globe, adminOnly: true },
       { label: "Easy Order ربط", path: "/webhook-settings", icon: Zap, adminOnly: true },
     ],

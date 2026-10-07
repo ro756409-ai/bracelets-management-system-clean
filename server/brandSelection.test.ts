@@ -19,6 +19,8 @@ import path from "path";
 
 const HOOK = "client/src/hooks/useBrandOptions.ts";
 const hook = fs.readFileSync(HOOK, "utf-8");
+/** نظيره لدفتر V3 (أنشطة الجلسة من `ledger.businesses.list` — تعمل لجلسة المحاسب بلا BusinessContext). */
+const LEDGER_HOOK = "client/src/pages/ledger/useLedgerBusinesses.ts";
 
 const codeOnly = (src: string) =>
   src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*/g, "");
@@ -77,7 +79,7 @@ describe("🔑 كل شاشة براند بتستخدم المصدر الواحد
 
   it("🔑 مفيش شاشة بتشتق البراند بإيدها تاني", () => {
     const offenders = clientFiles()
-      .filter(f => f !== HOOK)
+      .filter(f => f !== HOOK && f !== LEDGER_HOOK)
       .filter(f => {
         const code = codeOnly(fs.readFileSync(f, "utf-8"));
         // الشكل اللي وقع: «لو الطول واحد بالظبط خد الأول»

@@ -14,6 +14,10 @@ import PlatformAdmin from "./pages/platform/PlatformAdmin";
 import Dashboard from "./pages/Dashboard";
 import Orders from "./pages/Orders";
 import DailyLedger from "./pages/DailyLedger";
+import LedgerDaily from "./pages/ledger/LedgerDaily";
+import LedgerTransactions from "./pages/ledger/LedgerTransactions";
+import LedgerLayout from "./pages/ledger/LedgerLayout";
+import PermissionsPage from "./pages/PermissionsPage";
 import GoodsReceipt from "./pages/GoodsReceipt";
 import StockTransfer from "./pages/StockTransfer";
 import WorkshopReturns from "./pages/WorkshopReturns";
@@ -66,10 +70,12 @@ function ProtectedLayout({ children }: { children: React.ReactNode }) {
 }
 
 /** أنسب صفحة هبوط لجلسة حسب صلاحياتها — بيتستخدم لما نطرد حد من صفحة مالوش حق فيها. */
-function homeForPermissions(perms: string[]): string {
-  // النظام المحاسبي مجمّد: المحاسب (accounting.view وبس، غير المالك) بيروح صفحة «قيد
-  // التطوير» الآمنة بدل مساحة الحسابات. المالك admin بيعدّي الحُرّاس فمابيوصلش هنا.
-  if (perms.includes("dashboard.view")) return "/dashboard";
+function homeForPermissions(perms: string[], hasUser = false): string {
+  // جلسة إدارية (user موجود) → لوحة التحكم. غير ذلك (المحاسب: موظف غير إداري، لوحة التحكم تطلب
+  // جلسة مالك فتعرض له «سجّل الدخول»): دفتر V3 لو ممنوح `ledger.view`، وإلا — النظام المحاسبي
+  // القديم مجمّد — صفحة «قيد التطوير» الآمنة. المالك admin بيعدّي الحُرّاس فمابيوصلش هنا.
+  if (hasUser && perms.includes("dashboard.view")) return "/dashboard";
+  if (perms.includes("ledger.view")) return "/ledger";
   if (perms.includes("accounting.view")) return "/accounting-disabled";
   return "/employee-dashboard";
 }
@@ -101,7 +107,7 @@ function FinancialRoute({
   const authed = Boolean(user) || permissions.length > 0;
   if (!authed) return <Home />;
   const allowed = user?.role === "admin" || permissions.includes(permission);
-  if (!allowed) return <Redirect to={homeForPermissions(permissions)} />;
+  if (!allowed) return <Redirect to={homeForPermissions(permissions, Boolean(user))} />;
   return bare ? <>{children}</> : <DashboardLayout>{children}</DashboardLayout>;
 }
 
@@ -117,8 +123,8 @@ function BlockFinancialUser({ children }: { children: React.ReactNode }) {
   const { permissions, isLoading } = usePermissions();
   if (isLoading) return null;
   if (user?.role !== "admin" && permissions.includes("accounting.view")) {
-    // النظام المحاسبي مجمّد: المحاسب بيتحوّل لصفحة «قيد التطوير» الآمنة بدل مساحة الحسابات.
-    return <Redirect to="/accounting-disabled" />;
+    // المحاسب بيتحوّل لدفتر V3 لو ممنوح ledger.view، وإلا لصفحة «قيد التطوير» الآمنة (القديم مجمّد).
+    return <Redirect to={homeForPermissions(permissions, false)} />;
   }
   return <>{children}</>;
 }
@@ -268,6 +274,16 @@ function Router() {
           رابط/bookmark مايكسرش، لكن بتعرض صفحة «قيد التطوير» الآمنة بدل الشاشات المالية —
           لأي دور. القراءات/الكتابات المحاسبية متوقّفة على السيرفر برضه. مسارات المخزون
           (goods-receipt/stocktake/stock-transfer/workshop-returns) **مش** متأثرة. */}
+      {/* دفتر الحسابات V3 — خلف ledger.view (الحكم الفعلي على السيرفر لكل إجراء). */}
+      <Route path="/ledger/transactions">
+        <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerTransactions /></LedgerLayout></FinancialRoute>
+      </Route>
+      <Route path="/ledger">
+        <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerDaily /></LedgerLayout></FinancialRoute>
+      </Route>
+      <Route path="/permissions">
+        <ProtectedLayout><PermissionsPage /></ProtectedLayout>
+      </Route>
       <Route path="/accounting"><AccountingDisabled /></Route>
       <Route path="/treasury"><AccountingDisabled /></Route>
       <Route path="/expenses"><AccountingDisabled /></Route>

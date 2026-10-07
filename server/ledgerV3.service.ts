@@ -432,6 +432,20 @@ export async function getLedgerStatus(tenantId: number, db?: LedgerDb): Promise<
 
 const guardNoTable = async <T>(fn: () => Promise<T>): Promise<T> => { try { return await fn(); } catch (err) { if (isNoSuchTable(err)) throw new LedgerError("unavailable"); throw err; } };
 
+/**
+ * الأنشطة التي تراها واجهة الدفتر: أنشطة الشركة النشطة **المسموح بها للجلسة فقط** (`allowedIds` من
+ * `sessionBusinessIds`: المالك = كل أنشطة شركته، الموظف = نشاطه). `null` (تعذّر التحديد) = لا شيء —
+ * fail-closed. لا تعتمد على BusinessContext الذي يشترط جلسة مالك، فالمحاسب موظف غير إداري.
+ */
+export async function listLedgerBusinesses(tenantId: number, allowedIds: number[] | null, db?: LedgerDb): Promise<{ id: number; name: string }[]> {
+  if (!allowedIds || allowedIds.length === 0) return [];
+  const d = await resolveDb(db);
+  const rows = await d.select({ id: businesses.id, name: businesses.name }).from(businesses)
+    .where(and(eq(businesses.tenantId, tenantId), eq(businesses.isActive, true), inArray(businesses.id, allowedIds)))
+    .orderBy(asc(businesses.name));
+  return rows.map(r => ({ id: r.id, name: r.name }));
+}
+
 export async function listLedgerAccounts(tenantId: number, db?: LedgerDb) {
   const d = await resolveDb(db);
   return guardNoTable(async () => {
@@ -446,6 +460,11 @@ export async function listLedgerAccounts(tenantId: number, db?: LedgerDb) {
 }
 
 export type LedgerTransactionFilters = { page: number; limit: number; from?: string; to?: string; businessId?: number | null; accountId?: number; kind?: LedgerKind };
+export type LedgerTransactionRow = LedgerTransaction & {
+  entries: { id: number; transactionId: number; accountId: number; businessId: number | null; side: "debit" | "credit"; amount: string; code: string; name: string; kind: string }[];
+  actorName: string | null;
+  reversedByTransactionId: number | null;
+};
 
 export async function listLedgerTransactions(tenantId: number, f: LedgerTransactionFilters, db?: LedgerDb) {
   const d = await resolveDb(db);
@@ -460,7 +479,26 @@ export async function listLedgerTransactions(tenantId: number, f: LedgerTransact
     const [{ total }] = await d.select({ total: sql<number>`COUNT(*)` }).from(ledgerTransactions).where(where);
     const rows = await d.select().from(ledgerTransactions).where(where).orderBy(sql`${ledgerTransactions.effectiveDate} DESC`, sql`${ledgerTransactions.id} DESC`)
       .limit(f.limit).offset((f.page - 1) * f.limit);
-    return { rows, total: Number(total), page: f.page, limit: f.limit };
+    if (rows.length === 0) return { rows: [] as LedgerTransactionRow[], total: Number(total), page: f.page, limit: f.limit };
+    const ids = rows.map(r => r.id);
+    const entries = await d.select({
+      id: ledgerEntries.id, transactionId: ledgerEntries.transactionId, accountId: ledgerEntries.accountId, businessId: ledgerEntries.businessId,
+      side: ledgerEntries.side, amount: ledgerEntries.amount, code: ledgerAccounts.code, name: ledgerAccounts.name, kind: ledgerAccounts.kind,
+    }).from(ledgerEntries).innerJoin(ledgerAccounts, eq(ledgerAccounts.id, ledgerEntries.accountId))
+      .where(inArray(ledgerEntries.transactionId, ids)).orderBy(asc(ledgerEntries.id));
+    const reversals = await d.select({ id: ledgerTransactions.id, of: ledgerTransactions.reversalOfTransactionId }).from(ledgerTransactions)
+      .where(and(eq(ledgerTransactions.tenantId, tenantId), inArray(ledgerTransactions.reversalOfTransactionId, ids)));
+    const actorIds = [...new Set(rows.map(r => r.actorEmployeeId).filter((x): x is number => x != null))];
+    const actors = actorIds.length === 0 ? [] : await d.select({ id: employees.id, name: employees.name }).from(employees).where(inArray(employees.id, actorIds));
+    const actorName = new Map(actors.map(a => [a.id, a.name]));
+    const reversedBy = new Map(reversals.map(r => [r.of as number, r.id]));
+    const enriched: LedgerTransactionRow[] = rows.map(r => ({
+      ...r,
+      entries: entries.filter(e => e.transactionId === r.id),
+      actorName: r.actorEmployeeId != null ? actorName.get(r.actorEmployeeId) ?? null : null,
+      reversedByTransactionId: reversedBy.get(r.id) ?? null,
+    }));
+    return { rows: enriched, total: Number(total), page: f.page, limit: f.limit };
   });
 }
 

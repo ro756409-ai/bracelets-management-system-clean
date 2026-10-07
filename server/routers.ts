@@ -121,6 +121,7 @@ import {
   EMPLOYEE_ROLE_VALUES,
   permissionsForRole,
   type Permission,
+  LEDGER_OWNER_ONLY_PERMISSIONS,
 } from "./permissions";
 import { EMPLOYEE_SETTABLE_ORDER_STATUSES } from "@shared/const";
 import { toMinorUnits } from "../shared/accountingMoney";
@@ -2558,13 +2559,16 @@ export const appRouter = router({
      */
     myPermissions: publicProcedure.query(async ({ ctx }) => {
       const role = ctx.employee?.role;
+      const ownerOnlyLedger = (p: string) => (LEDGER_OWNER_ONLY_PERMISSIONS as readonly string[]).includes(p);
       if (ctx.user?.role === "admin") {
-        // المدير جلسته admin صناعية عشان تشغيله يفضل شغّال، لكنه **غير مالي** — فبنشيل
-        // الصلاحيات المالية من قايمته عشان الواجهة تخفي أقسام الحسابات عنه (زي ما البوابة
-        // بترفضها على السيرفر بالظبط).
-        if (role === "manager")
-          return ALL_PERMISSIONS.filter(p => !isFinancialPermission(p));
-        return [...ALL_PERMISSIONS];
+        // جلسة مالك بلا صف موظف → كل شيء. مع صف موظف (super_admin/admin/manager): الصلاحيات
+        // الفعلية للدور + تجاوزات الشركة — فالأدمن لا يرى reopen/activate (للمالك وحده)، والمدير
+        // (غير مالي) يرى ما يُمنح له من دفتر V3 فقط دون باقي المالي.
+        if (!role || ctx.tenantId == null) return [...ALL_PERMISSIONS];
+        const effective = await Promise.all(ALL_PERMISSIONS.map(async p => (await hasTenantPermission(ctx.tenantId!, role, p)) ? p : null));
+        return effective.filter((p): p is (typeof ALL_PERMISSIONS)[number] => p !== null)
+          .filter(p => !ownerOnlyLedger(p) || isOwnerRole(role))
+          .filter(p => role !== "manager" || !isFinancialPermission(p) || p.startsWith("ledger."));
       }
       if (!role || ctx.tenantId == null) return [];
       const granted = await Promise.all(
@@ -2574,7 +2578,7 @@ export const appRouter = router({
             : null
         )
       );
-      return granted.filter((p): p is (typeof ALL_PERMISSIONS)[number] => p !== null);
+      return granted.filter((p): p is (typeof ALL_PERMISSIONS)[number] => p !== null).filter(p => !ownerOnlyLedger(p) || isOwnerRole(role));
     }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
@@ -8945,7 +8949,7 @@ export const appRouter = router({
       }),
   }),
   // دفتر الحسابات V3 — خلف صلاحيات ledger.* ونطاق الجلسة؛ بلا تفعيل عام (داخلي حتى شاشة المالك).
-  ledger: createLedgerRouter({ scopeBusinessId }),
+  ledger: createLedgerRouter({ scopeBusinessId, sessionBusinessIds }),
 });
 
 export type AppRouter = typeof appRouter;

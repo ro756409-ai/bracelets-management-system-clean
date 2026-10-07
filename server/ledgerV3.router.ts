@@ -4,7 +4,7 @@ import { router, authenticatedProcedure } from "./_core/trpc";
 import { hasTenantPermission, isOwnerRole, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
-  createLedgerAccount, getLedgerStatus, getLedgerTransaction, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerPeriods,
+  createLedgerAccount, getLedgerStatus, getLedgerTransaction, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerBusinesses, listLedgerPeriods,
   listLedgerTransactions, lockLedgerPeriod, postLedgerTransaction, reconcileLedgerV3, renameLedgerAccount, reopenLedgerPeriod,
   reverseLedgerTransaction, revokeLedgerAccountBusiness, setLedgerAccountActive,
 } from "./ledgerV3.service";
@@ -18,7 +18,11 @@ import {
  * لا منطق مالي هنا: كل شيء يمر عبر الخدمة نفسها.
  */
 type ScopeCtx = { tenantId: number | null; user?: { role?: string | null } | null; employee?: { id?: number; role?: string | null; businessId?: number | null } | null; realEmployeeId?: number };
-type Deps = { scopeBusinessId: (ctx: ScopeCtx, businessId?: number | null) => Promise<number | undefined> };
+type Deps = {
+  scopeBusinessId: (ctx: ScopeCtx, businessId?: number | null) => Promise<number | undefined>;
+  /** أنشطة الجلسة المسموح بها (null = تعذّر التحديد → لا شيء). */
+  sessionBusinessIds: (ctx: ScopeCtx) => Promise<number[] | null>;
+};
 
 const NO_PERMISSION = "ليست لديك صلاحية على دفتر الحسابات لهذا الإجراء";
 
@@ -84,6 +88,11 @@ export function createLedgerRouter(deps: Deps) {
 
     accounts: router({
       list: ledgerProcedure("ledger.view").query(async ({ ctx }) => guard(() => listLedgerAccounts(tenantOf(ctx)))),
+    }),
+
+    // أنشطة الجلسة لواجهة الدفتر (المحاسب جلسة موظف بلا BusinessContext) — نطاق الجلسة على السيرفر، fail-closed.
+    businesses: router({
+      list: ledgerProcedure("ledger.view").query(async ({ ctx }) => listLedgerBusinesses(tenantOf(ctx), await deps.sessionBusinessIds(ctx))),
     }),
 
     transactions: router({

@@ -9,6 +9,7 @@ import {
   Truck,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PermissionSettings } from "@/components/PermissionSettings";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { Button } from "@/components/ui/button";
@@ -999,77 +1000,6 @@ function ShippingSettings({ businessId }: { businessId: number }) {
           والـendpoints كلهم مكانهم. اللي اتشال هو الفورم من الشاشة دي.
         */}
 
-      </CardContent>
-    </Card>
-  );
-}
-
-function PermissionSettings() {
-  const utils = trpc.useUtils();
-  const configuration = trpc.accountingV2.permissionConfiguration.useQuery();
-  const [role, setRole] = useState("");
-  const save = trpc.accountingV2.rolePermissionSave.useMutation({
-    onSuccess: async () => {
-      toast.success("تم حفظ Override الصلاحية");
-      await utils.accountingV2.permissionConfiguration.invalidate();
-    },
-    onError: error => toast.error(error.message),
-  });
-  useEffect(() => {
-    if (!role && configuration.data?.roles[0])
-      setRole(configuration.data.roles[0].role);
-  }, [configuration.data, role]);
-  const effective = useMemo(() => {
-    const defaults = new Set(
-      configuration.data?.roles.find(row => row.role === role)
-        ?.defaultPermissions ?? []
-    );
-    for (const override of configuration.data?.overrides.filter(
-      row => row.role === role
-    ) ?? [])
-      override.isAllowed
-        ? defaults.add(override.permission as any)
-        : defaults.delete(override.permission as any);
-    return defaults;
-  }, [configuration.data, role]);
-  if (configuration.error?.data?.code === "FORBIDDEN") return null;
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <ShieldCheck className="h-5 w-5 text-rose-700" />
-          صلاحيات الأدوار
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <select
-          className="h-10 w-full max-w-xs rounded-md border bg-background px-3 text-sm"
-          value={role}
-          onChange={event => setRole(event.target.value)}
-        >
-          {configuration.data?.roles.map(row => (
-            <option key={row.role} value={row.role}>
-              {row.role}
-            </option>
-          ))}
-        </select>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {configuration.data?.permissions.map(permission => (
-            <label
-              key={permission}
-              className="flex items-center justify-between gap-3 rounded-lg border p-3 text-sm"
-            >
-              <span className="font-mono text-xs">{permission}</span>
-              <Switch
-                checked={effective.has(permission)}
-                disabled={save.isPending}
-                onCheckedChange={isAllowed =>
-                  save.mutate({ role: role as any, permission, isAllowed })
-                }
-              />
-            </label>
-          ))}
-        </div>
       </CardContent>
     </Card>
   );

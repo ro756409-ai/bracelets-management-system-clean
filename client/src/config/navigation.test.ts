@@ -19,11 +19,12 @@ const MANAGER = { isAdmin: true, perms: ["inventory_costing.view", "inventory_co
 // موظف عادي غير إداري بصلاحيات محدودة.
 const AGENT = { isAdmin: false, perms: ["dashboard.view", "orders.view"] };
 
-describe("🔑 الوجهات الأساسية = ٧", () => {
-  it("🔑 بالظبط ٧ وجهات (مش قائمة طويلة)", () => {
+describe("🔑 الوجهات الأساسية = ٨", () => {
+  it("🔑 بالظبط ٨ وجهات (مش قائمة طويلة) — «الحسابات» أولًا خلف ledger.view", () => {
     expect(PRIMARY_DESTINATIONS.map(d => d.key)).toEqual([
-      "home", "orders", "operations", "inventory", "team", "reports", "settings",
+      "ledger", "home", "orders", "operations", "inventory", "team", "reports", "settings",
     ]);
+    expect(PRIMARY_DESTINATIONS[0].permission).toBe("ledger.view");
   });
 });
 

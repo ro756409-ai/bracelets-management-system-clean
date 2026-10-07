@@ -113,6 +113,20 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
     expect(await code(() => caller(clerkA).period.lock({ period: "2026-10" }))).toBe("FORBIDDEN");
   });
 
+  it("🏷️ businesses.list: المالك يرى أنشطة شركته فقط، المحاسب نشاطه فقط، بلا صلاحية = FORBIDDEN، ولا تسرب بين الشركات", async () => {
+    const ownerSees = await caller(ownerA).businesses.list();
+    expect(ownerSees.map((b: any) => b.id)).toContain(A.businessId);
+    expect(ownerSees.map((b: any) => b.id)).not.toContain(B.businessId);
+    expect(ownerSees.every((b: any) => typeof b.name === "string" && Object.keys(b).sort().join() === "id,name")).toBe(true);
+    const accSees = await caller(accountantA).businesses.list();
+    expect(accSees.map((b: any) => b.id)).toEqual([A.businessId]);
+    const ownerBSees = await caller(ownerB).businesses.list();
+    expect(ownerBSees.map((b: any) => b.id)).toContain(B.businessId);
+    expect(ownerBSees.map((b: any) => b.id)).not.toContain(A.businessId);
+    expect(await code(() => caller(clerkA).businesses.list())).toBe("FORBIDDEN");
+    expect(await code(() => caller(managerA).businesses.list())).toBe("FORBIDDEN");
+  });
+
   it("👤 المحاسب الممنوح: يرى ويرحّل (عبر الخدمة)، لكنه لا يعكس ولا يقفل ولا يدير الحسابات", async () => {
     const s = await top(accountantA, "status")();
     expect(s).toMatchObject({ tablesPresent: true, enabled: true, goLiveDate: "2026-10-01" });

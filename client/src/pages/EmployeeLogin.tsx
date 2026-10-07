@@ -56,8 +56,9 @@ export default function EmployeeLogin() {
       if (data.employee.role === 'manager') {
         setLocation("/dashboard");
       } else if (data.employee.role === 'accountant') {
-        // النظام المحاسبي مجمّد: المحاسب بيروح صفحة «قيد إعادة التطوير» الآمنة بدل مساحة الحسابات.
-        setLocation("/accounting-disabled");
+        // المحاسب → دفتر الحسابات V3؛ لو مش ممنوح `ledger.view` حارس المسار بيحوّله لصفحة
+        // «قيد إعادة التطوير» الآمنة (النظام المحاسبي القديم مجمّد).
+        setLocation("/ledger");
       } else if (
         data.employee.role === 'facebook_entry' ||
         data.employee.role === 'data_entry'
