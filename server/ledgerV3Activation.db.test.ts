@@ -159,19 +159,22 @@ describe.runIf(CAN)("🚀 Ledger V3 activation + runtime verify — قاعدتا
       });
 
       it("💰 شركة بأرصدة (ملف) ونشاط غير نشط مستبعد: قيد افتتاحي واحد متوازن، الأرصدة كما في الملف، ربط الخزن حسب safeGrants؛ retry بلا تكرار", async () => {
-        const opening = file({ goLiveDate: "2026-11-01", openingBalances: { OFFICE_CASH: "1000.00", BANK_MAIN: "2500.5", COD_BOSTA: "0" }, openingEquity: "3500.5", businessIds: [D.biz1], safeGrants: { OFFICE_CASH: [D.biz1], BANK_MAIN: [D.biz1], VF_CASH: [], INSTAPAY: [] } });
+        // safeGrants يستثني النشاط الفعّال من خزنة → مانع (الخزن مشتركة: كل نشاط فعّال يُربط بالتسعة)
+        const partialSafes = file({ goLiveDate: "2026-11-01", openingBalances: { OFFICE_CASH: "1000.00" }, businessIds: [D.biz1], safeGrants: { VF_CASH: [] } });
+        expect((await plan(D, { opening: partialSafes })).blockers.join(" ")).toContain("safeGrants.VF_CASH («فودافون كاش») لا يشمل النشاط الفعّال Brand D1");
+        const opening = file({ goLiveDate: "2026-11-01", openingBalances: { OFFICE_CASH: "1000.00", BANK_MAIN: "2500.5", COD_BOSTA: "0" }, openingEquity: "3500.5", businessIds: [D.biz1] });
         const p = await plan(D, { opening });
         expect(p.blockers).toEqual([]);
         expect(p.ready).toBe(true);
         expect(p.businessCoverage.find(c => c.id === D.biz2)).toMatchObject({ active: false, inPlan: false, accountCodes: [], result: "مستبعد — غير نشط" });
+        expect(p.businessCoverage.find(c => c.id === D.biz1)!.accountCodes).toEqual(LEDGER_BASE_ACCOUNTS.map(a => a.code));
         expect(renderActivationPlan(p)).toContain("مستبعد — غير نشط");
         expect(p.openingEntry).toEqual({ debits: [{ code: "OFFICE_CASH", amount: "1000.0000" }, { code: "BANK_MAIN", amount: "2500.5000" }], credit: { code: "OPENING_EQUITY", amount: "3500.5000" } });
-        expect(p.accounts.find(a => a.code === "VF_CASH")!.businesses).toEqual([]);
-        expect(p.accounts.find(a => a.code === "REVENUE")!.businesses).toEqual([D.biz1]);
+        expect(p.accounts.every(a => a.businesses.length === 1 && a.businesses[0] === D.biz1)).toBe(true);
         const r = await apply(D, p);
         expect(r.replay).toBe(false); expect(r.openingTransactionId).not.toBeNull(); expect(r.v2Changed).toEqual([]);
         const c1 = await tenantCounts(D);
-        expect(c1).toEqual({ accounts: 9, grants: 3 + 4, txs: 1, entries: 3, flags: 1 }); // خزن 3 (OFFICE/BANK/COD) + غير نقدية 4 × نشاط واحد
+        expect(c1).toEqual({ accounts: 9, grants: 9, txs: 1, entries: 3, flags: 1 }); // الحسابات التسعة × النشاط الفعّال الوحيد
         expect(await balance(D, "OFFICE_CASH")).toBe("1000.0000");
         expect(await balance(D, "BANK_MAIN")).toBe("2500.5000");
         expect(await balance(D, "OPENING_EQUITY")).toBe("3500.5000");
@@ -252,18 +255,29 @@ describe.runIf(CAN)("🚀 Ledger V3 activation + runtime verify — قاعدتا
         expect(await tenantCounts(E)).toEqual(c1);
       });
 
-      it("🔍 runtime verify يعتبر غياب ربط نشاط فعّال خطأً مانعًا، ويعود سليمًا بعد الاستعادة", async () => {
+      it("🔍 runtime verify: حذف ربط أي من الحسابات التسعة (OFFICE_CASH/BANK_MAIN/COD_BOSTA/REVENUE) لنشاط فعّال = فشل باسم النشاط وكود الحساب واسمه؛ كل الروابط = نجاح؛ غير النشط لا يفشل؛ شركة أخرى معزولة", async () => {
+        const ok0 = await verifyLedgerV3Runtime({ tenantId: E.tenantId, db, exec });
+        expect(ok0.ok).toBe(true);
+        const grantLabel = (v: { checks: { label: string }[] }) => v.checks.find(c => c.label.startsWith("كل نشاط فعّال مربوط بالحسابات الأساسية التسعة"));
+        expect(grantLabel(ok0)).toMatchObject({ ok: true });
+        for (const code of ["OFFICE_CASH", "BANK_MAIN", "COD_BOSTA", "REVENUE"]) {
+          const [rows] = await raw.query("SELECT ab.* FROM ledger_account_businesses ab JOIN ledger_accounts a ON a.id = ab.accountId WHERE ab.tenantId = ? AND ab.businessId = ? AND a.code = ?", [E.tenantId, E.biz2, code]) as any;
+          expect(rows).toHaveLength(1);
+          await raw.query("DELETE FROM ledger_account_businesses WHERE tenantId = ? AND accountId = ? AND businessId = ?", [E.tenantId, rows[0].accountId, E.biz2]);
+          const broken = await verifyLedgerV3Runtime({ tenantId: E.tenantId, db, exec });
+          expect(broken.ok).toBe(false);
+          const check = grantLabel(broken);
+          expect(check).toMatchObject({ ok: false });
+          const accountName = LEDGER_BASE_ACCOUNTS.find(a => a.code === code)!.name;
+          expect(check?.detail).toContain("فشل — روابط ناقصة (1)");
+          expect(check?.detail).toContain(`النشاط Brand E2 (#${E.biz2}) بلا ربط بالحساب ${code} «${accountName}»`);
+          // شركة أخرى معزولة: الشركة A (مفعّلة) لا تتأثر بحذف رابط في E
+          expect(grantLabel(await verifyLedgerV3Runtime({ tenantId: A.tenantId, db, exec }))).toMatchObject({ ok: true });
+          await raw.query("INSERT INTO ledger_account_businesses SET ?", [rows[0]]);
+        }
         expect((await verifyLedgerV3Runtime({ tenantId: E.tenantId, db, exec })).ok).toBe(true);
-        const [rows] = await raw.query("SELECT ab.* FROM ledger_account_businesses ab JOIN ledger_accounts a ON a.id = ab.accountId WHERE ab.tenantId = ? AND ab.businessId = ? AND a.code = 'REVENUE'", [E.tenantId, E.biz2]) as any;
-        expect(rows).toHaveLength(1);
-        await raw.query("DELETE FROM ledger_account_businesses WHERE tenantId = ? AND accountId = ? AND businessId = ?", [E.tenantId, rows[0].accountId, E.biz2]);
-        const broken = await verifyLedgerV3Runtime({ tenantId: E.tenantId, db, exec });
-        expect(broken.ok).toBe(false);
-        const grantCheck = broken.checks.find(c => c.label.startsWith("كل نشاط فعّال"));
-        expect(grantCheck).toMatchObject({ ok: false });
-        expect(grantCheck?.detail).toContain(`REVENUE→#${E.biz2}`);
-        await raw.query("INSERT INTO ledger_account_businesses SET ?", [rows[0]]);
-        expect((await verifyLedgerV3Runtime({ tenantId: E.tenantId, db, exec })).ok).toBe(true);
+        // النشاط غير النشط (D.biz2 بلا روابط، وE.biz3 المعطَّل) لا يسبب فشلًا
+        expect(grantLabel(await verifyLedgerV3Runtime({ tenantId: D.tenantId, db, exec }))).toMatchObject({ ok: true });
       });
 
       it("🏢 شركة أخرى (B) لا تتأثر: لا علم ولا حسابات ولا ربط", async () => {

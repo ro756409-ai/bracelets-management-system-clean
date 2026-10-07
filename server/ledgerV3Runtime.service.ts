@@ -42,14 +42,19 @@ export async function verifyLedgerV3Runtime(opts: { tenantId: number; db: Ledger
   const grants = await q<{ code: string; businessId: number; bt: number | null; active: number | null }>(exec,
     `SELECT a.code, ab.businessId, b.tenantId bt, b.isActive active FROM ledger_account_businesses ab
      JOIN ledger_accounts a ON a.id = ab.accountId LEFT JOIN businesses b ON b.id = ab.businessId WHERE ab.tenantId = ?`, [tenantId]);
-  // التفعيل على مستوى الشركة كلها: **كل** نشاط فعّال يجب أن يكون مربوطًا بالحسابات غير النقدية الأربعة (مانع)؛
+  // التفعيل على مستوى الشركة كلها وخزن الشركة مشتركة بين البراندات: **كل** نشاط فعّال يجب أن يكون مربوطًا
+  // بالحسابات الأساسية التسعة كلها — المصدر هو LEDGER_BASE_ACCOUNTS نفسه الذي يستخدمه activateLedgerV3 (قائمة واحدة).
   // أي ربط لنشاط من شركة أخرى = مانع؛ النشاط غير النشط (مربوطًا أو لا) معلومة فقط.
+  const activeBizRows = await q<{ id: number; name: string }>(exec, "SELECT id, name FROM businesses WHERE tenantId = ? AND isActive = 1 ORDER BY id", [tenantId]);
   const foreign = grants.filter(g => g.bt !== tenantId);
-  const nonMoneyMissing: string[] = [];
-  for (const a of LEDGER_BASE_ACCOUNTS.filter(a => !a.money)) for (const b of activeBiz) if (!grants.some(g => g.code === a.code && Number(g.businessId) === b)) nonMoneyMissing.push(`${a.code}→#${b}`);
+  const missingGrants: { businessId: number; businessName: string; code: string; accountName: string }[] = [];
+  for (const b of activeBizRows) for (const a of LEDGER_BASE_ACCOUNTS)
+    if (!grants.some(g => g.code === a.code && Number(g.businessId) === Number(b.id))) missingGrants.push({ businessId: Number(b.id), businessName: b.name, code: a.code, accountName: a.name });
   const inactiveGranted = [...new Set(grants.filter(g => g.bt === tenantId && !g.active).map(g => Number(g.businessId)))];
-  push("كل نشاط فعّال في الشركة مربوط بالحسابات المطلوبة، ولا ربط لنشاط من شركة أخرى", activeBiz.length > 0 && foreign.length === 0 && nonMoneyMissing.length === 0,
-    `${grants.length} ربط · أنشطة فعّالة ${activeBiz.length}${inactiveGranted.length ? ` · غير نشطة مربوطة (معلومة): ${inactiveGranted.map(b => `#${b}`).join(", ")}` : ""}${foreign.length ? ` · من شركة أخرى: ${foreign.length}` : ""}${nonMoneyMissing.length ? ` · نشاط فعّال بلا ربط: ${nonMoneyMissing.join(", ")}` : ""}`);
+  const missingText = missingGrants.map(m => `النشاط ${m.businessName} (#${m.businessId}) بلا ربط بالحساب ${m.code} «${m.accountName}»`).join(" | ");
+  push(`كل نشاط فعّال مربوط بالحسابات الأساسية التسعة (${LEDGER_BASE_ACCOUNTS.map(a => a.code).join("/")})، ولا ربط لنشاط من شركة أخرى`,
+    activeBizRows.length > 0 && foreign.length === 0 && missingGrants.length === 0,
+    `${grants.length} ربط · أنشطة فعّالة ${activeBizRows.length}${inactiveGranted.length ? ` · غير نشطة مربوطة (معلومة): ${inactiveGranted.map(b => `#${b}`).join(", ")}` : ""}${foreign.length ? ` · من شركة أخرى: ${foreign.length}` : ""}${missingGrants.length ? ` · فشل — روابط ناقصة (${missingGrants.length}): ${missingText}` : ""}`);
 
   // 4) القيد الافتتاحي
   const openings = await q<{ id: number }>(exec, "SELECT id FROM ledger_transactions WHERE tenantId = ? AND kind = 'opening_balance'", [tenantId]);

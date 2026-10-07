@@ -114,12 +114,17 @@ export async function planLedgerV3Activation(opts: {
   for (const b of bizRows) if (b.isActive && !selectedBusinessIds.includes(b.id)) blockers.push(`لا يمكن تفعيل دفتر الشركة: النشاط ${b.name} (#${b.id}) غير موجود في خطة التفعيل`);
   if (tenant && selectedBusinessIds.length === 0) blockers.push("لا أنشطة نشطة للشركة — لا تفعيل");
 
+  // خزن الشركة مشتركة بين البراندات: كل نشاط فعّال يُربط بالحسابات الأساسية التسعة كلها (الخزن الخمس وغير النقدية الأربعة).
+  // safeGrants في الملف اختياري ولا يجوز أن يستثني نشاطًا فعّالًا من أي خزنة — وإلا مانع.
   const safeGrants: Record<string, number[]> = {};
   for (const a of LEDGER_BASE_ACCOUNTS) {
     if (!a.money) continue;
-    const ids = opening?.safeGrants?.[a.code] ?? selectedBusinessIds;
-    for (const id of ids) if (!selectedBusinessIds.includes(id)) blockers.push(`safeGrants.${a.code}: النشاط #${id} ليس ضمن الأنشطة المفعَّلة`);
-    safeGrants[a.code] = ids;
+    const ids = opening?.safeGrants?.[a.code];
+    if (ids) {
+      for (const id of ids) if (!selectedBusinessIds.includes(id)) blockers.push(`safeGrants.${a.code}: النشاط #${id} ليس ضمن الأنشطة المفعَّلة`);
+      for (const id of selectedBusinessIds) if (!ids.includes(id)) { const b = bizRows.find(x => x.id === id); blockers.push(`safeGrants.${a.code} («${a.name}») لا يشمل النشاط الفعّال ${b?.name ?? ""} (#${id}) — خزن الشركة مشتركة وكل نشاط فعّال يُربط بالحسابات التسعة`); }
+    }
+    safeGrants[a.code] = selectedBusinessIds;
   }
 
   let v2Reconciliation: ActivationPlan["v2Reconciliation"] = null;
