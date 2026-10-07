@@ -52,7 +52,7 @@ export const LEDGER_V3_SPEC: Record<LedgerV3Table, { columns: ColumnSpec[]; uniq
     ],
     foreignKeys: [
       { name: "fk_ledger_accounts_tenant", columns: ["tenantId"], refTable: "tenants", refColumns: ["id"] },
-      { name: "fk_ledger_accounts_actor", columns: ["actorEmployeeId"], refTable: "employees", refColumns: ["id"] },
+      { name: "fk_ledger_accounts_tenant_actor", columns: ["tenantId", "actorEmployeeId"], refTable: "employees", refColumns: ["tenantId", "id"] },
     ],
   },
   ledger_account_businesses: {
@@ -68,8 +68,8 @@ export const LEDGER_V3_SPEC: Record<LedgerV3Table, { columns: ColumnSpec[]; uniq
     uniques: [{ name: "PRIMARY", columns: ["accountId", "businessId"] }],
     foreignKeys: [
       { name: "fk_lab_tenant_account", columns: ["tenantId", "accountId"], refTable: "ledger_accounts", refColumns: ["tenantId", "id"] },
-      { name: "fk_lab_business", columns: ["businessId"], refTable: "businesses", refColumns: ["id"] },
-      { name: "fk_lab_actor", columns: ["actorEmployeeId"], refTable: "employees", refColumns: ["id"] },
+      { name: "fk_lab_tenant_business", columns: ["tenantId", "businessId"], refTable: "businesses", refColumns: ["tenantId", "id"] },
+      { name: "fk_lab_tenant_actor", columns: ["tenantId", "actorEmployeeId"], refTable: "employees", refColumns: ["tenantId", "id"] },
     ],
   },
   ledger_periods: {
@@ -99,7 +99,7 @@ export const LEDGER_V3_SPEC: Record<LedgerV3Table, { columns: ColumnSpec[]; uniq
     foreignKeys: [
       { name: "fk_lpe_period", columns: ["periodId"], refTable: "ledger_periods", refColumns: ["id"] },
       { name: "fk_lpe_tenant", columns: ["tenantId"], refTable: "tenants", refColumns: ["id"] },
-      { name: "fk_lpe_actor", columns: ["actorEmployeeId"], refTable: "employees", refColumns: ["id"] },
+      { name: "fk_lpe_tenant_actor", columns: ["tenantId", "actorEmployeeId"], refTable: "employees", refColumns: ["tenantId", "id"] },
     ],
   },
   ledger_transactions: {
@@ -128,10 +128,10 @@ export const LEDGER_V3_SPEC: Record<LedgerV3Table, { columns: ColumnSpec[]; uniq
     ],
     foreignKeys: [
       { name: "fk_lt_tenant", columns: ["tenantId"], refTable: "tenants", refColumns: ["id"] },
-      { name: "fk_lt_business", columns: ["sourceBusinessId"], refTable: "businesses", refColumns: ["id"] },
+      { name: "fk_lt_tenant_business", columns: ["tenantId", "sourceBusinessId"], refTable: "businesses", refColumns: ["tenantId", "id"] },
       { name: "fk_lt_period", columns: ["tenantId", "postingPeriod"], refTable: "ledger_periods", refColumns: ["tenantId", "period"] },
       { name: "fk_lt_reversal", columns: ["tenantId", "reversalOfTransactionId"], refTable: "ledger_transactions", refColumns: ["tenantId", "id"] },
-      { name: "fk_lt_actor", columns: ["actorEmployeeId"], refTable: "employees", refColumns: ["id"] },
+      { name: "fk_lt_tenant_actor", columns: ["tenantId", "actorEmployeeId"], refTable: "employees", refColumns: ["tenantId", "id"] },
     ],
   },
   ledger_entries: {
@@ -150,7 +150,7 @@ export const LEDGER_V3_SPEC: Record<LedgerV3Table, { columns: ColumnSpec[]; uniq
     foreignKeys: [
       { name: "fk_le_tenant_tx", columns: ["tenantId", "transactionId"], refTable: "ledger_transactions", refColumns: ["tenantId", "id"] },
       { name: "fk_le_tenant_account", columns: ["tenantId", "accountId"], refTable: "ledger_accounts", refColumns: ["tenantId", "id"] },
-      { name: "fk_le_business", columns: ["businessId"], refTable: "businesses", refColumns: ["id"] },
+      { name: "fk_le_tenant_business", columns: ["tenantId", "businessId"], refTable: "businesses", refColumns: ["tenantId", "id"] },
     ],
   },
   ledger_tenant_flags: {
@@ -169,10 +169,16 @@ export const LEDGER_V3_SPEC: Record<LedgerV3Table, { columns: ColumnSpec[]; uniq
     foreignKeys: [
       { name: "fk_ltf_tenant", columns: ["tenantId"], refTable: "tenants", refColumns: ["id"] },
       { name: "fk_ltf_opening", columns: ["tenantId", "openingTransactionId"], refTable: "ledger_transactions", refColumns: ["tenantId", "id"] },
-      { name: "fk_ltf_actor", columns: ["actorEmployeeId"], refTable: "employees", refColumns: ["id"] },
+      { name: "fk_ltf_tenant_actor", columns: ["tenantId", "actorEmployeeId"], refTable: "employees", refColumns: ["tenantId", "id"] },
     ],
   },
 };
+
+/** الفهرسان الفريدان المركّبان المضافان إلى الجداول القديمة (additive) — هدفا الـFK المركّبة. */
+export const LEDGER_V3_OLD_TABLE_INDEXES: { table: "businesses" | "employees"; name: string; columns: string[] }[] = [
+  { table: "businesses", name: "businesses_tenant_id", columns: ["tenantId", "id"] },
+  { table: "employees", name: "employees_tenant_id", columns: ["tenantId", "id"] },
+];
 
 /** قيود CHECK المطلوبة (MySQL 8.0.16+ يفرضها). */
 export const LEDGER_V3_CHECKS: { table: LedgerV3Table; name: string }[] = [
@@ -187,7 +193,16 @@ export function splitMigrationStatements(sqlText: string): string[] {
     .filter(chunk => chunk.length > 0);
 }
 
-export type VerifyIssue = { table: string; kind: "table" | "column" | "unique" | "foreign_key" | "check"; detail: string };
+export type VerifyIssue = { table: string; kind: "table" | "column" | "unique" | "foreign_key" | "check" | "old_index"; detail: string };
+
+/** حالة التطبيق: لا شيء / كامل / **جزئي** (خطِر — تشغيل متقطّع). */
+export type ApplicationState = "not_applied" | "applied" | "partial";
+export function applicationState(snapshot: SchemaSnapshot): ApplicationState {
+  const tables = LEDGER_V3_TABLES.filter(t => snapshot.tables.has(t)).length;
+  const oldIdx = LEDGER_V3_OLD_TABLE_INDEXES.filter(i => Boolean(snapshot.uniques[i.table]?.[i.name])).length;
+  const total = tables + oldIdx, max = LEDGER_V3_TABLES.length + LEDGER_V3_OLD_TABLE_INDEXES.length;
+  return total === 0 ? "not_applied" : total === max ? "applied" : "partial";
+}
 
 /** صورة قاعدة البيانات كما يقرؤها information_schema (مُحمَّلة من الخارج). */
 export type SchemaSnapshot = {
@@ -225,6 +240,11 @@ export function verifyLedgerV3(snapshot: SchemaSnapshot): VerifyIssue[] {
       if (actual.columns.join(",") !== fk.columns.join(",") || actual.refTable !== fk.refTable || actual.refColumns.join(",") !== fk.refColumns.join(","))
         issues.push({ table, kind: "foreign_key", detail: `${fk.name}: (${actual.columns}) → ${actual.refTable}(${actual.refColumns}) ≠ (${fk.columns}) → ${fk.refTable}(${fk.refColumns})` });
     }
+  }
+  for (const oi of LEDGER_V3_OLD_TABLE_INDEXES) {
+    const actual = snapshot.uniques[oi.table]?.[oi.name];
+    if (!actual) issues.push({ table: oi.table, kind: "old_index", detail: `الفهرس الفريد المركّب ${oi.name} غير موجود` });
+    else if (actual.join(",") !== oi.columns.join(",")) issues.push({ table: oi.table, kind: "old_index", detail: `${oi.name}: الأعمدة (${actual.join(",")}) ≠ (${oi.columns.join(",")})` });
   }
   for (const chk of LEDGER_V3_CHECKS) {
     if (snapshot.tables.has(chk.table) && !snapshot.checks[chk.table]?.has(chk.name))

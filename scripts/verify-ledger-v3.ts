@@ -37,11 +37,12 @@ async function main() {
       process.exitCode = rows.every(r => r.ok) ? 0 : 1;
       return;
     }
-    const { issues, present } = await verifyLedgerV3OnDatabase(exec);
-    if (asJson) console.log(JSON.stringify({ present, issues }, null, 2));
+    const { issues, present, state } = await verifyLedgerV3OnDatabase(exec);
+    if (asJson) console.log(JSON.stringify({ state, present, issues }, null, 2));
     else {
+      console.log(`حالة التطبيق: ${state === "applied" ? "مطبَّق" : state === "not_applied" ? "غير مطبَّق" : "⚠️ جزئي — تشغيل متقطّع، راجع قبل أي إعادة"}`);
       console.log(`الجداول الموجودة: ${present.join(", ") || "لا شيء"}`);
-      if (issues.length === 0) console.log("✓ Ledger V3 مطابق للمواصفة بالكامل");
+      if (issues.length === 0) console.log("✓ Ledger V3 مطابق للمواصفة بالكامل (الجداول السبعة + الفهرسان المركّبان + كل FK مركّب للـtenant + currentBalance/payloadHash/العكس مرة واحدة/CHECK amount)");
       else for (const i of issues) console.log(`  ✗ ${i.table} [${i.kind}] ${i.detail}`);
     }
     process.exitCode = issues.length === 0 ? 0 : 1;

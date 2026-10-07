@@ -1,25 +1,25 @@
--- Accounting Ledger V3 — جداول جديدة فقط (DELTA مكتوبة بخط اليد، ADDITIVE بحت).
+-- Accounting Ledger V3 — DELTA مكتوبة بخط اليد، ADDITIVE بحت: فهرسان فريدان مركّبان على جدولين
+-- قديمين (بلا تغيير أعمدة أو بيانات) + 7 جداول جديدة. غير مضافة إلى drizzle journal.
 --
--- لا تمس أي جدول قائم: لا ALTER ولا فهرس جديد على الجداول القديمة (treasury_transactions،
--- financial_*، business_events، accounting_closings تبقى للقراءة كما هي). الدفتر الجديد:
---   • الحساب مملوك للـtenant (خزنة مكتب/بنك مشتركة بين البراندات)؛ النشاط لا يستخدم حسابًا إلا
---     عبر ledger_account_businesses (المصدر الوحيد للسماح).
---   • الحركة غير قابلة للتعديل: لا status ولا UPDATE/DELETE؛ كونها معكوسة يُستنتج من وجود حركة
---     kind='reversal' تحمل reversalOfTransactionId (UNIQUE → لا تُعكس مرتين).
---   • idempotency ذرّية في DB: UNIQUE(tenantId, idempotencyKey) + payloadHash محفوظ (نفس المفتاح
---     ونفس الهاش = replay، هاش مختلف = CONFLICT).
---   • الفاعل: actorType (employee|system|webhook) + actorEmployeeId NULL — لا موظف وهمي للنظام.
---   • الفترات: ledger_periods حالة حالية فقط، وledger_period_events سجل كل قفل/فتح بسبب وفاعل.
+-- عزل الـtenant مفروض بالـFK المركّب في **كل** علاقة:
+--   • الحساب/الحركة/القيد/العكس: (tenantId, …) → ledger_*(tenantId, id)
+--   • النشاط: (tenantId, businessId) → businesses(tenantId, id)   ← يتطلب UNIQUE businesses_tenant_id
+--   • الفاعل: (tenantId, actorEmployeeId) → employees(tenantId, id) ← يتطلب UNIQUE employees_tenant_id
+--   فصف يدّعي tenantId=A ويشير إلى نشاط/موظف/حساب تابع لـB يُرفض في DB نفسها (مُختبَر بالحالات الدقيقة).
 --
--- ما لا يضمنه الـFK (يُفرض في الخدمة fail-closed داخل Transaction، مع اختبارات concurrency لاحقًا):
---   تطابق tenant النشاط (businesses.tenantId) مع tenantId الصف — لا يوجد UNIQUE(tenantId, id) على
---   businesses، وإضافته تعديل على جدول قديم مرفوض الآن. الـFK المركّب يضمن فقط أن الحساب
---   والحركة والقيد من نفس tenant.
+-- ما لا يفرضه الـDB (تحقق fail-closed في خدمة V3 مع اختبار): actorType='employee' يتطلب
+--   actorEmployeeId، وactorType IN ('system','webhook') يتطلب actorEmployeeId IS NULL.
 --
--- Preflight (يجب أن يعيد صفرًا/القيم المتوقعة) في scripts/verify-ledger-v3.ts --preflight.
--- التشغيل اليدوي (بعد backup وبعد Staging):  mysql -u"$MYSQL_USER" -p <db> < drizzle/0040_ledger_v3.sql
--- Rollback قبل أي استخدام فعلي: الجداول السبعة مستقلة — DROP بالترتيب العكسي (أسفل الملف، معلّق).
+-- Preflight (قراءة فقط): scripts/verify-ledger-v3.ts --preflight — يشترط: لا جداول ledger_*،
+--   لا businesses.tenantId NULL، لا employees.tenantId NULL، لا أنشطة/موظفين يتيمين، foreign_key_checks=1.
+-- التشغيل اليدوي (بعد backup وبعد Staging): mysql -u"$MYSQL_USER" -p <db> < drizzle/0040_ledger_v3.sql
+-- إعادة التشغيل بالخطأ تفشل على أول عبارة (الفهرس موجود) بلا أي تغيير جزئي.
+-- Rollback قبل أي استخدام فعلي: أسفل الملف (معلّق) — الجداول السبعة بالترتيب العكسي ثم الفهرسان.
 
+ALTER TABLE `businesses` ADD UNIQUE INDEX `businesses_tenant_id` (`tenantId`,`id`);
+--> statement-breakpoint
+ALTER TABLE `employees` ADD UNIQUE INDEX `employees_tenant_id` (`tenantId`,`id`);
+--> statement-breakpoint
 CREATE TABLE `ledger_accounts` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`tenantId` int NOT NULL,
@@ -38,7 +38,7 @@ CREATE TABLE `ledger_accounts` (
 	CONSTRAINT `ledger_accounts_tenant_code_unique` UNIQUE(`tenantId`,`code`),
 	CONSTRAINT `ledger_accounts_tenant_id_unique` UNIQUE(`tenantId`,`id`),
 	CONSTRAINT `fk_ledger_accounts_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
-	CONSTRAINT `fk_ledger_accounts_actor` FOREIGN KEY (`actorEmployeeId`) REFERENCES `employees`(`id`)
+	CONSTRAINT `fk_ledger_accounts_tenant_actor` FOREIGN KEY (`tenantId`,`actorEmployeeId`) REFERENCES `employees`(`tenantId`,`id`)
 );
 --> statement-breakpoint
 CREATE TABLE `ledger_account_businesses` (
@@ -51,8 +51,8 @@ CREATE TABLE `ledger_account_businesses` (
 	`grantedAt` timestamp NOT NULL DEFAULT (now()),
 	CONSTRAINT `ledger_account_businesses_pk` PRIMARY KEY(`accountId`,`businessId`),
 	CONSTRAINT `fk_lab_tenant_account` FOREIGN KEY (`tenantId`,`accountId`) REFERENCES `ledger_accounts`(`tenantId`,`id`),
-	CONSTRAINT `fk_lab_business` FOREIGN KEY (`businessId`) REFERENCES `businesses`(`id`),
-	CONSTRAINT `fk_lab_actor` FOREIGN KEY (`actorEmployeeId`) REFERENCES `employees`(`id`)
+	CONSTRAINT `fk_lab_tenant_business` FOREIGN KEY (`tenantId`,`businessId`) REFERENCES `businesses`(`tenantId`,`id`),
+	CONSTRAINT `fk_lab_tenant_actor` FOREIGN KEY (`tenantId`,`actorEmployeeId`) REFERENCES `employees`(`tenantId`,`id`)
 );
 --> statement-breakpoint
 CREATE TABLE `ledger_periods` (
@@ -80,7 +80,7 @@ CREATE TABLE `ledger_period_events` (
 	KEY `ledger_period_events_period_idx` (`periodId`,`createdAt`),
 	CONSTRAINT `fk_lpe_period` FOREIGN KEY (`periodId`) REFERENCES `ledger_periods`(`id`),
 	CONSTRAINT `fk_lpe_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
-	CONSTRAINT `fk_lpe_actor` FOREIGN KEY (`actorEmployeeId`) REFERENCES `employees`(`id`)
+	CONSTRAINT `fk_lpe_tenant_actor` FOREIGN KEY (`tenantId`,`actorEmployeeId`) REFERENCES `employees`(`tenantId`,`id`)
 );
 --> statement-breakpoint
 CREATE TABLE `ledger_transactions` (
@@ -107,10 +107,10 @@ CREATE TABLE `ledger_transactions` (
 	KEY `ledger_transactions_tenant_period_idx` (`tenantId`,`postingPeriod`),
 	KEY `ledger_transactions_business_date_idx` (`sourceBusinessId`,`effectiveDate`),
 	CONSTRAINT `fk_lt_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
-	CONSTRAINT `fk_lt_business` FOREIGN KEY (`sourceBusinessId`) REFERENCES `businesses`(`id`),
+	CONSTRAINT `fk_lt_tenant_business` FOREIGN KEY (`tenantId`,`sourceBusinessId`) REFERENCES `businesses`(`tenantId`,`id`),
 	CONSTRAINT `fk_lt_period` FOREIGN KEY (`tenantId`,`postingPeriod`) REFERENCES `ledger_periods`(`tenantId`,`period`),
 	CONSTRAINT `fk_lt_reversal` FOREIGN KEY (`tenantId`,`reversalOfTransactionId`) REFERENCES `ledger_transactions`(`tenantId`,`id`),
-	CONSTRAINT `fk_lt_actor` FOREIGN KEY (`actorEmployeeId`) REFERENCES `employees`(`id`)
+	CONSTRAINT `fk_lt_tenant_actor` FOREIGN KEY (`tenantId`,`actorEmployeeId`) REFERENCES `employees`(`tenantId`,`id`)
 );
 --> statement-breakpoint
 CREATE TABLE `ledger_entries` (
@@ -130,7 +130,7 @@ CREATE TABLE `ledger_entries` (
 	KEY `ledger_entries_business_idx` (`businessId`),
 	CONSTRAINT `fk_le_tenant_tx` FOREIGN KEY (`tenantId`,`transactionId`) REFERENCES `ledger_transactions`(`tenantId`,`id`),
 	CONSTRAINT `fk_le_tenant_account` FOREIGN KEY (`tenantId`,`accountId`) REFERENCES `ledger_accounts`(`tenantId`,`id`),
-	CONSTRAINT `fk_le_business` FOREIGN KEY (`businessId`) REFERENCES `businesses`(`id`)
+	CONSTRAINT `fk_le_tenant_business` FOREIGN KEY (`tenantId`,`businessId`) REFERENCES `businesses`(`tenantId`,`id`)
 );
 --> statement-breakpoint
 CREATE TABLE `ledger_tenant_flags` (
@@ -146,11 +146,11 @@ CREATE TABLE `ledger_tenant_flags` (
 	CONSTRAINT `ledger_tenant_flags_pk` PRIMARY KEY(`tenantId`),
 	CONSTRAINT `fk_ltf_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
 	CONSTRAINT `fk_ltf_opening` FOREIGN KEY (`tenantId`,`openingTransactionId`) REFERENCES `ledger_transactions`(`tenantId`,`id`),
-	CONSTRAINT `fk_ltf_actor` FOREIGN KEY (`actorEmployeeId`) REFERENCES `employees`(`id`)
+	CONSTRAINT `fk_ltf_tenant_actor` FOREIGN KEY (`tenantId`,`actorEmployeeId`) REFERENCES `employees`(`tenantId`,`id`)
 );
 -- ─────────────────────────────────────────────────────────────────────────────
--- Rollback قبل أي استخدام فعلي (بالترتيب العكسي للمفاتيح الأجنبية). بعد أول حركة فعلية:
--- لا DROP — تعطيل الكتابة فقط (ledger_tenant_flags.ledgerV3Enabled=0 + disabledReason).
+-- Rollback قبل أي استخدام فعلي (الجداول بالترتيب العكسي للمفاتيح الأجنبية، ثم الفهرسان). بعد أول
+-- حركة فعلية: لا DROP — تعطيل الكتابة فقط (ledger_tenant_flags.ledgerV3Enabled=0 + disabledReason).
 --   DROP TABLE `ledger_tenant_flags`;
 --   DROP TABLE `ledger_entries`;
 --   DROP TABLE `ledger_transactions`;
@@ -158,3 +158,5 @@ CREATE TABLE `ledger_tenant_flags` (
 --   DROP TABLE `ledger_periods`;
 --   DROP TABLE `ledger_account_businesses`;
 --   DROP TABLE `ledger_accounts`;
+--   ALTER TABLE `employees` DROP INDEX `employees_tenant_id`;
+--   ALTER TABLE `businesses` DROP INDEX `businesses_tenant_id`;

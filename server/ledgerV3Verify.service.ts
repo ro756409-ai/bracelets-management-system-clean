@@ -1,12 +1,12 @@
 import type { ReadOnlyExecutor } from "./balanceReconciliation.service";
-import { LEDGER_V3_TABLES, verifyLedgerV3, type SchemaSnapshot, type VerifyIssue } from "../shared/ledgerV3Spec";
+import { LEDGER_V3_TABLES, LEDGER_V3_OLD_TABLE_INDEXES, applicationState, verifyLedgerV3, type ApplicationState, type SchemaSnapshot, type VerifyIssue } from "../shared/ledgerV3Spec";
 
 /**
  * لقطة information_schema لجداول Ledger V3 (قراءة فقط) → مقارنة بالمواصفة.
  * الاستعلامات على القاعدة الحالية للاتصال (`DATABASE()`), ولا تُطبع أي بيانات اتصال.
  */
 export async function loadLedgerV3Snapshot(exec: ReadOnlyExecutor): Promise<SchemaSnapshot> {
-  const names = [...LEDGER_V3_TABLES];
+  const names: string[] = [...LEDGER_V3_TABLES, ...LEDGER_V3_OLD_TABLE_INDEXES.map(i => i.table)];
   const ph = names.map(() => "?").join(",");
   const tables = await exec.query<{ TABLE_NAME: string }>(
     `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph})`, names
@@ -41,9 +41,10 @@ export async function loadLedgerV3Snapshot(exec: ReadOnlyExecutor): Promise<Sche
   return snapshot;
 }
 
-export async function verifyLedgerV3OnDatabase(exec: ReadOnlyExecutor): Promise<{ issues: VerifyIssue[]; present: string[] }> {
+export async function verifyLedgerV3OnDatabase(exec: ReadOnlyExecutor): Promise<{ issues: VerifyIssue[]; present: string[]; state: ApplicationState }> {
   const snapshot = await loadLedgerV3Snapshot(exec);
-  return { issues: verifyLedgerV3(snapshot), present: [...snapshot.tables].sort() };
+  const present = [...snapshot.tables].filter(t => (LEDGER_V3_TABLES as readonly string[]).includes(t)).sort();
+  return { issues: verifyLedgerV3(snapshot), present, state: applicationState(snapshot) };
 }
 
 /** Preflight قبل تطبيق 0040 — قراءة فقط؛ القيم المتوقعة مذكورة مع كل سطر. */
@@ -52,7 +53,11 @@ export async function ledgerV3Preflight(exec: ReadOnlyExecutor): Promise<{ label
   const one = async <T>(sql: string, params: unknown[] = []) => (await exec.query<T>(sql, params))[0];
   const existing = await one<{ n: number }>(`SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph})`, [...LEDGER_V3_TABLES]);
   const base = await one<{ n: number }>(`SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('tenants','businesses','employees')`);
-  const orphanBiz = await one<{ n: number }>(`SELECT COUNT(*) n FROM businesses b LEFT JOIN tenants t ON t.id = b.tenantId WHERE t.id IS NULL`);
+  const nullBizTenant = await one<{ n: number }>(`SELECT COUNT(*) n FROM businesses WHERE tenantId IS NULL`);
+  const nullEmpTenant = await one<{ n: number }>(`SELECT COUNT(*) n FROM employees WHERE tenantId IS NULL`);
+  const orphanBiz = await one<{ n: number }>(`SELECT COUNT(*) n FROM businesses b LEFT JOIN tenants t ON t.id = b.tenantId WHERE b.tenantId IS NOT NULL AND t.id IS NULL`);
+  const orphanEmp = await one<{ n: number }>(`SELECT COUNT(*) n FROM employees e LEFT JOIN tenants t ON t.id = e.tenantId WHERE e.tenantId IS NOT NULL AND t.id IS NULL`);
+  const oldIdx = await one<{ n: number }>(`SELECT COUNT(DISTINCT INDEX_NAME) n FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME IN ('businesses_tenant_id','employees_tenant_id')`);
   const fkChecks = await one<{ v: number }>(`SELECT @@foreign_key_checks v`);
   const idTypes = await exec.query<{ TABLE_NAME: string; COLUMN_TYPE: string }>(
     `SELECT TABLE_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'id' AND TABLE_NAME IN ('tenants','businesses','employees')`
@@ -61,7 +66,11 @@ export async function ledgerV3Preflight(exec: ReadOnlyExecutor): Promise<{ label
   const rows = [
     { label: "جداول ledger_* موجودة مسبقًا", expected: "0", actual: String(Number(existing?.n ?? 0)) },
     { label: "الجداول المرجعية tenants/businesses/employees", expected: "3", actual: String(Number(base?.n ?? 0)) },
-    { label: "أنشطة بلا tenant (FK ستفشل لاحقًا عند الربط)", expected: "0", actual: String(Number(orphanBiz?.n ?? 0)) },
+    { label: "الفهرسان المركّبان businesses_tenant_id/employees_tenant_id موجودان مسبقًا", expected: "0", actual: String(Number(oldIdx?.n ?? 0)) },
+    { label: "businesses.tenantId = NULL", expected: "0", actual: String(Number(nullBizTenant?.n ?? 0)) },
+    { label: "employees.tenantId = NULL", expected: "0", actual: String(Number(nullEmpTenant?.n ?? 0)) },
+    { label: "أنشطة يتيمة (tenantId لا يشير إلى tenant)", expected: "0", actual: String(Number(orphanBiz?.n ?? 0)) },
+    { label: "موظفون يتامى (tenantId لا يشير إلى tenant)", expected: "0", actual: String(Number(orphanEmp?.n ?? 0)) },
     { label: "foreign_key_checks", expected: "1", actual: String(Number(fkChecks?.v ?? 0)) },
     { label: "أعمدة id المرجعية من نوع int (لتطابق FK)", expected: "", actual: nonInt.join(",") },
   ];
