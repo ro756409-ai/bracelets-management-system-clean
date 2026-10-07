@@ -1,0 +1,26 @@
+{
+  "goLiveDate": "2026-11-01",
+  "currency": "EGP",
+  "openingBalances": {
+    "OFFICE_CASH": "12500.00",
+    "BANK_MAIN": "84210.75",
+    "VF_CASH": "0",
+    "INSTAPAY": "0",
+    "COD_BOSTA": "3300.50"
+  },
+  "openingEquity": "100011.25",
+  "businessIds": [1, 2],
+  "safeGrants": {
+    "OFFICE_CASH": [1, 2],
+    "BANK_MAIN": [1, 2],
+    "VF_CASH": [1],
+    "INSTAPAY": [1],
+    "COD_BOSTA": [1, 2]
+  },
+  "reconciliation": {
+    "reportGeneratedAt": "2026-10-31T20:00:00.000Z",
+    "approvedByEmployeeId": 1,
+    "approvedAt": "2026-10-31T21:00:00.000Z",
+    "acknowledgedDifferences": false
+  }
+}
