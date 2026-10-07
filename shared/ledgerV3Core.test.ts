@@ -37,14 +37,21 @@ describe("🧮 Ledger V3 — القواعد النقية", () => {
     expect(postingPeriodOf("2026-10-07")).toBe("2026-10");
     for (const bad of ["2026-13-01", "2026-10-32", "07/10/2026", "2026-10", ""]) expect(code(() => postingPeriodOf(bad))).toBe("date");
   });
-  it("payloadHash قانوني: ترتيب القيود لا يغيّره، والوصف خارجه، وأي تغيير مالي يغيّره", () => {
-    const base = { kind: "expense", sourceBusinessId: 1, effectiveDate: "2026-10-07", currency: "EGP", reversalOfTransactionId: null, sourceType: null, sourceReference: null };
+  it("payloadHash قانوني: ترتيب القيود/تطبيع الوصف لا يغيّرانه؛ أي تغيير مالي أو وصف أو مصدر أو فاعل يغيّره", () => {
+    const base = { kind: "expense", sourceBusinessId: 1, effectiveDate: "2026-10-07", currency: "EGP", reversalOfTransactionId: null, sourceType: "expense", sourceReference: "E-1", description: "إيجار  أكتوبر", actorType: "employee" as const, actorEmployeeId: 7 };
     const a = validateEntries([{ accountId: 1, side: "debit", amount: "100" }, { accountId: 2, side: "credit", amount: "100" }], 1);
     const b = validateEntries([{ accountId: 2, side: "credit", amount: "100.0" }, { accountId: 1, side: "debit", amount: "100" }], 1);
-    expect(canonicalPayloadHash({ ...base, entries: a })).toBe(canonicalPayloadHash({ ...base, entries: b }));
+    const h = canonicalPayloadHash({ ...base, entries: a });
+    expect(canonicalPayloadHash({ ...base, entries: b })).toBe(h);
+    expect(canonicalPayloadHash({ ...base, entries: a, description: "  إيجار أكتوبر " })).toBe(h); // تطبيع المسافات
     const c = validateEntries([{ accountId: 1, side: "debit", amount: "100.01" }, { accountId: 2, side: "credit", amount: "100.01" }], 1);
-    expect(canonicalPayloadHash({ ...base, entries: c })).not.toBe(canonicalPayloadHash({ ...base, entries: a }));
-    expect(canonicalPayloadHash({ ...base, effectiveDate: "2026-10-08", entries: a })).not.toBe(canonicalPayloadHash({ ...base, entries: a }));
+    expect(canonicalPayloadHash({ ...base, entries: c })).not.toBe(h);
+    expect(canonicalPayloadHash({ ...base, entries: a, effectiveDate: "2026-10-08" })).not.toBe(h);
+    expect(canonicalPayloadHash({ ...base, entries: a, description: "إيجار نوفمبر" })).not.toBe(h);
+    expect(canonicalPayloadHash({ ...base, entries: a, sourceReference: "E-2" })).not.toBe(h);
+    expect(canonicalPayloadHash({ ...base, entries: a, sourceType: "manual" })).not.toBe(h);
+    expect(canonicalPayloadHash({ ...base, entries: a, actorEmployeeId: 8 })).not.toBe(h);
+    expect(canonicalPayloadHash({ ...base, entries: a, actorType: "system", actorEmployeeId: null })).not.toBe(h);
   });
   it("شكل الفاعل: موظف بمعرّف؛ نظام/webhook بلا معرّف", () => {
     expect(code(() => assertActorShape({ type: "employee", employeeId: 5 }))).toBe("ok");
@@ -74,7 +81,9 @@ describe("🔒 حراس المصدر — الخدمة لا تقبل من الع�
   });
   it("الحسابات تُقفل FOR UPDATE بترتيب id، والفترة FOR UPDATE، والعلم FOR SHARE؛ غياب الجداول = خطأ واضح", () => {
     expect(svc).toContain('.orderBy(asc(ledgerAccounts.id)).for("update")');
-    expect(svc).toContain('ledgerPeriods.period, period))).limit(1).for("update")');
+    expect(svc).toContain('ledgerPeriods.period, period))).limit(1).for("share")'); // الترحيل يشارك القفل
+    expect(svc).toContain('eq(ledgerPeriods.period, input.period))).limit(1).for("update")'); // القفل/الفتح حصري
+    expect(svc).not.toContain("accounting_manager");
     expect(svc).toContain('eq(ledgerTenantFlags.tenantId, tenantId)).for("share")');
     expect(svc).toContain('throw new LedgerError("unavailable")');
     for (const v2 of ["treasuryTransactions", "financialTransactions", "financialAccounts", "businessEvents", "addTreasuryTransaction"]) expect(svc).not.toContain(v2);

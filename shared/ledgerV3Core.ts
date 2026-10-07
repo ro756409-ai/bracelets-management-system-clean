@@ -39,7 +39,7 @@ export const LEDGER_MESSAGES = {
   actorEmployee: "الفاعل من نوع موظف يتطلب موظفًا فعّالًا تابعًا لنفس الشركة",
   actorSystem: "فاعل النظام أو الـwebhook لا يحمل معرّف موظف",
   reason: "السبب إلزامي ولا يجوز أن يكون فارغًا",
-  reopenRole: "إعادة فتح الفترة متاحة للمالك أو مدير الحسابات فقط",
+  reopenRole: "إعادة فتح الفترة وتعطيل الدفتر يتطلبان فاعلًا موظفًا معتمدًا (الصلاحية تُفحص على السيرفر)",
   reversedAlready: "هذه الحركة معكوسة بالفعل — لا تُعكس مرتين",
   transaction: "الحركة غير موجودة أو غير تابعة لهذه الشركة",
   periodNotFound: "الفترة غير موجودة",
@@ -119,14 +119,21 @@ export function stableJson(value: unknown): string {
   return `{${Object.keys(record).sort().map(k => `${JSON.stringify(k)}:${stableJson(record[k])}`).join(",")}}`;
 }
 
+/** تطبيع الوصف قبل الهاش: تشذيب الطرفين وضغط المسافات المتتالية إلى مسافة واحدة. */
+export function normalizeDescription(d: string | null | undefined): string {
+  return String(d ?? "").replace(/\s+/g, " ").trim();
+}
+
 /**
- * الحمولة القانونية = كل ما له أثر مالي (النوع، النشاط، التاريخ، العملة، القيود مرتّبة، الأصل المعكوس،
- * المصدر). الوصف والفاعل **خارجها**: إعادة الإرسال باسم فاعل مختلف أو وصف معدّل تبقى replay لا
- * تعارضًا، أما أي تغيير في المبالغ أو الحسابات أو التاريخ فتعارض.
+ * الحمولة القانونية = النوع، النشاط، التاريخ، العملة، القيود بترتيب ثابت، الأصل المعكوس، المصدر،
+ * **الوصف المطبَّع، ونوع الفاعل ومعرّفه**. لا تشمل postingPeriod/balanceAfter/currentBalance (مشتقة
+ * من السيرفر). النتيجة: نفس المفتاح ونفس كل البيانات = replay؛ أي اختلاف (مالي أو وصف أو مصدر أو
+ * فاعل) = CONFLICT.
  */
 export function canonicalPayloadHash(p: {
   kind: string; sourceBusinessId: number | null; effectiveDate: string; currency: string;
   entries: ValidatedEntry[]; reversalOfTransactionId: number | null; sourceType: string | null; sourceReference: string | null;
+  description: string; actorType: LedgerActor["type"]; actorEmployeeId: number | null;
 }): string {
   const entries = p.entries
     .map(e => ({ a: e.accountId, s: e.side, m: e.amount, b: e.businessId }))
@@ -134,6 +141,7 @@ export function canonicalPayloadHash(p: {
   return createHash("sha256").update(stableJson({
     kind: p.kind, sourceBusinessId: p.sourceBusinessId, effectiveDate: p.effectiveDate, currency: p.currency,
     entries, reversalOfTransactionId: p.reversalOfTransactionId, sourceType: p.sourceType, sourceReference: p.sourceReference,
+    description: normalizeDescription(p.description), actorType: p.actorType, actorEmployeeId: p.actorEmployeeId,
   })).digest("hex");
 }
 

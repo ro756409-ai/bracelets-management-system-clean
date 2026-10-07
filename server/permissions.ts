@@ -79,7 +79,22 @@ export const ALL_PERMISSIONS = [
   "payroll.manage",
   "payroll.approve",
   "payroll.pay",
+  // دفتر الحسابات V3 — بلا دور جديد: التوزيع الافتراضي أدناه، والمنح/المنع لكل tenant عبر
+  // tenant_role_permissions (المحاسب يأخذ view/post بمنح المالك).
+  "ledger.view",
+  "ledger.post",
+  "ledger.reverse",
+  "ledger.manage_accounts",
+  "ledger.period.lock",
+  "ledger.period.reopen",
+  "ledger.activate",
 ] as const;
+
+/** صلاحيات دفتر V3 التي يملكها المالك وحده افتراضيًا (لا يأخذها admin إلا بمنح صريح لكل tenant). */
+export const LEDGER_OWNER_ONLY_PERMISSIONS: readonly Permission[] = ["ledger.period.reopen", "ledger.activate"];
+const LEDGER_PERMISSIONS: readonly Permission[] = [
+  "ledger.view", "ledger.post", "ledger.reverse", "ledger.manage_accounts", "ledger.period.lock", "ledger.period.reopen", "ledger.activate",
+];
 
 export type Permission = (typeof ALL_PERMISSIONS)[number];
 
@@ -104,6 +119,7 @@ export const FINANCIAL_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission
   "ad_spend.view", "ad_spend.manage",
   "treasury.transfer", "settlements.create", "reports.view_profit",
   "payroll.view", "payroll.manage", "payroll.approve", "payroll.pay",
+  "ledger.view", "ledger.post", "ledger.reverse", "ledger.manage_accounts", "ledger.period.lock", "ledger.period.reopen", "ledger.activate",
 ]);
 
 export function isFinancialPermission(permission: Permission): boolean {
@@ -186,8 +202,10 @@ export function isOwnerRole(role: string | null | undefined): boolean {
 
 const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
   super_admin: ALL_PERMISSIONS,
-  admin: ALL_PERMISSIONS,
-  manager: ALL_PERMISSIONS,
+  // admin: كل شيء عدا ما هو للمالك وحده في دفتر V3 (إعادة فتح الفترة والتفعيل).
+  admin: ALL_PERMISSIONS.filter(p => !LEDGER_OWNER_ONLY_PERMISSIONS.includes(p)),
+  // المدير تشغيلي: كل الصلاحيات القديمة كما كانت، وبلا أي صلاحية على دفتر V3 (مالي).
+  manager: ALL_PERMISSIONS.filter(p => !LEDGER_PERMISSIONS.includes(p)),
   // المحاسب هو الدور الوحيد غير الإداري اللي بيدخل حركات على الخزنة — الدور كان موجود
   // في القائمة من غير أي صلاحية محاسبية، فكان بيشوف الأوردرات وبس.
   accountant: [

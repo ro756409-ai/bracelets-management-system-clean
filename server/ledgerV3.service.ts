@@ -6,7 +6,7 @@ import {
 } from "../drizzle/ledgerV3.schema";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import {
-  LEDGER_KINDS, LedgerError, applyToBalance, assertActorShape, assertCurrency, canonicalPayloadHash, postingPeriodOf,
+  LEDGER_KINDS, LedgerError, applyToBalance, assertActorShape, assertCurrency, canonicalPayloadHash, normalizeDescription, postingPeriodOf,
   reconcileAccount, validateEntries, type LedgerActor, type LedgerEntryInput, type LedgerKind, type LedgerReconLine, type ValidatedEntry,
 } from "../shared/ledgerV3Core";
 import { getDb, withDeadlockRetry } from "./db";
@@ -17,7 +17,8 @@ import { isOwnerRole } from "./permissions";
  *
  * نقطة ترحيل واحدة `postLedgerTransaction` داخل `db.transaction` واحدة مع إعادة المحاولة عند الـdeadlock:
  *   1) العلم (FOR SHARE) → 2) النشاط والفاعل fail-closed → 3) الفترة من التاريخ (إنشاء open عند الغياب
- *   بأمان من السباق) ثم FOR UPDATE ورفض locked → 4) **حجز idempotencyKey بالإدراج نفسه** (القيد الفريد
+ *   بأمان من السباق) ثم **FOR SHARE** ورفض locked (الترحيلات في الشهر نفسه تتوازى؛ القفل/الفتح يأخذان
+ *   FOR UPDATE فينتظران الحركات المفتوحة ثم يمنعان الجديدة) → 4) **حجز idempotencyKey بالإدراج نفسه** (القيد الفريد
  *   هو القفل؛ Duplicate → قراءة مقفولة للموجود → replay أو CONFLICT بالـpayloadHash المحفوظ) →
  *   5) قفل الحسابات FOR UPDATE بترتيب id → 6) tenant/نشطة/عملة/صلاحية النشاط → 7) الأرصدة حسب
  *   normalSide ومنع السالب → 8) إدراج القيود وتحديث currentBalance. أي فشل = rollback كامل، فلا توجد
@@ -90,9 +91,13 @@ async function resolveActor(tx: Tx, tenantId: number, actor: LedgerActor): Promi
   return { actorType: "employee", actorEmployeeId: emp.id, role: emp.role };
 }
 
-/** الفترة بتاريخ الحركة: تُنشأ open عند الغياب (السباق: Duplicate → إعادة القراءة)، ثم تُقفل FOR UPDATE وتُرفض لو locked. */
+/**
+ * الفترة بتاريخ الحركة: تُنشأ open عند الغياب (السباق: Duplicate → إعادة القراءة)، ثم تُقرأ **FOR SHARE**
+ * وتُرفض لو locked. القفل المشترك يسمح بتوازي الترحيلات في الشهر الواحد، ويُجبر `lock/reopen` (FOR UPDATE)
+ * على انتظار كل ترحيل مفتوح قبل تغيير الحالة — فلا ترحيل بعد القفل.
+ */
 async function lockPeriodForPosting(tx: Tx, tenantId: number, period: string): Promise<{ id: number }> {
-  const read = async () => (await tx.select().from(ledgerPeriods).where(and(eq(ledgerPeriods.tenantId, tenantId), eq(ledgerPeriods.period, period))).limit(1).for("update"))[0];
+  const read = async () => (await tx.select().from(ledgerPeriods).where(and(eq(ledgerPeriods.tenantId, tenantId), eq(ledgerPeriods.period, period))).limit(1).for("share"))[0];
   let row = await read();
   if (!row) {
     try { await tx.insert(ledgerPeriods).values({ tenantId, period, status: "open" }); }
@@ -124,10 +129,6 @@ async function postInternal(tx: Tx, input: InternalPost): Promise<PostResult> {
   assertCurrency(input.currency);
   const postingPeriod = postingPeriodOf(input.effectiveDate);
   const entries: ValidatedEntry[] = validateEntries(input.entries, input.sourceBusinessId ?? null);
-  const payloadHash = canonicalPayloadHash({
-    kind: input.kind, sourceBusinessId: input.sourceBusinessId, effectiveDate: input.effectiveDate, currency: input.currency,
-    entries, reversalOfTransactionId: input.reversalOfTransactionId, sourceType: input.sourceType, sourceReference: input.sourceReference,
-  });
 
   // 1) العلم  2) النشاط/الفاعل  3) الفترة
   await assertEnabled(tx, input.tenantId);
@@ -136,6 +137,12 @@ async function postInternal(tx: Tx, input: InternalPost): Promise<PostResult> {
     if (b !== input.sourceBusinessId) await assertBusinessInTenant(tx, input.tenantId, b);
   const actor = await resolveActor(tx, input.tenantId, input.actor);
   await lockPeriodForPosting(tx, input.tenantId, postingPeriod);
+  // الهاش القانوني بعد حلّ الفاعل (يشمل الوصف المطبَّع ونوع الفاعل ومعرّفه)
+  const payloadHash = canonicalPayloadHash({
+    kind: input.kind, sourceBusinessId: input.sourceBusinessId, effectiveDate: input.effectiveDate, currency: input.currency,
+    entries, reversalOfTransactionId: input.reversalOfTransactionId, sourceType: input.sourceType, sourceReference: input.sourceReference,
+    description: input.description, actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId,
+  });
 
   // 4) حجز المفتاح بالإدراج — القيد الفريد هو القفل
   let transactionId: number;
@@ -143,7 +150,7 @@ async function postInternal(tx: Tx, input: InternalPost): Promise<PostResult> {
     const r = await tx.insert(ledgerTransactions).values({
       tenantId: input.tenantId, sourceBusinessId: input.sourceBusinessId, kind: input.kind, idempotencyKey: input.idempotencyKey, payloadHash,
       currency: input.currency, effectiveDate: input.effectiveDate, postingPeriod, reversalOfTransactionId: input.reversalOfTransactionId,
-      sourceType: input.sourceType, sourceReference: input.sourceReference, description: input.description,
+      sourceType: input.sourceType, sourceReference: input.sourceReference, description: normalizeDescription(input.description),
       actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId,
     });
     transactionId = insertId(r);
@@ -232,8 +239,6 @@ export async function reverseLedgerTransaction(input: {
   });
 }
 
-const REOPEN_ALLOWED = (role: string | null) => isOwnerRole(role) || role === "admin" || role === "accounting_manager";
-
 export async function lockLedgerPeriod(input: { tenantId: number; period: string; actor: LedgerActor; reason?: string }, db?: LedgerDb): Promise<{ periodId: number; status: "locked"; replay: boolean }> {
   const d = await resolveDb(db);
   return ledgerTransaction(d, async tx => {
@@ -255,8 +260,10 @@ export async function reopenLedgerPeriod(input: { tenantId: number; period: stri
   const d = await resolveDb(db);
   return ledgerTransaction(d, async tx => {
     await assertEnabled(tx, input.tenantId);
+    // الصلاحية (ledger.period.reopen) تُفحص على السيرفر قبل الوصول هنا؛ الخدمة تشترط فاعلًا موظفًا
+    // فعّالًا من نفس الشركة (للـaudit) — لا فاعل نظام/webhook ولا دور مُسمّى.
     const actor = await resolveActor(tx, input.tenantId, input.actor);
-    if (actor.actorType !== "employee" || !REOPEN_ALLOWED(actor.role)) throw new LedgerError("reopenRole");
+    if (actor.actorType !== "employee") throw new LedgerError("reopenRole");
     const [row] = await tx.select().from(ledgerPeriods).where(and(eq(ledgerPeriods.tenantId, input.tenantId), eq(ledgerPeriods.period, input.period))).limit(1).for("update");
     if (!row) throw new LedgerError("periodNotFound", input.period);
     if (row.status === "open") return { periodId: row.id, status: "open" as const, replay: true };
@@ -285,12 +292,12 @@ export async function reconcileLedgerV3(tenantId: number, db?: LedgerDb): Promis
 export const LEDGER_BASE_ACCOUNTS = [
   { code: "OFFICE_CASH", name: "خزنة المكتب", kind: "cash", normalSide: "debit", money: true },
   { code: "BANK_MAIN", name: "البنك", kind: "bank", normalSide: "debit", money: true },
-  { code: "COD_BOSTA", name: "تحصيلات بوسطة (ذمم)", kind: "carrier_receivable", normalSide: "debit", money: true },
+  { code: "COD_BOSTA", name: "مستحقات بوسطة", kind: "carrier_receivable", normalSide: "debit", money: true },
   { code: "VF_CASH", name: "فودافون كاش", kind: "wallet", normalSide: "debit", money: true },
   { code: "INSTAPAY", name: "إنستا باي", kind: "wallet", normalSide: "debit", money: true },
-  { code: "REVENUE", name: "الإيرادات", kind: "revenue", normalSide: "credit", money: false },
-  { code: "EXPENSE", name: "المصروفات", kind: "expense", normalSide: "debit", money: false },
-  { code: "OPENING_EQUITY", name: "رأس المال الافتتاحي", kind: "equity", normalSide: "credit", money: false },
+  { code: "REVENUE", name: "إيرادات المبيعات", kind: "revenue", normalSide: "credit", money: false },
+  { code: "EXPENSE", name: "مصروفات عامة", kind: "expense", normalSide: "debit", money: false },
+  { code: "OPENING_EQUITY", name: "الرصيد الافتتاحي", kind: "equity", normalSide: "credit", money: false },
   { code: "SUSPENSE", name: "حساب معلّق", kind: "suspense", normalSide: "debit", money: false },
 ] as const;
 
@@ -398,7 +405,7 @@ export async function disableLedgerV3(input: { tenantId: number; actor: LedgerAc
   const d = await resolveDb(db);
   await ledgerTransaction(d, async tx => {
     const actor = await resolveActor(tx, input.tenantId, input.actor);
-    if (actor.actorType !== "employee" || !REOPEN_ALLOWED(actor.role)) throw new LedgerError("reopenRole");
+    if (actor.actorType !== "employee") throw new LedgerError("reopenRole");
     await tx.update(ledgerTenantFlags).set({ ledgerV3Enabled: 0, disabledAt: sql`now()`, disabledReason: input.reason.trim() }).where(eq(ledgerTenantFlags.tenantId, input.tenantId));
   });
 }

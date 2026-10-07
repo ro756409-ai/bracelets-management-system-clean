@@ -206,6 +206,49 @@ describe.runIf(CAN)("📒 Ledger V3 service — قاعدتان كاملتان م
         expect(await balance(acc.OFFICE_CASH)).toBe((Number(cashBefore) - 300).toFixed(4));
         expect(await code(() => post("300.01"))).toBe("conflict");
         expect((await post("300")).replay).toBe(true);
+        // نفس المفتاح ونفس الأرقام لكن وصف/مصدر/فاعل مختلف → CONFLICT؛ وصف بمسافات مختلفة فقط → replay
+        const variant = (over: Partial<Parameters<typeof postLedgerTransaction>[0]>) => postLedgerTransaction({
+          tenantId: tenantA, sourceBusinessId: bizA1, kind: "expense", idempotencyKey: key, effectiveDate: "2026-10-07", currency: "EGP", actor: emp(accountantA),
+          entries: [{ accountId: acc.EXPENSE, side: "debit", amount: "300" }, { accountId: acc.OFFICE_CASH, side: "credit", amount: "300" }], description: "مصروف", ...over,
+        }, db);
+        expect((await variant({ description: "  مصروف  " })).replay).toBe(true);
+        expect(await code(() => variant({ description: "مصروف آخر" }))).toBe("conflict");
+        expect(await code(() => variant({ sourceReference: "INV-9" }))).toBe("conflict");
+        expect(await code(() => variant({ sourceType: "manual" }))).toBe("conflict");
+        expect(await code(() => variant({ actor: emp(ownerA) }))).toBe("conflict");
+        expect(await code(() => variant({ actor: sys }))).toBe("conflict");
+        expect(await code(() => variant({ effectiveDate: "2026-10-08" }))).toBe("conflict");
+      });
+
+      it("🔁 الفترة FOR SHARE: ترحيلات متوازية على حسابات مختلفة في نفس الشهر تنجح معًا؛ القفل ينتظر الحركة المفتوحة ثم يمنع أي حركة جديدة", async () => {
+        const month = "2026-11";
+        const bankBefore = BigInt(Math.round(Number(await balance(acc.BANK_MAIN)) * 10000));
+        const cashBefore = BigInt(Math.round(Number(await balance(acc.OFFICE_CASH)) * 10000));
+        // حسابان مختلفان × 10 حركات متوازية في نفس الشهر
+        await Promise.all(Array.from({ length: 10 }, (_, i) => Promise.all([
+          postLedgerTransaction({ tenantId: tenantA, sourceBusinessId: bizA1, kind: "owner_contribution", idempotencyKey: `k-${tag}-nov-bank-${i}`, effectiveDate: "2026-11-03", currency: "EGP", actor: sys,
+            entries: [{ accountId: acc.BANK_MAIN, side: "debit", amount: "2.5" }, { accountId: acc.OPENING_EQUITY, side: "credit", amount: "2.5" }], description: "بنك" }, db),
+          postLedgerTransaction({ tenantId: tenantA, sourceBusinessId: bizA1, kind: "owner_contribution", idempotencyKey: `k-${tag}-nov-cash-${i}`, effectiveDate: "2026-11-04", currency: "EGP", actor: sys,
+            entries: [{ accountId: acc.OFFICE_CASH, side: "debit", amount: "1.25" }, { accountId: acc.OPENING_EQUITY, side: "credit", amount: "1.25" }], description: "مكتب" }, db),
+        ])));
+        expect(await balance(acc.BANK_MAIN)).toBe((Number(bankBefore + 10n * 25000n) / 10000).toFixed(4));
+        expect(await balance(acc.OFFICE_CASH)).toBe((Number(cashBefore + 10n * 12500n) / 10000).toFixed(4));
+        // حركة «مفتوحة» تمسك الفترة FOR SHARE (كما يفعل الترحيل) → القفل ينتظر ولا يكتمل قبل الالتزام
+        const holder = await mysql.createConnection(urlFor(name));
+        await holder.query("START TRANSACTION");
+        await holder.query("SELECT id FROM ledger_periods WHERE tenantId = ? AND period = ? FOR SHARE", [tenantA, month]);
+        let lockDone = false;
+        const lockPromise = lockLedgerPeriod({ tenantId: tenantA, period: month, actor: emp(ownerA), reason: "إقفال نوفمبر" }, db).then(r => { lockDone = true; return r; });
+        await new Promise(r => setTimeout(r, 400));
+        expect(lockDone).toBe(false); // القفل ينتظر الحركة المفتوحة
+        await holder.query("COMMIT"); await holder.end();
+        const lock = await lockPromise;
+        expect(lock.status).toBe("locked"); expect(lockDone).toBe(true);
+        // بعد القفل: لا ترحيل جديد في الشهر، ولا يُعاد تأريخه
+        expect(await code(() => postLedgerTransaction({ tenantId: tenantA, sourceBusinessId: bizA1, kind: "expense", idempotencyKey: `k-${tag}-nov-after`, effectiveDate: "2026-11-20", currency: "EGP", actor: sys,
+          entries: [{ accountId: acc.EXPENSE, side: "debit", amount: "1" }, { accountId: acc.OFFICE_CASH, side: "credit", amount: "1" }], description: "x" }, db))).toBe("periodLocked");
+        expect((await db.select().from(ledgerTransactions).where(eq(ledgerTransactions.postingPeriod, month))).length).toBe(20);
+        expect((await reconcileLedgerV3(tenantA, db)).ok).toBe(true);
       });
 
       it("🔁 حركتان متزامنتان مختلفتان على نفس الحساب → رصيد صحيح بلا lost update (×20)", async () => {
@@ -235,8 +278,8 @@ describe.runIf(CAN)("📒 Ledger V3 service — قاعدتان كاملتان م
         }, db))).toBe("periodLocked");
         expect(await count("ledger_transactions")).toBe(before);
         expect(await code(() => reopenLedgerPeriod({ tenantId: tenantA, period: "2026-09", actor: emp(ownerA), reason: "  " }, db))).toBe("reason");
-        expect(await code(() => reopenLedgerPeriod({ tenantId: tenantA, period: "2026-09", actor: emp(accountantA), reason: "تصحيح" }, db))).toBe("reopenRole");
-        expect(await code(() => reopenLedgerPeriod({ tenantId: tenantA, period: "2026-09", actor: sys, reason: "تصحيح" }, db))).toBe("reopenRole");
+        expect(await code(() => reopenLedgerPeriod({ tenantId: tenantA, period: "2026-09", actor: sys, reason: "تصحيح" }, db))).toBe("reopenRole"); // فاعل النظام لا يعيد الفتح
+        expect(await code(() => reopenLedgerPeriod({ tenantId: tenantA, period: "2026-09", actor: emp(ownerB), reason: "تصحيح" }, db))).toBe("actorEmployee"); // موظف من tenant آخر
         expect(await code(() => reopenLedgerPeriod({ tenantId: tenantB, period: "2026-09", actor: emp(ownerB), reason: "x" }, db))).toBe("disabled");
         const reopen = await reopenLedgerPeriod({ tenantId: tenantA, period: "2026-09", actor: emp(ownerA), reason: "فاتورة متأخرة" }, db);
         expect(reopen.status).toBe("open");
@@ -270,12 +313,14 @@ describe.runIf(CAN)("📒 Ledger V3 service — قاعدتان كاملتان م
       });
 
       it("🔄 تحويل من البنك إلى خزنة المكتب (على مستوى الشركة، بلا نشاط) + مطابقة = صفر فروق لكل الحسابات", async () => {
+        const bankBefore = Number(await balance(acc.BANK_MAIN)), cashBefore = Number(await balance(acc.OFFICE_CASH));
         const r = await postLedgerTransaction({
           tenantId: tenantA, sourceBusinessId: null, kind: "transfer", idempotencyKey: `k-${tag}-transfer`, effectiveDate: "2026-10-08", currency: "EGP", actor: emp(ownerA),
           entries: [{ accountId: acc.OFFICE_CASH, side: "debit", amount: "5000" }, { accountId: acc.BANK_MAIN, side: "credit", amount: "5000" }], description: "تغذية خزنة",
         }, db);
         expect(r.replay).toBe(false);
-        expect(await balance(acc.BANK_MAIN)).toBe("5000.5000");
+        expect(await balance(acc.BANK_MAIN)).toBe((bankBefore - 5000).toFixed(4));
+        expect(await balance(acc.OFFICE_CASH)).toBe((cashBefore + 5000).toFixed(4));
         const recon = await reconcileLedgerV3(tenantA, db);
         expect(recon.ok).toBe(true);
         expect(recon.lines.every(l => l.difference === "0.0000")).toBe(true);
@@ -295,6 +340,35 @@ describe.runIf(CAN)("📒 Ledger V3 service — قاعدتان كاملتان م
         }, db))).toBe("disabled");
         expect(await count("ledger_transactions")).toBeGreaterThan(0);
         expect(await count("ledger_accounts")).toBe(10); // 9 لـA + حساب B المباشر من اختبار العزل
+      });
+
+      it("✅ تفعيل Tenant B بأرصدة صفر: بلا قيد صفري، openingTransactionId NULL، يُسجَّل المنفّذ والتاريخ، وretry لا يكرر الحسابات أو الربط", async () => {
+        const input = {
+          tenantId: tenantB, goLiveDate: "2026-10-01", currency: "EGP", actor: emp(ownerB),
+          reconciliation: { reportGeneratedAt: "2026-09-30T20:00:00Z", approvedByEmployeeId: ownerB, approvedAt: "2026-09-30T21:00:00Z" },
+          openingBalances: { OFFICE_CASH: "0", BANK_MAIN: "0.0000" }, businessIds: [bizB], safeGrants: { OFFICE_CASH: [bizB], BANK_MAIN: [bizB] },
+        };
+        const txBefore = await count("ledger_transactions");
+        const r = await activateLedgerV3(input, db);
+        expect(r.replay).toBe(false); expect(r.openingTransactionId).toBeNull();
+        expect(await count("ledger_transactions")).toBe(txBefore); // لا قيد صفري
+        const [flag] = await db.select().from(ledgerTenantFlags).where(eq(ledgerTenantFlags.tenantId, tenantB));
+        expect(flag).toMatchObject({ ledgerV3Enabled: 1, goLiveDate: "2026-10-01", openingTransactionId: null, actorType: "employee", actorEmployeeId: ownerB });
+        expect(flag.enabledAt).toBeTruthy();
+        const accountsB = await db.select().from(ledgerAccounts).where(eq(ledgerAccounts.tenantId, tenantB));
+        expect(accountsB).toHaveLength(9); // حساب OFFICE_CASH الموجود مسبقًا أُعيد استخدامه لا تكراره
+        const grantsB = await db.select().from(ledgerAccountBusinesses).where(eq(ledgerAccountBusinesses.tenantId, tenantB));
+        const grantsCount = grantsB.length;
+        const again = await activateLedgerV3(input, db);
+        expect(again.replay).toBe(true);
+        expect((await db.select().from(ledgerAccounts).where(eq(ledgerAccounts.tenantId, tenantB))).length).toBe(9);
+        expect((await db.select().from(ledgerAccountBusinesses).where(eq(ledgerAccountBusinesses.tenantId, tenantB))).length).toBe(grantsCount);
+        // الدفتر يعمل فورًا بعد التفعيل الصفري
+        const cashB = accountsB.find(a => a.code === "OFFICE_CASH")!.id, eqB = accountsB.find(a => a.code === "OPENING_EQUITY")!.id;
+        const posted = await postLedgerTransaction({ tenantId: tenantB, sourceBusinessId: bizB, kind: "owner_contribution", idempotencyKey: `k-${tag}-b-first`, effectiveDate: "2026-10-05", currency: "EGP", actor: emp(ownerB),
+          entries: [{ accountId: cashB, side: "debit", amount: "100" }, { accountId: eqB, side: "credit", amount: "100" }], description: "أول حركة" }, db);
+        expect(posted.replay).toBe(false);
+        expect((await reconcileLedgerV3(tenantB, db)).ok).toBe(true);
       });
     });
   }
