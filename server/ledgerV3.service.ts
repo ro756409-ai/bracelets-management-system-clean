@@ -6,7 +6,7 @@ import {
 } from "../drizzle/ledgerV3.schema";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import {
-  LEDGER_KINDS, LedgerError, applyToBalance, assertActorShape, assertCurrency, canonicalPayloadHash, normalizeDescription, postingPeriodOf,
+  LEDGER_KINDS, LedgerError, applyToBalance, assertActorShape, assertCurrency, assertEffectiveDate, canonicalPayloadHash, normalizeDescription, postingPeriodOf,
   reconcileAccount, validateEntries, type LedgerActor, type LedgerEntryInput, type LedgerKind, type LedgerReconLine, type ValidatedEntry,
 } from "../shared/ledgerV3Core";
 import { getDb, withDeadlockRetry } from "./db";
@@ -410,3 +410,159 @@ export async function disableLedgerV3(input: { tenantId: number; actor: LedgerAc
   });
 }
 
+
+
+// ═══════════════════════════ قراءات وإدارة الحسابات (للـRouters) ═══════════════════════════
+
+export type LedgerStatus = { tablesPresent: boolean; enabled: boolean; goLiveDate: string | null; openingTransactionId: number | null; enabledAt: Date | null; disabledAt: Date | null; disabledReason: string | null };
+
+export async function getLedgerStatus(tenantId: number, db?: LedgerDb): Promise<LedgerStatus> {
+  const d = await resolveDb(db);
+  try {
+    const [flag] = await d.select().from(ledgerTenantFlags).where(eq(ledgerTenantFlags.tenantId, tenantId)).limit(1);
+    return {
+      tablesPresent: true, enabled: flag?.ledgerV3Enabled === 1, goLiveDate: flag?.goLiveDate ?? null, openingTransactionId: flag?.openingTransactionId ?? null,
+      enabledAt: flag?.enabledAt ?? null, disabledAt: flag?.disabledAt ?? null, disabledReason: flag?.disabledReason ?? null,
+    };
+  } catch (err) {
+    if (isNoSuchTable(err)) return { tablesPresent: false, enabled: false, goLiveDate: null, openingTransactionId: null, enabledAt: null, disabledAt: null, disabledReason: null };
+    throw err;
+  }
+}
+
+const guardNoTable = async <T>(fn: () => Promise<T>): Promise<T> => { try { return await fn(); } catch (err) { if (isNoSuchTable(err)) throw new LedgerError("unavailable"); throw err; } };
+
+export async function listLedgerAccounts(tenantId: number, db?: LedgerDb) {
+  const d = await resolveDb(db);
+  return guardNoTable(async () => {
+    const accounts = await d.select().from(ledgerAccounts).where(eq(ledgerAccounts.tenantId, tenantId)).orderBy(asc(ledgerAccounts.code));
+    const grants = await d.select().from(ledgerAccountBusinesses).where(eq(ledgerAccountBusinesses.tenantId, tenantId));
+    const baseCodes = new Set<string>(LEDGER_BASE_ACCOUNTS.map(a => a.code));
+    return accounts.map(a => ({
+      ...a, isSystem: baseCodes.has(a.code),
+      businesses: grants.filter(g => g.accountId === a.id).map(g => ({ businessId: g.businessId, canPost: g.canPost === 1 })),
+    }));
+  });
+}
+
+export type LedgerTransactionFilters = { page: number; limit: number; from?: string; to?: string; businessId?: number | null; accountId?: number; kind?: LedgerKind };
+
+export async function listLedgerTransactions(tenantId: number, f: LedgerTransactionFilters, db?: LedgerDb) {
+  const d = await resolveDb(db);
+  return guardNoTable(async () => {
+    const conds = [eq(ledgerTransactions.tenantId, tenantId)];
+    if (f.from) { assertEffectiveDate(f.from); conds.push(sql`${ledgerTransactions.effectiveDate} >= ${f.from}`); }
+    if (f.to) { assertEffectiveDate(f.to); conds.push(sql`${ledgerTransactions.effectiveDate} <= ${f.to}`); }
+    if (f.businessId != null) conds.push(eq(ledgerTransactions.sourceBusinessId, f.businessId));
+    if (f.kind) conds.push(eq(ledgerTransactions.kind, f.kind));
+    if (f.accountId != null) conds.push(sql`${ledgerTransactions.id} IN (SELECT transactionId FROM ledger_entries WHERE tenantId = ${tenantId} AND accountId = ${f.accountId})`);
+    const where = and(...conds);
+    const [{ total }] = await d.select({ total: sql<number>`COUNT(*)` }).from(ledgerTransactions).where(where);
+    const rows = await d.select().from(ledgerTransactions).where(where).orderBy(sql`${ledgerTransactions.effectiveDate} DESC`, sql`${ledgerTransactions.id} DESC`)
+      .limit(f.limit).offset((f.page - 1) * f.limit);
+    return { rows, total: Number(total), page: f.page, limit: f.limit };
+  });
+}
+
+export async function getLedgerTransaction(tenantId: number, transactionId: number, db?: LedgerDb) {
+  const d = await resolveDb(db);
+  return guardNoTable(async () => {
+    const [tx] = await d.select().from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, tenantId), eq(ledgerTransactions.id, transactionId))).limit(1);
+    if (!tx) throw new LedgerError("transaction", `#${transactionId}`);
+    const entries = await d.select().from(ledgerEntries).where(eq(ledgerEntries.transactionId, tx.id)).orderBy(asc(ledgerEntries.id));
+    const [reversal] = await d.select({ id: ledgerTransactions.id }).from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, tenantId), eq(ledgerTransactions.reversalOfTransactionId, tx.id))).limit(1);
+    return { ...tx, entries, reversedByTransactionId: reversal?.id ?? null };
+  });
+}
+
+export async function listLedgerPeriods(tenantId: number, db?: LedgerDb) {
+  const d = await resolveDb(db);
+  return guardNoTable(async () => {
+    const periods = await d.select().from(ledgerPeriods).where(eq(ledgerPeriods.tenantId, tenantId)).orderBy(sql`${ledgerPeriods.period} DESC`);
+    const events = periods.length === 0 ? [] : await d.select().from(ledgerPeriodEvents).where(eq(ledgerPeriodEvents.tenantId, tenantId)).orderBy(asc(ledgerPeriodEvents.id));
+    return periods.map(p => ({ ...p, events: events.filter(e => e.periodId === p.id) }));
+  });
+}
+
+const CODE_RE = /^[A-Z][A-Z0-9_]{1,49}$/;
+const IMMUTABLE_BASE = new Set<string>(LEDGER_BASE_ACCOUNTS.map(a => a.code));
+
+/** حساب إضافي (مثل تصنيف مصروف) — كود مستقل، لا يمس حسابات النظام. */
+export async function createLedgerAccount(input: {
+  tenantId: number; code: string; name: string; kind: (typeof LEDGER_BASE_ACCOUNTS)[number]["kind"] | "cogs" | "inventory" | "employee_receivable" | "supplier_payable" | "customer_advance" | "owner_current";
+  normalSide: "debit" | "credit"; allowNegative?: boolean; actor: LedgerActor;
+}, db?: LedgerDb): Promise<{ id: number; replay: boolean }> {
+  const d = await resolveDb(db);
+  if (!CODE_RE.test(input.code)) throw new LedgerError("account", "الكود: حروف لاتينية كبيرة وأرقام و_ (2–50)");
+  if (!input.name?.trim()) throw new LedgerError("account", "الاسم مطلوب");
+  if (IMMUTABLE_BASE.has(input.code)) throw new LedgerError("account", "كود محجوز لحساب النظام");
+  return ledgerTransaction(d, async tx => {
+    await assertEnabled(tx, input.tenantId);
+    const actor = await resolveActor(tx, input.tenantId, input.actor);
+    const [flag] = await tx.select({ currency: sql<string>`(SELECT currency FROM ledger_accounts WHERE tenantId = ${input.tenantId} LIMIT 1)` }).from(ledgerTenantFlags).where(eq(ledgerTenantFlags.tenantId, input.tenantId)).limit(1);
+    const currency = flag?.currency ?? "EGP";
+    try {
+      const r = await tx.insert(ledgerAccounts).values({
+        tenantId: input.tenantId, code: input.code, name: input.name.trim(), kind: input.kind, normalSide: input.normalSide, currency,
+        allowNegative: input.allowNegative ? 1 : 0, actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId,
+      });
+      return { id: insertId(r), replay: false };
+    } catch (err) {
+      if (!isMysqlError(err, "ER_DUP_ENTRY")) throw err;
+      const [existing] = await tx.select().from(ledgerAccounts).where(and(eq(ledgerAccounts.tenantId, input.tenantId), eq(ledgerAccounts.code, input.code))).limit(1).for("share");
+      if (existing && existing.kind === input.kind && existing.normalSide === input.normalSide) return { id: existing.id, replay: true };
+      throw new LedgerError("conflict", `الكود ${input.code} مستخدم بنوع مختلف`);
+    }
+  });
+}
+
+async function loadOwnedAccount(tx: Tx, tenantId: number, accountId: number): Promise<LedgerAccount> {
+  const [a] = await tx.select().from(ledgerAccounts).where(and(eq(ledgerAccounts.tenantId, tenantId), eq(ledgerAccounts.id, accountId))).limit(1).for("update");
+  if (!a) throw new LedgerError("account", `#${accountId}`);
+  return a;
+}
+
+/** تغيير الاسم فقط — لا يمس الكود/النوع/الجانب/العملة ولا أي قيد. */
+export async function renameLedgerAccount(input: { tenantId: number; accountId: number; name: string; actor: LedgerActor }, db?: LedgerDb): Promise<void> {
+  if (!input.name?.trim()) throw new LedgerError("account", "الاسم مطلوب");
+  const d = await resolveDb(db);
+  await ledgerTransaction(d, async tx => {
+    await assertEnabled(tx, input.tenantId); await resolveActor(tx, input.tenantId, input.actor);
+    await loadOwnedAccount(tx, input.tenantId, input.accountId);
+    await tx.update(ledgerAccounts).set({ name: input.name.trim() }).where(and(eq(ledgerAccounts.tenantId, input.tenantId), eq(ledgerAccounts.id, input.accountId)));
+  });
+}
+
+/** تعطيل/تفعيل: التعطيل يمنع القيود الجديدة فقط — التاريخ والرصيد يبقيان كما هما. */
+export async function setLedgerAccountActive(input: { tenantId: number; accountId: number; isActive: boolean; actor: LedgerActor }, db?: LedgerDb): Promise<void> {
+  const d = await resolveDb(db);
+  await ledgerTransaction(d, async tx => {
+    await assertEnabled(tx, input.tenantId); await resolveActor(tx, input.tenantId, input.actor);
+    await loadOwnedAccount(tx, input.tenantId, input.accountId);
+    await tx.update(ledgerAccounts).set({ isActive: input.isActive ? 1 : 0 }).where(and(eq(ledgerAccounts.tenantId, input.tenantId), eq(ledgerAccounts.id, input.accountId)));
+  });
+}
+
+/** منح نشاط صلاحية الترحيل على حساب (canPost=1) — النشاط والحساب من نفس الشركة. */
+export async function grantLedgerAccountBusiness(input: { tenantId: number; accountId: number; businessId: number; actor: LedgerActor }, db?: LedgerDb): Promise<void> {
+  const d = await resolveDb(db);
+  await ledgerTransaction(d, async tx => {
+    await assertEnabled(tx, input.tenantId);
+    const actor = await resolveActor(tx, input.tenantId, input.actor);
+    await loadOwnedAccount(tx, input.tenantId, input.accountId);
+    await assertBusinessInTenant(tx, input.tenantId, input.businessId);
+    const [has] = await tx.select().from(ledgerAccountBusinesses).where(and(eq(ledgerAccountBusinesses.accountId, input.accountId), eq(ledgerAccountBusinesses.businessId, input.businessId))).limit(1).for("update");
+    if (has) { if (has.canPost !== 1) await tx.update(ledgerAccountBusinesses).set({ canPost: 1 }).where(and(eq(ledgerAccountBusinesses.accountId, input.accountId), eq(ledgerAccountBusinesses.businessId, input.businessId))); return; }
+    await tx.insert(ledgerAccountBusinesses).values({ tenantId: input.tenantId, accountId: input.accountId, businessId: input.businessId, canPost: 1, actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId });
+  });
+}
+
+/** سحب الصلاحية = canPost=0 (الصف يبقى؛ التاريخ لا يُخفى). */
+export async function revokeLedgerAccountBusiness(input: { tenantId: number; accountId: number; businessId: number; actor: LedgerActor }, db?: LedgerDb): Promise<void> {
+  const d = await resolveDb(db);
+  await ledgerTransaction(d, async tx => {
+    await assertEnabled(tx, input.tenantId); await resolveActor(tx, input.tenantId, input.actor);
+    await loadOwnedAccount(tx, input.tenantId, input.accountId);
+    await tx.update(ledgerAccountBusinesses).set({ canPost: 0 }).where(and(eq(ledgerAccountBusinesses.tenantId, input.tenantId), eq(ledgerAccountBusinesses.accountId, input.accountId), eq(ledgerAccountBusinesses.businessId, input.businessId)));
+  });
+}

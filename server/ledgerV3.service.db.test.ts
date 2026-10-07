@@ -17,6 +17,8 @@ import { ledgerAccounts, ledgerAccountBusinesses, ledgerEntries, ledgerPeriodEve
  * بنفس المفتاح، التعارض، حركتان متزامنتان بلا lost update، الفترة المقفولة والـaudit، العكس مرة
  * واحدة، التفعيل الذرّي، المطابقة = صفر فروق، وصفر كتابة في جداول V2.
  */
+/** DDL المنسوخ يمثّل ما قبل 0040: يُحذف الفهرسان المركّبان إن كان اختبار آخر قد طبّق 0040 على القاعدة الرئيسية بالتوازي. */
+const stripLedgerIndexes = (ddl: string) => ddl.split("\n").filter(l => !/`(businesses|employees)_tenant_id`/.test(l)).join("\n").replace(/,\n\)/, "\n)");
 const CAN = Boolean(process.env.TEST_DATABASE_URL);
 const statements = splitMigrationStatements(fs.readFileSync("drizzle/0040_ledger_v3.sql", "utf-8"));
 const V2_TABLES = ["treasury_transactions", "financial_transactions", "financial_transaction_entries", "financial_accounts", "business_events"];
@@ -32,9 +34,9 @@ describe.runIf(CAN)("📒 Ledger V3 service — قاعدتان كاملتان م
   beforeAll(async () => {
     admin = await mysql.createConnection(baseUrl);
     const [tables] = await admin.query("SHOW TABLES") as any;
-    const names: string[] = tables.map((r: any) => Object.values(r)[0] as string).filter((n: string) => !n.startsWith("ledger_"));
+    const names: string[] = tables.map((r: any) => Object.values(r)[0] as string).filter((n: string) => !n.startsWith("ledger_") && !n.startsWith("_"));
     const ddl: string[] = [];
-    for (const n of names) { const [r] = await admin.query(`SHOW CREATE TABLE \`${n}\``) as any; ddl.push(r[0]["Create Table"]); }
+    for (const n of names) { try { const [r] = await admin.query(`SHOW CREATE TABLE \`${n}\``) as any; ddl.push(stripLedgerIndexes(r[0]["Create Table"])); } catch (e: any) { if (e?.code !== "ER_NO_SUCH_TABLE") throw e; } }
     for (const name of dbNames) {
       await admin.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
       const c = await mysql.createConnection(urlFor(name));
@@ -373,10 +375,14 @@ describe.runIf(CAN)("📒 Ledger V3 service — قاعدتان كاملتان م
     });
   }
 
-  it("🚫 غياب جداول V3 (قاعدة الاختبار الرئيسية بلا 0040) → خطأ واضح، لا سقوط على V2", async () => {
-    const main = drizzle(baseUrl) as unknown as LedgerDb;
+  it("🚫 غياب جداول V3 (قاعدة مؤقتة بلا 0040) → خطأ واضح، لا سقوط على V2", async () => {
+    const bare = `ledgerbare_${tag}`;
+    await admin.query(`CREATE DATABASE \`${bare}\``);
+    const [[t]] = await admin.query("SHOW CREATE TABLE `tenants`") as any;
+    const c = await mysql.createConnection(urlFor(bare)); await c.query(t["Create Table"]); await c.end();
+    const bareDb = drizzle(urlFor(bare)) as unknown as LedgerDb;
     try {
-      expect(await (async () => { try { await reconcileLedgerV3(1, main); return "ok"; } catch (e) { return e instanceof LedgerError ? e.code : "ERR"; } })()).toBe("unavailable");
-    } finally { await (main as any).$client?.end?.(); }
+      expect(await (async () => { try { await reconcileLedgerV3(1, bareDb); return "ok"; } catch (e) { return e instanceof LedgerError ? e.code : "ERR"; } })()).toBe("unavailable");
+    } finally { await (bareDb as any).$client?.end?.(); await admin.query(`DROP DATABASE \`${bare}\``); }
   });
 });

@@ -170,6 +170,14 @@ export function cairoParseDateRange(dateStr: string): { from: Date; to: Date } {
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
+/**
+ * للاختبارات فقط: توجيه كل دوال هذا الملف (ومن ثم كل الخدمات) إلى قاعدة أخرى — مثل قاعدة مؤقتة
+ * كاملة تحمل migration لم تُطبَّق على قاعدة الاختبار المشتركة. لا أثر في الإنتاج (لا يُستدعى هناك).
+ */
+export function __setDbForTests(db: ReturnType<typeof drizzle> | null): void {
+  _db = db;
+}
+
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {

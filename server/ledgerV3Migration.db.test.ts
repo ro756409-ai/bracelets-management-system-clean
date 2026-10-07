@@ -11,6 +11,8 @@ import { ledgerV3Preflight, verifyLedgerV3OnDatabase } from "./ledgerV3Verify.se
  * preflight → تطبيق 9 عبارات → تحقق مطابق → إعادة تشغيل تفشل بأمان بلا تغيير جزئي → الحالات الدقيقة
  * لعزل الـtenant (كل رفض بلا صف جزئي) → rollback كامل → المخطط القديم وبياناته كما كانا بالضبط.
  */
+/** DDL المنسوخ يمثّل ما قبل 0040: يُحذف الفهرسان المركّبان إن كان اختبار آخر قد طبّق 0040 على القاعدة الرئيسية بالتوازي. */
+const stripLedgerIndexes = (ddl: string) => ddl.split("\n").filter(l => !/`(businesses|employees)_tenant_id`/.test(l)).join("\n").replace(/,\n\)/, "\n)");
 const CAN = Boolean(process.env.TEST_DATABASE_URL);
 const statements = splitMigrationStatements(fs.readFileSync("drizzle/0040_ledger_v3.sql", "utf-8"));
 const ROLLBACK = [
@@ -40,9 +42,9 @@ describe.runIf(CAN)("🏗️ Migration 0040 — نسختان كاملتان من
   beforeAll(async () => {
     admin = await mysql.createConnection(baseUrl);
     const [tables] = await admin.query("SHOW TABLES") as any;
-    const names: string[] = tables.map((r: any) => Object.values(r)[0] as string).filter((n: string) => !n.startsWith("ledger_"));
+    const names: string[] = tables.map((r: any) => Object.values(r)[0] as string).filter((n: string) => !n.startsWith("ledger_") && !n.startsWith("_"));
     const ddl: string[] = [];
-    for (const n of names) { const [r] = await admin.query(`SHOW CREATE TABLE \`${n}\``) as any; ddl.push(r[0]["Create Table"]); }
+    for (const n of names) { try { const [r] = await admin.query(`SHOW CREATE TABLE \`${n}\``) as any; ddl.push(stripLedgerIndexes(r[0]["Create Table"])); } catch (e: any) { if (e?.code !== "ER_NO_SUCH_TABLE") throw e; } }
     for (const name of dbNames) {
       await admin.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
       const c = await mysql.createConnection(urlFor(name));

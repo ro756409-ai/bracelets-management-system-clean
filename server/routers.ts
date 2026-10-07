@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabledForBusiness, resolveShipmentImagesForOrder, toPublicImageUrl } from "./bosta.service";
 import { isPublicImageUrl, packageImageTenant, PACKAGE_IMAGE_URL_PREFIX } from "../shared/packageImages";
 import { packageImageExists } from "./packageImageUpload";
+import { createLedgerRouter } from "./ledgerV3.router";
 import { isOwnedLogoUrl } from "../shared/branding";
 import {
   analyzePasteV2,
@@ -8943,6 +8944,8 @@ export const appRouter = router({
         return { success: true };
       }),
   }),
+  // دفتر الحسابات V3 — خلف صلاحيات ledger.* ونطاق الجلسة؛ بلا تفعيل عام (داخلي حتى شاشة المالك).
+  ledger: createLedgerRouter({ scopeBusinessId }),
 });
 
 export type AppRouter = typeof appRouter;
