@@ -45,6 +45,8 @@ export const LEDGER_MESSAGES = {
   periodNotFound: "الفترة غير موجودة",
   alreadyEnabled: "دفتر V3 مفعّل بالفعل لهذه الشركة بتاريخ بدء مختلف",
   activationInput: "التفعيل يتطلب اعتماد تقرير المطابقة وأرصدة افتتاحية صريحة",
+  // التفعيل على مستوى الشركة كلها (العلم في ledger_tenant_flags): كل نشاط فعّال يجب أن يكون في الخطة
+  activationScope: "لا يمكن تفعيل دفتر الشركة",
 } as const;
 
 export class LedgerError extends Error {

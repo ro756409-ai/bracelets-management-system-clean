@@ -59,7 +59,7 @@ describe.runIf(CAN)("🚀 Ledger V3 activation + runtime verify — قاعدتا
 
   function suite(i: number, name: string) {
     let db: LedgerDb; let raw: mysql.Connection; let exec: ReadOnlyExecutor;
-    let A: Tenant, B: Tenant, C: Tenant, D: Tenant;
+    let A: Tenant, B: Tenant, C: Tenant, D: Tenant, E: Tenant;
     const ins = async (sql: string, p: unknown[]) => Number(((await raw.query(sql, p)) as any)[0].insertId);
     const n = async (sql: string, p: unknown[] = []) => { try { return Number(((await raw.query(sql, p)) as any)[0][0].n); } catch (e: any) { if (e?.code === "ER_NO_SUCH_TABLE") return -1; throw e; } };
     const seedTenant = async (label: string): Promise<Tenant> => {
@@ -96,7 +96,9 @@ describe.runIf(CAN)("🚀 Ledger V3 activation + runtime verify — قاعدتا
         raw = await mysql.createConnection(urlFor(name));
         exec = await openReadOnlyExecutor(urlFor(name));
         __setDbForTests(db as any); // routers/createContext/hasTenantPermission داخل verify تقرأ هذه القاعدة
-        A = await seedTenant("A"); B = await seedTenant("B"); C = await seedTenant("C"); D = await seedTenant("D");
+        A = await seedTenant("A"); B = await seedTenant("B"); C = await seedTenant("C"); D = await seedTenant("D"); E = await seedTenant("E");
+        // الشركة D: نشاطها الثاني غير نشط — المستبعد الوحيد المسموح به من خطة التفعيل
+        await raw.query("UPDATE businesses SET isActive = 0 WHERE id = ?", [D.biz2]);
         // فرق V2 حقيقي عند الشركة C: حساب برصيد مخزّن 100 بلا أي قيد (createdAt قديم حتى لا يقع في نافذة التفعيل)
         await raw.query("INSERT INTO financial_accounts (businessId, code, name, accountType, currencyCode, openingBalance, currentBalance, createdAt) VALUES (?, 'CASH', 'خزنة قديمة', 'cash', 'EGP', '0', '100', '2026-01-01 00:00:00')", [C.biz1]);
         v2Baseline = Object.fromEntries(await Promise.all(V2_TABLES.map(async t => [t, await n(`SELECT COUNT(*) n FROM \`${t}\``)])));
@@ -139,7 +141,10 @@ describe.runIf(CAN)("🚀 Ledger V3 activation + runtime verify — قاعدتا
         expect(p.openingBalances.every(o => o.amount === "0.0000" && o.source === "zero")).toBe(true);
         expect(p.warnings.join(" ")).toContain("لا ملف أرصدة");
         expect(p.confirmation).toBe(confirmationPhrase(A.tenantId, "2026-11-01"));
-        expect(renderActivationPlan(p)).toContain("لا موانع");
+        expect(p.ready).toBe(true);
+        expect(p.businessCoverage.map(c => c.result)).toEqual(["مغطّى", "مغطّى"]);
+        expect(renderActivationPlan(p)).toContain("✓ جاهز للتفعيل — كل الأنشطة الفعّالة مغطّاة");
+        expect(renderActivationPlan(p)).toContain("النشاط | الحالة | داخل خطة التفعيل؟ | الحسابات المربوطة | النتيجة");
         const r = await apply(A, p);
         expect(r).toMatchObject({ replay: false, openingTransactionId: null, v2Changed: [] });
         expect(Object.keys(r.accounts).sort()).toEqual([...LEDGER_BASE_ACCOUNTS.map(a => a.code)].sort());
@@ -153,10 +158,13 @@ describe.runIf(CAN)("🚀 Ledger V3 activation + runtime verify — قاعدتا
         expect(await tenantCounts(A)).toEqual(c1);
       });
 
-      it("💰 شركة بأرصدة (ملف): قيد افتتاحي واحد متوازن، الأرصدة كما في الملف، ربط الخزن حسب safeGrants؛ retry بلا تكرار", async () => {
+      it("💰 شركة بأرصدة (ملف) ونشاط غير نشط مستبعد: قيد افتتاحي واحد متوازن، الأرصدة كما في الملف، ربط الخزن حسب safeGrants؛ retry بلا تكرار", async () => {
         const opening = file({ goLiveDate: "2026-11-01", openingBalances: { OFFICE_CASH: "1000.00", BANK_MAIN: "2500.5", COD_BOSTA: "0" }, openingEquity: "3500.5", businessIds: [D.biz1], safeGrants: { OFFICE_CASH: [D.biz1], BANK_MAIN: [D.biz1], VF_CASH: [], INSTAPAY: [] } });
         const p = await plan(D, { opening });
         expect(p.blockers).toEqual([]);
+        expect(p.ready).toBe(true);
+        expect(p.businessCoverage.find(c => c.id === D.biz2)).toMatchObject({ active: false, inPlan: false, accountCodes: [], result: "مستبعد — غير نشط" });
+        expect(renderActivationPlan(p)).toContain("مستبعد — غير نشط");
         expect(p.openingEntry).toEqual({ debits: [{ code: "OFFICE_CASH", amount: "1000.0000" }, { code: "BANK_MAIN", amount: "2500.5000" }], credit: { code: "OPENING_EQUITY", amount: "3500.5000" } });
         expect(p.accounts.find(a => a.code === "VF_CASH")!.businesses).toEqual([]);
         expect(p.accounts.find(a => a.code === "REVENUE")!.businesses).toEqual([D.biz1]);
@@ -206,6 +214,57 @@ describe.runIf(CAN)("🚀 Ledger V3 activation + runtime verify — قاعدتا
           expect(r.replay).toBe(false); expect(r.openingTransactionId).not.toBeNull();
         });
       }
+
+      it("🏭 نطاق التفعيل = الشركة كلها: ملف يستبعد نشاطًا فعّالًا → رفض بلا كتابة؛ النشاطان → ربط كامل؛ نشاط فعّال أُضيف بعد الخطة → يُكتشف تحت القفل ويُرفض؛ retry بلا تكرار", async () => {
+        const before = await snapshot();
+        // 1) الملف يحتوي نشاطًا واحدًا من اثنين فعّالين
+        const partial = file({ goLiveDate: "2026-11-01", openingBalances: { OFFICE_CASH: "10" }, businessIds: [E.biz1], reconciliation: { reportGeneratedAt: "r", approvedByEmployeeId: E.ownerId, approvedAt: "a" } });
+        const p1 = await plan(E, { opening: partial });
+        expect(p1.ready).toBe(false);
+        expect(p1.blockers).toContain(`لا يمكن تفعيل دفتر الشركة: النشاط Brand E2 (#${E.biz2}) غير موجود في خطة التفعيل`);
+        expect(p1.businessCoverage.find(c => c.id === E.biz2)).toMatchObject({ active: true, inPlan: false, result: "مانع — غير موجود في خطة التفعيل" });
+        expect(renderActivationPlan(p1)).not.toContain("جاهز للتفعيل");
+        expect(await msg(() => apply(E, p1))).toMatch(/غير موجود في خطة التفعيل/);
+        expect(await snapshot()).toEqual(before);
+        // 2) خطة سليمة بالنشاطين — ثم نشاط فعّال جديد يُضاف قبل apply → الخدمة تكتشفه تحت قفل العلم وترفض (rollback كامل)
+        const full = file({ goLiveDate: "2026-11-01", openingBalances: { OFFICE_CASH: "10" }, businessIds: [E.biz1, E.biz2], reconciliation: { reportGeneratedAt: "r", approvedByEmployeeId: E.ownerId, approvedAt: "a" } });
+        const p2 = await plan(E, { opening: full });
+        expect(p2.ready).toBe(true);
+        const biz3 = await ins("INSERT INTO businesses (tenantId, name, slug) VALUES (?, 'Brand E3', ?)", [E.tenantId, `e3-${tag}`]);
+        const late = await msg(() => apply(E, p2));
+        expect(late).toContain("لا يمكن تفعيل دفتر الشركة");
+        expect(late).toContain(`النشاط Brand E3 (#${biz3}) غير موجود في خطة التفعيل`);
+        expect(await tenantCounts(E)).toEqual({ accounts: 0, grants: 0, txs: 0, entries: 0, flags: 0 });
+        expect(await n("SELECT COUNT(*) n FROM ledger_tenant_flags WHERE tenantId = ?", [E.tenantId])).toBe(0);
+        expect(await snapshot()).toEqual(before);
+        // 3) النشاط الجديد يُعطَّل → الخطة بالنشاطين تتفعّل ويُربط كلاهما بكل الحسابات؛ retry لا يكرر الروابط ولا القيد
+        await raw.query("UPDATE businesses SET isActive = 0 WHERE id = ?", [biz3]);
+        const p3 = await plan(E, { opening: full });
+        expect(p3.businessCoverage.map(c => c.result)).toEqual(["مغطّى", "مغطّى", "مستبعد — غير نشط"]);
+        const r = await apply(E, p3);
+        expect(r.replay).toBe(false); expect(r.openingTransactionId).not.toBeNull();
+        const c1 = await tenantCounts(E);
+        expect(c1).toEqual({ accounts: 9, grants: 9 * 2, txs: 1, entries: 2, flags: 1 });
+        expect(await n("SELECT COUNT(DISTINCT businessId) n FROM ledger_account_businesses WHERE tenantId = ?", [E.tenantId])).toBe(2);
+        expect(await n("SELECT COUNT(*) n FROM ledger_account_businesses WHERE tenantId = ? AND businessId = ?", [E.tenantId, biz3])).toBe(0);
+        const r2 = await apply(E, await plan(E, { opening: full }));
+        expect(r2).toMatchObject({ replay: true, openingTransactionId: r.openingTransactionId });
+        expect(await tenantCounts(E)).toEqual(c1);
+      });
+
+      it("🔍 runtime verify يعتبر غياب ربط نشاط فعّال خطأً مانعًا، ويعود سليمًا بعد الاستعادة", async () => {
+        expect((await verifyLedgerV3Runtime({ tenantId: E.tenantId, db, exec })).ok).toBe(true);
+        const [rows] = await raw.query("SELECT ab.* FROM ledger_account_businesses ab JOIN ledger_accounts a ON a.id = ab.accountId WHERE ab.tenantId = ? AND ab.businessId = ? AND a.code = 'REVENUE'", [E.tenantId, E.biz2]) as any;
+        expect(rows).toHaveLength(1);
+        await raw.query("DELETE FROM ledger_account_businesses WHERE tenantId = ? AND accountId = ? AND businessId = ?", [E.tenantId, rows[0].accountId, E.biz2]);
+        const broken = await verifyLedgerV3Runtime({ tenantId: E.tenantId, db, exec });
+        expect(broken.ok).toBe(false);
+        const grantCheck = broken.checks.find(c => c.label.startsWith("كل نشاط فعّال"));
+        expect(grantCheck).toMatchObject({ ok: false });
+        expect(grantCheck?.detail).toContain(`REVENUE→#${E.biz2}`);
+        await raw.query("INSERT INTO ledger_account_businesses SET ?", [rows[0]]);
+        expect((await verifyLedgerV3Runtime({ tenantId: E.tenantId, db, exec })).ok).toBe(true);
+      });
 
       it("🏢 شركة أخرى (B) لا تتأثر: لا علم ولا حسابات ولا ربط", async () => {
         expect(await tenantCounts(B)).toEqual({ accounts: 0, grants: 0, txs: 0, entries: 0, flags: 1 - 1 });

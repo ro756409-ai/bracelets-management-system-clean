@@ -34,11 +34,18 @@ export async function countV2Rows(exec: ReadOnlyExecutor, businessIds: number[])
 }
 
 export type PlannedAccount = { code: string; name: string; kind: string; normalSide: string; money: boolean; exists: boolean; businesses: number[] };
+export type BusinessCoverage = { id: number; name: string; active: boolean; inPlan: boolean; accountCodes: string[]; result: "مغطّى" | "مستبعد — غير نشط" | "مانع — غير موجود في خطة التفعيل" | "مانع — غير نشط داخل الخطة" };
 export type ActivationPlan = {
   tenant: { id: number; name: string; status: string } | null;
   businesses: { id: number; name: string; isActive: boolean }[];
-  /** الأنشطة التي ستُفعَّل (من الملف أو كل النشطة) */
+  /** الأنشطة التي ستُفعَّل (من الملف أو كل النشطة) — التفعيل على مستوى الشركة: يجب أن تشمل كل نشاط فعّال */
   selectedBusinessIds: number[];
+  /** جدول التغطية لكل نشاط في الشركة */
+  businessCoverage: BusinessCoverage[];
+  /** كل الأنشطة الفعّالة داخل الخطة */
+  allActiveCovered: boolean;
+  /** جاهز للتفعيل = لا موانع وكل الأنشطة الفعّالة مغطّاة */
+  ready: boolean;
   migration: { state: ApplicationState; issues: number; present: string[] };
   flag: LedgerStatus | null;
   v2Reconciliation: { generatedAt: string; ok: boolean; lines: { businessId: number; key: string; label: string; stored: number; computed: number; difference: number; ok: boolean }[] } | null;
@@ -100,8 +107,11 @@ export async function planLedgerV3Activation(opts: {
   for (const id of selectedBusinessIds) {
     const b = bizRows.find(x => x.id === id);
     if (!b) blockers.push(`النشاط #${id} ليس تابعًا لهذه الشركة`);
-    else if (!b.isActive) blockers.push(`النشاط #${id} (${b.name}) غير نشط`);
+    else if (!b.isActive) blockers.push(`النشاط #${id} (${b.name}) غير نشط — لا يُدرج في خطة التفعيل`);
   }
+  // التفعيل على مستوى الشركة كلها (العلم في ledger_tenant_flags): كل نشاط فعّال يجب أن يكون في الخطة؛
+  // المستبعد الوحيد المسموح هو النشاط غير النشط. (الخدمة تعيد الفحص نفسه تحت القفل عند التطبيق.)
+  for (const b of bizRows) if (b.isActive && !selectedBusinessIds.includes(b.id)) blockers.push(`لا يمكن تفعيل دفتر الشركة: النشاط ${b.name} (#${b.id}) غير موجود في خطة التفعيل`);
   if (tenant && selectedBusinessIds.length === 0) blockers.push("لا أنشطة نشطة للشركة — لا تفعيل");
 
   const safeGrants: Record<string, number[]> = {};
@@ -158,9 +168,19 @@ export async function planLedgerV3Activation(opts: {
     : null;
   if (!opening) warnings.push("لا ملف أرصدة: كل الأرصدة الافتتاحية صفر (تفعيل صفري بلا قيد افتتاحي) — لا تخمين ولا نسخ من V2");
 
+  // جدول التغطية: كل نشاط في الشركة — حالته، هل هو في الخطة، الحسابات التي ستُربط به، والنتيجة
+  const businessCoverage: BusinessCoverage[] = bizRows.map(b => {
+    const inPlan = selectedBusinessIds.includes(b.id);
+    const accountCodes = inPlan ? accounts.filter(a => a.businesses.includes(b.id)).map(a => a.code) : [];
+    const result: BusinessCoverage["result"] = !b.isActive ? (inPlan ? "مانع — غير نشط داخل الخطة" : "مستبعد — غير نشط") : inPlan ? "مغطّى" : "مانع — غير موجود في خطة التفعيل";
+    return { id: b.id, name: b.name, active: b.isActive, inPlan, accountCodes, result };
+  });
+  const allActiveCovered = bizRows.filter(b => b.isActive).every(b => selectedBusinessIds.includes(b.id)) && activeIds.length > 0;
+
   return {
-    tenant, businesses: bizRows, selectedBusinessIds, migration, flag, v2Reconciliation, accounts, safeGrants, openingBalances, openingEntry,
+    tenant, businesses: bizRows, selectedBusinessIds, businessCoverage, allActiveCovered, migration, flag, v2Reconciliation, accounts, safeGrants, openingBalances, openingEntry,
     goLiveDate, currency: opening?.currency ?? "EGP", reconciliation, actorEmployeeId: opts.actorEmployeeId ?? null, blockers, warnings,
+    ready: blockers.length === 0 && allActiveCovered,
     confirmation: goLiveDate ? confirmationPhrase(tenantId, goLiveDate) : null,
   };
 }
@@ -173,6 +193,7 @@ export type ActivationApplyResult = {
 export async function applyLedgerV3Activation(opts: { tenantId: number; plan: ActivationPlan; db: LedgerDb; exec: ReadOnlyExecutor; actorEmployeeId: number; confirm: string }): Promise<ActivationApplyResult> {
   const { tenantId, plan, db, exec } = opts;
   if (plan.blockers.length > 0) throw new Error(`موانع التفعيل: ${plan.blockers.join(" | ")}`);
+  if (!plan.ready) throw new Error("الخطة غير جاهزة للتفعيل: ليست كل الأنشطة الفعّالة مغطّاة — لا كتابة");
   if (!plan.confirmation || opts.confirm !== plan.confirmation) throw new Error("عبارة التأكيد غير مطابقة — لا كتابة");
   if (plan.actorEmployeeId !== opts.actorEmployeeId) throw new Error("الفاعل يختلف عن الخطة — أعد التخطيط بنفس --actor");
   const actor = await isActiveOwner(db, tenantId, opts.actorEmployeeId);
@@ -211,9 +232,13 @@ export function renderActivationPlan(plan: ActivationPlan): string {
   for (const o of plan.openingBalances) L.push(`  ${o.code}: ${o.amount} (${o.source === "file" ? "من الملف" : "صفر — غير مذكور"})`);
   L.push(plan.openingEntry ? `القيد الافتتاحي: مدين ${plan.openingEntry.debits.map(d => `${d.code} ${d.amount}`).join(" + ")} / دائن OPENING_EQUITY ${plan.openingEntry.credit.amount}` : "القيد الافتتاحي: لا شيء (أرصدة صفرية)");
   L.push(`الاعتماد: ${plan.reconciliation ? `تقرير ${plan.reconciliation.reportGeneratedAt} · معتمِد #${plan.reconciliation.approvedByEmployeeId} في ${plan.reconciliation.approvedAt}${plan.reconciliation.acknowledgedDifferences ? " · مع إقرار بالفروق" : ""}` : "—"}`);
+  L.push("تغطية الأنشطة (التفعيل على مستوى الشركة كلها — كل نشاط فعّال يجب أن يكون داخل الخطة):");
+  L.push("  النشاط | الحالة | داخل خطة التفعيل؟ | الحسابات المربوطة | النتيجة");
+  for (const c of plan.businessCoverage) L.push(`  #${c.id} ${c.name} | ${c.active ? "فعّال" : "غير نشط"} | ${c.inPlan ? "نعم" : "لا"} | ${c.accountCodes.join(", ") || "—"} | ${c.result}`);
   for (const w of plan.warnings) L.push(`⚠️ ${w}`);
-  L.push(plan.blockers.length ? `موانع التفعيل (${plan.blockers.length}):` : "✓ لا موانع");
-  for (const b of plan.blockers) L.push(`  ✗ ${b}`);
+  if (plan.blockers.length) { L.push(`موانع التفعيل (${plan.blockers.length}):`); for (const b of plan.blockers) L.push(`  ✗ ${b}`); }
+  else if (plan.ready) L.push("✓ جاهز للتفعيل — كل الأنشطة الفعّالة مغطّاة ولا موانع");
+  else L.push("✗ غير جاهز للتفعيل — ليست كل الأنشطة الفعّالة مغطّاة");
   if (plan.confirmation) L.push(`عبارة التأكيد المطلوبة لـ--apply: ${plan.confirmation}`);
   return L.join("\n");
 }

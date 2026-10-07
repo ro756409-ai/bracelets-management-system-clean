@@ -42,15 +42,14 @@ export async function verifyLedgerV3Runtime(opts: { tenantId: number; db: Ledger
   const grants = await q<{ code: string; businessId: number; bt: number | null; active: number | null }>(exec,
     `SELECT a.code, ab.businessId, b.tenantId bt, b.isActive active FROM ledger_account_businesses ab
      JOIN ledger_accounts a ON a.id = ab.accountId LEFT JOIN businesses b ON b.id = ab.businessId WHERE ab.tenantId = ?`, [tenantId]);
-  const foreign = grants.filter(g => g.bt !== tenantId || !g.active);
-  // الأنشطة المفعَّلة = التي لها أي ربط؛ كل واحد منها يجب أن يكون مربوطًا بالحسابات غير النقدية الأربعة كلها.
-  // نشاط نشط بلا أي ربط ليس خطأ (لم يُفعَّل عمدًا في ملف الأرصدة) — يُذكر فقط.
-  const grantedBiz = [...new Set(grants.map(g => Number(g.businessId)))];
+  // التفعيل على مستوى الشركة كلها: **كل** نشاط فعّال يجب أن يكون مربوطًا بالحسابات غير النقدية الأربعة (مانع)؛
+  // أي ربط لنشاط من شركة أخرى = مانع؛ النشاط غير النشط (مربوطًا أو لا) معلومة فقط.
+  const foreign = grants.filter(g => g.bt !== tenantId);
   const nonMoneyMissing: string[] = [];
-  for (const a of LEDGER_BASE_ACCOUNTS.filter(a => !a.money)) for (const b of grantedBiz) if (!grants.some(g => g.code === a.code && Number(g.businessId) === b)) nonMoneyMissing.push(`${a.code}→#${b}`);
-  const ungranted = activeBiz.filter(b => !grantedBiz.includes(b));
-  push("الربط بالأنشطة صحيح (لا نشاط أجنبي/غير نشط، وكل نشاط مفعَّل مربوط بالحسابات غير النقدية كلها)", grants.length > 0 && foreign.length === 0 && nonMoneyMissing.length === 0,
-    `${grants.length} ربط · أنشطة مفعَّلة ${grantedBiz.length}/${activeBiz.length} نشطة${ungranted.length ? ` (بلا ربط: ${ungranted.map(b => `#${b}`).join(", ")})` : ""}${foreign.length ? ` · أجنبي/غير نشط: ${foreign.length}` : ""}${nonMoneyMissing.length ? ` · ناقص: ${nonMoneyMissing.join(", ")}` : ""}`);
+  for (const a of LEDGER_BASE_ACCOUNTS.filter(a => !a.money)) for (const b of activeBiz) if (!grants.some(g => g.code === a.code && Number(g.businessId) === b)) nonMoneyMissing.push(`${a.code}→#${b}`);
+  const inactiveGranted = [...new Set(grants.filter(g => g.bt === tenantId && !g.active).map(g => Number(g.businessId)))];
+  push("كل نشاط فعّال في الشركة مربوط بالحسابات المطلوبة، ولا ربط لنشاط من شركة أخرى", activeBiz.length > 0 && foreign.length === 0 && nonMoneyMissing.length === 0,
+    `${grants.length} ربط · أنشطة فعّالة ${activeBiz.length}${inactiveGranted.length ? ` · غير نشطة مربوطة (معلومة): ${inactiveGranted.map(b => `#${b}`).join(", ")}` : ""}${foreign.length ? ` · من شركة أخرى: ${foreign.length}` : ""}${nonMoneyMissing.length ? ` · نشاط فعّال بلا ربط: ${nonMoneyMissing.join(", ")}` : ""}`);
 
   // 4) القيد الافتتاحي
   const openings = await q<{ id: number }>(exec, "SELECT id FROM ledger_transactions WHERE tenantId = ? AND kind = 'opening_balance'", [tenantId]);

@@ -42,7 +42,8 @@ const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v ===
 export function parseOpeningFile(raw: unknown, moneyCodes: readonly string[]): ParsedOpening {
   const errors: string[] = [];
   if (!isPlainObject(raw)) return { ok: false, errors: ["الملف يجب أن يكون كائن JSON"] };
-  for (const k of Object.keys(raw)) if (!TOP_KEYS.has(k)) errors.push(`مفتاح غير معروف: ${k}`);
+  // المفاتيح التي تبدأ بـ"_" تعليقات بشرية (مثل _note في ملف المثال) — تُتجاهل؛ أي مفتاح آخر مجهول = رفض
+  for (const k of Object.keys(raw)) if (!TOP_KEYS.has(k) && !k.startsWith("_")) errors.push(`مفتاح غير معروف: ${k}`);
 
   const goLiveDate = raw.goLiveDate;
   if (!isValidIsoDate(goLiveDate)) errors.push("goLiveDate مطلوب بصيغة YYYY-MM-DD");

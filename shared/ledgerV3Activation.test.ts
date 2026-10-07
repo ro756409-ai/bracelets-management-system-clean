@@ -40,6 +40,11 @@ describe("📄 ملف الأرصدة الافتتاحية — تحليل صار�
     const r = parseOpeningFile({ ...base, businessIds: [2, 1, 2], safeGrants: { OFFICE_CASH: [1, 1] }, reconciliation: { reportGeneratedAt: "2026-10-31T20:00:00Z", approvedByEmployeeId: 7, approvedAt: "2026-10-31T21:00:00Z", acknowledgedDifferences: true } }, MONEY);
     expect(r).toMatchObject({ ok: true, file: { businessIds: [2, 1], safeGrants: { OFFICE_CASH: [1] }, reconciliation: { approvedByEmployeeId: 7, acknowledgedDifferences: true } } });
   });
+  it("مفاتيح التعليق التي تبدأ بـ_ تُتجاهل (ملف المثال في docs يُقبل كما هو)", () => {
+    expect(parseOpeningFile({ ...base, _note: "تعليق" }, MONEY)).toMatchObject({ ok: true });
+    const example = JSON.parse(require("fs").readFileSync("docs/ledger-v3-opening.example.json", "utf-8"));
+    expect(parseOpeningFile(example, MONEY)).toMatchObject({ ok: true, total: "100011.2500" });
+  });
   it("عبارة التأكيد تتضمن tenantId وتاريخ Go-Live حرفيًا؛ التاريخ يُفحص فعليًا", () => {
     expect(confirmationPhrase(3, "2026-11-01")).toBe("ACTIVATE LEDGER V3 TENANT 3 GO-LIVE 2026-11-01");
     expect(isValidIsoDate("2026-11-31")).toBe(false);

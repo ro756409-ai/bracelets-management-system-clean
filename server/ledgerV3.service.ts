@@ -343,6 +343,12 @@ export async function activateLedgerV3(input: ActivateLedgerV3Input, db?: Ledger
       }
       throw new LedgerError("alreadyEnabled");
     }
+    // نطاق التفعيل = الشركة كلها: كل نشاط فعّال (FOR SHARE تحت قفل العلم — نشاط أُضيف بعد إعداد الخطة يُكتشف هنا)
+    // يجب أن يكون في businessIds؛ المستبعد الوحيد المسموح هو النشاط غير النشط.
+    const activeNow = await tx.select({ id: businesses.id, name: businesses.name }).from(businesses)
+      .where(and(eq(businesses.tenantId, input.tenantId), eq(businesses.isActive, true))).for("share");
+    const outside = (activeNow as { id: number; name: string }[]).filter(b => !input.businessIds.includes(b.id));
+    if (outside.length > 0) throw new LedgerError("activationScope", `النشاط ${outside.map(b => `${b.name} (#${b.id})`).join("، ")} غير موجود في خطة التفعيل`);
     if (!flag) {
       try { await tx.insert(ledgerTenantFlags).values({ tenantId: input.tenantId, ledgerV3Enabled: 0 }); } catch (e) { if (!isMysqlError(e, "ER_DUP_ENTRY")) throw e; }
       await tx.select().from(ledgerTenantFlags).where(eq(ledgerTenantFlags.tenantId, input.tenantId)).limit(1).for("update");
