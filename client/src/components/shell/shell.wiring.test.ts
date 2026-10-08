@@ -78,6 +78,12 @@ describe("🔑 الشل — الموبايل والكيبورد", () => {
     // الشريط العلوي الضيق: نصوص مبدّل النشاط تختفي تحت sm بدل أن تتداخل مع أزرار الإجراءات (الأيقونة + aria-label يبقيان)
     const switcher = fs.readFileSync("client/src/components/shell/BusinessSwitcher.tsx", "utf-8");
     expect(switcher).toContain('${inSidebar ? "" : "hidden sm:block"}');
+    // اسم الصفحة في الشريط العلوي لا يظهر مقطوعًا تحت 640px: مخفي حتى sm (موجود في العنوان وWorkspaceTabs)
+    expect(layout).toContain('className="hidden min-w-0 truncate text-sm text-muted-foreground sm:inline"');
+    expect(layout).not.toContain("min-[400px]:inline");
+    // الحوار فوق الشريط السفلي: nav z-40 < dialog z-50
+    expect(read("client/src/components/shell/MobileBottomNav.tsx")).toContain("z-40");
+    expect(read("client/src/components/ui/dialog.tsx")).toContain("z-50");
   });
   it("زر طي السايدبار زر حقيقي بـaria-label وaria-expanded، وSidebarTrigger على الموبايل 44px", () => {
     expect(layout).toContain('aria-label={isCollapsed ? "توسيع القائمة" : "طي القائمة"}');

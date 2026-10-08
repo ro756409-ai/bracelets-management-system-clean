@@ -72,6 +72,24 @@ describe("🪟 DisplayPrefsDialog", () => {
   });
 });
 
+describe("📜 الوصول إلى آخر النافذة على الهاتف", () => {
+  it("الحاوية تُمرَّر داخليًا بارتفاع ≤ الشاشة − 8rem على الهاتف؛ ترتيب DOM: الكثافة → تقليل الحركة → استعادة → تم، و«تم» آخر عنصر قابل للتركيز", () => {
+    mountDialog();
+    const content = screen.getByTestId("display-prefs-dialog");
+    expect(content.className).toContain("overflow-y-auto"); expect(content.className).toContain("max-h-[calc(100dvh-8rem)]"); expect(content.className).toContain("sm:max-h-[90vh]");
+    const order = ["prefs-group-density", "prefs-group-motion", "prefs-reset", "prefs-done"].map(id => screen.getByTestId(id));
+    for (let i = 1; i < order.length; i++) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING, `ترتيب ${i}`).toBeTruthy();
+    // آخر عنصرين تفاعليين في النافذة (عدا زر الإغلاق X الذي يرسمه DialogContent في النهاية) = استعادة ثم تم
+    const focusables = [...content.querySelectorAll<HTMLElement>('[data-testid^="prefs-"]')].filter(el => el.matches("button, [role=radio]"));
+    expect(focusables[focusables.length - 1].getAttribute("data-testid")).toBe("prefs-done");
+    expect(focusables[focusables.length - 2].getAttribute("data-testid")).toBe("prefs-reset");
+    for (const el of [screen.getByTestId("prefs-reset"), screen.getByTestId("prefs-done")]) expect(el.className).toContain("min-h-11");
+    const onOpenChange = vi.fn();
+    cleanup(); render(<DisplayPrefsProvider><DisplayPrefsDialog open onOpenChange={onOpenChange} /></DisplayPrefsProvider>);
+    fireEvent.click(screen.getByTestId("prefs-done")); expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
 describe("🔝 الزر في الشريط العلوي", () => {
   const base = { isAdmin: true, permissions: [] as string[], userName: "مالك", roleLabel: "إدارة", lowStockCount: 0, onGoInventory: () => {}, onLogout: vi.fn() };
   it("ديسكتوب: زر «تخصيص العرض» مفعّل (ليس placeholder) ويفتح النافذة؛ المساعدة/الإشعارات تبقى معطّلة", () => {

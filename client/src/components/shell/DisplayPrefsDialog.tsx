@@ -62,7 +62,9 @@ export function DisplayPrefsDialog({ open, onOpenChange }: { open: boolean; onOp
   const swatchMode = resolvedTheme;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto" data-testid="display-prefs-dialog">
+      {/* على الهاتف: الارتفاع ≤ الشاشة − 8rem فيبقى أسفل النافذة (الاستعادة/تم) فوق منطقة MobileBottomNav
+          والنافذة تُمرَّر داخليًا حتى آخر عنصر؛ الحوار (z-50) فوق الشريط السفلي (z-40) في كل الأحوال. */}
+      <DialogContent className="max-h-[calc(100dvh-8rem)] max-w-lg overflow-y-auto sm:max-h-[90vh]" data-testid="display-prefs-dialog">
         <DialogHeader>
           <DialogTitle>تخصيص العرض</DialogTitle>
           <DialogDescription>
