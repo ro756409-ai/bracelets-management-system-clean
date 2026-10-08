@@ -8,6 +8,7 @@
   --radius-md: var(--radius-brand-md);
   --radius-lg: var(--radius-brand-lg);
   --radius-xl: var(--radius-brand-xl);
+  --radius-2xl: var(--radius-brand-2xl);
   --radius-pill: var(--radius-brand-pill);
   --shadow-card: var(--shadow-card);
   --shadow-dropdown: var(--shadow-dropdown);
@@ -19,6 +20,15 @@
   --font-en: var(--font-brand-en);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  /* Copper Signature × Clean Spatial — السطوح والنصوص الثانوية والنحاسي الناعم ودرجات الحالة الجديدة */
+  --color-surface-2: var(--surface-2);
+  --color-text-2: var(--text-2);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-text: var(--primary-text);
+  --color-rx-good: var(--rx-good);
+  --color-rx-good-foreground: var(--rx-good-foreground);
+  --color-ai: var(--ai);
+  --color-ai-foreground: var(--ai-foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -72,13 +82,32 @@
 }
 
 :root {
-  /* Corner radius scale — sm/md/lg/xl/pill per the approved brand book (§16) */
-  --radius-brand-sm: 4px;
+  /* Corner radius scale — Copper Signature × Clean Spatial (Theme Spec §7): 6 · 8 · 12 · 16 · 22 · pill */
+  --radius-brand-sm: 6px;
   --radius-brand-md: 8px;
-  --radius-brand-lg: 14px;
-  --radius-brand-xl: 24px;
-  --radius-brand-pill: 32px;
+  --radius-brand-lg: 12px;
+  --radius-brand-xl: 16px;
+  --radius-brand-2xl: 22px;
+  --radius-brand-pill: 999px;
   --radius: var(--radius-brand-md);
+
+  /* Type scale (Theme Spec §7): 12 · 13 · 14 · 15 · 17 · 20 · 24 · 30 × معامل حجم الخط.
+     `--font-scale` يبقى 1 الآن؛ «تخصيص العرض» (المرحلة 5) هو من يغيّره (0.9 / 1 / 1.1 / 1.25). */
+  --font-scale: 1;
+  --text-12: calc(12px * var(--font-scale));
+  --text-13: calc(13px * var(--font-scale));
+  --text-14: calc(14px * var(--font-scale));
+  --text-15: calc(15px * var(--font-scale));
+  --text-17: calc(17px * var(--font-scale));
+  --text-20: calc(20px * var(--font-scale));
+  --text-24: calc(24px * var(--font-scale));
+  --text-30: calc(30px * var(--font-scale));
+
+  /* Control heights (Theme Spec §7): 42px مريح · 36px مدمج · 44px+ لمس على الموبايل.
+     معلنة هنا فقط؛ لا مكوّن يستهلكها قبل مرحلته. */
+  --control-h: 42px;
+  --control-h-compact: 36px;
+  --control-h-touch: 44px;
 
   /* Spacing — 8px base unit (brand book §15). Every gap, pad and margin in the product should
      land on this scale; nothing in between. The named aliases below are the two composites the
@@ -102,16 +131,18 @@
      filled, so icons stay quiet next to data. Applied globally to Lucide in @layer base. */
   --icon-stroke: 1.75;
 
-  /* The one approved gradient (brand book §21): Primary → Dark Purple at 135°. Hero surfaces
-     and premium CTAs only — never a default background. */
-  --gradient-brand: linear-gradient(135deg, #5B3DF5 0%, #4527D6 100%);
+  /* The one approved gradient: Copper → Copper-text at 135°. Hero surfaces and premium CTAs
+     only — never a default background (copper stays ~10% of the surface). */
+  --gradient-brand: linear-gradient(135deg, #B4532A 0%, #9A421D 100%);
 
-  /* A quiet 16px dot grid derived from the logo's construction grid (brand book §22) — for
-     section backgrounds, empty states and print collateral texture. */
-  --pattern-dot-grid: radial-gradient(circle, rgb(30 41 59 / 0.07) 1px, transparent 1px);
+  /* A quiet 16px dot grid — for section backgrounds, empty states and print collateral texture. */
+  --pattern-dot-grid: radial-gradient(circle, rgb(20 20 20 / 0.07) 1px, transparent 1px);
   --pattern-dot-size: 16px;
-  --font-brand: 'IBM Plex Sans Arabic', 'Inter', 'Cairo', 'Tajawal', sans-serif;
-  --font-brand-en: 'Inter', 'IBM Plex Sans Arabic', sans-serif;
+  /* Fonts (Theme Spec §7): DM Sans أولًا فيلتقط اللاتيني والأرقام الغربية، وما يفتقده
+     (العربي والأرقام العربية-الهندية) يسقط على Noto Kufi Arabic. الاحتياطيان نظاميان قريبا
+     الشكل حتى لا يقفز التخطيط أثناء swap. */
+  --font-brand: 'DM Sans', 'Noto Kufi Arabic', 'Segoe UI', 'Tahoma', 'Arial', sans-serif;
+  --font-brand-en: 'DM Sans', 'Segoe UI', 'Arial', sans-serif;
 
   /* Motion — one scale so every transition in the product feels like the same product.
      `--ease-out` is the standard "settle" curve (fast start, soft landing) used by Linear /
@@ -122,129 +153,165 @@
   --duration-base: 180ms;   /* dropdowns, popovers, inline expand */
   --duration-slow: 260ms;   /* drawers, dialogs, page-level surfaces */
 
-  /* Shadows — always neutral navy at low opacity, never tinted purple (brand book §16) */
-  --shadow-card: 0 1px 2px 0 rgb(30 41 59 / 0.06), 0 1px 3px 0 rgb(30 41 59 / 0.08);
-  --shadow-dropdown: 0 4px 6px -1px rgb(30 41 59 / 0.1), 0 2px 4px -2px rgb(30 41 59 / 0.08);
-  --shadow-modal: 0 20px 25px -5px rgb(30 41 59 / 0.15), 0 8px 10px -6px rgb(30 41 59 / 0.1);
-  --shadow-sidebar: 1px 0 3px 0 rgb(30 41 59 / 0.1);
+  /* Shadows — warm-black at low opacity (Clean Spatial: L1 cards, L2 lists/menus, L3 dialogs) */
+  --shadow-card: 0 1px 2px 0 rgb(20 20 20 / 0.05), 0 1px 3px 0 rgb(20 20 20 / 0.07);
+  --shadow-dropdown: 0 4px 6px -1px rgb(20 20 20 / 0.09), 0 2px 4px -2px rgb(20 20 20 / 0.07);
+  --shadow-modal: 0 20px 25px -5px rgb(20 20 20 / 0.14), 0 8px 10px -6px rgb(20 20 20 / 0.09);
+  --shadow-sidebar: 1px 0 3px 0 rgb(20 20 20 / 0.08);
 
-  /* ==================== Matjarak (متجرك) brand identity — approved 2026 brand book ==================== */
-  --background: #F8FAFC;
-  --foreground: #1E293B;
+  /* ==================== Matjarak — Copper Signature × Clean Spatial (Theme Spec §7, Light) ====================
+     أسماء shadcn كما هي؛ القيم فقط تغيّرت. النحاسي للأزرار الرئيسية والعناصر المهمة (~10% من
+     السطح)، الأخضر/الأحمر للحالات فقط، النصوص الطويلة أسود/رمادي محايد دافئ. */
+  --background: #F5F5F3;
+  --foreground: #141414;
+  --surface-2: #F8F8F6;
+  --text-2: #4A4946;
   --card: #FFFFFF;
-  --card-foreground: #1E293B;
+  --card-foreground: #141414;
   --popover: #FFFFFF;
-  --popover-foreground: #1E293B;
-  --primary: #5B3DF5;
+  --popover-foreground: #141414;
+  --primary: #B4532A;
   --primary-foreground: #FFFFFF;
-  --primary-dark: #4527D6;
-  --secondary: #1E293B;
-  --secondary-foreground: #FFFFFF;
-  --muted: #F1F5F9;
-  --muted-foreground: #64748B;
-  --accent: #EDE9FE;
-  --accent-foreground: #4527D6;
-  --destructive: #EF4444;
+  /* نحاسي للنصوص/الحالة النشطة والـhover على النحاسي */
+  --primary-text: #9A421D;
+  --primary-dark: #9A421D;
+  --primary-soft: #F7EBE4;
+  /* ثانوي = سطح هادئ بنص أساسي (Clean Spatial)، لا كتلة داكنة */
+  --secondary: #ECEBE7;
+  --secondary-foreground: #141414;
+  --muted: #EFEEEA;
+  --muted-foreground: #696863;
+  /* accent = النحاسي الناعم (خلفيات العنصر النشط/الشارات الأساسية) بنص نحاسي */
+  --accent: #F7EBE4;
+  --accent-foreground: #9A421D;
+  --destructive: #C2302A;
   --destructive-foreground: #FFFFFF;
-  --success: #10B981;
+  /* الأخضر: Theme Spec يذكر #12804A (4.99 على الأبيض) لكنه 4.35 كنص فوق صبغة 10% في شارات الحالة —
+     فأُعمّق درجة واحدة (#0F7443) ليحقق AA في الاستخدامين مع نفس الصبغة. */
+  --success: #0F7443;
   --success-foreground: #FFFFFF;
-  --warning: #F59E0B;
-  --warning-foreground: #1E293B;
-  /* Informational (neutral-positive) — distinct from success and warning so a hint is not
-     mistaken for a problem. Matches --chart-2 so charts and callouts agree. */
-  --info: #3B82F6;
+  --warning: #A35800;
+  --warning-foreground: #FFFFFF;
+  --info: #1F5FC9;
   --info-foreground: #FFFFFF;
-  --error: #EF4444;
+  --error: #C2302A;
   --error-foreground: #FFFFFF;
-  /* Extra order-status hues (StatusBadge only) — new/shipped keep --info's blue; these fill
-     out the remaining distinct colors the status palette needs (purple/cyan/yellow/orange/dark-green). */
-  --purple: #8B5CF6;
+  /* توقع استلام جيد (70–84%) — لا يُستخدم إلا مع مصدر بيانات حقيقي */
+  --rx-good: #0B7480;
+  --rx-good-foreground: #FFFFFF;
+  /* صندوق الاقتراح الذكي */
+  --ai: #FFF6D2;
+  --ai-foreground: #5C4300;
+  /* Extra order-status hues (StatusBadge only): نصوص على خلفية 10% من اللون نفسه فوق البطاقة —
+     لذا كل قيمة هنا تحقق AA كنص على الأبيض (Clean Spatial: مشبّعة قليلًا، داكنة كفاية). */
+  --purple: #6B3FA0;
   --purple-foreground: #FFFFFF;
-  --cyan: #06B6D4;
+  --cyan: #0E6E83;
   --cyan-foreground: #FFFFFF;
-  --amber: #EAB308;
-  --amber-foreground: #1E293B;
-  --orange: #F97316;
+  --amber: #8A5A00;
+  --amber-foreground: #FFFFFF;
+  --orange: #A34A24;
   --orange-foreground: #FFFFFF;
-  --delivered: #047857;
+  --delivered: #0F7443;
   --delivered-foreground: #FFFFFF;
-  --border: #E2E8F0;
-  --input: #E2E8F0;
-  --ring: #5B3DF5;
-  --chart-1: #5B3DF5;
-  --chart-2: #3B82F6;
-  --chart-3: #10B981;
-  --chart-4: #F59E0B;
-  --chart-5: #EF4444;
-  /* Sidebar: Matjarak dark navy base (brand book §27 mobile/desktop hierarchy) */
-  --sidebar: #1E293B;
-  --sidebar-foreground: #F1F5F9;
-  --sidebar-primary: #5B3DF5;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #334155;
-  --sidebar-accent-foreground: #F1F5F9;
-  --sidebar-border: #334155;
-  --sidebar-ring: #5B3DF5;
+  --border: #E5E4E0;
+  --input: #E5E4E0;
+  --ring: #B4532A;
+  /* Charts: النحاسي أولًا ثم ألوان الحالة المحايدة؛ لا أحمر كسلسلة بيانات افتراضية */
+  --chart-1: #B4532A;
+  --chart-2: #1F5FC9;
+  --chart-3: #12804A;
+  --chart-4: #A35800;
+  --chart-5: #0B7480;
+  /* Sidebar — المرحلة 1 تُبقيه داكنًا دافئًا عمدًا: BusinessSwitcher وعناصر الشل تكتب text-white
+     يدويًا فوق السايدبار، والسايدبار الأبيض (Theme Spec §3) يأتي مع المرحلة 2 حين تُصلح تلك
+     المكوّنات. العلامة النشطة نحاسية من الآن. */
+  --sidebar: #1C1B19;
+  --sidebar-foreground: #F3F2EE;
+  --sidebar-primary: #E07A4B;
+  --sidebar-primary-foreground: #121211;
+  --sidebar-accent: #2C2A27;
+  --sidebar-accent-foreground: #F3F2EE;
+  --sidebar-border: #2F2E2B;
+  --sidebar-ring: #E07A4B;
 }
 
 .dark {
-  /* Matjarak dark mode: same brand hues on dark neutral surfaces */
-  --background: #0F172A;
-  --foreground: #F1F5F9;
-  --card: #1E293B;
-  --card-foreground: #F1F5F9;
-  --popover: #1E293B;
-  --popover-foreground: #F1F5F9;
-  --primary: #7C63F7;
-  --primary-foreground: #FFFFFF;
-  --primary-dark: #4527D6;
-  --secondary: #334155;
-  --secondary-foreground: #F1F5F9;
-  --muted: #1E293B;
-  --muted-foreground: #94A3B8;
-  --accent: #322659;
-  --accent-foreground: #EDE9FE;
-  --destructive: #EF4444;
-  --destructive-foreground: #FFFFFF;
-  --success: #34D399;
-  --success-foreground: #052E1E;
-  --warning: #FBBF24;
-  --warning-foreground: #221604;
-  --info: #60A5FA;
-  --info-foreground: #04203F;
-  --error: #EF4444;
-  --error-foreground: #FFFFFF;
-  --purple: #A78BFA;
-  --purple-foreground: #2E1065;
-  --cyan: #22D3EE;
-  --cyan-foreground: #083344;
-  --amber: #FDE047;
-  --amber-foreground: #422006;
-  --orange: #FB923C;
-  --orange-foreground: #431407;
-  --delivered: #10B981;
-  --delivered-foreground: #052E1E;
-  --border: #334155;
-  --input: #334155;
-  --ring: #7C63F7;
-  --chart-1: #7C63F7;
-  --chart-2: #60A5FA;
-  --chart-3: #34D399;
-  --chart-4: #FBBF24;
-  --chart-5: #EF4444;
-  --sidebar: #0B1220;
-  --sidebar-foreground: #F1F5F9;
-  --sidebar-primary: #7C63F7;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #1E293B;
-  --sidebar-accent-foreground: #F1F5F9;
-  --sidebar-border: #1E293B;
-  --sidebar-ring: #7C63F7;
+  /* ==================== Copper Signature × Clean Spatial (Theme Spec §7, Dark) ====================
+     أسطح دافئة داكنة مصممة بذاتها (ليست عكس الفاتح): النحاسي أفتح (#E07A4B) والنص عليه داكن
+     (#121211) لأن الأبيض فوقه لا يحقق AA. */
+  --background: #121211;
+  --foreground: #F3F2EE;
+  --surface-2: #20201F;
+  --text-2: #BEBBB4;
+  --card: #1B1B1A;
+  --card-foreground: #F3F2EE;
+  --popover: #1B1B1A;
+  --popover-foreground: #F3F2EE;
+  --primary: #E07A4B;
+  --primary-foreground: #121211;
+  --primary-text: #F29C70;
+  --primary-dark: #C96A3E;
+  --primary-soft: rgba(224, 122, 75, 0.15);
+  --secondary: #2A2927;
+  --secondary-foreground: #F3F2EE;
+  --muted: #242321;
+  --muted-foreground: #94918A;
+  /* النحاسي الناعم فوق البطاقة الداكنة كقيمة صلبة (مزج 15%) ليبقى التباين قابلًا للقياس */
+  --accent: #392921;
+  --accent-foreground: #F29C70;
+  --destructive: #F47167;
+  --destructive-foreground: #121211;
+  --success: #4CC98C;
+  --success-foreground: #121211;
+  --warning: #F2A848;
+  --warning-foreground: #121211;
+  --info: #7AA9F6;
+  --info-foreground: #121211;
+  --error: #F47167;
+  --error-foreground: #121211;
+  --rx-good: #47C2CE;
+  --rx-good-foreground: #121211;
+  --ai: rgba(242, 200, 80, 0.10);
+  --ai-foreground: #F2C850;
+  --purple: #C4A4F2;
+  --purple-foreground: #121211;
+  --cyan: #47C2CE;
+  --cyan-foreground: #121211;
+  --amber: #F2C850;
+  --amber-foreground: #121211;
+  --orange: #F29C70;
+  --orange-foreground: #121211;
+  --delivered: #4CC98C;
+  --delivered-foreground: #121211;
+  --border: #2F2E2B;
+  --input: #2F2E2B;
+  --ring: #E07A4B;
+  --chart-1: #E07A4B;
+  --chart-2: #7AA9F6;
+  --chart-3: #4CC98C;
+  --chart-4: #F2A848;
+  --chart-5: #47C2CE;
+  --sidebar: #0D0D0C;
+  --sidebar-foreground: #F3F2EE;
+  --sidebar-primary: #E07A4B;
+  --sidebar-primary-foreground: #121211;
+  --sidebar-accent: #2A2927;
+  --sidebar-accent-foreground: #F3F2EE;
+  --sidebar-border: #2F2E2B;
+  --sidebar-ring: #E07A4B;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  html {
+    /* المتصفح يرسم عناصر النموذج/أشرطة التمرير بلوحة الوضع الصحيحة */
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
   }
   body {
     @apply bg-background text-foreground;
@@ -254,6 +321,28 @@
        governorate/address strings readable instead of cramped. */
     line-height: 1.75;
     -webkit-font-smoothing: antialiased;
+    /* الأرقام جدولية في كل مكان (Theme Spec §7): tnum يمسّ الأرقام فقط ولا يغيّر أشكال
+       الحروف العربية النسبية. */
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* Focus ring موحّد وواضح (WCAG 2.4.7 / 1.4.11): حلقتان — نحاسي 2px + فاصل بلون الخلفية —
+     تظهر للوحة المفاتيح فقط (focus-visible) فلا تُزعج النقر بالفأرة. */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--background);
+  }
+
+  /* احترام تفضيل تقليل الحركة: لا حركة إجبارية في أي مكان. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 
   /* Headings ride tighter than body copy so they read as one block. */
@@ -412,8 +501,13 @@
   background-size: var(--pattern-dot-size) var(--pattern-dot-size);
 }
 
-/* The single approved gradient (§21): Primary → Dark Purple at 135°. Hero surfaces and
-   premium-tier CTAs only. */
+/* The single approved gradient: Copper → Copper-text at 135°. Hero surfaces and premium-tier
+   CTAs only. */
 .bg-brand-gradient {
   background-image: var(--gradient-brand);
+}
+
+/* الأرقام والمعرّفات اللاتينية (AWB، أرقام الهواتف، المبالغ) بخط DM Sans صراحةً عند الحاجة. */
+.font-en {
+  font-family: var(--font-brand-en);
 }

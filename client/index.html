@@ -11,12 +11,18 @@
       name="description"
       content="متجرك — كل أعمالك في مكان واحد. Everything your business needs, in one intelligent platform."
     />
-    <meta name="theme-color" content="#5B3DF5" />
+    <!-- لون شريط المتصفح يتبع لوحة النظام (Safari/Chrome يدعمان media على theme-color)؛ المتصفح
+         الذي لا يفهم media يأخذ أول وسم = الفاتح. القيم = --background في الوضعين. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F5F5F3" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121211" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- الخطوط (Theme Spec §7): Noto Kufi Arabic للعربي، DM Sans للاتيني والأرقام. Google Fonts
+         مع display=swap (الاستضافة الذاتية تُراجع في مرحلة الـAssets)؛ preconnect يقصّر زمن الـswap. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap"
       rel="stylesheet"
     />
   </head>
