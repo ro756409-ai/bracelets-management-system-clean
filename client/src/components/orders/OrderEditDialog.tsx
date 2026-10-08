@@ -263,7 +263,8 @@ export function OrderEditDialog({
           onInteractOutside={e => { if (dirty) e.preventDefault(); }}
           onEscapeKeyDown={e => { if (dirty) { e.preventDefault(); requestClose(); } }}
         >
-          <DialogHeader className="border-b px-4 py-3 text-start sm:px-6">
+          {/* pr-16/md:pr-14 يحجز مساحة زر الإغلاق المشترك (44px هاتف / 36px md) — px-4 كان يلغي pr-10 الافتراضي فيتداخل العنوان */}
+          <DialogHeader className="border-b py-3 pl-4 pr-16 text-start sm:pl-6 md:pr-14">
             <DialogTitle className="flex items-center gap-2 text-base">
               <Edit2 className="h-5 w-5 shrink-0 text-[var(--info)]" />
               <span className="min-w-0 truncate">

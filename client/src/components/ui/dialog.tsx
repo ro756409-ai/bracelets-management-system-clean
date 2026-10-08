@@ -131,13 +131,19 @@ function DialogContent({
         {...props}
       >
         {children}
+        {/*
+          زر الإغلاق: هدف لمس ≥44×44px على الهاتف (h-11/w-11 مع أرضية بالبكسل من index.css) و36px على md+؛ الأيقونة تبقى 16px.
+          الموضع في الزاوية (top-2/right-2) حتى يبقى داخل حشو المحتوى، وDialogHeader يحجز pr-10 فلا يتداخل العنوان معه.
+          منطق الإغلاق كما هو (DialogPrimitive.Close).
+        */}
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            aria-label="إغلاق"
+            className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-2 right-2 inline-flex h-11 w-11 min-h-11 min-w-11 items-center justify-center rounded-md opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none md:top-3 md:right-3 md:h-9 md:w-9 md:min-h-9 md:min-w-9 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
           >
             <XIcon />
-            <span className="sr-only">Close</span>
+            <span className="sr-only">إغلاق</span>
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Content>
@@ -149,7 +155,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2 text-center sm:text-left", className)}
+      className={cn("flex flex-col gap-2 pr-10 text-center sm:text-left md:pr-8", className)}
       {...props}
     />
   );
