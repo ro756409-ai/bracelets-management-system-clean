@@ -411,8 +411,11 @@ export async function disableLedgerV3(input: { tenantId: number; actor: LedgerAc
   const d = await resolveDb(db);
   await ledgerTransaction(d, async tx => {
     const actor = await resolveActor(tx, input.tenantId, input.actor);
-    if (actor.actorType !== "employee") throw new LedgerError("reopenRole");
-    await tx.update(ledgerTenantFlags).set({ ledgerV3Enabled: 0, disabledAt: sql`now()`, disabledReason: input.reason.trim() }).where(eq(ledgerTenantFlags.tenantId, input.tenantId));
+    // التعطيل للمالك (super_admin) وحده — ويُسجَّل الفاعل والسبب والتوقيت في صف العلم
+    if (actor.actorType !== "employee" || !isOwnerRole(actor.role)) throw new LedgerError("reopenRole");
+    await tx.update(ledgerTenantFlags)
+      .set({ ledgerV3Enabled: 0, disabledAt: sql`now()`, disabledReason: input.reason.trim(), actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId })
+      .where(eq(ledgerTenantFlags.tenantId, input.tenantId));
   });
 }
 
