@@ -10,7 +10,8 @@ import { cn } from "@/lib/utils";
  * (رقم الأوردر/الهاتف/الاسم/AWB…) يُرسل عند Enter أو زر «بحث»؛ يسار = إجراءات (تصفية/تحميل…).
  * بلا منطق أعمال: الصفحة تمرّر الحقول وتستقبل `{field, query}`. كل عنصر تفاعلي ≥44px.
  */
-export type SearchField = { id: string; label: string };
+/** `disabled` = حقل غير مدعوم من السيرفر حاليًا — يظهر كـ«غير متاح» ولا يُختار (لا فلترة ناقصة على العميل). */
+export type SearchField = { id: string; label: string; disabled?: boolean };
 export type OrderSearch = { field: string; query: string };
 
 export type OrderToolbarProps = {
@@ -30,7 +31,7 @@ export type OrderToolbarProps = {
 export function OrderToolbar({ title, icon, count, countLabel = "أوردر", fields, search, onSearchChange, onSubmit, actions, className }: OrderToolbarProps) {
   const inputId = useId();
   const submit = (e: FormEvent) => { e.preventDefault(); onSubmit(search); };
-  const current = fields.find(f => f.id === search.field) ?? fields[0];
+  const current = fields.find(f => f.id === search.field && !f.disabled) ?? fields.find(f => !f.disabled) ?? fields[0];
   return (
     <div className={cn("flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between", className)} data-testid="order-toolbar">
       <div className="flex min-w-0 items-center gap-2">
@@ -45,7 +46,11 @@ export function OrderToolbar({ title, icon, count, countLabel = "أوردر", fi
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {fields.map(f => <SelectItem key={f.id} value={f.id} className="min-h-11 md:min-h-9">{f.label}</SelectItem>)}
+            {fields.map(f => (
+              <SelectItem key={f.id} value={f.id} disabled={f.disabled} className="min-h-11 md:min-h-9" data-testid={`order-toolbar-field-${f.id}`}>
+                {f.label}{f.disabled ? " — غير متاح" : ""}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <label htmlFor={inputId} className="sr-only">{`بحث حسب ${current?.label ?? ""}`}</label>

@@ -34,10 +34,10 @@ describe("📊 ResponsiveDataTable — حدود المرحلة 3", () => {
   });
 });
 
-describe("🔌 الربط مؤجل للمرحلة 4 — لا صفحة تستورد المكوّنات الجديدة بعد", () => {
-  it("Orders.tsx / BostaOrders.tsx لا تستورد UnderlineTabs/ScopeBar/ReviewAttentionBanner/OrderToolbar/…", () => {
+describe("🔌 نطاق الربط — صفحة الأوردرات فقط (المرحلة 4)؛ باقي الصفحات لم تُلمس", () => {
+  it("BostaOrders/Collections/Expenses/Treasury/Payroll لا تستورد UnderlineTabs/ScopeBar/ReviewAttentionBanner/OrderToolbar/…", () => {
     const names = ["UnderlineTabs", "ScopeBar", "ReviewAttentionBanner", "OrderToolbar", "CustomerCell", "TwoLineCell", "AttemptsCell", "ReceiptPrediction", "OfflineState"];
-    for (const f of ["Orders.tsx", "BostaOrders.tsx"]) {
+    for (const f of ["BostaOrders.tsx", "Collections.tsx", "Expenses.tsx", "Treasury.tsx", "Payroll.tsx"]) {
       const s = page(f);
       for (const n of names) expect(s, `${f} يستورد ${n}`).not.toMatch(new RegExp(`\\b${n}\\b`));
     }

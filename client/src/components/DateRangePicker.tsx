@@ -299,7 +299,7 @@ export default function DateRangePicker({ value, onChange, placeholder = "اخت
         ref={triggerRef}
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg border bg-background hover:bg-muted transition-colors text-sm text-foreground min-w-[200px] justify-between"
+        className="flex min-h-11 items-center gap-2 px-3 py-1.5 rounded-lg border bg-background hover:bg-muted transition-colors text-sm text-foreground min-w-[200px] justify-between md:min-h-0"
       >
         <span className="flex items-center gap-2">
           <Calendar className="w-4 h-4 text-muted-foreground shrink-0" />

@@ -109,9 +109,10 @@ describe("📱 MobileOrderCard — role=button + Enter/Space + زر تفاصيل
 type Row = { id: number; name: string; total: number };
 const ROWS: Row[] = [{ id: 1, name: "أ", total: 10 }, { id: 2, name: "ب", total: 20 }, { id: 3, name: "ج", total: 30 }];
 const COLS: Column<Row>[] = [
-  { id: "name", header: "الاسم", cell: r => r.name, sticky: true },
+  { id: "name", header: "الاسم", cell: r => r.name, sticky: "start" },
   { id: "total", header: "الإجمالي", cell: r => r.total, numeric: true, sticky: "end" },
-  { id: "act", header: "إجراء", cell: r => <button type="button">فتح {r.id}</button> },
+  // `true` = الحافة الختامية (end) — سلوك المستهلكين القدامى الذين يثبّتون عمود الإجراءات الأخير
+  { id: "act", header: "إجراء", cell: r => <button type="button">فتح {r.id}</button>, sticky: true },
 ];
 const cardRow = (r: Row) => <div data-testid={`card-${r.id}`}><button type="button">بطاقة {r.id}</button></div>;
 
@@ -153,6 +154,8 @@ describe("📊 ResponsiveDataTable — نسخة واحدة في DOM، تثبيت
     const name = ths.find(t => t.textContent?.includes("الاسم"))!; const total = ths.find(t => t.textContent?.includes("الإجمالي"))!;
     expect(name.className).toContain("sticky"); expect(name.className).toContain("start-0"); expect(name.className).toContain("text-start");
     expect(total.className).toContain("sticky"); expect(total.className).toContain("end-0"); expect(total.className).toContain("text-end");
+    const act = ths.find(t => t.textContent?.includes("إجراء"))!;
+    expect(act.className).toContain("end-0"); expect(act.className).not.toContain("start-0"); // true = end
     for (const el of document.querySelectorAll("th, td")) { expect(el.className).not.toMatch(/\b(left|right)-0\b/); expect(el.className).not.toMatch(/\btext-(left|right)\b/); }
     const firstTd = document.querySelector("tbody td")!;
     expect(firstTd.className).toContain("start-0");

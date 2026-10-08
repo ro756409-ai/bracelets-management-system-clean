@@ -21,10 +21,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Plus, Search, CheckCircle, XCircle, Clock, UserPlus, Eye, FileSpreadsheet, Download, Truck,
-  Trash2, Printer, PhoneCall, PhoneOff, Edit2, RotateCcw, CalendarDays, Copy, PackageCheck, QrCode,
-  MoreHorizontal, MoreVertical, ListChecks, LayoutGrid, Rows3,
-  Package, AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal, UserX,
+  Plus, CheckCircle, XCircle, UserPlus, Eye, FileSpreadsheet, Download, Truck,
+  Trash2, Printer, PhoneCall, Edit2, RotateCcw, CalendarDays, Copy, QrCode,
+  MoreHorizontal, LayoutGrid, Rows3, ShoppingCart,
+  AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal,
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import ImportExcelDialog from "@/components/ImportExcelDialog";
@@ -35,10 +35,10 @@ import { cairoDateKey, cairoDayRange, previousDateKey } from "@/lib/cairoDate";
 import {
   PageHeader,
   StatusBadge,
+  ORDER_SOURCE,
   MultiSelect,
-  ResponsiveDataTable,
-  type Column,
-  MobileOrderCard,
+  OrderToolbar,
+  type SearchField,
   Pagination,
   Drawer,
   ConfirmDialog,
@@ -49,9 +49,13 @@ import {
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
-import { usePermission, usePermissions } from "@/hooks/usePermission";
-import { WorkspaceTabs, StatusFilterChips, DataToolbar, type StatusChipItem } from "@/components/workspace";
-import { PRIMARY_DESTINATIONS, visibleChildren } from "@/config/navigation";
+import { usePermission } from "@/hooks/usePermission";
+import { DataToolbar } from "@/components/workspace";
+// المرحلة 4 — أجزاء العرض فقط (التبويبات/الجدول/بطاقة الموبايل)؛ الاستعلامات والـmutations والنوافذ تبقى هنا.
+import { OrdersTabs, TODAY_TAB_KEY } from "@/components/orders/OrdersTabs";
+import { OrdersTable, buildOrdersColumns, type OrdersColumnsContext, type OrdersRowActions } from "@/components/orders/OrdersTable";
+import { renderOrdersMobileRow } from "@/components/orders/OrdersMobileList";
+import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
@@ -169,6 +173,17 @@ function buildOrderTimeline(order: any, employeeName?: string): TimelineEvent[] 
   return events.sort((a, b) => a.at.getTime() - b.at.getTime());
 }
 
+/**
+ * حقول البحث: السيرفر (`orders.list.search`) يبحث في رقم الأوردر والهاتف واسم العميل **معًا** بمعامل
+ * واحد ولا يدعم اختيار حقل — فلا نعرض اختيارًا وهميًا بينها (نفس الطلب يُرسل أيًّا كان الاختيار).
+ * AWB بوسطة غير مدعوم في `orders.list` (موجود فقط في بحث شحنات بوسطة) → يظهر «غير متاح» وتُسجَّل الحاجة
+ * لمعامل `searchField`/`awb` على السيرفر — لا فلترة ناقصة على الصفحة الحالية.
+ */
+const ORDER_SEARCH_FIELDS: SearchField[] = [
+  { id: "any", label: "رقم الأوردر / الهاتف / الاسم" },
+  { id: "awb", label: "AWB بوسطة", disabled: true },
+];
+
 function STATUS_LABEL(status: string): string {
   const labels: Record<string, string> = {
     new: "جديد", confirmed: "مؤكد", printed: "مطبوع", postponed: "مؤجل",
@@ -183,14 +198,9 @@ export default function Orders() {
   const utils = trpc.useUtils();
   const [, navigate] = useLocation();
   const isAdmin = user?.role === 'admin';
-  const { permissions } = usePermissions();
-  const { currentBusinessIds } = useBusinessContext();
-  // تبويبات Workspace الطلبات — من نفس مصدر التنقّل (NavConfig)، مفلترة بصلاحيات الجلسة.
-  // بتفتح الصفحات الموجودة (bosta/returns/…) — الـroutes القديمة كما هي (backward compatible).
-  const ordersTabs = useMemo(() => {
-    const dest = PRIMARY_DESTINATIONS.find(d => d.key === "orders");
-    return dest ? visibleChildren(dest, isAdmin, permissions) : [];
-  }, [isAdmin, permissions]);
+  // نطاق النشاط = نفس BusinessContext الذي يقرأه مبدّل النشاط في الـShell؛ ScopeBar في الصفحة يكتب فيه.
+  const { currentBusinessIds, currentBusinessId, setCurrentBusinessId, businesses } = useBusinessContext();
+  // صف تبويبات الـWorkspace (bosta/returns/…) يرسمه الـShell مرة واحدة (DashboardLayout) — لا نسخة هنا.
   // Same shared source as every other screen. The edit dialog falls back on its own,
   // but the two governorate FILTERS on this page read this list directly and were
   // rendering empty for exactly the same reason.
@@ -202,6 +212,15 @@ export default function Orders() {
 
   const [activeTab, setActiveTab] = useState<'all' | 'today_confirmed'>('all');
   const [search, setSearch] = useState("");
+  // مسودة البحث: debounce 300ms (نفس قيمة SearchInput السابقة) — Enter/زر «بحث» يطبّقها فورًا.
+  const [searchDraft, setSearchDraft] = useState("");
+  const applySearch = (value: string) => { setSearch(value); setPage(1); };
+  useEffect(() => {
+    if (searchDraft === search) return;
+    const t = setTimeout(() => applySearch(searchDraft), 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchDraft]);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [websiteFilter, setWebsiteFilter] = useState<string>("all");
@@ -346,7 +365,7 @@ export default function Orders() {
     businessIds: currentBusinessIds,
   }), [search, statusFilter, sourceFilter, websiteFilter, governorateFilter, dateRange, printedDateRange, adNameFilter, hideAssigned, employeeFilter, page, pageSize, currentBusinessIds]);
 
-  const { data, isLoading, refetch } = trpc.orders.list.useQuery(queryParams);
+  const { data, isLoading, error: listError, refetch } = trpc.orders.list.useQuery(queryParams);
   const { data: statusCounts } = trpc.orders.statusCounts.useQuery({ businessIds: currentBusinessIds });
   const confirmedDateParam = useMemo(() => {
     if (confirmedDateFilter === 'yesterday') {
@@ -399,6 +418,13 @@ export default function Orders() {
     onSuccess: () => { toast.success("تم تأكيد الأوردر"); utils.orders.list.invalidate(); utils.orders.statusCounts.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
+
+  // حماية من الضغط المكرر: `isPending` يتأخر render واحد، فحارس «قيد التنفيذ» يمنع mutation ثانية
+  // لنفس الأوردر فورًا (الجدول/البطاقة/الدرج كلها تمر من هنا). السيرفر يبقى الحكم (confirmOrderOrReject).
+  const confirmGuard = useRef(createInFlightGuard<number>()).current;
+  const confirmOrder = (orderId: number) => {
+    confirmGuard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId }, { onSettled: done }));
+  };
 
   const cancelMutation = trpc.orders.cancel.useMutation({
     onSuccess: () => {
@@ -648,7 +674,7 @@ export default function Orders() {
   };
   const resetAllFilters = () => {
     setPage(1);
-    setSearch(""); setStatusFilter("all"); setSourceFilter("all"); setWebsiteFilter("all");
+    setSearch(""); setSearchDraft(""); setStatusFilter("all"); setSourceFilter("all"); setWebsiteFilter("all");
     setGovernorateFilter([]); setAdNameFilter("all"); setHideAssigned(false);
     setEmployeeFilter("all");
     setDateRange({ from: null, to: null });
@@ -665,262 +691,32 @@ export default function Orders() {
   };
 
   // ==================== Table columns ====================
-  // No hand-rolled "select" column: row selection (including shift-click ranges and the
-  // select-all header box) now comes from ResponsiveDataTable's built-in `selectedKeys`
-  // support, so it looks and behaves identically to every other table in the product.
-  const columns: Column<any>[] = [
-    {
-      id: "seq", header: "#", defaultHidden: true,
-      cell: (order) => <span className="text-xs text-muted-foreground font-semibold">{seqByOrderId.get(order.id)}</span>,
-      className: "text-center w-12",
-    },
-    {
-      id: "identifier", header: "رقم الأوردر", alwaysVisible: true,
-      cell: (order) => (
-        <div className="leading-tight">
-          {/* المعرّف الخارجي هو اللي الموظف بينده بيه، فهو الأبرز؛ الرقم الداخلي سياق تحته.
-              اتشال الخلفية الملوّنة: اللون في هذا النظام دلالة حالة، مش زخرفة. */}
-          {order.easyOrderShortId ? (
-            <>
-              <p className="font-mono text-sm font-bold">#{order.easyOrderShortId}</p>
-              <p className="type-caption font-mono">{order.orderNumber}</p>
-            </>
-          ) : (
-            <p className="font-mono text-sm font-bold">#{order.orderNumber}</p>
-          )}
-          {order.bostaShipmentId && (
-            <span className="flex items-center gap-0.5 mt-0.5 text-[10px] bg-[var(--info)] text-white px-1.5 py-0.5 rounded-full w-fit font-bold" title={`شحنة Bosta: ${order.bostaTrackingNumber || order.bostaShipmentId}`}>
-              <PackageCheck className="h-2.5 w-2.5" /> بوسطة
-            </span>
-          )}
-          {order.bostaLastError && !order.bostaShipmentId && (
-            <span className="block mt-0.5 text-[10px] bg-destructive/10 text-destructive border border-destructive/20 px-1.5 py-0.5 rounded-full w-fit font-bold">
-              ⚠️ فشل بوسطة
-            </span>
-          )}
-        </div>
-      ),
-    },
-    {
-      id: "customer", header: "العميل", alwaysVisible: true,
-      cell: (order) => (
-        <div className="min-w-0 max-w-[200px] leading-tight">
-          <p className="truncate text-sm font-semibold" title={order.customerName}>{order.customerName}</p>
-          <p className="flex items-center gap-1 type-caption">
-            <PhoneCall className="h-3 w-3 shrink-0" />
-            <span className="font-mono" dir="ltr">{order.customerPhone}</span>
-          </p>
-        </div>
-      ),
-    },
-    {
-      // "الموقع" في التصميم: المحافظة بارزة والمنطقة تحتها. العنوان الكامل يظل في الـdrawer
-      // بدل ما ياخد عرض عمود كامل في الجدول.
-      id: "location", header: "الموقع", alwaysVisible: true,
-      cell: (order) => (
-        <div className="max-w-[130px] leading-tight">
-          <p className="text-sm font-medium">{order.governorate || '—'}</p>
-          {(order.city || order.customerAddress) && (
-            <p className="truncate type-caption" title={order.customerAddress || undefined}>
-              {order.city || order.customerAddress}
-            </p>
-          )}
-        </div>
-      ),
-    },
-    {
-      id: "product", header: "المنتج", alwaysVisible: true,
-      cell: (order) => {
-        // ملخص المنتج: اسم — عدد القطع، وسطر تخصيص (لون/مقاس) لو موجود. أيقونة تحذير لو
-        // فيه أكتر من قطعة ومعاها تخصيص — أقرب دليل متاح من بيانات الأوردر الحالية بدون أي
-        // تعديل في الـ backend (مفيش items[] منفصل مرجّع من orders.list).
-        const hasCustomization = Boolean(order.color || order.size);
-        const multipleCustomized = order.quantity > 1 && hasCustomization;
-        return (
-          <div className="max-w-[210px] leading-tight">
-            <p className="truncate text-sm font-medium" title={order.productName}>
-              {order.productName}{order.quantity > 1 ? ` – ${order.quantity} قطع` : ''}
-            </p>
-            {hasCustomization && (
-              <p className="flex items-center gap-1 truncate type-caption">
-                {/* أيقونة من طقم Lucide بدل إيموجي: الإيموجي بيتغيّر شكله من نظام لنظام
-                    وبيكسر اتساق الأيقونات اللي الكتيّب بيفرضه (§18). */}
-                {multipleCustomized && (
-                  <AlertTriangle className="h-3 w-3 shrink-0 text-[var(--warning)]" />
-                )}
-                <span className="truncate">
-                  {order.color && `اللون: ${order.color}`}
-                  {order.color && order.size && ' · '}
-                  {order.size && `المقاس: ${order.size}`}
-                </span>
-              </p>
-            )}
-          </div>
-        );
-      },
-    },
-    {
-      id: "status", header: "الحالة", alwaysVisible: true,
-      cell: (order) => (
-        <div className="flex flex-col items-start gap-1">
-          <StatusBadge status={order.status} kind="order" size="sm" />
-          {order.needsReview && (
-            <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-[var(--purple)] bg-[var(--purple)]/10 border border-[var(--purple)]/30">
-              يحتاج مراجعة
-            </span>
-          )}
-          {/* شارة "لسه مطبعش" اتشالت عمدًا: حالة "مؤكد" معناها بالتعريف إنه لم يُطبع بعد
-              (الطباعة حالة منفصلة "مطبوع") — كانت معلومة مكررة بتزحم العمود في كل صف مؤكد. */}
-        </div>
-      ),
-    },
-    {
-      id: "assignedEmployee", header: "الموظف المسؤول", alwaysVisible: true,
-      cell: (order) => {
-        const name = order.assignedEmployeeId ? employeeNameById.get(order.assignedEmployeeId) : undefined;
-        return name ? (
-          <span className="text-sm font-medium">{name}</span>
-        ) : (
-          <span className="type-caption">غير موزع</span>
-        );
-      },
-    },
-    {
-      id: "total", header: "الإجمالي", numeric: true, alwaysVisible: true,
-      cell: (order) => (
-        // المبلغ هو الرقم اللي العين بتدوّر عليه، فبيفضل بارز والعملة تخفت وراه.
-        <span className="text-sm font-bold tabular-nums">
-          {Number(order.totalAmount).toLocaleString('ar-EG')}{' '}
-          <span className="type-caption font-normal">ج.م</span>
-        </span>
-      ),
-    },
-    {
-      id: "website", header: "الموقع", defaultHidden: true,
-      cell: (order) => order.websiteName ? (
-        <span className="inline-block bg-accent text-accent-foreground px-2 py-1 rounded text-xs font-medium">
-          {order.websiteName}
-        </span>
-      ) : <span className="text-muted-foreground">—</span>,
-    },
-    {
-      id: "date", header: "تاريخ الطلب", alwaysVisible: true,
-      cell: (order) => (
-        <div className="whitespace-nowrap leading-tight">
-          <p className="text-sm tabular-nums">
-            {new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
-          </p>
-          <p className="type-caption tabular-nums">
-            {new Date(order.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
-          </p>
-        </div>
-      ),
-    },
-    {
-      // أقرب حقل موجود فعليًا لمفهوم "آخر متابعة" — لا يوجد عمود بهذا المعنى تحديدًا في قاعدة
-      // البيانات، والاتفاق كان استخدام تاريخ آخر تعديل للأوردر بدل إضافة أي حقل جديد بالباك إند.
-      id: "lastFollowUp", header: "آخر متابعة", alwaysVisible: true,
-      cell: (order) => (
-        <div className="whitespace-nowrap leading-tight">
-          {order.updatedAt ? (
-            <>
-              <p className="text-sm tabular-nums">
-                {new Date(order.updatedAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
-              </p>
-              <p className="type-caption tabular-nums">
-                {new Date(order.updatedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
-              </p>
-            </>
-          ) : <span className="type-caption">—</span>}
-        </div>
-      ),
-    },
-    {
-      id: "actions", header: "", alwaysVisible: true, sticky: true,
-      cell: (order) => {
-        const isActionable = order.status === 'new' || order.status === 'postponed';
-        const canReturn = isAdmin && ['confirmed', 'shipped', 'delivered', 'preparing'].includes(order.status);
-        return (
-          <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-            {/* أزرار أساسية — ظاهرة دايمًا، لون ثابت لكل معنى، بحد أقصى 3-4 عشان الصف ميبقاش مزدحم */}
-            {isActionable && (
-              <>
-                <Button size="icon" variant="ghost" className="h-8 w-8 text-[var(--success)] hover:bg-[var(--success)]/12 hover:text-[var(--success)]"
-                  onClick={() => confirmMutation.mutate({ orderId: order.id })}
-                  title="تأكيد الأوردر" aria-label="تأكيد الأوردر">
-                  <CheckCircle className="h-4 w-4" />
-                </Button>
-                <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive hover:bg-destructive/12 hover:text-destructive"
-                  onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}
-                  title="إلغاء الأوردر" aria-label="إلغاء الأوردر">
-                  <XCircle className="h-4 w-4" />
-                </Button>
-              </>
-            )}
-            <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-8 w-8" />
-            <Button size="icon" variant="ghost" className="h-8 w-8 text-[var(--info)] hover:bg-[var(--info)]/12 hover:text-[var(--info)]"
-              onClick={() => setDetailOrderId(order.id)}
-              title="عرض تفاصيل الأوردر" aria-label="عرض تفاصيل الأوردر">
-              <Eye className="h-4 w-4" />
-            </Button>
-
-            {/* باقي الإجراءات — أقل استخدامًا، جوه قائمة منسدلة بدل ما تزاحم الصف */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="ghost" className="h-8 w-8 p-0 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                  title="إجراءات أخرى" aria-label="إجراءات أخرى لهذا الأوردر">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                {isActionable && (
-                  <>
-                    <DropdownMenuItem onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}>
-                      <Clock className="h-4 w-4 ml-2 text-[var(--warning)]" /> جدولة اتصال لاحق
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => openNoAnswerDialog(order.id)}>
-                      <PhoneOff className="h-4 w-4 ml-2 text-[var(--warning)]" /> لم يرد
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}>
-                  <PhoneCall className="h-4 w-4 ml-2 text-[var(--info)]" /> اتصال بالعميل
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => openEditFor(order)}>
-                  <Edit2 className="h-4 w-4 ml-2 text-[var(--info)]" /> تعديل
-                </DropdownMenuItem>
-                {isAdmin && (
-                  <DropdownMenuItem
-                    disabled={duplicateOrderMutation.isPending}
-                    onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: order.id, orderNumber: order.orderNumber, customerName: order.customerName })}
-                  >
-                    <Copy className="h-4 w-4 ml-2 text-muted-foreground" /> تكرار الأوردر
-                  </DropdownMenuItem>
-                )}
-                {canReturn && (
-                  <DropdownMenuItem onClick={() => { setReturnOrderId(order.id); setShowReturnDialog(true); }}>
-                    <RotateCcw className="h-4 w-4 ml-2 text-primary" /> مرتجع
-                  </DropdownMenuItem>
-                )}
-                {isAdmin && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="text-destructive focus:text-destructive"
-                      onClick={() => setPendingConfirm({ type: "deleteOrder", orderId: order.id, orderNumber: order.orderNumber })}
-                    >
-                      <Trash2 className="h-4 w-4 ml-2" /> حذف
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        );
-      },
-    },
-  ];
+  // أعمدة الديسكتوب (17 عمودًا بالترتيب المعتمد) في components/orders/OrdersTable.tsx — عرض فقط.
+  // الصفحة تمرّر السياق + callbacks؛ كل mutation/dialog يبقى هنا. التحديد (shift-click/select-all)
+  // من ResponsiveDataTable كما كان.
+  const businessNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    businesses.forEach(b => map.set(b.id, b.name));
+    return map;
+  }, [businesses]);
+  const sourceLabel = (source: string) => sourceOptions.find(o => o.value === source)?.label ?? ORDER_SOURCE[source]?.label ?? source;
+  const rowActions: OrdersRowActions = {
+    isAdmin,
+    confirmPending: confirmMutation.isPending,
+    duplicatePending: duplicateOrderMutation.isPending,
+    onConfirm: order => confirmOrder(order.id),
+    onCancel: order => { setSelectedOrderId(order.id); setShowCancelDialog(true); },
+    onDetails: order => setDetailOrderId(order.id),
+    onPostpone: order => { setSelectedOrderId(order.id); setShowPostponeDialog(true); },
+    onNoAnswer: order => openNoAnswerDialog(order.id),
+    onCall: order => { window.location.href = `tel:${order.customerPhone}`; },
+    onEdit: order => openEditFor(order),
+    onDuplicate: order => setPendingConfirm({ type: "duplicateOrder", orderId: order.id, orderNumber: order.orderNumber, customerName: order.customerName }),
+    onReturn: order => { setReturnOrderId(order.id); setShowReturnDialog(true); },
+    onDelete: order => setPendingConfirm({ type: "deleteOrder", orderId: order.id, orderNumber: order.orderNumber }),
+  };
+  const columnsCtx: OrdersColumnsContext = { seqByOrderId, employeeNameById, businessNameById, sourceLabel, actions: rowActions };
+  const columns = buildOrdersColumns(columnsCtx);
 
   const selectedKeysSet = useMemo(() => new Set<string | number>(selectedOrderIds), [selectedOrderIds]);
 
@@ -966,7 +762,7 @@ export default function Orders() {
         title="الأوردرات"
         description="إدارة ومتابعة الطلبات والشحن والتوصيل"
         primaryAction={
-          <Button className="gap-1.5" onClick={() => setShowCreateDialog(true)}>
+          <Button className="h-11 gap-1.5 md:h-9" onClick={() => setShowCreateDialog(true)}>
             <Plus className="h-4 w-4" />
             أوردر جديد
           </Button>
@@ -975,7 +771,7 @@ export default function Orders() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               {/* أيقونة فقط: الفائض مش إجراء أساسي، فمياخدش وزن بصري زي الزر الأساسي */}
-              <Button variant="outline" size="icon" aria-label="إجراءات أخرى" title="إجراءات أخرى">
+              <Button variant="outline" size="icon" className="h-11 w-11 md:h-9 md:w-9" aria-label="إجراءات أخرى" title="إجراءات أخرى">
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -1032,78 +828,29 @@ export default function Orders() {
         }
       />
 
-      {/* تنقّل Workspace الطلبات — نفس مصدر NavConfig (bosta/returns/duplicates/printed/QR).
-          الـroutes القديمة كما هي؛ ده تنظيم وصول مش نقل منطق. */}
-      <WorkspaceTabs tabs={ordersTabs} />
-
-      {/* شريط التبويبات الموحّد — الحالات كلها + تبويب "مؤكدات اليوم" المميز في صف واحد،
-          بدل صفين تبويبات فوق بعض (الزرار القديم اتشال). */}
-      {/* شريط حالة موحّد (StatusFilterChips) — بديل صف الـKPI cards المكرّر + شريط التبويبات
-          القديم في آنٍ واحد. عدّاد كل حالة في مكان **واحد** بس. + زر «مؤكدات اليوم» (وضع منفصل)
-          + شارة «يحتاج مراجعة». نفس الحالات والعدّادات والمنطق — عرض موحّد بس. */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
-        <StatusFilterChips
-          chips={([
-            { key: "new", tone: "info" },
-            { key: "confirmed", tone: "success" },
-            { key: "no_answer", tone: "warning" },
-            { key: "postponed", tone: "amber" },
-            { key: "printed", tone: "neutral" },
-            { key: "preparing", tone: "neutral" },
-            { key: "shipped", tone: "cyan" },
-            { key: "delivered", tone: "delivered" },
-            { key: "cancelled", tone: "danger" },
-            { key: "returned", tone: "orange" },
-          ] as const).map((c): StatusChipItem => ({
-            key: c.key,
-            label: STATUS_LABEL(c.key),
-            count: statusCounts?.byStatus?.[c.key],
-            tone: c.tone,
-          }))}
-          totalCount={statusCounts?.total}
-          value={activeTab === 'today_confirmed' ? '__today__' : (statusFilter === 'all' ? null : statusFilter)}
-          onChange={(key) => { setActiveTab('all'); setStatusFilter(key ?? 'all'); setPage(1); }}
-        />
-        <button
-          onClick={() => setActiveTab('today_confirmed')}
-          className={`inline-flex items-center gap-1.5 rounded-[var(--radius-brand-pill)] border px-3 py-1.5 text-sm font-medium transition-colors ${
-            activeTab === 'today_confirmed'
-              ? 'border-[var(--success)] bg-[var(--success)] text-[var(--success-foreground)]'
-              : 'border-border bg-card text-muted-foreground hover:bg-muted'
-          }`}
-        >
-          ✔ مؤكدات اليوم
-          {todayConfirmedData?.total != null && (
-            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-black/10 px-1 text-xs font-bold tabular-nums">
-              {Number(todayConfirmedData.total).toLocaleString('ar-EG')}
-            </span>
-          )}
-        </button>
-        {/* زر رئيسي واضح: الأوردرات غير الموزعة (بدل التحكم المدفون في الفلاتر المتقدمة).
-            عرض فقط — بيفلتر unassigned server-side، ومايوزّعش أي أوردر. */}
-        <button
-          onClick={() => { setActiveTab('all'); setHideAssigned(v => !v); setPage(1); }}
-          disabled={employeeFilter !== 'all'}
-          title={employeeFilter !== 'all' ? 'غير متاح أثناء الفلترة بموظف محدد' : 'عرض الأوردرات اللي مالهاش موظف مسؤول'}
-          className={`inline-flex items-center gap-1.5 rounded-[var(--radius-brand-pill)] border px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-            hideAssigned && employeeFilter === 'all'
-              ? 'border-[var(--warning)] bg-[var(--warning)]/15 text-[var(--warning)]'
-              : 'border-border bg-card text-muted-foreground hover:bg-muted'
-          }`}
-        >
-          <UserX className="h-4 w-4" /> الأوردرات غير الموزعة
-          {hideAssigned && employeeFilter === 'all' && activeTab === 'all' && data?.total != null && (
-            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-black/10 px-1 text-xs font-bold tabular-nums">
-              {Number(data.total).toLocaleString('ar-EG')}
-            </span>
-          )}
-        </button>
-        {(statusCounts?.needsReview ?? 0) > 0 && (
-          <span className="ms-auto inline-flex items-center gap-1.5 rounded-[var(--radius-brand-pill)] border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-3 py-1.5 text-sm font-medium text-[var(--warning)]">
-            <AlertTriangle className="h-4 w-4" /> يحتاج مراجعة: {(statusCounts?.needsReview ?? 0).toLocaleString('ar-EG')}
-          </span>
-        )}
-      </div>
+      {/* رأس الصفحة (المرحلة 4): نطاق النشاط + تبويبات الحالة («الكل» + الحالات العشر + «مؤكدات اليوم»)
+          + شريط «بانتظار قرار» — عرض فقط في components/orders/OrdersTabs.tsx. نفس الحالات والعدّادات
+          والمنطق السابق (StatusFilterChips + زر مؤكدات اليوم + زر غير الموزعة + شارة المراجعة).
+          صف WorkspaceTabs (bosta/returns/…) يرسمه الـShell مرة واحدة — النسخة المكررة هنا أُزيلت. */}
+      <OrdersTabs
+        businesses={businesses}
+        scopeValue={currentBusinessId ?? null}
+        onScopeChange={id => { setCurrentBusinessId(id ?? undefined); setPage(1); }}
+        statusCounts={statusCounts}
+        todayCount={todayConfirmedData?.total}
+        value={activeTab === 'today_confirmed' ? TODAY_TAB_KEY : statusFilter}
+        onChange={key => {
+          if (key === TODAY_TAB_KEY) { setActiveTab('today_confirmed'); return; }
+          setActiveTab('all'); setStatusFilter(key); setPage(1);
+        }}
+        statusLabel={STATUS_LABEL}
+        unassigned={{
+          active: hideAssigned && employeeFilter === 'all',
+          disabled: employeeFilter !== 'all',
+          count: activeTab === 'all' ? data?.total : null,
+          onToggle: () => { setActiveTab('all'); setHideAssigned(v => !v); setPage(1); },
+        }}
+      />
 
       {/* Today-confirmed panel */}
       {activeTab === 'today_confirmed' && (
@@ -1185,12 +932,21 @@ export default function Orders() {
           <CardContent className="p-3">
             {/* DataToolbar الموحّد: بحث + الفلاتر الأكثر استخدامًا ظاهرة (المصدر/التاريخ) +
                 باقي الفلاتر في Drawer «فلاتر متقدمة». chips + مسح الكل محفوظين كما هم. الحالة
-                ممثّلة في StatusFilterChips فوق — فمفيش Status Select مكرّر هنا. نفس الـstate
+                ممثّلة في تبويبات OrdersTabs فوق — فمفيش Status Select مكرّر هنا. نفس الـstate
                 ونفس الـhandlers ونفس منطق الفلترة/الـquery بالظبط — إعادة تنظيم UI فقط. */}
+            {/* شريط الأدوات (المرحلة 4): العنوان + العدد الحقيقي + بحث بحقل محدد (OrderToolbar) —
+                نفس معامل `search` ونفس الـdebounce؛ باقي الفلاتر/الشرائح/الدرج المتقدم في DataToolbar كما هي. */}
+            <OrderToolbar
+              title="الأوردرات"
+              icon={<ShoppingCart className="h-4 w-4" aria-hidden="true" />}
+              count={data?.total ?? null}
+              fields={ORDER_SEARCH_FIELDS}
+              search={{ field: "any", query: searchDraft }}
+              onSearchChange={next => setSearchDraft(next.query)}
+              onSubmit={next => applySearch(next.query)}
+              className="mb-3"
+            />
             <DataToolbar
-              search={search}
-              onSearch={(v) => { setSearch(v); setPage(1); }}
-              searchPlaceholder="بحث بالاسم أو الهاتف أو رقم الأوردر..."
               chips={filterChips}
               onClearChip={clearOneFilter}
               onReset={resetAllFilters}
@@ -1216,7 +972,7 @@ export default function Orders() {
                   )}
 
                   <Select value={sourceFilter} onValueChange={v => { setSourceFilter(v); setPage(1); }}>
-                    <SelectTrigger className="h-9 w-40"><SelectValue placeholder="المصدر" /></SelectTrigger>
+                    <SelectTrigger className="min-h-11 w-40 md:min-h-9"><SelectValue placeholder="المصدر" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">كل المصادر</SelectItem>
                       {sourceOptions.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
@@ -1231,7 +987,7 @@ export default function Orders() {
                   {/* زر الأعمدة — بيفتح/يقفل الأعمدة الإضافية (seq/website). وظيفة أعمدة مش فلتر،
                       فاتسمّى «الأعمدة» عشان مايتلخبطش مع «فلاتر متقدمة» الجديدة. نفس المنطق. */}
                   <Button
-                    variant="outline" size="sm" className="h-9 gap-1.5"
+                    variant="outline" size="sm" className="h-11 gap-1.5 md:h-9"
                     aria-expanded={hiddenColumns.size === 0}
                     onClick={() => setHiddenColumns(prev => prev.size > 0 ? new Set() : new Set(['seq', 'website']))}
                   >
@@ -1298,32 +1054,33 @@ export default function Orders() {
         </Card>
       )}
 
-      {/* Orders table */}
-      <ResponsiveDataTable
+      {/* Orders table — جدول فقط من 768px وبطاقات فقط تحته (cardsBelow="md" لهذه الصفحة فقط).
+          العرض في components/orders/OrdersTable.tsx + OrdersMobileList.tsx؛ الحالة والـmutations هنا. */}
+      <OrdersTable
         rows={orders}
         columns={columns}
-        rowKey={(o: any) => o.id}
         loading={activeLoading}
+        error={activeTab === 'all' ? (listError?.message ?? null) : null}
+        onRetry={() => { void refetch(); }}
         density={density}
-        onRowClick={(order: any) => setDetailOrderId(order.id)}
+        onRowClick={(order) => setDetailOrderId(order.id)}
         hiddenColumns={hiddenColumns}
         onHiddenColumnsChange={setHiddenColumns}
-        empty={{ title: "لا توجد أوردرات", description: "جرّب تعديل الفلاتر أو أضف أوردرًا جديدًا" }}
         toolbar={
           <div className="flex items-center gap-1">
             <Button
               variant={density === 'comfortable' ? 'secondary' : 'ghost'}
-              size="icon" className="h-8 w-8" title="تباعد مريح"
+              size="icon" className="h-11 w-11 md:h-9 md:w-9" title="تباعد مريح" aria-label="تباعد مريح"
               onClick={() => setDensity('comfortable')}
             >
-              <Rows3 className="h-4 w-4" />
+              <Rows3 className="h-4 w-4" aria-hidden="true" />
             </Button>
             <Button
               variant={density === 'compact' ? 'secondary' : 'ghost'}
-              size="icon" className="h-8 w-8" title="تباعد مضغوط"
+              size="icon" className="h-11 w-11 md:h-9 md:w-9" title="تباعد مضغوط" aria-label="تباعد مضغوط"
               onClick={() => setDensity('compact')}
             >
-              <LayoutGrid className="h-4 w-4" />
+              <LayoutGrid className="h-4 w-4" aria-hidden="true" />
             </Button>
           </div>
         }
@@ -1331,92 +1088,19 @@ export default function Orders() {
         onSelectionChange={isAdmin ? (keys) => setSelectedOrderIds(Array.from(keys) as number[]) : undefined}
         bulkActions={() => (
           <>
-            <Button variant="outline" size="sm" className="h-8" onClick={() => setShowAssignDialog(true)}>
-              <UserPlus className="h-4 w-4 ml-1" /> توزيع
+            <Button variant="outline" size="sm" className="h-9" onClick={() => setShowAssignDialog(true)}>
+              <UserPlus className="h-4 w-4 ml-1" aria-hidden="true" /> توزيع
             </Button>
             <Button
               variant="outline" size="sm"
-              className="h-8 border-destructive/30 text-destructive hover:bg-destructive/10"
+              className="h-9 border-destructive/30 text-destructive hover:bg-destructive/10"
               onClick={() => setPendingConfirm({ type: "bulkDelete" })}
             >
-              <Trash2 className="h-4 w-4 ml-1" /> حذف
+              <Trash2 className="h-4 w-4 ml-1" aria-hidden="true" /> حذف
             </Button>
           </>
         )}
-        mobileRow={(order: any) => (
-          <MobileOrderCard
-            orderNumber={order.easyOrderShortId || order.orderNumber}
-            customerName={order.customerName}
-            customerPhone={order.customerPhone}
-            governorate={order.governorate}
-            statusBadge={<StatusBadge status={order.status} kind="order" size="sm" />}
-            sourceBadge={order.websiteName ? <Badge variant="secondary" className="text-[10px]">{order.websiteName}</Badge> : undefined}
-            productSummary={[
-              `${order.productName}${order.quantity > 1 ? ` – ${order.quantity} قطع` : ''}`,
-              // نوع الحفر مهم للتجهيز، فبيظهر على كارت الموبايل زي ما بيظهر في الجدول.
-              [order.color, order.size].filter(Boolean).join(' / '),
-            ].filter(Boolean).join(' · ')}
-            total={`${Number(order.totalAmount).toLocaleString('ar-EG')} ج.م`}
-            dateLabel={new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
-            expanded={expandedMobileId === order.id}
-            onToggle={() => setExpandedMobileId(id => id === order.id ? null : order.id)}
-            warnings={order.needsReview ? (
-              <Badge variant="outline" className="border-[var(--warning)] text-[var(--warning)] text-[10px]">يحتاج مراجعة</Badge>
-            ) : undefined}
-            details={
-              <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">{order.customerAddress || '—'}</p>
-                <p className="type-caption">
-                  الموظف المسؤول: <span className="font-medium text-foreground">{order.assignedEmployeeId ? (employeeNameById.get(order.assignedEmployeeId) ?? `#${order.assignedEmployeeId}`) : 'غير موزع'}</span>
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {(order.status === 'new' || order.status === 'postponed') && (
-                    <>
-                      <Button size="sm" className="h-8 gap-1 bg-[var(--success)] text-[var(--success-foreground)]"
-                        onClick={() => confirmMutation.mutate({ orderId: order.id })}>
-                        <CheckCircle className="h-3.5 w-3.5" /> تأكيد
-                      </Button>
-                      <Button size="sm" variant="outline" className="h-8 gap-1 border-destructive/30 text-destructive"
-                        onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}>
-                        <XCircle className="h-3.5 w-3.5" /> إلغاء
-                      </Button>
-                    </>
-                  )}
-                  <WhatsAppButton phone={order.customerPhone} size="sm" className="h-8" />
-                  <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30" onClick={() => setDetailOrderId(order.id)}>
-                    <Eye className="h-3.5 w-3.5" /> تفاصيل
-                  </Button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button size="sm" variant="outline" className="h-8 gap-1 text-muted-foreground" aria-label="إجراءات أخرى لهذا الأوردر">
-                        <MoreVertical className="h-3.5 w-3.5" /> المزيد
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-52">
-                      {(order.status === 'new' || order.status === 'postponed') && (
-                        <>
-                          <DropdownMenuItem onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}>
-                            <Clock className="h-4 w-4 ml-2 text-[var(--warning)]" /> جدولة اتصال لاحق
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => openNoAnswerDialog(order.id)}>
-                            <PhoneOff className="h-4 w-4 ml-2 text-[var(--warning)]" /> لم يرد
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                        </>
-                      )}
-                      <DropdownMenuItem onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}>
-                        <PhoneCall className="h-4 w-4 ml-2 text-[var(--info)]" /> اتصال بالعميل
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => openEditFor(order)}>
-                        <Edit2 className="h-4 w-4 ml-2 text-[var(--info)]" /> تعديل
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-            }
-          />
-        )}
+        mobileRow={renderOrdersMobileRow(columnsCtx, expandedMobileId, id => setExpandedMobileId(cur => (cur === id ? null : id)))}
       />
 
       {activeTab === 'all' && total > 0 && (
@@ -1908,9 +1592,10 @@ export default function Orders() {
               {/* تغيير الحالة من جوّه الدرج — من غير ما تقفله وترجع للجدول */}
               <Select
                 value={drawerOrder.status}
-                onValueChange={(v) => updateStatusMutation.mutate({ id: drawerOrder.id, status: v as any })}
+                disabled={updateStatusMutation.isPending}
+                onValueChange={(v) => { if (updateStatusMutation.isPending) return; updateStatusMutation.mutate({ id: drawerOrder.id, status: v as any }); }}
               >
-                <SelectTrigger className="h-9 w-44"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9 w-44" aria-busy={updateStatusMutation.isPending || undefined} data-testid="drawer-status-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {/* «مؤكد» من زر التأكيد (يخصم المخزون)، و«تم التسليم» من بوسطة أو المسار اليدوي المعتمد — لا من هنا */}
                   {["new", "postponed", "no_answer", "preparing", "shipped", "cancelled"].map(v => (
@@ -1927,7 +1612,7 @@ export default function Orders() {
                 <>
                   <Button size="sm" className="h-9 gap-1 bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90"
                     disabled={confirmMutation.isPending}
-                    onClick={() => confirmMutation.mutate({ orderId: drawerOrder.id })}>
+                    onClick={() => confirmOrder(drawerOrder.id)}>
                     <CheckCircle className="h-4 w-4" /> تأكيد
                   </Button>
                   <Button size="sm" variant="outline" className="h-9 gap-1 border-destructive/30 text-destructive"

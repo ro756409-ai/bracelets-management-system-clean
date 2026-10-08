@@ -26,9 +26,11 @@ export type Column<T> = {
   /** Right-align numeric columns and give them tabular figures. */
   numeric?: boolean;
   /**
-   * Keeps the column pinned while the table scrolls horizontally. `true`/`"start"` pins to the
-   * logical start edge (the right edge in RTL), `"end"` to the logical end edge — logical, never
-   * physical left/right, so the same column definition is correct in both directions.
+   * Keeps the column pinned while the table scrolls horizontally. `"start"` pins to the logical
+   * start edge (the right edge in RTL), `"end"` to the logical end edge — logical, never physical
+   * left/right, so the same column definition is correct in both directions.
+   * `true` = `"end"`: every existing consumer sets it on the trailing «actions» column, and the
+   * legacy `left-0` it replaced was exactly the end edge in RTL.
    */
   sticky?: boolean | "start" | "end";
   /** Never offered in the column-visibility menu (e.g. the actions column). */
@@ -412,8 +414,9 @@ export function ResponsiveDataTable<T>({
   );
 }
 
-/** تثبيت منطقي: start = الحافة البادئة (اليمين في RTL)، end = الحافة الختامية — لا left/right فيزيائية. */
+/** تثبيت منطقي: start = الحافة البادئة (اليمين في RTL)، end = الحافة الختامية — لا left/right فيزيائية.
+ *  `true` = end (عمود الإجراءات الأخير في كل المستهلكين الحاليين؛ كان `left-0` = الحافة الختامية في RTL). */
 export function stickyClass(sticky: Column<unknown>["sticky"], extra: string): string | false {
   if (!sticky) return false;
-  return cn("sticky", sticky === "end" ? "end-0" : "start-0", extra);
+  return cn("sticky", sticky === "start" ? "start-0" : "end-0", extra);
 }

@@ -73,7 +73,7 @@ export function Pagination({
           <Button
             variant="outline"
             size="icon"
-            className="h-9 w-9"
+            className="h-11 w-11 md:h-9 md:w-9"
             disabled={page <= 1}
             onClick={() => onPageChange(page - 1)}
             aria-label="الصفحة السابقة"
@@ -91,7 +91,7 @@ export function Pagination({
                 key={p}
                 variant={p === page ? "default" : "outline"}
                 size="icon"
-                className="h-9 w-9 tabular-nums"
+                className="h-11 w-11 tabular-nums md:h-9 md:w-9"
                 onClick={() => onPageChange(p)}
                 aria-current={p === page ? "page" : undefined}
               >
@@ -103,7 +103,7 @@ export function Pagination({
           <Button
             variant="outline"
             size="icon"
-            className="h-9 w-9"
+            className="h-11 w-11 md:h-9 md:w-9"
             disabled={page >= totalPages}
             onClick={() => onPageChange(page + 1)}
             aria-label="الصفحة التالية"
@@ -114,7 +114,7 @@ export function Pagination({
 
         {pageSizeOptions && onPageSizeChange && (
           <Select value={String(pageSize)} onValueChange={(v) => onPageSizeChange(Number(v))}>
-            <SelectTrigger className="h-9 w-28">
+            <SelectTrigger className="min-h-11 w-28 md:min-h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
