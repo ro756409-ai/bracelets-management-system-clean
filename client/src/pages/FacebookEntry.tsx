@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
 import { draftKey, readEmployeeScope, sanitizeDraftItems } from "@/lib/employeeScope";
 import { activeDraftKey } from "@/lib/activeBusiness";
@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import {
   Plus, Phone, MapPin, Package, LogOut, RefreshCw, X, Trash2, Pencil, Save, Eraser, ClipboardPaste, AlertTriangle,
+  ChevronDown, CheckCircle2, Building2, User, Truck, ClipboardCheck, ListChecks,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -24,6 +25,11 @@ import {
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { GovernorateCitySelect } from "@/components/orders/GovernorateCitySelect";
 import { LegacyEngravingPicker } from "@/components/orders/LegacyEngravingPicker";
+import { isValidEgyptianMobile } from "@/components/orders/OrderEditDialog";
+import { PartnerLogo } from "@/components/brand/PartnerLogo";
+import { createInFlightGuard } from "@/components/orders/confirmGuard";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { ErrorState, OfflineState } from "@/components/shared";
 import { DEFAULT_ORDER_ENTRY_MODE, type OrderEntryMode } from "@shared/orderEntryMode";
 import {
   VariantOrderPicker,
@@ -38,6 +44,9 @@ import {
  *   المنتج ← اللون ← المقاس ← الكمية، مع عرض المتاح ومنع تجاوزه.
  * السعر بيتحسب من سعر التركيبة × الكمية. الأوردر بيتحفظ ومعاه variantId وSKU واللون والمقاس.
  * الموظف يرى ويعدّل أوردراته فقط (العزل على السيرفر). مافيش أي منطق قديم للإسورة.
+ *
+ * المرحلة 7B (عرض فقط): النموذج نفسه مقسّم 7 أقسام مرقّمة قابلة للطي داخل الصفحة الواحدة
+ * (لا معالج صفحات) — نفس الحالة، نفس المسودة ومفتاحها، نفس المنتقيات، نفس الحفظ والتحقق.
  */
 
 type CustomerForm = {
@@ -59,6 +68,46 @@ const EMPTY_CUSTOMER: CustomerForm = {
   city: "", notes: "", adName: "", shipping: "0", discount: "0",
 };
 
+/** أخطاء الحقول المطلوبة — مشتقة من الحالة؛ إصلاح حقل يزيل سببه هو فقط. نفس شروط submit(). */
+type FieldIssues = Partial<Record<"customerName" | "customerPhone" | "governorate" | "customerAddress", string>>;
+const FIELD_ID: Record<keyof FieldIssues, string> = { customerName: "f-customer-name", customerPhone: "f-customer-phone", governorate: "f-governorate", customerAddress: "f-address" };
+const FIELD_SECTION: Record<keyof FieldIssues, number> = { customerName: 2, customerPhone: 2, governorate: 3, customerAddress: 3 };
+
+const TOUCH = "min-h-11";
+/**
+ * نطاق أهداف اللمس للمكوّنات المشتركة داخل هذا النموذج فقط (منتقي التركيبات/المحافظة): ≥44px على الهاتف
+ * (أرضية بالبكسل حتى عند 90%)، والقياس الافتراضي 36px على md+ — بلا تعديل المكوّنات نفسها أو صفحات أخرى.
+ */
+const TOUCH_SCOPE = "[&_button]:min-h-[max(2.75rem,44px)] [&_button]:min-w-[max(2.75rem,44px)] [&_input]:min-h-[max(2.75rem,44px)] [&_[role=combobox]]:min-h-[max(2.75rem,44px)] md:[&_button]:min-h-9 md:[&_button]:min-w-0 md:[&_input]:min-h-9 md:[&_[role=combobox]]:min-h-9";
+
+/** قسم مرقّم قابل للطي — المحتوى يبقى في الـDOM عند الطي (details) فلا تضيع قيم ولا حالة. */
+function EntrySection({ n, title, icon, open, onToggle, status, children }: { n: number; title: string; icon: ReactNode; open: boolean; onToggle: (open: boolean) => void; status?: { ok: boolean; text: string }; children: ReactNode }) {
+  return (
+    <details
+      open={open}
+      onToggle={e => onToggle((e.currentTarget as HTMLDetailsElement).open)}
+      className="group rounded-[var(--radius-brand-md)] border border-border bg-card shadow-[var(--shadow-card)]"
+      data-testid={`entry-section-${n}`}
+    >
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-bold text-accent-foreground tabular-nums" aria-hidden="true">{n}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="shrink-0 text-muted-foreground" aria-hidden="true">{icon}</span>
+          <span className="truncate">{title}</span>
+        </span>
+        {status && (
+          <span className={`hidden shrink-0 items-center gap-1 text-[11px] font-medium sm:inline-flex ${status.ok ? "text-[var(--success)]" : "text-[var(--warning)]"}`} data-testid={`entry-section-${n}-status`}>
+            {status.ok ? <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" /> : <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />}
+            {status.text}
+          </span>
+        )}
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="space-y-3 border-t border-border p-3">{children}</div>
+    </details>
+  );
+}
+
 export default function FacebookEntry() {
   const governorateOptions = useGovernorateOptions();
   const utils = trpc.useUtils();
@@ -71,7 +120,7 @@ export default function FacebookEntry() {
   // مفتاح المسودة مربوط بالحساب (tenant/نشاط/موظف) **والقالب** — مسودة حساب تاني على
   // نفس الجهاز عمرها ما تترجّع هنا، وتغيير القالب مايرجّعش مسودة بشكل تاني.
   // + النشاط الفعّال: تبديل النشاط مايرجّعش مسودة نشاط تاني.
-  const { currentBusinessId: activeBusinessId } = useBusinessContext();
+  const { currentBusinessId: activeBusinessId, businesses } = useBusinessContext();
   const DRAFT_KEY = useMemo(
     () => activeDraftKey(draftKey(readEmployeeScope()), activeBusinessId, entryMode),
     [entryMode, activeBusinessId]
@@ -95,6 +144,9 @@ export default function FacebookEntry() {
   const [showOrders, setShowOrders] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  /** حالة الطي لكل قسم — كلها مفتوحة افتراضيًا؛ الطي لا يفرّغ شيئًا. */
+  const [openSections, setOpenSections] = useState<Record<number, boolean>>({ 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true });
+  const setOpen = (n: number, open: boolean) => setOpenSections(s => (s[n] === open ? s : { ...s, [n]: open }));
 
   // Edit dialog
   const [editingOrder, setEditingOrder] = useState<any>(null);
@@ -103,8 +155,10 @@ export default function FacebookEntry() {
   const [deletingOrderId, setDeletingOrderId] = useState<number | null>(null);
 
   const { data: me, isLoading: meLoading } = trpc.employeePortal.me.useQuery();
-  const { data: catalog = { products: [], variants: [] }, isLoading: catalogLoading } =
-    trpc.facebookEntry.catalog.useQuery() as { data: Catalog; isLoading: boolean };
+  const { data: catalog = { products: [], variants: [] }, isLoading: catalogLoading, isError: catalogError, refetch: refetchCatalog } =
+    trpc.facebookEntry.catalog.useQuery() as { data: Catalog; isLoading: boolean; isError: boolean; refetch: () => unknown };
+  const online = useOnlineStatus();
+  const saveGuard = useRef(createInFlightGuard<string>()).current;
 
   const { data: myOrders = [], refetch: refetchOrders } =
     trpc.facebookEntry.myOrders.useQuery(
@@ -166,6 +220,20 @@ export default function FacebookEntry() {
   }, [pasteExpected]);
   // كل الموانع (العامة + موانع الرسالة) — الزر والقائمة والحفظ بيقروا من هنا.
   const blockers = useMemo(() => Array.from(new Set([...baseBlockers, ...pasteBlockers])), [baseBlockers, pasteBlockers]);
+
+  // أخطاء الحقول المطلوبة بجانب الحقل + في الملخّص: نفس شروط submit() حرفيًا (فراغ فقط)؛
+  // صيغة الهاتف تنبيه غير مانع (السيرفر هو الحكم) — مشتقة من الحالة فتختفي فور الإصلاح.
+  const fieldIssues = useMemo((): FieldIssues => {
+    const out: FieldIssues = {};
+    if (!cust.customerName.trim()) out.customerName = "اسم العميل مطلوب";
+    if (!cust.customerPhone.trim()) out.customerPhone = "رقم الهاتف مطلوب";
+    if (!cust.governorate.trim()) out.governorate = "المحافظة مطلوبة";
+    if (!cust.customerAddress.trim()) out.customerAddress = "العنوان مطلوب";
+    return out;
+  }, [cust.customerName, cust.customerPhone, cust.governorate, cust.customerAddress]);
+  const phoneFormatWarning = cust.customerPhone.trim() !== "" && !isValidEgyptianMobile(cust.customerPhone.trim())
+    ? "الرقم ليس رقم موبايل مصري (01xxxxxxxxx) — راجعه قبل الحفظ" : null;
+  const issueCount = Object.keys(fieldIssues).length + blockers.length;
 
   const addOrderMutation = trpc.facebookEntry.addOrder.useMutation({
     onSuccess: data => {
@@ -348,7 +416,8 @@ export default function FacebookEntry() {
       isLegacy && !manualMode && parseV2 && parseToken && analyzedText
         ? { rawText: analyzedText, parseToken, parseResult: parseV2, discount: Number(cust.discount) || 0 }
         : {};
-    addOrderMutation.mutate({
+    // حارس الضغط المكرر: `isPending` يتأخر render واحدًا — الضغطة الثانية تُرفض فورًا حتى onSettled.
+    saveGuard.run(DRAFT_KEY, addOrderMutation.isPending, done => addOrderMutation.mutate({
       customerName: cust.customerName.trim(),
       customerPhone: cust.customerPhone.trim(),
       customerPhone2: cust.customerPhone2.trim() || undefined,
@@ -364,7 +433,7 @@ export default function FacebookEntry() {
       color: first.color ?? undefined,
       size: first.size ?? undefined,
       ...pastePayload,
-    } as any);
+    } as any, { onSettled: done }));
   }
 
   function openEdit(order: any) {
@@ -431,11 +500,28 @@ export default function FacebookEntry() {
     window.location.href = "/employee-login";
   }
 
+  /** القفز لحقل به خطأ: يفتح قسمه ثم يركّز الحقل (لوحة المفاتيح/قارئ الشاشة). */
+  function focusField(key: keyof FieldIssues) {
+    setOpen(FIELD_SECTION[key], true);
+    requestAnimationFrame(() => {
+      const el = document.getElementById(FIELD_ID[key]) as HTMLElement | null;
+      el?.focus?.(); el?.scrollIntoView?.({ block: "center" });
+    });
+  }
+  function focusLine(i: number) {
+    setOpen(4, true);
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(`[data-testid="legacy-line-${i}"], [data-testid="vop-item-${i}"]`);
+      el?.scrollIntoView?.({ block: "center" });
+      el?.querySelector<HTMLElement>("button, input, [role=combobox]")?.focus?.();
+    });
+  }
+
   if (meLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="flex items-center gap-2 text-muted-foreground">
-          <RefreshCw className="h-4 w-4 animate-spin" /> جاري التحميل...
+        <div className="flex items-center gap-2 text-muted-foreground" role="status" aria-live="polite">
+          <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> جاري التحميل...
         </div>
       </div>
     );
@@ -445,81 +531,164 @@ export default function FacebookEntry() {
     return null;
   }
 
-  const custForm = (c: CustomerForm, set: (u: CustomerForm) => void) => (
+  const inlineError = (id: string, msg?: string) => msg ? <p id={`${id}-error`} className="mt-1 flex items-center gap-1 text-xs text-destructive" role="alert"><AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />{msg}</p> : null;
+
+  /** حقول العميل (الاسم/الهاتف/رقم إضافي) — `issues` للنموذج الرئيسي فقط؛ حوار التعديل بلا أخطاء مضمّنة كما كان. */
+  const customerFields = (c: CustomerForm, set: (u: CustomerForm) => void, issues?: FieldIssues, idp = "f") => (
     <div className="space-y-3">
       <div>
-        <Label className="text-xs flex items-center gap-1"><Package className="h-3.5 w-3.5" /> اسم العميل *</Label>
-        <Input value={c.customerName} onChange={e => set({ ...c, customerName: e.target.value })} className="mt-1" />
+        <Label htmlFor={`${idp}-customer-name`} className="text-xs flex items-center gap-1"><User className="h-3.5 w-3.5" aria-hidden="true" /> اسم العميل *</Label>
+        <Input id={`${idp}-customer-name`} value={c.customerName} onChange={e => set({ ...c, customerName: e.target.value })} className={`mt-1 ${TOUCH}`} autoComplete="off" aria-invalid={!!issues?.customerName || undefined} aria-describedby={issues?.customerName ? `${idp}-customer-name-error` : undefined} />
+        {inlineError(`${idp}-customer-name`, issues?.customerName)}
       </div>
       <div>
-        <Label className="text-xs flex items-center gap-1"><Phone className="h-3.5 w-3.5" /> رقم الهاتف *</Label>
-        <Input value={c.customerPhone} onChange={e => set({ ...c, customerPhone: e.target.value })} className="mt-1" inputMode="tel" />
+        <Label htmlFor={`${idp}-customer-phone`} className="text-xs flex items-center gap-1"><Phone className="h-3.5 w-3.5" aria-hidden="true" /> رقم الهاتف *</Label>
+        <Input id={`${idp}-customer-phone`} value={c.customerPhone} onChange={e => set({ ...c, customerPhone: e.target.value })} className={`mt-1 ${TOUCH}`} inputMode="tel" dir="ltr" aria-invalid={!!issues?.customerPhone || undefined} aria-describedby={issues?.customerPhone ? `${idp}-customer-phone-error` : undefined} />
+        {inlineError(`${idp}-customer-phone`, issues?.customerPhone)}
+        {issues && !issues.customerPhone && phoneFormatWarning && (
+          <p className="mt-1 flex items-center gap-1 text-xs text-[var(--warning)]" data-testid="phone-format-warning"><AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />{phoneFormatWarning}</p>
+        )}
       </div>
       <div>
-        <Label className="text-xs flex items-center gap-1"><Phone className="h-3.5 w-3.5" /> رقم هاتف إضافي (اختياري)</Label>
-        <Input value={c.customerPhone2} onChange={e => set({ ...c, customerPhone2: e.target.value })} className="mt-1" inputMode="tel" data-testid="phone2" />
-      </div>
-      <GovernorateCitySelect
-        governorate={c.governorate}
-        city={c.city}
-        onGovernorateChange={v => set(v !== c.governorate ? { ...c, governorate: v, city: "" } : { ...c, governorate: v })}
-        onCityChange={v => set({ ...c, city: v })}
-        configuredGovernorates={governorateOptions.values}
-        isLoading={governorateOptions.isLoading}
-        isError={governorateOptions.isError}
-      />
-      <div>
-        <Label className="text-xs flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> العنوان *</Label>
-        <Input value={c.customerAddress} onChange={e => set({ ...c, customerAddress: e.target.value })} className="mt-1" />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <Label className="text-xs">الشحن</Label>
-          <Input type="number" min="0" value={c.shipping} onChange={e => set({ ...c, shipping: e.target.value })} className="mt-1" />
-        </div>
-        <div>
-          <Label className="text-xs">مصدر الإعلان (اختياري)</Label>
-          <Input value={c.adName} onChange={e => set({ ...c, adName: e.target.value })} className="mt-1" />
-        </div>
-      </div>
-      <div>
-        <Label className="text-xs">ملاحظات (اختياري)</Label>
-        <Input value={c.notes} onChange={e => set({ ...c, notes: e.target.value })} className="mt-1" />
+        <Label htmlFor={`${idp}-customer-phone2`} className="text-xs flex items-center gap-1"><Phone className="h-3.5 w-3.5" aria-hidden="true" /> رقم هاتف إضافي (اختياري)</Label>
+        <Input id={`${idp}-customer-phone2`} value={c.customerPhone2} onChange={e => set({ ...c, customerPhone2: e.target.value })} className={`mt-1 ${TOUCH}`} inputMode="tel" dir="ltr" data-testid="phone2" />
       </div>
     </div>
   );
+  /** العنوان والمحافظة/المدينة — GovernorateCitySelect كما هو (يعرض «مطلوبة» بنفسه). */
+  const addressFields = (c: CustomerForm, set: (u: CustomerForm) => void, issues?: FieldIssues, idp = "f") => (
+    <div className="space-y-3">
+      <div id={`${idp}-governorate`} tabIndex={-1} className={`rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring ${TOUCH_SCOPE}`} aria-describedby={issues?.governorate ? `${idp}-governorate-error` : undefined}>
+        <GovernorateCitySelect
+          governorate={c.governorate}
+          city={c.city}
+          onGovernorateChange={v => set(v !== c.governorate ? { ...c, governorate: v, city: "" } : { ...c, governorate: v })}
+          onCityChange={v => set({ ...c, city: v })}
+          configuredGovernorates={governorateOptions.values}
+          isLoading={governorateOptions.isLoading}
+          isError={governorateOptions.isError}
+        />
+        {issues?.governorate && <span id={`${idp}-governorate-error`} className="sr-only">{issues.governorate}</span>}
+      </div>
+      <div>
+        <Label htmlFor={`${idp}-address`} className="text-xs flex items-center gap-1"><MapPin className="h-3.5 w-3.5" aria-hidden="true" /> العنوان *</Label>
+        <Input id={`${idp}-address`} value={c.customerAddress} onChange={e => set({ ...c, customerAddress: e.target.value })} className={`mt-1 ${TOUCH}`} aria-invalid={!!issues?.customerAddress || undefined} aria-describedby={issues?.customerAddress ? `${idp}-address-error` : undefined} />
+        {inlineError(`${idp}-address`, issues?.customerAddress)}
+      </div>
+    </div>
+  );
+  /** الشحن ومصدر الإعلان والملاحظات. */
+  const extraFields = (c: CustomerForm, set: (u: CustomerForm) => void, idp = "f") => (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label htmlFor={`${idp}-shipping`} className="text-xs">الشحن</Label>
+          <Input id={`${idp}-shipping`} type="number" inputMode="decimal" min="0" value={c.shipping} onChange={e => set({ ...c, shipping: e.target.value })} className={`mt-1 ${TOUCH}`} />
+        </div>
+        <div>
+          <Label htmlFor={`${idp}-ad-name`} className="text-xs">مصدر الإعلان (اختياري)</Label>
+          <Input id={`${idp}-ad-name`} value={c.adName} onChange={e => set({ ...c, adName: e.target.value })} className={`mt-1 ${TOUCH}`} />
+        </div>
+      </div>
+      <div>
+        <Label htmlFor={`${idp}-notes`} className="text-xs">ملاحظات (اختياري)</Label>
+        <Input id={`${idp}-notes`} value={c.notes} onChange={e => set({ ...c, notes: e.target.value })} className={`mt-1 ${TOUCH}`} />
+      </div>
+    </div>
+  );
+  // حوار التعديل: نفس الحقول كلها متتالية كما كانت (بلا أقسام) — معرّفات مختلفة حتى لا تتصادم مع النموذج الرئيسي.
+  const custForm = (c: CustomerForm, set: (u: CustomerForm) => void) => (
+    <div className="space-y-3">
+      {customerFields(c, set, undefined, "e")}
+      {addressFields(c, set, undefined, "e")}
+      {extraFields(c, set, "e")}
+    </div>
+  );
+
+  const activeBusinessName = activeBusinessId != null ? businesses.find(b => b.id === activeBusinessId)?.name ?? null : null;
+  const linesOk = items.length > 0 && !items.some(it => it.needsPick || it.needsVariantReview || !it.productId);
+  const sectionStatus = {
+    2: !fieldIssues.customerName && !fieldIssues.customerPhone ? { ok: true, text: "مكتمل" } : { ok: false, text: "ناقص" },
+    3: !fieldIssues.governorate && !fieldIssues.customerAddress ? { ok: true, text: "مكتمل" } : { ok: false, text: "ناقص" },
+    4: items.length === 0 ? { ok: false, text: "لا أصناف" } : linesOk ? { ok: true, text: `${items.length} سطر` } : { ok: false, text: "سطر يحتاج اختيارًا" },
+    7: issueCount === 0 ? { ok: true, text: "جاهز للحفظ" } : { ok: false, text: `${issueCount} ملاحظة` },
+  } as const;
 
   return (
-    <div dir="rtl" className="min-h-screen bg-background p-3 sm:p-6">
+    <main dir="rtl" className="min-h-screen bg-background p-3 sm:p-6" aria-label="إدخال أوردر يدوي">
       <div className="mx-auto max-w-3xl space-y-4">
         {/* الرأس */}
         <div className="flex items-center justify-between gap-2">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-lg font-bold">إدخال أوردر يدوي</h1>
-            <p className="text-xs text-muted-foreground">أهلاً {me.name}</p>
+            <p className="truncate text-xs text-muted-foreground">أهلاً {me.name}</p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setShowOrders(s => !s)}>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button size="sm" variant="outline" className={TOUCH} onClick={() => setShowOrders(s => !s)} aria-expanded={showOrders}>
               {showOrders ? "إخفاء أوردراتي" : "أوردراتي"}
             </Button>
-            <Button size="sm" variant="ghost" onClick={handleLogout} title="خروج">
-              <LogOut className="h-4 w-4" />
+            <Button size="sm" variant="ghost" className={`${TOUCH} min-w-11`} onClick={handleLogout} aria-label="خروج" title="خروج">
+              <LogOut className="h-4 w-4" aria-hidden="true" />
             </Button>
           </div>
         </div>
 
-        {/* نموذج الإدخال */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">أوردر جديد</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        {/* انقطاع الاتصال: تنبيه واضح — الحفظ على السيرفر سيفشل، والمسودة المحلية متاحة. قواعد الحفظ لا تتغير. */}
+        {!online && <OfflineState message="الحفظ على السيرفر غير ممكن الآن. ما كتبته باقٍ هنا — احفظ مسودة على هذا الجهاز ثم أعد المحاولة." className="py-6" />}
+
+        {/* ملخّص المراجعة أعلى النموذج — مشتق من الحالة: كل سبب يختفي وحده فور إصلاح حقله/سطره */}
+        {issueCount > 0 && (
+          <div className="rounded-[var(--radius-brand-md)] border border-[var(--warning)]/50 bg-[var(--warning)]/5 p-3 text-sm" role="status" aria-live="polite" data-testid="review-summary">
+            <p className="mb-1.5 flex items-center gap-1.5 font-semibold text-[var(--warning)]"><ListChecks className="h-4 w-4" aria-hidden="true" /> قبل الحفظ ({issueCount})</p>
+            <ul className="space-y-1">
+              {(Object.keys(fieldIssues) as (keyof FieldIssues)[]).map(k => (
+                <li key={k}>
+                  <button type="button" className="min-h-11 w-full text-start text-xs underline-offset-2 hover:underline sm:min-h-9" onClick={() => focusField(k)} data-testid={`review-jump-${k}`}>
+                    {fieldIssues[k]}
+                  </button>
+                </li>
+              ))}
+              {blockers.map((b, i) => {
+                const m = /رقم (\d+)/.exec(b);
+                return (
+                  <li key={`b-${i}`}>
+                    <button type="button" className="min-h-11 w-full text-start text-xs underline-offset-2 hover:underline sm:min-h-9" onClick={() => (m ? focusLine(Number(m[1]) - 1) : setOpen(4, true))} data-testid={`review-jump-line-${i}`}>
+                      {b}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        {/* نموذج الإدخال — 7 أقسام مرقّمة قابلة للطي داخل الصفحة الواحدة */}
+        {/*
+          حاوية عادية لا <form>: داخل <form> يرسم Radix Select عنصر <select> أصليًا مخفيًا، وعند ضبط القيمة
+          برمجيًا (استرجاع المسودة/التحليل) قبل تركيب خياراته يُطلق change بقيمة فارغة فتُمسح المحافظة والمدينة.
+          الحفظ من زر صريح كما كان في الأصل.
+        */}
+        <div className="space-y-3 pb-[88px] sm:pb-0" role="group" aria-label="أوردر جديد">
+          {/* 1 — النشاط والمصدر */}
+          <EntrySection n={1} title="النشاط والمصدر" icon={<Building2 className="h-4 w-4" />} open={openSections[1]} onToggle={o => setOpen(1, o)}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <p className="text-xs text-muted-foreground">النشاط</p>
+                <p className="text-sm font-medium" data-testid="entry-business">{activeBusinessName ?? "يحدده السيرفر من نطاق حسابك"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">مصدر الأوردر</p>
+                {/* السيرفر يسجّل الأوردرات من هذه الشاشة بمصدر facebook (addOrder) — فالشعار هنا صحيح */}
+                <p className="inline-flex items-center gap-1.5 text-sm font-medium" data-testid="entry-source"><PartnerLogo partner="facebook" size="xs" decorative /> فيسبوك — إدخال يدوي</p>
+              </div>
+            </div>
             {/* لصق رسالة العميل — تحليل تلقائي وملء الحقول (تفضل قابلة للتعديل يدويًا). */}
             <div className="rounded-md border bg-muted/30 p-2 space-y-2">
-              <Label className="text-xs flex items-center gap-1">
-                <ClipboardPaste className="h-3.5 w-3.5" /> لصق رسالة العميل (تحليل تلقائي)
+              <Label htmlFor="f-paste" className="text-xs flex items-center gap-1">
+                <ClipboardPaste className="h-3.5 w-3.5" aria-hidden="true" /> لصق رسالة العميل (تحليل تلقائي)
               </Label>
               <Textarea
+                id="f-paste"
                 value={pasteText}
                 onChange={e => setPasteText(e.target.value)}
                 rows={4}
@@ -527,52 +696,108 @@ export default function FacebookEntry() {
                 placeholder={"بيدج: ...\nالاسم: ...\nالعنوان: محافظة ...\nرقم الفون(1): 01xxxxxxxxx\nنوع المنتج: ...\nعدد القطع: ١\nاللون: اسود مقاس 8 سنين\nالشحن: مجانا\nالاجمالي: ..."}
                 className="text-xs font-mono"
               />
-              <div className="flex items-center gap-2">
-                <Button type="button" size="sm" onClick={parseAndFill} disabled={parsing || !pasteText.trim()}>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" size="sm" className={TOUCH} onClick={parseAndFill} disabled={parsing || !pasteText.trim()} data-testid="parse-fill">
                   {parsing ? (
-                    <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" /> جاري التحليل...</span>
+                    <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> جاري التحليل...</span>
                   ) : (
-                    <span className="flex items-center gap-2"><ClipboardPaste className="h-4 w-4" /> تحليل وملء</span>
+                    <span className="flex items-center gap-2"><ClipboardPaste className="h-4 w-4" aria-hidden="true" /> تحليل وملء</span>
                   )}
                 </Button>
                 <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                  <AlertTriangle className="h-3 w-3" /> راجع الحقول بعد التحليل قبل الحفظ
+                  <AlertTriangle className="h-3 w-3" aria-hidden="true" /> راجع الحقول بعد التحليل قبل الحفظ
                 </span>
               </div>
             </div>
+          </EntrySection>
 
-            {custForm(cust, setCust)}
+          {/* 2 — العميل */}
+          <EntrySection n={2} title="العميل" icon={<User className="h-4 w-4" />} open={openSections[2]} onToggle={o => setOpen(2, o)} status={sectionStatus[2]}>
+            {customerFields(cust, setCust, fieldIssues)}
+          </EntrySection>
 
-            <div className="border-t pt-3" data-entry-mode={entryMode}>
-              <Label className="text-sm font-semibold">
-                {isLegacy ? "الأصناف — نوع النقش والكمية" : "الأصناف (من المخزون)"}
-              </Label>
-              <div className="mt-2">
-                {/* القالب من السيرفر بهوية الجلسة: مكوّنان منفصلان، نفس endpoints ونفس الحفظ الذرّي. */}
-                {isLegacy ? (
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      {structurallyEdited ? (
-                        <span className="text-xs text-muted-foreground" data-testid="structural-edit-notice">تم تعديل اقتراح التحليل يدويًا</span>
-                      ) : <span />}
-                      <Button type="button" variant="outline" size="sm" className="h-11 min-h-[44px]" onClick={startManualEntry} data-testid="manual-entry">
-                        إدخال يدوي
-                      </Button>
-                    </div>
-                    <LegacyEngravingPicker catalog={catalog} value={items} onChange={setItems} suggestedUnitPrice={suggestedUnitPrice} />
+          {/* 3 — العنوان والمحافظة */}
+          <EntrySection n={3} title="العنوان والمحافظة" icon={<MapPin className="h-4 w-4" />} open={openSections[3]} onToggle={o => setOpen(3, o)} status={sectionStatus[3]}>
+            {addressFields(cust, setCust, fieldIssues)}
+          </EntrySection>
+
+          {/* 4 — المنتجات والمتغيرات والكميات */}
+          <EntrySection n={4} title={isLegacy ? "الأصناف — نوع النقش والكمية" : "الأصناف (من المخزون)"} icon={<Package className="h-4 w-4" />} open={openSections[4]} onToggle={o => setOpen(4, o)} status={sectionStatus[4]}>
+            <div data-entry-mode={entryMode} className={TOUCH_SCOPE}>
+              {catalogError && (
+                <ErrorState title="تعذّر تحميل كتالوج نشاطك" message="بدون الكتالوج لا يمكن اختيار المنتجات. أعد المحاولة." onRetry={() => refetchCatalog()} className="mb-3" />
+              )}
+              {/* القالب من السيرفر بهوية الجلسة: مكوّنان منفصلان، نفس endpoints ونفس الحفظ الذرّي. */}
+              {isLegacy ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    {structurallyEdited ? (
+                      <span className="text-xs text-muted-foreground" data-testid="structural-edit-notice">تم تعديل اقتراح التحليل يدويًا</span>
+                    ) : <span />}
+                    <Button type="button" variant="outline" size="sm" className="h-11 min-h-[44px]" onClick={startManualEntry} data-testid="manual-entry">
+                      إدخال يدوي
+                    </Button>
                   </div>
-                ) : (
-                  <VariantOrderPicker catalog={catalog} value={items} onChange={setItems} />
-                )}
-              </div>
+                  <LegacyEngravingPicker catalog={catalog} value={items} onChange={setItems} suggestedUnitPrice={suggestedUnitPrice} />
+                </div>
+              ) : (
+                <VariantOrderPicker catalog={catalog} value={items} onChange={setItems} />
+              )}
               {piecesMismatch && (
                 <div className="mt-2 flex items-center gap-1 text-xs text-[var(--warning)]" data-testid="pieces-soft-warning">
-                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
                   الرسالة تقول {expectedPieces} قطعة والسطور فيها {summary.pieces} — راجع الكميات لو لازم
                 </div>
               )}
             </div>
+          </EntrySection>
 
+          {/* 5 — النقش/المتغير لكل قطعة: مراجعة سطر بسطر (كل سطر مستقل — لا دمج) */}
+          <EntrySection n={5} title="مراجعة كل سطر" icon={<ClipboardCheck className="h-4 w-4" />} open={openSections[5]} onToggle={o => setOpen(5, o)} status={items.length === 0 ? undefined : linesOk ? { ok: true, text: "كل السطور محسومة" } : { ok: false, text: "راجع السطور" }}>
+            {items.length === 0 ? (
+              <p className="text-sm text-muted-foreground" data-testid="line-review-empty">لا سطور بعد — أضف الأصناف في القسم 4. كل قطعة بنقشها/متغيرها في سطر مستقل.</p>
+            ) : (
+              <ol className="divide-y divide-border" aria-label="سطور الأوردر">
+                {items.map((it, i) => {
+                  const unresolved = it.needsPick || it.needsVariantReview || !it.productId;
+                  const variantText = it.optionLabel || [it.color, it.size].filter(Boolean).join(" / ") || (it.variantId ? `#${it.variantId}` : null);
+                  return (
+                    <li key={i} className="flex items-start justify-between gap-3 py-2 first:pt-0 last:pb-0" data-testid={`line-review-${i}`}>
+                      <div className="min-w-0">
+                        <p className="text-sm">
+                          <span className="font-semibold">سطر {i + 1}</span>
+                          <span className="text-muted-foreground"> · </span>
+                          <span className="font-medium">{it.productName || "— لم يُحدَّد المنتج —"}</span>
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {variantText ? <span className="text-[var(--info)]">{variantText}</span> : <span>بدون متغير</span>}
+                          {it.segmentText && <span> — من الرسالة: «{it.segmentText}»</span>}
+                        </p>
+                        {unresolved && (
+                          <p className="mt-0.5 flex items-center gap-1 text-xs text-[var(--warning)]" data-testid={`line-review-warning-${i}`}>
+                            <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" /> {it.pickReason ?? `اختر المنتج والنوع للصنف رقم ${i + 1}`}
+                          </p>
+                        )}
+                      </div>
+                      <div className="shrink-0 text-end text-sm tabular-nums">
+                        <p className="font-semibold">× {it.quantity}</p>
+                        <p className="text-xs text-muted-foreground">{(it.unitPrice * it.quantity).toFixed(2)} ج.م</p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+          </EntrySection>
+
+          {/* 6 — الشحن والدفع */}
+          <EntrySection n={6} title="الشحن والدفع" icon={<Truck className="h-4 w-4" />} open={openSections[6]} onToggle={o => setOpen(6, o)}>
+            {extraFields(cust, setCust)}
+            <p className="text-xs text-muted-foreground" data-testid="payment-note">طريقة الدفع لا تُحدَّد من هذا النموذج (يُسجَّل الأوردر بالقواعد الحالية للنظام) — غير متاح هنا.</p>
+          </EntrySection>
+
+          {/* 7 — المراجعة والحفظ */}
+          <EntrySection n={7} title="المراجعة والحفظ" icon={<ListChecks className="h-4 w-4" />} open={openSections[7]} onToggle={o => setOpen(7, o)} status={sectionStatus[7]}>
             {/* ملخّص الأوردر — بيتحدّث فورًا مع أي تعديل في كمية أو سعر أو شحن أو خصم */}
             <div className="rounded-lg border bg-muted/30 p-3 space-y-1 text-sm" data-testid="order-summary">
               <div className="flex justify-between">
@@ -584,11 +809,12 @@ export default function FacebookEntry() {
                 <span className="font-semibold">{summary.itemsSubtotal.toFixed(2)} ج.م</span>
               </div>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-muted-foreground">الشحن</span>
+                <Label htmlFor="sum-shipping" className="text-muted-foreground font-normal">الشحن</Label>
                 <Input
+                  id="sum-shipping"
                   type="number" min="0" step="0.01" value={cust.shipping}
                   onChange={e => setCust(c => ({ ...c, shipping: e.target.value }))}
-                  className="h-8 w-28 text-left" data-testid="sum-shipping"
+                  className={`w-28 text-left ${TOUCH} sm:min-h-9 sm:h-9`} data-testid="sum-shipping"
                 />
               </div>
               {pasteExpected?.itemsTotal != null && (
@@ -599,11 +825,12 @@ export default function FacebookEntry() {
               )}
               {(!isLegacy || Number(cust.discount) > 0 || !!pasteExpected) && (
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">الخصم</span>
+                  <Label htmlFor="sum-discount" className="text-muted-foreground font-normal">الخصم</Label>
                   <Input
+                    id="sum-discount"
                     type="number" min="0" step="0.01" value={cust.discount}
                     onChange={e => setCust(c => ({ ...c, discount: e.target.value }))}
-                    className="h-8 w-28 text-left" data-testid="sum-discount"
+                    className={`w-28 text-left ${TOUCH} sm:min-h-9 sm:h-9`} data-testid="sum-discount"
                   />
                 </div>
               )}
@@ -612,10 +839,11 @@ export default function FacebookEntry() {
                 <span className="font-bold" data-testid="sum-total">{summary.total.toFixed(2)} ج.م</span>
               </div>
               {totalMismatch && (
-                <label className="flex items-center gap-2 pt-1 text-xs text-[var(--warning)]">
+                <label className="flex min-h-11 items-center gap-2 pt-1 text-xs text-[var(--warning)]">
                   <input
                     type="checkbox" checked={totalConfirmed}
                     onChange={e => setTotalConfirmed(e.target.checked)}
+                    className="h-5 w-5"
                     data-testid="confirm-total"
                   />
                   الإجمالي المكتوب في الرسالة لا يساوي الحساب — راجعته وأؤكده
@@ -628,31 +856,34 @@ export default function FacebookEntry() {
               <div className="rounded-lg border border-[var(--warning)] bg-[var(--warning)]/5 p-2 text-xs space-y-1" data-testid="save-blockers">
                 {blockers.map((b, i) => (
                   <div key={i} className="flex items-center gap-1 text-[var(--warning)]">
-                    <AlertTriangle className="h-3 w-3 shrink-0" /> {b}
+                    <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" /> {b}
                   </div>
                 ))}
               </div>
             )}
+            <p className="text-xs text-muted-foreground">آخر حقل فوق زر الحفظ دائمًا؛ الشريط أدناه يبقى ظاهرًا أثناء التمرير على الموبايل.</p>
+          </EntrySection>
 
-            {/* زر الحفظ sticky أسفل الشاشة على الموبايل (بخلفية) — مايغطيش الحقول لأن الكارت فيه مسافة سفلية */}
-            <div className="sticky bottom-0 -mx-4 flex items-center gap-2 border-t bg-background/95 px-4 py-3 backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-0" data-testid="save-bar">
-              <Button
-                onClick={submit}
-                disabled={addOrderMutation.isPending || blockers.length > 0}
-                className="h-11 min-h-[44px] flex-1"
-                data-testid="save-order"
-              >
-                {addOrderMutation.isPending ? (
-                  <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" /> جاري الحفظ...</span>
-                ) : (
-                  <span className="flex items-center gap-2"><Plus className="h-4 w-4" /> حفظ الأوردر</span>
-                )}
-              </Button>
-              <Button variant="outline" onClick={saveDraft} title="حفظ مسودة"><Save className="h-4 w-4" /></Button>
-              <Button variant="ghost" onClick={clearForm} title="مسح"><Eraser className="h-4 w-4" /></Button>
-            </div>
-          </CardContent>
-        </Card>
+          {/* شريط الحفظ ثابت أسفل الشاشة على الهاتف (بخلفية + safe-area) — النموذج له حشو سفلي فلا يغطي آخر حقل؛ عادي على sm+ */}
+          <div className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-2 border-t border-border bg-background/95 px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-0" data-testid="save-bar">
+            <Button
+              type="button"
+              onClick={submit}
+              disabled={addOrderMutation.isPending || blockers.length > 0}
+              className="h-11 min-h-[44px] flex-1"
+              data-testid="save-order"
+              aria-busy={addOrderMutation.isPending || undefined}
+            >
+              {addOrderMutation.isPending ? (
+                <span className="flex items-center gap-2"><RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> جاري الحفظ...</span>
+              ) : (
+                <span className="flex items-center gap-2"><Plus className="h-4 w-4" aria-hidden="true" /> حفظ الأوردر</span>
+              )}
+            </Button>
+            <Button type="button" variant="outline" className={`${TOUCH} min-w-11`} onClick={saveDraft} title="حفظ مسودة" aria-label="حفظ مسودة" data-testid="save-draft"><Save className="h-4 w-4" aria-hidden="true" /></Button>
+            <Button type="button" variant="ghost" className={`${TOUCH} min-w-11`} onClick={clearForm} title="مسح" aria-label="مسح النموذج" data-testid="clear-form"><Eraser className="h-4 w-4" aria-hidden="true" /></Button>
+          </div>
+        </div>
 
         {/* أوردراتي */}
         {showOrders && (
@@ -662,9 +893,9 @@ export default function FacebookEntry() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex items-center gap-2">
-                <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="text-xs" />
-                <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="text-xs" />
-                <Button size="sm" variant="outline" onClick={() => refetchOrders()}><RefreshCw className="h-4 w-4" /></Button>
+                <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className={`text-xs ${TOUCH}`} aria-label="من تاريخ" />
+                <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className={`text-xs ${TOUCH}`} aria-label="إلى تاريخ" />
+                <Button size="sm" variant="outline" className={`${TOUCH} min-w-11`} onClick={() => refetchOrders()} aria-label="تحديث"><RefreshCw className="h-4 w-4" aria-hidden="true" /></Button>
               </div>
               {myOrders.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">لا توجد أوردرات</p>
@@ -678,8 +909,8 @@ export default function FacebookEntry() {
                           <Badge variant="secondary">{o.status}</Badge>
                           {o.status === "new" && (
                             <>
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => openEdit(o)}><Pencil className="h-3.5 w-3.5" /></Button>
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => setDeletingOrderId(o.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                              <Button size="sm" variant="ghost" className="h-11 w-11 p-0 sm:h-8 sm:w-8" onClick={() => openEdit(o)} aria-label="تعديل"><Pencil className="h-3.5 w-3.5" aria-hidden="true" /></Button>
+                              <Button size="sm" variant="ghost" className="h-11 w-11 p-0 text-destructive sm:h-8 sm:w-8" onClick={() => setDeletingOrderId(o.id)} aria-label="حذف"><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></Button>
                             </>
                           )}
                         </div>
@@ -709,14 +940,14 @@ export default function FacebookEntry() {
             {custForm(editCust, setEditCust)}
             <div className="border-t pt-3">
               <Label className="text-sm font-semibold">الأصناف</Label>
-              <div className="mt-2">
+              <div className={`mt-2 ${TOUCH_SCOPE}`}>
                 <VariantOrderPicker catalog={catalog} value={editItems} onChange={setEditItems} />
               </div>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingOrder(null)}>إلغاء</Button>
-            <Button onClick={submitEdit} disabled={updateOrderMutation.isPending}>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" className={TOUCH} onClick={() => setEditingOrder(null)}>إلغاء</Button>
+            <Button type="button" className={TOUCH} onClick={submitEdit} disabled={updateOrderMutation.isPending}>
               {updateOrderMutation.isPending ? "جاري الحفظ..." : "حفظ التعديل"}
             </Button>
           </DialogFooter>
@@ -728,14 +959,14 @@ export default function FacebookEntry() {
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>حذف الأوردر؟</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">لا يمكن التراجع عن هذه العملية.</p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeletingOrderId(null)}>إلغاء</Button>
-            <Button variant="destructive" onClick={() => deletingOrderId != null && deleteOrderMutation.mutate({ orderId: deletingOrderId })} disabled={deleteOrderMutation.isPending}>
-              <Trash2 className="h-4 w-4 ml-1" /> حذف
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" className={TOUCH} onClick={() => setDeletingOrderId(null)}>إلغاء</Button>
+            <Button type="button" variant="destructive" className={TOUCH} onClick={() => deletingOrderId != null && deleteOrderMutation.mutate({ orderId: deletingOrderId })} disabled={deleteOrderMutation.isPending}>
+              <Trash2 className="h-4 w-4 ml-1" aria-hidden="true" /> حذف
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </main>
   );
 }
