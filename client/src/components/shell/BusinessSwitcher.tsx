@@ -46,10 +46,12 @@ export function BusinessSwitcher({
   const face = (
     <div className="flex min-w-0 items-center gap-2.5" data-testid="business-identity">
       {identity}
+      {/* الشريط العلوي الضيق (<640px): الأيقونة/الحرف فقط — النصوص تختفي بدل أن تُعصر وتتداخل مع أزرار الإجراءات؛
+          aria-label والهدف 44px كما هما، والاسم الكامل في القائمة نفسها. السايدبار يعرض النصوص دائمًا. */}
       {!collapsed && (
-        <div className="min-w-0 text-right">
+        <div className={`min-w-0 text-right ${inSidebar ? "" : "hidden sm:block"}`}>
           <p className={`truncate text-sm font-bold leading-tight ${textColor}`} data-testid="business-name">{name || "—"}</p>
-          {businesses.length > 1 && <p className={`text-[11px] ${subColor}`}>تبديل النشاط</p>}
+          {businesses.length > 1 && <p className={`truncate text-[11px] ${subColor}`}>تبديل النشاط</p>}
         </div>
       )}
     </div>

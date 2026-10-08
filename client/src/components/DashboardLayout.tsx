@@ -366,8 +366,9 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
             {isMobile && <SidebarTrigger className="h-11 w-11 shrink-0 rounded-lg" aria-label="فتح القائمة" />}
             {/* الموبايل: هوية النشاط (لوجو/حرف + اسم) في الشريط العلوي؛ الديسكتوب: في رأس السايدبار. */}
             {isMobile && <BusinessSwitcher variant="topbar" />}
+            {/* اسم الصفحة نص ثانوي (العنوان نفسه أسفل الشريط): يختفي تحت 400px بدل أن يُعصر إلى حرفين */}
             {isMobile && (
-              <span className="min-w-0 truncate text-sm text-muted-foreground">{activeMenuItem?.label ?? "القائمة"}</span>
+              <span className="hidden min-w-0 truncate text-sm text-muted-foreground min-[400px]:inline">{activeMenuItem?.label ?? "القائمة"}</span>
             )}
             {!isMobile && <CreateMenu isAdmin={isAdmin} permissions={permissions} />}
           </div>
