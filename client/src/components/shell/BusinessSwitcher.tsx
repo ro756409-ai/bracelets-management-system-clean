@@ -29,15 +29,16 @@ export function BusinessSwitcher({
   collapsed?: boolean;
 }) {
   const { businesses, groups, currentBusinessId, setCurrentBusinessId, activeBusiness } = useBusinessContext();
-  const dark = variant === "sidebar";
-  const textColor = dark ? "text-white" : "text-foreground";
-  const subColor = dark ? "text-white/60" : "text-muted-foreground";
+  // داخل السايدبار الألوان من Tokens السايدبار (تتبع Light/Dark تلقائيًا) — لا text-white فوق سطح متغيّر
+  const inSidebar = variant === "sidebar";
+  const textColor = inSidebar ? "text-sidebar-foreground" : "text-foreground";
+  const subColor = inSidebar ? "text-sidebar-foreground/70" : "text-muted-foreground";
 
   const name = activeBusiness?.name ?? (businesses.length > 1 ? "كل الأنشطة" : "");
   const identity = activeBusiness ? (
     <BusinessAvatar name={activeBusiness.name} logoUrl={activeBusiness.logoUrl} className="h-9 w-9" />
   ) : (
-    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${dark ? "bg-white/15 text-white" : "bg-muted text-muted-foreground"}`} data-testid="business-all">
+    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${inSidebar ? "bg-sidebar-accent text-sidebar-accent-foreground" : "bg-muted text-muted-foreground"}`} data-testid="business-all">
       <LayoutGrid className="h-4 w-4" />
     </div>
   );
@@ -68,7 +69,8 @@ export function BusinessSwitcher({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className={`flex min-w-0 items-center gap-2 rounded-[var(--radius-brand-md)] px-1.5 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${dark ? "hover:bg-sidebar-accent" : "hover:bg-muted"}`}
+          type="button"
+          className={`flex min-h-11 min-w-0 items-center gap-2 rounded-[var(--radius-brand-md)] px-1.5 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${inSidebar ? "hover:bg-sidebar-accent" : "hover:bg-muted"}`}
           aria-label="تبديل النشاط"
           data-testid="business-switcher"
         >

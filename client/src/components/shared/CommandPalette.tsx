@@ -1,75 +1,77 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
-import {
-  BarChart3, Boxes, ClipboardList, Copy, FileSpreadsheet, LayoutDashboard, Package,
-  Printer, QrCode, RotateCcw, ScanLine, Settings, ShoppingCart, Truck, Users,
-  Wallet, Receipt, Banknote, HandCoins,
-} from "lucide-react";
 import {
   CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
   CommandSeparator, CommandShortcut,
 } from "@/components/ui/command";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { usePermissions } from "@/hooks/usePermission";
+import { PRIMARY_DESTINATIONS, TOOLS_LINKS, canSeeNav, type NavGate, type NavLink } from "@/config/navigation";
 
 /**
  * ⌘K / Ctrl+K palette — the fastest path between any two screens in the product.
  *
- * An ERP operator's day is not one page; it is orders → preparation → shipping → back to
- * orders, dozens of times. Sidebar navigation costs a scan and two clicks each hop. This costs
- * a keystroke and a word, and it works the same everywhere, so the muscle memory transfers.
- *
- * Destinations are declared here rather than derived from the router: the palette should list
- * what a human would go looking for, in business language, not every route that happens to
- * exist. `keywords` carry Arabic and English spellings plus common misspellings so "orders",
- * "اوردر" and "طلبات" all land on the same row.
+ * الوجهات تُشتق من `config/navigation` (المصدر الواحد للشل) ومفلترة بالصلاحيات الفعلية — فلا تكشف
+ * اللوحة مسارًا لا يحق للجلسة فتحه. القاعدة (نفس بوابات الشل، مع اعتبار نوع الجلسة):
+ *   • بند بـ`permission` → يظهر لو الصلاحية في myPermissions.
+ *   • بند `adminOnly` → للمالك/الأدمن الصناعي فقط.
+ *   • بند مفتوح → يتطلب جلسة لوحة التحكم (user موجود)؛ موظف البوابة (user=null) يرى ما تمنحه
+ *     صلاحياته فقط (مثل دفتر V3 للمحاسب).
+ * الإخفاء هنا ليس أمانًا — كل route محروس على مستواه. تُفتح بالاختصار أو بحدث `COMMAND_PALETTE_OPEN_EVENT`
+ * من زر البحث في الشريط العلوي.
  */
+export const COMMAND_PALETTE_OPEN_EVENT = "matjarak:command-palette:open";
 
-type PaletteItem = {
-  label: string;
-  href: string;
-  icon: React.ReactNode;
-  keywords: string[];
-  group: string;
+export type PaletteItem = { label: string; href: string; icon: NavLink["icon"]; keywords: string[]; group: string; gate: NavGate };
+
+/** كلمات بحث إضافية (عربي/إنجليزي/أخطاء شائعة) لكل مسار — تُلحق باسم الوجهة من config/navigation. */
+const KEYWORDS: Record<string, string[]> = {
+  "/orders": ["orders", "اوردرات", "طلبات"], "/dashboard": ["dashboard", "لوحه", "احصائيات"], "/workspace": ["workspace", "مساحه", "شغل"],
+  "/bosta-orders": ["bosta", "بوسطة", "شحن", "شحنات"], "/returns": ["returns", "مرتجع"], "/duplicates": ["duplicates", "مكرر", "تكرار"],
+  "/printed-orders": ["printed", "مطبوع", "طباعة"], "/scan-orders": ["scan", "qr", "مسح", "باركود"], "/preparation": ["preparation", "تجهيز", "تحضير"],
+  "/today-shipments": ["shipments", "شحنات", "اليوم"], "/shipping-schedule": ["schedule", "جدول", "مواعيد"], "/inventory": ["inventory", "مخزون", "منتجات", "products", "اصناف"],
+  "/goods-receipt": ["goods", "استلام", "بضاعة"], "/stocktake": ["stocktake", "جرد"], "/workshop-returns": ["workshop", "ورشة"],
+  "/employees": ["employees", "موظفين", "فريق"], "/reports": ["reports", "تقارير"], "/businesses": ["businesses", "انشطة", "براند"],
+  "/permissions": ["permissions", "صلاحيات", "ادوار"], "/sales-channels": ["channels", "قنوات", "بيع", "تكامل"], "/webhook-settings": ["easy", "webhook", "ربط"],
+  "/ledger": ["ledger", "حسابات", "دفتر", "خزنة", "مصروف", "ايراد"], "/ledger/transactions": ["transactions", "حركات", "سجل"],
+  "/print-logs": ["print", "طباعة", "سجل"], "/scan-logs": ["scan", "مسح", "سجل"], "/activity-log": ["activity", "سجل", "انشطة", "log"], "/merge-logs": ["merge", "دمج"],
 };
 
-const ITEMS: PaletteItem[] = [
-  // ---- العمل اليومي ----
-  { group: "العمل اليومي", label: "الأوردرات", href: "/orders", icon: <ShoppingCart className="h-4 w-4" />, keywords: ["orders", "اوردرات", "طلبات", "الطلبات"] },
-  { group: "العمل اليومي", label: "لوحة التحكم", href: "/dashboard", icon: <LayoutDashboard className="h-4 w-4" />, keywords: ["dashboard", "لوحه", "الرئيسية", "احصائيات"] },
-  { group: "العمل اليومي", label: "مساحة العمل", href: "/workspace", icon: <ClipboardList className="h-4 w-4" />, keywords: ["workspace", "مساحه", "شغل"] },
-  { group: "العمل اليومي", label: "إدخال فيسبوك", href: "/facebook-entry", icon: <FileSpreadsheet className="h-4 w-4" />, keywords: ["facebook", "فيسبوك", "ادخال", "لصق"] },
+/** كل الوجهات (قبل الفلترة) من config/navigation — الوجهات الأساسية وأبناؤها ثم أدوات «المزيد». */
+export function allPaletteItems(): PaletteItem[] {
+  const out: PaletteItem[] = [];
+  const seen = new Set<string>();
+  for (const dest of PRIMARY_DESTINATIONS) {
+    for (const link of dest.children ?? [{ label: dest.label, path: dest.path, icon: dest.icon } as NavLink]) {
+      if (seen.has(link.path)) continue;
+      seen.add(link.path);
+      out.push({ label: link.label, href: link.path, icon: link.icon, keywords: KEYWORDS[link.path] ?? [], group: dest.label, gate: { permission: link.permission ?? dest.permission, adminOnly: link.adminOnly ?? dest.adminOnly } });
+    }
+  }
+  for (const link of TOOLS_LINKS) {
+    if (seen.has(link.path)) continue;
+    seen.add(link.path);
+    out.push({ label: link.label, href: link.path, icon: link.icon, keywords: KEYWORDS[link.path] ?? [], group: "المزيد", gate: { permission: link.permission, adminOnly: link.adminOnly } });
+  }
+  return out;
+}
 
-  // ---- التجهيز والشحن ----
-  { group: "التجهيز والشحن", label: "التجهيز", href: "/preparation", icon: <Package className="h-4 w-4" />, keywords: ["preparation", "تجهيز", "تحضير"] },
-  { group: "التجهيز والشحن", label: "طلبات بوسطة", href: "/bosta-orders", icon: <Truck className="h-4 w-4" />, keywords: ["bosta", "بوسطة", "شحن", "شحنات"] },
-  { group: "التجهيز والشحن", label: "شحنات اليوم", href: "/today-shipments", icon: <Truck className="h-4 w-4" />, keywords: ["shipments", "شحنات", "اليوم"] },
-  { group: "التجهيز والشحن", label: "جدول الشحن", href: "/shipping-schedule", icon: <Truck className="h-4 w-4" />, keywords: ["schedule", "جدول", "مواعيد"] },
-  { group: "التجهيز والشحن", label: "مسح QR", href: "/scan-orders", icon: <QrCode className="h-4 w-4" />, keywords: ["scan", "qr", "مسح", "باركود"] },
-  { group: "التجهيز والشحن", label: "المطبوعات", href: "/printed-orders", icon: <Printer className="h-4 w-4" />, keywords: ["printed", "مطبوع", "طباعة"] },
-
-  // ---- المخزون والمنتجات ----
-  { group: "المخزون", label: "المخزون", href: "/inventory", icon: <Boxes className="h-4 w-4" />, keywords: ["inventory", "مخزون", "منتجات", "products", "اصناف"] },
-  { group: "المخزون", label: "المرتجعات", href: "/returns", icon: <RotateCcw className="h-4 w-4" />, keywords: ["returns", "مرتجع", "مرتجعات"] },
-  { group: "المخزون", label: "المكررات", href: "/duplicates", icon: <Copy className="h-4 w-4" />, keywords: ["duplicates", "مكرر", "تكرار"] },
-
-  // ---- الحسابات ----
-  { group: "الحسابات", label: "لوحة الأرباح", href: "/accounting", icon: <Wallet className="h-4 w-4" />, keywords: ["accounting", "حسابات", "مالية", "ارباح", "ربح", "هامش"] },
-  { group: "الحسابات", label: "الخزنة", href: "/treasury", icon: <Wallet className="h-4 w-4" />, keywords: ["treasury", "خزنة", "خزينة", "رصيد", "كاش"] },
-  { group: "الحسابات", label: "المصروفات", href: "/expenses", icon: <Receipt className="h-4 w-4" />, keywords: ["expenses", "مصروف", "مصروفات", "صرف"] },
-  { group: "الحسابات", label: "التحصيلات", href: "/collections", icon: <Banknote className="h-4 w-4" />, keywords: ["collections", "تحصيل", "تحصيلات", "محصل"] },
-  { group: "الحسابات", label: "المرتبات", href: "/payroll", icon: <HandCoins className="h-4 w-4" />, keywords: ["payroll", "salary", "مرتب", "مرتبات", "رواتب", "راتب", "سلفة", "سلف", "عمولة"] },
-
-  // ---- الإدارة ----
-  { group: "الإدارة", label: "الموظفون", href: "/employees", icon: <Users className="h-4 w-4" />, keywords: ["employees", "موظفين", "موظفون", "فريق"] },
-  { group: "الإدارة", label: "التقارير", href: "/reports", icon: <BarChart3 className="h-4 w-4" />, keywords: ["reports", "تقارير", "تقرير"] },
-  { group: "الإدارة", label: "قنوات البيع", href: "/sales-channels", icon: <Settings className="h-4 w-4" />, keywords: ["channels", "قنوات", "بيع", "تكامل"] },
-  { group: "الإدارة", label: "سجل الأنشطة", href: "/activity-log", icon: <ScanLine className="h-4 w-4" />, keywords: ["activity", "سجل", "انشطة", "log"] },
-];
-
-const GROUPS = Array.from(new Set(ITEMS.map((i) => i.group)));
+/** الوجهات المرئية لجلسة بعينها. */
+export function paletteItemsFor(session: { hasUser: boolean; isAdmin: boolean; permissions: string[] }): PaletteItem[] {
+  return allPaletteItems().filter(item => {
+    if (item.gate.permission) return session.permissions.includes(item.gate.permission);
+    if (item.gate.adminOnly) return session.isAdmin;
+    return session.hasUser;
+  });
+}
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [, navigate] = useLocation();
+  const { user } = useAuth();
+  const { permissions } = usePermissions();
+  const items = useMemo(() => paletteItemsFor({ hasUser: Boolean(user), isAdmin: user?.role === "admin", permissions }), [user, permissions]);
+  const groups = useMemo(() => Array.from(new Set(items.map(i => i.group))), [items]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -77,11 +79,13 @@ export function CommandPalette() {
       // Notion, Slack and GitHub, so it needs no discovery.
       if (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        setOpen((v) => !v);
+        setOpen(v => !v);
       }
     };
+    const onOpen = () => setOpen(true);
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, onOpen);
+    return () => { document.removeEventListener("keydown", onKey); window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, onOpen); };
   }, []);
 
   const go = (href: string) => {
@@ -100,18 +104,19 @@ export function CommandPalette() {
       <CommandInput placeholder="اذهب إلى… (اكتب اسم الصفحة)" />
       <CommandList>
         <CommandEmpty>لا توجد نتائج مطابقة.</CommandEmpty>
-        {GROUPS.map((group, gi) => (
+        {groups.map((group, gi) => (
           <div key={group}>
             {gi > 0 && <CommandSeparator />}
             <CommandGroup heading={group}>
-              {ITEMS.filter((i) => i.group === group).map((item) => (
+              {items.filter(i => i.group === group).map(item => (
                 <CommandItem
                   key={item.href}
                   value={`${item.label} ${item.keywords.join(" ")}`}
                   onSelect={() => go(item.href)}
-                  className="gap-2"
+                  className="min-h-11 gap-2"
+                  data-testid={`palette-item-${item.href}`}
                 >
-                  <span className="text-muted-foreground">{item.icon}</span>
+                  <item.icon className="h-4 w-4 text-muted-foreground" />
                   <span>{item.label}</span>
                 </CommandItem>
               ))}

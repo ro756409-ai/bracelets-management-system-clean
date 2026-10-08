@@ -1,16 +1,8 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermission";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -25,12 +17,7 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import {
-  Factory,
-  LayoutDashboard, LogOut, PanelRight, Users, ShoppingCart,
-  Package, BarChart3, Briefcase, AlertTriangle, Zap, GitMerge, RotateCcw, PackageCheck, Clock, Activity, Globe, Building2, QrCode, Printer, Home, Boxes, UserCog, LineChart, Plug, Settings, Truck, Wallet, Receipt, Banknote, CalendarDays, PackagePlus, ArrowLeftRight, RotateCcw as ReturnIcon, Megaphone, ClipboardCheck,
-  ChevronDown,
-} from "lucide-react";
+import { LayoutDashboard, PanelRight, ChevronDown } from "lucide-react";
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   MORE_ICON, activeDestinationKey, visibleChildren, visibleDestinations, visibleToolsLinks,
@@ -38,6 +25,8 @@ import {
 import { BusinessSwitcher } from "@/components/shell/BusinessSwitcher";
 import { MobileBottomNav } from "@/components/shell/MobileBottomNav";
 import { WorkspaceTabs } from "@/components/shell/WorkspaceTabs";
+import { CreateMenu } from "@/components/shell/CreateMenu";
+import { TopBarActions } from "@/components/shell/TopBar";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { BrandLogo } from './BrandLogo';
@@ -45,32 +34,27 @@ import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 /**
- * Sidebar, grouped by workflow instead of one flat list of 19 items (Phase A of the UI
- * redesign — see UI_AUDIT.md). Every route and the `adminOnly` gate below is unchanged
- * from the previous `menuItems`/`adminMenuItems` split; only the grouping/visual
- * hierarchy is new.
+ * App Shell — Copper Signature × Clean Spatial (Theme Spec §3), المرحلة 2.
+ *
+ * Sidebar يمين (RTL) قابل للطي إلى أيقونات مع Tooltips، عرض قابل للسحب (كما كان)، أبيض/بطاقة في
+ * Light وداكن دافئ في Dark عبر **Tokens فقط**: ألوان السايدبار تُشتق من الـTokens الدلالية
+ * (`--card/--foreground/--primary-soft/--primary-text/--border/--primary`) بتعيين CSS مُحكَم على
+ * حاوية السايدبار (الديسكتوب) وورقة الموبايل — فلا لون مباشر في أي مكوّن. العنصر النشط: خلفية
+ * primary-soft + نص primary-text + علامة 3px نحاسية على الحافة المنطقية (inset-inline-start).
+ *
+ * الشريط العلوي: «إنشاء» المقسوم (روابط موجودة مفلترة بالصلاحيات)، البحث (لوحة الأوامر ⌘K)، مدخلات
+ * معطّلة صراحةً (تخصيص العرض/المساعدة/الإشعارات)، وقائمة المستخدم — **مرة واحدة في DOM** (أُزيلت من
+ * تذييل السايدبار). هوية النشاط/المبدّل: رأس السايدبار على الديسكتوب، والشريط العلوي على الموبايل.
+ *
+ * Routes والصلاحيات كما هي: التنقّل كله من `config/navigation` (visibleDestinations بالصلاحيات من
+ * myPermissions). الإخفاء ليس أمانًا — كل route محروس على مستواه.
  *
  * Deliberately NOT included: /employee-dashboard, /manager-dashboard, /today-shipments,
- * /facebook-entry. These are a separate portal gated by the `employee_token` cookie
- * (`employeePortal.me`), independent of this layout's `app_session_id` session — an
- * owner logged in via /login has no `employee_token` and would be bounced to
- * /employee-login if this sidebar linked there. Reached instead via /employee-login's
- * own role-based redirect. (The original audit listed these as simply "hidden from the
- * sidebar"; this is the corrected finding after tracing the two cookies.)
+ * /facebook-entry (بوابة الموظف بكوكي `employee_token`؛ المالك بلا الكوكي يُطرد منها).
  */
-// `financial` بند مالي — بيظهر للمالك والمحاسب بس (اللي عندهم `accounting.view`)، ومخفي
-// عن المدير والمودريتور والتأكيدات وإدخال البيانات. الإخفاء ده مش أمان لوحده — البوابة
-// على السيرفر (`permissionProcedure`) هي الحارس الحقيقي؛ ده عشان مايشوفش قسم مايوصلوش.
-type MenuItem = { icon: typeof LayoutDashboard; label: string; path: string; adminOnly?: boolean; financial?: boolean };
+type MenuItem = { icon: typeof LayoutDashboard; label: string; path: string };
 type MenuGroup = {
   label: string;
   icon: typeof LayoutDashboard;
@@ -79,11 +63,31 @@ type MenuGroup = {
   collapsible?: boolean;
 };
 
-
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
-const DEFAULT_WIDTH = 260;
+const DEFAULT_WIDTH = 236;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 400;
+
+/**
+ * ألوان السايدبار من الـTokens الدلالية (Light: بطاقة بيضاء، Dark: بطاقة داكنة دافئة) — مُعيّنة على
+ * حاوية الديسكتوب وورقة الموبايل معًا لأن ورقة الموبايل تُرسم في Portal خارج شجرة الـProvider.
+ * (الانتقال إلى :root/.dark في index.css خطوة لاحقة عندما يكون الملف ضمن نطاق مرحلة.)
+ */
+export const SIDEBAR_TOKEN_CSS = `
+[data-slot="sidebar-container"], [data-slot="sidebar"][data-mobile="true"] {
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--primary-soft);
+  --sidebar-accent-foreground: var(--primary-text);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
+`;
+
+/** العنصر النشط: علامة 3px نحاسية على الحافة المنطقية (RTL = اليمين) — فوق خلفية primary-soft ونص primary-text من Tokens السايدبار. */
+const ACTIVE_MARK_CLASS = "before:absolute before:inset-y-1.5 before:inset-inline-start-0 before:w-[3px] before:rounded-full before:bg-sidebar-primary";
 
 export default function DashboardLayout({
   children,
@@ -115,6 +119,7 @@ export default function DashboardLayout({
             </p>
           </div>
           <Button
+            type="button"
             onClick={() => { window.location.href = getLoginUrl(); }}
             size="lg"
             className="w-full"
@@ -130,6 +135,7 @@ export default function DashboardLayout({
     <SidebarProvider
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
+      <style precedence="default" href="matjarak-shell-sidebar-tokens">{SIDEBAR_TOKEN_CSS}</style>
       <DashboardLayoutContent setSidebarWidth={setSidebarWidth}>
         {children}
       </DashboardLayoutContent>
@@ -162,9 +168,9 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   const lowStockCount = lowStockProducts?.length ?? 0;
 
   const isAdmin = user?.role === 'admin';
-  // التنقّل V2 كله بيتبني من المصدر الواحد (config/navigation): ٧ وجهات أساسية (قابلة للطي
-  // فالسايدبار تفضل مختصرة) + مجموعة «المزيد» للأدوات والسجلّات والحسابات القديمة. الفلترة
-  // بالصلاحيات من نفس مصدر السيرفر (myPermissions) عبر canSeeNav — تعريف واحد، مش مبعتر.
+  // التنقّل V2 كله بيتبني من المصدر الواحد (config/navigation): الوجهات الأساسية (قابلة للطي
+  // فالسايدبار تفضل مختصرة) + مجموعة «المزيد» للأدوات والسجلّات. الفلترة بالصلاحيات من نفس
+  // مصدر السيرفر (myPermissions) عبر canSeeNav — تعريف واحد، مش مبعتر.
   const navDestinations = useMemo(
     () => visibleDestinations(isAdmin, permissions),
     [isAdmin, permissions]
@@ -233,18 +239,24 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
     };
   }, [isResizing, setSidebarWidth]);
 
+  const userName = user?.name ?? "";
+  const roleLabel = user?.role === 'admin' ? 'إدارة' : 'موظف';
+
   return (
     <>
       <div className="relative" ref={sidebarRef}>
         <Sidebar side="right" collapsible="icon" disableTransition={isResizing}>
           <SidebarHeader className="h-16 justify-center border-b border-sidebar-border">
-            <div className="flex items-center gap-3 px-2 w-full">
+            <div className="flex items-center gap-2 px-2 w-full">
               <button
+                type="button"
                 onClick={toggleSidebar}
-                className="h-8 w-8 flex items-center justify-center hover:bg-sidebar-accent rounded-lg transition-colors shrink-0"
-                aria-label="Toggle navigation"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                aria-label={isCollapsed ? "توسيع القائمة" : "طي القائمة"}
+                aria-expanded={!isCollapsed}
+                data-testid="sidebar-toggle"
               >
-                <PanelRight className="h-4 w-4 text-sidebar-foreground/60" />
+                <PanelRight className="h-4 w-4" aria-hidden="true" />
               </button>
               {/* هوية النشاط الفعّال (اسم البراند + اللوجو من القاعدة) — وهي نفسها مبدّل
                   الأنشطة لو المالك عنده أكتر من نشاط. مطوية → اللوجو/الحرف بس. */}
@@ -255,7 +267,6 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
           </SidebarHeader>
 
           <SidebarContent className="gap-0 py-2">
-            {/* مبدّل الأنشطة اتنقل للـTopbar (BusinessSwitcher) — مصدر واحد، من غير تكرار. */}
             {visibleGroups.map(group => {
               const holdsCurrent = group.items.some(
                 item =>
@@ -273,7 +284,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                   (group.collapsible ? (
                     <button
                       type="button"
-                      className="flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent"
+                      className="flex w-full min-h-9 items-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                      aria-expanded={!collapsed}
                       onClick={() =>
                         setOpenGroups(current => {
                           const next = new Set(current);
@@ -284,15 +296,16 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                         })
                       }
                     >
-                      <group.icon className="h-3.5 w-3.5 shrink-0" />
-                      <span className="flex-1 text-right">{group.label}</span>
+                      <group.icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <span className="flex-1 text-start">{group.label}</span>
                       <ChevronDown
                         className={`h-3.5 w-3.5 shrink-0 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+                        aria-hidden="true"
                       />
                     </button>
                   ) : (
-                    <SidebarGroupLabel className="gap-1.5">
-                      <group.icon className="h-3.5 w-3.5" />
+                    <SidebarGroupLabel className="gap-1.5 text-sidebar-foreground/70">
+                      <group.icon className="h-3.5 w-3.5" aria-hidden="true" />
                       {group.label}
                     </SidebarGroupLabel>
                   ))}
@@ -308,9 +321,10 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                             isActive={isActive}
                             onClick={() => setLocation(item.path)}
                             tooltip={item.label}
-                            className="h-10 transition-all font-medium"
+                            aria-current={isActive ? "page" : undefined}
+                            className={`relative h-10 font-medium transition-colors ${isActive ? ACTIVE_MARK_CLASS : ""}`}
                           >
-                            <item.icon className={`h-4 w-4 shrink-0 ${isActive ? "text-sidebar-primary" : ""}`} />
+                            <item.icon className={`h-4 w-4 shrink-0 ${isActive ? "text-sidebar-primary" : ""}`} aria-hidden="true" />
                             <span className="flex-1 truncate">{item.label}</span>
                             {showBadge && !isCollapsed && (
                               <Badge variant="destructive" className="h-5 text-xs px-1.5">
@@ -318,7 +332,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                               </Badge>
                             )}
                             {showBadge && isCollapsed && (
-                              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-destructive" />
+                              <span className="absolute top-1 end-1 w-2 h-2 rounded-full bg-destructive" aria-hidden="true" />
                             )}
                           </SidebarMenuButton>
                         </SidebarMenuItem>
@@ -331,69 +345,46 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
               );
             })}
           </SidebarContent>
-
-          <SidebarFooter className="p-3 border-t border-sidebar-border">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-sidebar-accent/50 transition-colors w-full text-right focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring">
-                  <Avatar className="h-8 w-8 border border-sidebar-border shrink-0">
-                    <AvatarFallback className="text-xs font-bold bg-sidebar-primary text-sidebar-primary-foreground">
-                      {user?.name?.charAt(0).toUpperCase() ?? 'U'}
-                    </AvatarFallback>
-                  </Avatar>
-                  {!isCollapsed && (
-                    <div className="flex-1 min-w-0 text-right">
-                      <p className="text-sm font-medium text-sidebar-foreground truncate">{user?.name || "-"}</p>
-                      <p className="text-xs text-sidebar-foreground/50 truncate">
-                        {user?.role === 'admin' ? 'مدير' : 'موظف'}
-                      </p>
-                    </div>
-                  )}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem onClick={logout} className="cursor-pointer text-destructive focus:text-destructive">
-                  <LogOut className="ml-2 h-4 w-4" />
-                  <span>تسجيل الخروج</span>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </SidebarFooter>
         </Sidebar>
 
+        {/* مقبض تغيير العرض: ديسكتوب فقط — على الموبايل السايدبار ورقة والمقبض كان يبرز 4px خارج الشاشة */}
         <div
-          className={`absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${isCollapsed ? "hidden" : ""}`}
+          className={`absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${isCollapsed ? "hidden" : "hidden md:block"}`}
           onMouseDown={() => { if (!isCollapsed) setIsResizing(true); }}
           style={{ zIndex: 50 }}
+          aria-hidden="true"
         />
       </div>
 
       <SidebarInset>
-        {/* Topbar موحّد: مبدّل الأنشطة (المصدر المعتمد) + عنوان الصفحة على الموبايل +
-            مؤشّر المخزون المنخفض. البروفايل بيفضل في تذييل السايدبار — مفيش تكرار. */}
-        <header className="sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-border bg-background/95 px-4 backdrop-blur">
-          <div className="flex min-w-0 items-center gap-3">
-            {isMobile && <SidebarTrigger className="h-9 w-9 rounded-lg" />}
+        {/* الشريط العلوي (Theme Spec §3): يمين = «إنشاء» (ديسكتوب) / زر القائمة + هوية النشاط + اسم الصفحة
+            (موبايل)؛ يسار = البحث، مدخلات معطّلة صراحةً، تنبيه المخزون، قائمة المستخدم (مرة واحدة في DOM). */}
+        <header className="sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-border bg-background/95 px-3 backdrop-blur md:h-16 md:px-4">
+          {/* المجموعة اليمنى تتقلص (min-w-0 flex-1) والإجراءات ثابتة (shrink-0) — فلا يُدفع شيء خارج 360px */}
+          <div className="flex min-w-0 flex-1 items-center gap-2 md:gap-3">
+            {isMobile && <SidebarTrigger className="h-11 w-11 shrink-0 rounded-lg" aria-label="فتح القائمة" />}
             {/* الموبايل: هوية النشاط (لوجو/حرف + اسم) في الشريط العلوي؛ الديسكتوب: في رأس السايدبار. */}
             {isMobile && <BusinessSwitcher variant="topbar" />}
             {isMobile && (
-              <span className="truncate text-sm text-muted-foreground">{activeMenuItem?.label ?? "القائمة"}</span>
+              <span className="min-w-0 truncate text-sm text-muted-foreground">{activeMenuItem?.label ?? "القائمة"}</span>
             )}
+            {!isMobile && <CreateMenu isAdmin={isAdmin} permissions={permissions} />}
           </div>
-          {lowStockCount > 0 && (
-            <button
-              onClick={() => setLocation("/inventory")}
-              className="flex items-center gap-1 text-xs text-destructive"
-            >
-              <AlertTriangle className="h-3.5 w-3.5" />
-              <span>{lowStockCount} منتج ينفد</span>
-            </button>
-          )}
+          <TopBarActions
+            isMobile={isMobile}
+            isAdmin={isAdmin}
+            permissions={permissions}
+            userName={userName}
+            roleLabel={roleLabel}
+            lowStockCount={lowStockCount}
+            onGoInventory={() => setLocation("/inventory")}
+            onLogout={logout}
+          />
         </header>
         {/* تبويبات القسم (secondary nav) — الوجهة بتبقى workspace بتفاصيلها فوق المحتوى. */}
         <WorkspaceTabs tabs={workspaceTabs} />
-        {/* مساحة سفلية على الموبايل عشان المحتوى ما يتغطّاش وراء الـbottom nav. */}
-        <main className="flex-1 p-4 pb-24 md:p-6 md:pb-6">{children}</main>
+        {/* مساحة سفلية على الموبايل عشان المحتوى ما يتغطّاش وراء الـbottom nav (+ safe-area). */}
+        <main className="flex-1 p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:p-6 md:pb-6">{children}</main>
       </SidebarInset>
       <MobileBottomNav destinations={navDestinations} />
     </>
