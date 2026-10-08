@@ -625,3 +625,12 @@
 .font-en {
   font-family: var(--font-brand-en);
 }
+
+/* أهداف اللمس على الهاتف ≥44px **مهما كان حجم الخط** (تخصيص العرض 90%): أصناف 44px القياسية مبنية على rem
+   (2.75rem) فتصغر مع الخط؛ هنا حد أدنى بالبكسل تحت 768px فقط. خارج أي @layer عمدًا ليغلب أصناف Tailwind. */
+@media (max-width: 767px) {
+  .min-h-11 { min-height: max(2.75rem, 44px); }
+  .h-11 { height: max(2.75rem, 44px); }
+  .w-11 { width: max(2.75rem, 44px); }
+  .min-w-11 { min-width: max(2.75rem, 44px); }
+}

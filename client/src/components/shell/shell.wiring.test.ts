@@ -75,6 +75,8 @@ describe("🔑 الشل — الموبايل والكيبورد", () => {
     expect(tabs).not.toContain("overflow-x-hidden");
     expect(tabs).toContain("scrollIntoView");
     expect(layout).toContain("pb-[calc(6rem+env(safe-area-inset-bottom))]");
+    // landmark واحد: <main> يرسمه SidebarInset فقط (7A أزالت الـmain الداخلي المكرر)
+    expect((layout.match(/<main\b/g) ?? []).length).toBe(0);
     // الشريط العلوي الضيق: نصوص مبدّل النشاط تختفي تحت sm بدل أن تتداخل مع أزرار الإجراءات (الأيقونة + aria-label يبقيان)
     const switcher = fs.readFileSync("client/src/components/shell/BusinessSwitcher.tsx", "utf-8");
     expect(switcher).toContain('${inSidebar ? "" : "hidden sm:block"}');

@@ -61,8 +61,9 @@ export function NeedsAttention({ needsConfirmation = 0, lowStock = 0, duplicates
           {items.map(item => (
             <li key={item.key}>
               <button
+                type="button"
                 onClick={() => setLocation(item.to)}
-                className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-brand-md)] border border-border bg-background px-4 py-3 text-right transition-colors hover:bg-muted"
+                className="flex min-h-11 w-full items-center justify-between gap-3 rounded-[var(--radius-brand-md)] border border-border bg-background px-4 py-3 text-right transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span className="flex items-center gap-3">
                   <item.icon className={`h-5 w-5 shrink-0 ${TONE[item.tone]}`} />

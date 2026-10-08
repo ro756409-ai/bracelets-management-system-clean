@@ -13,6 +13,8 @@ export type SectionCardProps = {
   flush?: boolean;
   className?: string;
   contentClassName?: string;
+  /** معرّف اختبار اختياري على الجذر */
+  testId?: string;
 };
 
 /**
@@ -28,9 +30,10 @@ export function SectionCard({
   flush = false,
   className,
   contentClassName,
+  testId,
 }: SectionCardProps) {
   return (
-    <Card className={cn("shadow-[var(--shadow-card)]", className)}>
+    <Card className={cn("shadow-[var(--shadow-card)]", className)} data-testid={testId}>
       {(title || action) && (
         <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
           <div className="min-w-0 space-y-1">

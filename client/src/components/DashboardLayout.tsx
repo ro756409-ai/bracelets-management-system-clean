@@ -387,7 +387,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
         {/* تبويبات القسم (secondary nav) — الوجهة بتبقى workspace بتفاصيلها فوق المحتوى. */}
         <WorkspaceTabs tabs={workspaceTabs} />
         {/* مساحة سفلية على الموبايل عشان المحتوى ما يتغطّاش وراء الـbottom nav (+ safe-area). */}
-        <main className="flex-1 p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:p-6 md:pb-6">{children}</main>
+        {/* الـlandmark الوحيد (عنصر main) هو SidebarInset أعلاه؛ هذه حاوية التخطيط فقط (كانت عنصر main ثانيًا — مشكلة landmark قديمة أُصلحت في 7A) */}
+        <div className="flex-1 p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] md:p-6 md:pb-6" data-testid="page-content">{children}</div>
       </SidebarInset>
       <MobileBottomNav destinations={navDestinations} />
     </>
