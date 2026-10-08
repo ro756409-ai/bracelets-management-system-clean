@@ -43,7 +43,7 @@ export function TopBarActions({
     <div className="flex shrink-0 items-center gap-1 sm:gap-2" data-testid="topbar-actions">
       {isMobile ? <CreateMenu isAdmin={isAdmin} permissions={permissions} compact /> : null}
       {lowStockCount > 0 && (
-        <Button type="button" variant="ghost" size="sm" onClick={onGoInventory} className="h-10 gap-1 text-destructive hover:text-destructive" data-testid="low-stock-indicator">
+        <Button type="button" variant="ghost" size="sm" onClick={onGoInventory} className="h-11 min-w-11 gap-1 text-destructive hover:text-destructive md:h-10 md:min-w-0" data-testid="low-stock-indicator">
           <AlertTriangle className="h-4 w-4" />
           <span className="hidden sm:inline">{lowStockCount} منتج ينفد</span>
           <span className="sm:hidden">{lowStockCount}</span>
@@ -51,7 +51,8 @@ export function TopBarActions({
       )}
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button type="button" variant="ghost" size="icon" className="h-10 w-10" onClick={openCommandPalette} aria-label="بحث (⌘K)" data-testid="topbar-search">
+          {/* أهداف اللمس: 44px على الموبايل؛ 40px مقصود على الديسكتوب للأزرار الثانوية */}
+          <Button type="button" variant="ghost" size="icon" className="h-11 w-11 md:h-10 md:w-10" onClick={openCommandPalette} aria-label="بحث (⌘K)" data-testid="topbar-search">
             <Search className="h-5 w-5" />
           </Button>
         </TooltipTrigger>
@@ -66,7 +67,7 @@ export function TopBarActions({
       )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" className="flex h-10 items-center gap-2 rounded-md px-1.5 hover:bg-muted focus-visible:outline-none" aria-label="قائمة المستخدم" data-testid="user-menu">
+          <button type="button" className="flex h-11 min-w-11 items-center justify-center gap-2 rounded-md px-1.5 hover:bg-muted focus-visible:outline-none md:h-10 md:min-w-0 md:justify-start" aria-label="قائمة المستخدم" data-testid="user-menu">
             <Avatar className="h-8 w-8 border border-border">
               <AvatarFallback className="bg-accent text-xs font-bold text-accent-foreground">{userName.charAt(0).toUpperCase() || "U"}</AvatarFallback>
             </Avatar>

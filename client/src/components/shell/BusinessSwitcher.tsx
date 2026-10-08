@@ -79,7 +79,8 @@ export function BusinessSwitcher({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-h-[70vh] w-64 overflow-y-auto">
-        <DropdownMenuItem onClick={() => setCurrentBusinessId(undefined)} className="cursor-pointer justify-between font-medium">
+        {/* بنود القائمة ≥44px على الموبايل (36px مقصود على الديسكتوب) */}
+        <DropdownMenuItem onClick={() => setCurrentBusinessId(undefined)} className="min-h-11 cursor-pointer justify-between font-medium md:min-h-9">
           <span>كل الأنشطة</span>
           {currentBusinessId == null && <Check className="h-4 w-4 text-primary" />}
         </DropdownMenuItem>
@@ -93,7 +94,7 @@ export function BusinessSwitcher({
               {showHeader && <DropdownMenuLabel className="text-xs text-muted-foreground">{gName}</DropdownMenuLabel>}
               <DropdownMenuItem
                 onClick={() => setCurrentBusinessId(b.id)}
-                className="cursor-pointer justify-between gap-2"
+                className="min-h-11 cursor-pointer justify-between gap-2 md:min-h-9"
                 data-testid={`business-option-${b.id}`}
               >
                 <span className="flex min-w-0 items-center gap-2">

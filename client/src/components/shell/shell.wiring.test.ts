@@ -77,7 +77,20 @@ describe("🔑 الشل — الموبايل والكيبورد", () => {
     expect(layout).toContain('<SidebarTrigger className="h-11 w-11 shrink-0 rounded-lg" aria-label="فتح القائمة" />');
     // المجموعة اليمنى تتقلص والإجراءات ثابتة؛ مقبض تغيير العرض ديسكتوب فقط
     expect(layout).toContain('className="flex min-w-0 flex-1 items-center gap-2 md:gap-3"');
-    expect(read("client/src/components/shell/TopBar.tsx")).toContain('className="flex shrink-0 items-center gap-1 sm:gap-2"');
+    const top = read("client/src/components/shell/TopBar.tsx");
+    expect(top).toContain('className="flex shrink-0 items-center gap-1 sm:gap-2"');
+    // أهداف اللمس 44px على الموبايل (40px مقصود على الديسكتوب للأزرار الثانوية)
+    expect(top).toContain('className="h-11 w-11 md:h-10 md:w-10" onClick={openCommandPalette}');
+    expect(top).toContain('className="flex h-11 min-w-11 items-center justify-center gap-2 rounded-md px-1.5 hover:bg-muted focus-visible:outline-none md:h-10 md:min-w-0 md:justify-start" aria-label="قائمة المستخدم"');
+    expect(top).toContain('className="h-11 min-w-11 gap-1 text-destructive hover:text-destructive md:h-10 md:min-w-0"');
+    expect(read("client/src/components/shell/CreateMenu.tsx")).toContain('className="h-11 w-11 shrink-0" aria-label="إنشاء"');
     expect(layout).toContain('"hidden" : "hidden md:block"');
+    // ورقة الموبايل: بنود القائمة ورؤوس المجموعات وزر الطي ≥44px (40/36 مقصودة على الديسكتوب)
+    expect(layout).toContain("className={`relative h-11 font-medium transition-colors md:h-10 ${isActive ? ACTIVE_MARK_CLASS : \"\"}`}");
+    expect(layout).toContain("flex w-full min-h-11 items-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70");
+    expect(layout).toContain("flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/70");
+    const sw = read("client/src/components/shell/BusinessSwitcher.tsx");
+    expect(sw).toContain('className="min-h-11 cursor-pointer justify-between font-medium md:min-h-9"');
+    expect(sw).toContain('className="min-h-11 cursor-pointer justify-between gap-2 md:min-h-9"');
   });
 });

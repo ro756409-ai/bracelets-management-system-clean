@@ -251,7 +251,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
               <button
                 type="button"
                 onClick={toggleSidebar}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring md:h-10 md:w-10"
                 aria-label={isCollapsed ? "توسيع القائمة" : "طي القائمة"}
                 aria-expanded={!isCollapsed}
                 data-testid="sidebar-toggle"
@@ -284,7 +284,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                   (group.collapsible ? (
                     <button
                       type="button"
-                      className="flex w-full min-h-9 items-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                      className="flex w-full min-h-11 items-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring md:min-h-9"
                       aria-expanded={!collapsed}
                       onClick={() =>
                         setOpenGroups(current => {
@@ -322,7 +322,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                             onClick={() => setLocation(item.path)}
                             tooltip={item.label}
                             aria-current={isActive ? "page" : undefined}
-                            className={`relative h-10 font-medium transition-colors ${isActive ? ACTIVE_MARK_CLASS : ""}`}
+                            // أهداف لمس 44px داخل ورقة الموبايل؛ 40px مقصود على الديسكتوب
+                            className={`relative h-11 font-medium transition-colors md:h-10 ${isActive ? ACTIVE_MARK_CLASS : ""}`}
                           >
                             <item.icon className={`h-4 w-4 shrink-0 ${isActive ? "text-sidebar-primary" : ""}`} aria-hidden="true" />
                             <span className="flex-1 truncate">{item.label}</span>
