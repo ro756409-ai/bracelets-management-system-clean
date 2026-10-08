@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingSkeleton } from "./States";
+import { useMediaQuery } from "./useMediaQuery";
 
 export type Density = "comfortable" | "compact";
 
@@ -24,8 +25,12 @@ export type Column<T> = {
   sortable?: boolean;
   /** Right-align numeric columns and give them tabular figures. */
   numeric?: boolean;
-  /** Keeps the column pinned while the table scrolls horizontally. */
-  sticky?: boolean;
+  /**
+   * Keeps the column pinned while the table scrolls horizontally. `true`/`"start"` pins to the
+   * logical start edge (the right edge in RTL), `"end"` to the logical end edge — logical, never
+   * physical left/right, so the same column definition is correct in both directions.
+   */
+  sticky?: boolean | "start" | "end";
   /** Never offered in the column-visibility menu (e.g. the actions column). */
   alwaysVisible?: boolean;
   /** Hidden until the user opts in via the column menu. */
@@ -63,10 +68,17 @@ export type ResponsiveDataTableProps<T> = {
   onHiddenColumnsChange?: (hidden: Set<string>) => void;
 
   /**
-   * Rendered instead of the table below `lg`. Without this the table still renders and
-   * scrolls inside its own container — but a card list is almost always better on a phone.
+   * Rendered instead of the table below the `cardsBelow` breakpoint. Without this the table
+   * still renders and scrolls inside its own container — but a card list is almost always better
+   * on a phone. Exactly one of the two (cards or table) is in the DOM at any time — the other is
+   * not rendered at all, so hidden controls can never be focused or announced.
    */
   mobileRow?: (row: T) => ReactNode;
+  /**
+   * Breakpoint below which `mobileRow` replaces the table. Default `lg` (1024px) keeps every
+   * current consumer's behaviour; a page opts into `md` (768px) deliberately.
+   */
+  cardsBelow?: "md" | "lg";
 
   /** Toolbar content shown above the table (density switch, exports…). */
   toolbar?: ReactNode;
@@ -114,11 +126,15 @@ export function ResponsiveDataTable<T>({
   hiddenColumns,
   onHiddenColumnsChange,
   mobileRow,
+  cardsBelow = "lg",
   toolbar,
   bulkActions,
   className,
 }: ResponsiveDataTableProps<T>) {
   const selectable = Boolean(selectedKeys && onSelectionChange);
+  // شاشة واسعة؟ (jsdom/SSR بلا matchMedia → نفترض الواسعة فلا تتغيّر الاختبارات القائمة)
+  const isWide = useMediaQuery(cardsBelow === "md" ? "(min-width: 768px)" : "(min-width: 1024px)", true);
+  const showCards = Boolean(mobileRow) && !isWide;
 
   // Roving-tabindex keyboard navigation. A data table is a grid, not a list of links: only one
   // row is in the tab order at a time, and ↑/↓ moves within it. Without this, tabbing through a
@@ -215,13 +231,13 @@ export function ResponsiveDataTable<T>({
 
   return (
     <div className={cn("space-y-3", className)}>
-      {(toolbar || onHiddenColumnsChange) && (
+      {(toolbar || (onHiddenColumnsChange && !showCards)) && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">{toolbar}</div>
-          {onHiddenColumnsChange && (
+          {onHiddenColumnsChange && !showCards && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="hidden h-9 gap-1.5 lg:inline-flex">
+                <Button type="button" variant="outline" size="sm" className="h-11 gap-1.5 md:h-9">
                   <Columns3 className="h-4 w-4" />
                   الأعمدة
                 </Button>
@@ -271,27 +287,26 @@ export function ResponsiveDataTable<T>({
         </div>
       )}
 
-      {/* Mobile: card list */}
-      {mobileRow && (
-        <div className="space-y-2 lg:hidden">
+      {/* الموبايل: قائمة بطاقات — وحدها في DOM (لا نسخة جدول مخفية بجانبها) */}
+      {showCards && (
+        <div className="space-y-2" data-testid="responsive-table-cards">
           {rows.map((row) => (
-            <div key={rowKey(row)}>{mobileRow(row)}</div>
+            <div key={rowKey(row)}>{mobileRow!(row)}</div>
           ))}
         </div>
       )}
 
-      {/* Desktop table — scrolls inside itself, never widening the page */}
+      {/* Desktop table — scrolls inside itself, never widening the page; وحده في DOM على الشاشة الواسعة */}
+      {!showCards && (
       <div
-        className={cn(
-          "overflow-x-auto rounded-[var(--radius-brand-md)] border border-border",
-          mobileRow && "hidden lg:block"
-        )}
+        className="overflow-x-auto rounded-[var(--radius-brand-md)] border border-border"
+        data-testid="responsive-table-table"
       >
         <table className="w-full min-w-full border-collapse text-sm">
           <thead className="sticky top-0 z-10 bg-muted/60 backdrop-blur">
             <tr>
               {selectable && (
-                <th className="w-10 px-3 py-2.5 text-right">
+                <th className="w-10 px-3 py-2.5 text-start">
                   <Checkbox
                     checked={allSelected || (someSelected && "indeterminate")}
                     onCheckedChange={toggleAll}
@@ -304,9 +319,9 @@ export function ResponsiveDataTable<T>({
                   key={col.id}
                   scope="col"
                   className={cn(
-                    "px-3 py-2.5 text-right text-xs font-semibold text-muted-foreground",
-                    col.numeric && "text-left tabular-nums",
-                    col.sticky && "sticky left-0 z-10 bg-muted/60",
+                    "px-3 py-2.5 text-start text-xs font-semibold text-muted-foreground",
+                    col.numeric && "text-end tabular-nums",
+                    stickyClass(col.sticky, "z-10 bg-muted/60"),
                     col.headerClassName
                   )}
                 >
@@ -378,8 +393,8 @@ export function ResponsiveDataTable<T>({
                       key={col.id}
                       className={cn(
                         "px-3 py-2 align-middle",
-                        col.numeric && "text-left tabular-nums",
-                        col.sticky && "sticky left-0 z-[1] bg-card",
+                        col.numeric && "text-end tabular-nums",
+                        stickyClass(col.sticky, "z-[1] bg-card"),
                         col.className
                       )}
                     >
@@ -392,6 +407,13 @@ export function ResponsiveDataTable<T>({
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
+}
+
+/** تثبيت منطقي: start = الحافة البادئة (اليمين في RTL)، end = الحافة الختامية — لا left/right فيزيائية. */
+export function stickyClass(sticky: Column<unknown>["sticky"], extra: string): string | false {
+  if (!sticky) return false;
+  return cn("sticky", sticky === "end" ? "end-0" : "start-0", extra);
 }

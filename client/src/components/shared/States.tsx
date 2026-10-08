@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Inbox, Lock, RefreshCw } from "lucide-react";
+import { AlertTriangle, Inbox, Lock, RefreshCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -90,6 +90,29 @@ export function ErrorState({
       {onRetry && (
         <Button variant="outline" size="sm" onClick={onRetry} disabled={retrying} className="gap-1">
           <RefreshCw className={cn("h-3.5 w-3.5", retrying && "animate-spin")} />
+          إعادة المحاولة
+        </Button>
+      )}
+    </div>
+  );
+}
+
+export type OfflineStateProps = { message?: string; onRetry?: () => void; retrying?: boolean; className?: string };
+
+/** انقطاع الاتصال: حالة واضحة بنص + أيقونة، `role="status"`، وزر إعادة محاولة ≥44px (لا يُنفّذ شيئًا من تلقاء نفسه). */
+export function OfflineState({ message, onRetry, retrying = false, className }: OfflineStateProps) {
+  return (
+    <div role="status" aria-live="polite" className={cn("flex flex-col items-center justify-center gap-3 rounded-[var(--radius-brand-md)] border border-dashed border-border bg-card px-6 py-10 text-center", className)} data-testid="offline-state">
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-hidden="true">
+        <WifiOff className="h-6 w-6" />
+      </span>
+      <div className="space-y-1">
+        <p className="font-medium">لا يوجد اتصال بالإنترنت</p>
+        <p className="mx-auto max-w-sm text-sm text-muted-foreground">{message ?? "تحقّق من الاتصال ثم أعد المحاولة. لم يُفقد شيء مما حفظته."}</p>
+      </div>
+      {onRetry && (
+        <Button type="button" variant="outline" onClick={onRetry} disabled={retrying} className="min-h-11 gap-1.5">
+          <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} aria-hidden="true" />
           إعادة المحاولة
         </Button>
       )}

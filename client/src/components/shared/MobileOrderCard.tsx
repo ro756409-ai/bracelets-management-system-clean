@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { ChevronDown, ChevronUp, MapPin, Phone } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +28,9 @@ export type MobileOrderCardProps = {
  * The order-list row for phones. This replaces dragging a 9-column table sideways: a
  * customer's name, phone, status and total are the only things visible until the card is
  * opened, and everything else lives behind "expand" rather than being squeezed into cells.
+ *
+ * الوصول (المرحلة 3): البطاقة القابلة للنقر `role="button"` في ترتيب التركيز وتستجيب لـEnter/Space،
+ * واسم الوصول يحمل رقم الأوردر؛ زر التفاصيل ≥44px بـ`aria-expanded`؛ الرقم والهاتف بخط DM Sans واتجاه LTR.
  */
 export function MobileOrderCard({
   orderNumber,
@@ -46,16 +49,25 @@ export function MobileOrderCard({
   onClick,
   className,
 }: MobileOrderCardProps) {
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!onClick) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); }
+  };
   return (
     <div
       className={cn(
         "overflow-hidden rounded-[var(--radius-brand-md)] border border-border bg-card shadow-[var(--shadow-card)]",
         className
       )}
+      data-testid="mobile-order-card"
     >
       <div
-        className={cn("space-y-2.5 p-3.5", onClick && "cursor-pointer")}
+        className={cn("space-y-2.5 p-3.5", onClick && "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring")}
         onClick={onClick}
+        onKeyDown={onKeyDown}
+        role={onClick ? "button" : undefined}
+        tabIndex={onClick ? 0 : undefined}
+        aria-label={onClick ? `فتح الأوردر ${orderNumber} — ${customerName}` : undefined}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 space-y-1">
@@ -66,8 +78,8 @@ export function MobileOrderCard({
             </div>
             {warnings && <div className="flex flex-wrap gap-1">{warnings}</div>}
           </div>
-          <div className="flex shrink-0 flex-col items-end gap-0.5 text-left">
-            <span className="font-mono text-xs text-muted-foreground">{orderNumber}</span>
+          <div className="flex shrink-0 flex-col items-end gap-0.5 text-end">
+            <span className="font-en text-xs text-muted-foreground tabular-nums" dir="ltr">{orderNumber}</span>
             {dateLabel && <span className="text-[11px] text-muted-foreground">{dateLabel}</span>}
           </div>
         </div>
@@ -75,13 +87,13 @@ export function MobileOrderCard({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
           {customerPhone && (
             <span className="flex items-center gap-1">
-              <Phone className="h-3.5 w-3.5" />
-              <span dir="ltr">{customerPhone}</span>
+              <Phone className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="font-en tabular-nums" dir="ltr">{customerPhone}</span>
             </span>
           )}
           {governorate && (
             <span className="flex items-center gap-1">
-              <MapPin className="h-3.5 w-3.5" />
+              <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
               {governorate}
             </span>
           )}
@@ -99,16 +111,17 @@ export function MobileOrderCard({
               e.stopPropagation();
               onToggle();
             }}
-            className="flex w-full items-center justify-center gap-1 border-t border-border pt-2 text-xs text-muted-foreground hover:text-foreground"
+            onKeyDown={(e) => e.stopPropagation()}
+            className="flex min-h-11 w-full items-center justify-center gap-1 border-t border-border pt-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-expanded={expanded}
           >
             {expanded ? (
               <>
-                <ChevronUp className="h-3.5 w-3.5" /> إخفاء التفاصيل
+                <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> إخفاء التفاصيل
               </>
             ) : (
               <>
-                <ChevronDown className="h-3.5 w-3.5" /> عرض التفاصيل
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> عرض التفاصيل
               </>
             )}
           </button>

@@ -23,10 +23,22 @@ export {
   type EmptyStateProps,
   ErrorState,
   type ErrorStateProps,
+  OfflineState,
+  type OfflineStateProps,
   PermissionDeniedState,
   LoadingSkeleton,
   type LoadingSkeletonProps,
 } from "./States";
+// المرحلة 3 — مكوّنات صفحة الطلبات المعتمدة (Theme Spec §3–§4)؛ غير مربوطة بـOrders.tsx بعد (المرحلة 4)
+export { UnderlineTabs, type UnderlineTabsProps, type UnderlineTab } from "./UnderlineTabs";
+export { ScopeBar, type ScopeBarProps, type ScopeOption } from "./ScopeBar";
+export { ReviewAttentionBanner, type ReviewAttentionBannerProps } from "./ReviewAttentionBanner";
+export { OrderToolbar, type OrderToolbarProps, type OrderSearch, type SearchField } from "./OrderToolbar";
+export { CustomerCell, type CustomerCellProps } from "./CustomerCell";
+export { TwoLineCell, type TwoLineCellProps } from "./TwoLineCell";
+export { AttemptsCell, type AttemptsCellProps, UNAVAILABLE_LABEL } from "./AttemptsCell";
+export { ReceiptPrediction, type ReceiptPredictionProps, type ReceiptBand, receiptBand, PREDICTION_UNAVAILABLE } from "./ReceiptPrediction";
+export { useMediaQuery } from "./useMediaQuery";
 export { ConfirmDialog, type ConfirmDialogProps } from "./ConfirmDialog";
 export { SearchInput, type SearchInputProps, FilterBar, type FilterBarProps } from "./FilterBar";
 export {

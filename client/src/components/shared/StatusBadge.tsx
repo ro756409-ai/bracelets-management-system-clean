@@ -1,3 +1,8 @@
+import type { ReactNode } from "react";
+import {
+  AlertTriangle, Archive, Ban, CheckCircle2, CircleDot, Clock, Info, Package, PackageCheck, PhoneOff, Printer, Sparkles, Truck, Undo2, XCircle,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -10,6 +15,10 @@ import { cn } from "@/lib/utils";
  * Tones are semantic, not decorative: a status the user must act on reads warning, a
  * finished-well status reads success, a failure reads danger. Statuses that are merely
  * stages in a healthy pipeline stay neutral so the screen is not a wall of colour.
+ *
+ * Copper Signature (Theme Spec §8): الحالة = لون + **أيقونة دلالية** + نص دائمًا — لا اعتماد على
+ * اللون وحده (WCAG 1.4.1). الأيقونة زخرفية (`aria-hidden`) لأن النص هو المعنى، والشارة تحمل
+ * `data-status`/`data-tone` و`title` للمعلومة الكاملة عند الاقتطاع.
  */
 export type StatusTone =
   | "neutral" | "primary" | "success" | "warning" | "danger" | "info"
@@ -32,23 +41,13 @@ const TONE_CLASS: Record<StatusTone, string> = {
   delivered: "bg-[var(--delivered)]/10 text-[var(--delivered)] border-[var(--delivered)]/30",
 };
 
-/** The dot uses the solid tone colour (not the 10%-opacity background) so it stays a
- *  clear anchor even for two statuses that share a tone (e.g. "مؤجل"/"لم يرد" both warning). */
-const TONE_DOT_CLASS: Record<StatusTone, string> = {
-  neutral: "bg-muted-foreground",
-  primary: "bg-primary",
-  success: "bg-[var(--success)]",
-  warning: "bg-[var(--warning)]",
-  danger: "bg-destructive",
-  info: "bg-[var(--info)]",
-  purple: "bg-[var(--purple)]",
-  cyan: "bg-[var(--cyan)]",
-  amber: "bg-[var(--amber)]",
-  orange: "bg-[var(--orange)]",
-  delivered: "bg-[var(--delivered)]",
+/** أيقونة احتياطية لكل نغمة — تُستخدم عندما لا تملك الحالة أيقونتها الخاصة. */
+const TONE_ICON: Record<StatusTone, LucideIcon> = {
+  neutral: CircleDot, primary: Sparkles, success: CheckCircle2, warning: AlertTriangle, danger: XCircle, info: Info,
+  purple: CircleDot, cyan: Truck, amber: Clock, orange: Clock, delivered: PackageCheck,
 };
 
-type StatusDef = { label: string; tone: StatusTone };
+type StatusDef = { label: string; tone: StatusTone; icon?: LucideIcon };
 
 /**
  * Canonical order statuses. Labels match the wording staff already read on screen.
@@ -59,16 +58,16 @@ type StatusDef = { label: string; tone: StatusTone };
  * meaningful colors, so they don't compete for attention with the statuses that need it.
  */
 export const ORDER_STATUS: Record<string, StatusDef> = {
-  new: { label: "جديد", tone: "info" },
-  confirmed: { label: "مؤكد", tone: "success" },
-  printed: { label: "مطبوع", tone: "neutral" },
-  preparing: { label: "قيد التحضير", tone: "neutral" },
-  shipped: { label: "تم الشحن", tone: "cyan" },
-  delivered: { label: "تم التوصيل", tone: "delivered" },
-  postponed: { label: "مؤجل", tone: "orange" },
-  no_answer: { label: "لم يرد", tone: "amber" },
-  cancelled: { label: "ملغي", tone: "danger" },
-  returned: { label: "مرتجع", tone: "danger" },
+  new: { label: "جديد", tone: "info", icon: Sparkles },
+  confirmed: { label: "مؤكد", tone: "success", icon: CheckCircle2 },
+  printed: { label: "مطبوع", tone: "neutral", icon: Printer },
+  preparing: { label: "قيد التحضير", tone: "neutral", icon: Package },
+  shipped: { label: "تم الشحن", tone: "cyan", icon: Truck },
+  delivered: { label: "تم التوصيل", tone: "delivered", icon: PackageCheck },
+  postponed: { label: "مؤجل", tone: "orange", icon: Clock },
+  no_answer: { label: "لم يرد", tone: "amber", icon: PhoneOff },
+  cancelled: { label: "ملغي", tone: "danger", icon: Ban },
+  returned: { label: "مرتجع", tone: "danger", icon: Undo2 },
 };
 
 /** Where an order came from. Deliberately neutral — source is context, not a warning. */
@@ -85,10 +84,10 @@ export const ORDER_SOURCE: Record<string, StatusDef> = {
 
 /** Stock health, shared by the inventory page and its variant rows. */
 export const STOCK_STATUS: Record<string, StatusDef> = {
-  available: { label: "متوفر", tone: "success" },
-  low: { label: "منخفض", tone: "warning" },
-  out: { label: "نفد", tone: "danger" },
-  archived: { label: "مؤرشف", tone: "neutral" },
+  available: { label: "متوفر", tone: "success", icon: CheckCircle2 },
+  low: { label: "منخفض", tone: "warning", icon: AlertTriangle },
+  out: { label: "نفد", tone: "danger", icon: XCircle },
+  archived: { label: "مؤرشف", tone: "neutral", icon: Archive },
 };
 
 export type StatusBadgeProps = {
@@ -100,6 +99,8 @@ export type StatusBadgeProps = {
   label?: string;
   tone?: StatusTone;
   size?: "sm" | "md";
+  /** أيقونة مخصصة (تُحلّ محلّ أيقونة الحالة/النغمة). `null` = نقطة لونية فقط. */
+  icon?: ReactNode | null;
   className?: string;
 };
 
@@ -111,6 +112,7 @@ export function StatusBadge({
   label,
   tone,
   size = "md",
+  icon,
   className,
 }: StatusBadgeProps) {
   const def = MAPS[kind][status];
@@ -118,6 +120,9 @@ export function StatusBadge({
   // nothing would hide a real data problem from whoever is looking at the screen.
   const text = label ?? def?.label ?? status;
   const resolvedTone = tone ?? def?.tone ?? "neutral";
+  // المصدر (kind=source) سياق لا حالة → نقطة فقط؛ غير ذلك أيقونة الحالة أو احتياطي النغمة
+  const Icon = icon === undefined ? (def?.icon ?? (kind === "source" ? undefined : TONE_ICON[resolvedTone])) : undefined;
+  const iconSize = size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5";
 
   return (
     <span
@@ -127,8 +132,17 @@ export function StatusBadge({
         TONE_CLASS[resolvedTone],
         className
       )}
+      data-status={status}
+      data-tone={resolvedTone}
+      title={text}
     >
-      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", TONE_DOT_CLASS[resolvedTone])} />
+      {icon !== undefined && icon !== null ? (
+        <span className={cn("inline-flex shrink-0 [&>svg]:h-full [&>svg]:w-full", iconSize)} aria-hidden="true">{icon}</span>
+      ) : Icon ? (
+        <Icon className={cn("shrink-0", iconSize)} aria-hidden="true" />
+      ) : (
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />
+      )}
       {text}
     </span>
   );
