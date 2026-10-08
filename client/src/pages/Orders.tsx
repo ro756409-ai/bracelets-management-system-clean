@@ -56,6 +56,7 @@ import { OrdersTabs, TODAY_TAB_KEY } from "@/components/orders/OrdersTabs";
 import { OrdersTable, buildOrdersColumns, type OrdersColumnsContext, type OrdersRowActions } from "@/components/orders/OrdersTable";
 import { renderOrdersMobileRow } from "@/components/orders/OrdersMobileList";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
+import { useDisplayPrefs } from "@/contexts/DisplayPrefsContext";
 import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
@@ -237,7 +238,10 @@ export default function Orders() {
     setPage(1);
     localStorage.setItem('orders-page-size', String(size));
   };
-  const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
+  // الكثافة تبدأ من تفضيل العرض الشخصي (المرحلة 5) وتبقى قابلة للتبديل محليًا من شريط الجدول
+  const { prefs: displayPrefs } = useDisplayPrefs();
+  const [density, setDensity] = useState<'comfortable' | 'compact'>(displayPrefs.density);
+  useEffect(() => { setDensity(displayPrefs.density); }, [displayPrefs.density]);
   // لازم يتزامن مع أعمدة columns تحت اللي معلّمة defaultHidden: true (seq/address/website) —
   // ResponsiveDataTable بيحترم فقط الـids الموجودة فعليًا في هذا الـSet، الخاصية defaultHidden
   // على تعريف العمود نفسه مجرد نية، مش بتُطبَّق لوحدها.

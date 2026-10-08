@@ -1,0 +1,92 @@
+// @vitest-environment jsdom
+/**
+ * المرحلة 5 — نافذة «تخصيص العرض»: المجموعات الخمس بأسماء عربية، radio semantics + أسهم، أهداف 44px،
+ * التطبيق الفوري على الجذر، الاستعادة، ورسالة الزائر. تُفتح من زر الشريط العلوي الحقيقي.
+ */
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+
+const auth = vi.hoisted(() => ({ user: null as null | { id: number } }));
+vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ user: auth.user, loading: false, isAuthenticated: Boolean(auth.user), error: null, refresh: () => {}, logout: () => {} }) }));
+vi.mock("@/components/ui/tooltip", () => ({ Tooltip: ({ children }: any) => <>{children}</>, TooltipTrigger: ({ children }: any) => <>{children}</>, TooltipContent: () => null }));
+
+import { DisplayPrefsProvider } from "@/contexts/DisplayPrefsContext";
+import { DisplayPrefsDialog } from "./DisplayPrefsDialog";
+import { TopBarActions } from "./TopBar";
+import { ACCENTS } from "@/lib/displayPrefs";
+
+beforeEach(() => {
+  auth.user = { id: 3 }; localStorage.clear();
+  (window as any).matchMedia = (q: string) => ({ matches: q.includes("min-width"), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+  const root = document.documentElement; root.className = ""; root.removeAttribute("style");
+});
+afterEach(() => cleanup());
+const root = () => document.documentElement;
+
+const mountDialog = () => render(<DisplayPrefsProvider><DisplayPrefsDialog open onOpenChange={() => {}} /></DisplayPrefsProvider>);
+
+describe("🪟 DisplayPrefsDialog", () => {
+  it("خمس مجموعات radiogroup بأسماء عربية وخيارات 4/3/4/2/3، كل خيار زر ≥44px، النحاسي واللون 100% محددان افتراضيًا", () => {
+    mountDialog();
+    const groups = screen.getAllByRole("radiogroup");
+    expect(groups.map(g => g.getAttribute("aria-label"))).toEqual(["حجم الخط", "الوضع", "اللون الرئيسي", "الكثافة", "تقليل الحركة"]);
+    expect(groups.map(g => within(g).getAllByRole("radio").length)).toEqual([4, 3, 4, 2, 3]);
+    for (const r of screen.getAllByRole("radio")) { expect(r.className).toContain("min-h-11"); expect(r.getAttribute("type")).toBe("button"); }
+    expect(screen.getByTestId("prefs-fontScale-1").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("prefs-accent-copper").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("prefs-accent-copper").textContent).toContain("نحاسي");
+    for (const id of ["teal", "indigo", "olive"] as const) expect(screen.getByTestId(`prefs-accent-${id}`).textContent).toContain(ACCENTS[id].label);
+    expect(document.querySelector('input[type="color"]')).toBeNull();
+    expect((screen.getByTestId("prefs-swatch-teal") as HTMLElement).style.backgroundColor).not.toBe("");
+    expect(screen.getByText(/تُحفظ لحسابك/)).toBeTruthy();
+  });
+  it("النقر يطبّق فورًا على الجذر: 125% / داكن / نيلي / مدمجة / تقليل الحركة — ثم الاستعادة تعيد الافتراضي", () => {
+    mountDialog();
+    fireEvent.click(screen.getByTestId("prefs-fontScale-1.25")); expect(root().style.getPropertyValue("--font-scale")).toBe("1.25");
+    fireEvent.click(screen.getByTestId("prefs-theme-dark")); expect(root().classList.contains("dark")).toBe(true);
+    fireEvent.click(screen.getByTestId("prefs-accent-indigo")); expect(root().getAttribute("data-accent")).toBe("indigo");
+    fireEvent.click(screen.getByTestId("prefs-density-compact")); expect(root().getAttribute("data-density")).toBe("compact");
+    fireEvent.click(screen.getByTestId("prefs-motion-reduce")); expect(root().getAttribute("data-reduce-motion")).toBe("on");
+    expect(JSON.parse(localStorage.getItem("matjarak:display-prefs:v1:u:3")!)).toEqual({ fontScale: 1.25, theme: "dark", accent: "indigo", density: "compact", motion: "reduce" });
+    fireEvent.click(screen.getByTestId("prefs-reset"));
+    expect(root().style.getPropertyValue("--font-scale")).toBe("1"); expect(root().classList.contains("dark")).toBe(false); expect(root().getAttribute("data-accent")).toBe("copper"); expect(root().getAttribute("data-density")).toBe("comfortable"); expect(root().getAttribute("data-reduce-motion")).toBe("off");
+    expect(localStorage.getItem("matjarak:display-prefs:v1:u:3")).toBeNull();
+    expect(screen.getByTestId("prefs-fontScale-1").getAttribute("aria-checked")).toBe("true");
+  });
+  it("لوحة المفاتيح داخل المجموعة: تركيز واحد (المحدد) والأسهم تنتقل وتختار؛ RTL: السهم الأيسر = التالي", () => {
+    document.documentElement.dir = "rtl"; mountDialog();
+    const g = screen.getByRole("radiogroup", { name: "حجم الخط" });
+    const radios = within(g).getAllByRole("radio");
+    expect(radios.map(r => r.getAttribute("tabindex"))).toEqual(["-1", "0", "-1", "-1"]);
+    fireEvent.keyDown(radios[1], { key: "ArrowLeft" });
+    expect(root().style.getPropertyValue("--font-scale")).toBe("1.1");
+    fireEvent.keyDown(screen.getByTestId("prefs-fontScale-1.1"), { key: "ArrowRight" });
+    expect(root().style.getPropertyValue("--font-scale")).toBe("1");
+  });
+  it("الزائر: رسالة «لهذه الجلسة فقط» ولا كتابة في التخزين", () => {
+    auth.user = null; mountDialog();
+    expect(screen.getByText(/لهذه الجلسة فقط/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("prefs-accent-olive"));
+    expect(root().getAttribute("data-accent")).toBe("olive");
+    expect(Object.keys(localStorage).filter(k => k.startsWith("matjarak:display-prefs"))).toHaveLength(0);
+  });
+});
+
+describe("🔝 الزر في الشريط العلوي", () => {
+  const base = { isAdmin: true, permissions: [] as string[], userName: "مالك", roleLabel: "إدارة", lowStockCount: 0, onGoInventory: () => {}, onLogout: vi.fn() };
+  it("ديسكتوب: زر «تخصيص العرض» مفعّل (ليس placeholder) ويفتح النافذة؛ المساعدة/الإشعارات تبقى معطّلة", () => {
+    render(<DisplayPrefsProvider><TopBarActions {...base} isMobile={false} /></DisplayPrefsProvider>);
+    const b = screen.getByTestId("topbar-display-prefs") as HTMLButtonElement;
+    expect(b.disabled).toBe(false); expect(b.getAttribute("aria-label")).toBe("تخصيص العرض"); expect(b.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(screen.queryByTestId("display-prefs-dialog")).toBeNull();
+    fireEvent.click(b);
+    expect(screen.getByTestId("display-prefs-dialog")).toBeTruthy();
+    expect(screen.getByRole("dialog").textContent).toContain("تخصيص العرض");
+    for (const id of ["topbar-help", "topbar-notifications"]) expect((screen.getByTestId(id) as HTMLButtonElement).disabled).toBe(true);
+  });
+  it("موبايل: لا أيقونة في الشريط (تبقى داخل قائمة المستخدم بالكود) ولا نافذة مركّبة قبل الفتح", () => {
+    render(<DisplayPrefsProvider><TopBarActions {...base} isMobile /></DisplayPrefsProvider>);
+    expect(screen.queryByTestId("topbar-display-prefs")).toBeNull();
+    expect(screen.queryByTestId("display-prefs-dialog")).toBeNull();
+  });
+});

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { AlertTriangle, Bell, CircleHelp, LogOut, Search, SlidersHorizontal } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -5,12 +6,14 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CreateMenu } from "./CreateMenu";
 import { COMMAND_PALETTE_OPEN_EVENT } from "@/components/shared/CommandPalette";
+import { DisplayPrefsDialog } from "./DisplayPrefsDialog";
 
 /**
  * عناصر الشريط العلوي (Theme Spec §3) — تُركَّب داخل `<header>` في DashboardLayout.
  *   • «إنشاء» (روابط موجودة مفلترة بالصلاحيات) · البحث يفتح لوحة الأوامر الحالية (⌘K).
- *   • «تخصيص العرض» و«المساعدة» و«الإشعارات» مدخلات **معطّلة صراحةً** (aria-disabled + تلميح «غير
- *     متاح حاليًا»): لا نظام خلفها بعد، فلا تدّعي أنها تعمل (تخصيص العرض = المرحلة 5).
+ *   • «تخصيص العرض» (المرحلة 5) يفتح نافذة الإعدادات لكل مستخدم: أيقونة على الديسكتوب، وبند في قائمة
+ *     المستخدم على الموبايل. «المساعدة» و«الإشعارات» مدخلات **معطّلة صراحةً** (aria-disabled + تلميح
+ *     «غير متاح حاليًا»): لا نظام خلفها بعد، فلا تدّعي أنها تعمل.
  *   • قائمة المستخدم (الاسم/الدور/خروج) هنا فقط — أُزيلت من تذييل السايدبار فلا تتكرر في DOM.
  * لا ألوان مباشرة: Tokens دلالية فقط.
  */
@@ -39,6 +42,7 @@ export function TopBarActions({
   isMobile: boolean; isAdmin: boolean; permissions: string[]; userName: string; roleLabel: string;
   lowStockCount: number; onGoInventory: () => void; onLogout: () => void;
 }) {
+  const [prefsOpen, setPrefsOpen] = useState(false);
   return (
     <div className="flex shrink-0 items-center gap-1 sm:gap-2" data-testid="topbar-actions">
       {isMobile ? <CreateMenu isAdmin={isAdmin} permissions={permissions} compact /> : null}
@@ -60,7 +64,14 @@ export function TopBarActions({
       </Tooltip>
       {!isMobile && (
         <>
-          <PlaceholderAction label="تخصيص العرض" icon={SlidersHorizontal} testId="topbar-display-prefs" />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button type="button" variant="ghost" size="icon" className="h-10 w-10" onClick={() => setPrefsOpen(true)} aria-label="تخصيص العرض" aria-haspopup="dialog" data-testid="topbar-display-prefs">
+                <SlidersHorizontal className="h-5 w-5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>تخصيص العرض — الخط واللون والوضع</TooltipContent>
+          </Tooltip>
           <PlaceholderAction label="المساعدة" icon={CircleHelp} testId="topbar-help" />
           <PlaceholderAction label="الإشعارات" icon={Bell} testId="topbar-notifications" />
         </>
@@ -82,12 +93,20 @@ export function TopBarActions({
         <DropdownMenuContent align="end" className="w-52">
           <DropdownMenuLabel className="truncate">{userName || "—"} · {roleLabel}</DropdownMenuLabel>
           <DropdownMenuSeparator />
+          {isMobile && (
+            <DropdownMenuItem onClick={() => setPrefsOpen(true)} className="min-h-11 cursor-pointer" data-testid="user-display-prefs">
+              <SlidersHorizontal className="h-4 w-4" />
+              <span>تخصيص العرض</span>
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem onClick={onLogout} className="min-h-11 cursor-pointer text-destructive focus:text-destructive" data-testid="user-logout">
             <LogOut className="h-4 w-4" />
             <span>تسجيل الخروج</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {/* تُركَّب عند الفتح فقط — فلا تتطلب المزوّد في الاختبارات التي لا تفتحها */}
+      {prefsOpen && <DisplayPrefsDialog open={prefsOpen} onOpenChange={setPrefsOpen} />}
     </div>
   );
 }

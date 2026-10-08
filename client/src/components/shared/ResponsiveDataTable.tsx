@@ -394,7 +394,7 @@ export function ResponsiveDataTable<T>({
                     <td
                       key={col.id}
                       className={cn(
-                        "px-3 py-2 align-middle",
+                        "px-3 py-[var(--cell-py)] align-middle",
                         col.numeric && "text-end tabular-nums",
                         stickyClass(col.sticky, "z-[1] bg-card"),
                         col.className

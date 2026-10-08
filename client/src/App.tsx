@@ -6,6 +6,7 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch, Redirect } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { DisplayPrefsProvider } from "./contexts/DisplayPrefsContext";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -330,6 +331,8 @@ function Router() {
 function App() {
   return (
     <ErrorBoundary>
+      {/* تخصيص العرض لكل مستخدم (المرحلة 5) — مصدر الوضع/الخط/اللون/الكثافة/الحركة؛ ThemeProvider يقرأ منه */}
+      <DisplayPrefsProvider>
       <ThemeProvider defaultTheme="light">
         <BusinessProvider>
           <TooltipProvider>
@@ -346,6 +349,7 @@ function App() {
           </TooltipProvider>
         </BusinessProvider>
       </ThemeProvider>
+      </DisplayPrefsProvider>
     </ErrorBoundary>
   );
 }

@@ -81,10 +81,12 @@ describe("🔝 TopBarActions + CreateMenu", () => {
     render(<TopBarActions {...base} isMobile={false} />);
     fireEvent.click(screen.getByTestId("topbar-search"));
     expect(seen).toHaveBeenCalledTimes(1);
-    for (const id of ["topbar-display-prefs", "topbar-help", "topbar-notifications"]) {
+    for (const id of ["topbar-help", "topbar-notifications"]) {
       const b = screen.getByTestId(id) as HTMLButtonElement;
       expect(b.disabled).toBe(true); expect(b.getAttribute("aria-disabled")).toBe("true"); expect(b.getAttribute("aria-label")).toContain("غير متاح حاليًا");
     }
+    // «تخصيص العرض» صار حقيقيًا (المرحلة 5) — اختباره الكامل في DisplayPrefsDialog.test.tsx
+    expect((screen.getByTestId("topbar-display-prefs") as HTMLButtonElement).disabled).toBe(false);
     expect(screen.getAllByTestId("user-menu")).toHaveLength(1);
     expect(screen.queryByTestId("create-menu-compact")).toBeNull();
     window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, seen);

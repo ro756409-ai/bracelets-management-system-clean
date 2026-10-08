@@ -42,6 +42,11 @@ describe("🔑 الشل — بنية واحدة بلا تكرار", () => {
     expect(top).toContain("new CustomEvent(COMMAND_PALETTE_OPEN_EVENT)");
     expect(top).toContain('aria-disabled="true" disabled');
     expect(top).toContain("غير متاح حاليًا");
+    // المرحلة 5: «تخصيص العرض» زر حقيقي يفتح النافذة (ديسكتوب أيقونة + بند في قائمة المستخدم على الموبايل)
+    expect(top).toContain('aria-label="تخصيص العرض" aria-haspopup="dialog" data-testid="topbar-display-prefs"');
+    expect(top).toContain('data-testid="user-display-prefs"');
+    expect(top).toContain("<DisplayPrefsDialog open={prefsOpen} onOpenChange={setPrefsOpen} />");
+    expect(top).not.toContain('label="تخصيص العرض" icon={SlidersHorizontal} testId');
     expect(palette).toContain("window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, onOpen)");
   });
   it("لوحة الأوامر تُشتق من config/navigation وتُفلتر بالصلاحيات — لا قائمة ثابتة ولا مسارات محاسبة مجمّدة", () => {

@@ -126,6 +126,8 @@
   --space-section: var(--space-6);   /* 24px */
   --row-h-comfortable: 3.75rem;
   --row-h-compact: 2.75rem;
+  /* حشو خلايا الجدول عموديًا — تخصيص العرض «مدمجة» يقلّصه على الديسكتوب */
+  --cell-py: 0.5rem;
 
   /* Iconography (brand book §18) — 24px grid, 1.75px stroke, rounded joins, outlined never
      filled, so icons stay quiet next to data. Applied globally to Lucide in @layer base. */
@@ -302,6 +304,103 @@
   --sidebar-ring: #E07A4B;
 }
 
+/* ==================== اللون الرئيسي لكل مستخدم (تخصيص العرض، المرحلة 5) ====================
+   النحاسي هو الافتراضي (قيم :root/.dark أعلاه). اللوحات الثلاث الأخرى تمسّ primary/accent/ring/chart-1/sidebar-primary
+   فقط — ألوان الحالات الدلالية لا تتغير. القيم ذاتها في lib/displayPrefs.ts (اختبار التباين يثبّت التطابق). */
+:root[data-accent="teal"] {
+  --primary: #0E6E78;
+  --primary-foreground: #FFFFFF;
+  --primary-text: #0B5A62;
+  --primary-dark: #0B5A62;
+  --primary-soft: #E3F2F3;
+  --accent: #E3F2F3;
+  --accent-foreground: #0B5A62;
+  --ring: #0E6E78;
+  --chart-1: #0E6E78;
+  --sidebar-primary: #4FC3CF;
+  --sidebar-primary-foreground: #121211;
+  --gradient-brand: linear-gradient(135deg, #0E6E78 0%, #0B5A62 100%);
+}
+.dark[data-accent="teal"] {
+  --primary: #4FC3CF;
+  --primary-foreground: #121211;
+  --primary-text: #7FD8E0;
+  --primary-dark: #3AA9B5;
+  --primary-soft: #1A3236;
+  --accent: #1A3236;
+  --accent-foreground: #7FD8E0;
+  --ring: #4FC3CF;
+  --chart-1: #4FC3CF;
+  --sidebar-primary: #4FC3CF;
+  --sidebar-primary-foreground: #121211;
+}
+:root[data-accent="indigo"] {
+  --primary: #3D52B5;
+  --primary-foreground: #FFFFFF;
+  --primary-text: #2F4094;
+  --primary-dark: #2F4094;
+  --primary-soft: #E8EBF8;
+  --accent: #E8EBF8;
+  --accent-foreground: #2F4094;
+  --ring: #3D52B5;
+  --chart-1: #3D52B5;
+  --sidebar-primary: #9DB0F4;
+  --sidebar-primary-foreground: #121211;
+  --gradient-brand: linear-gradient(135deg, #3D52B5 0%, #2F4094 100%);
+}
+.dark[data-accent="indigo"] {
+  --primary: #9DB0F4;
+  --primary-foreground: #121211;
+  --primary-text: #B9C7F7;
+  --primary-dark: #7F95E8;
+  --primary-soft: #252B45;
+  --accent: #252B45;
+  --accent-foreground: #B9C7F7;
+  --ring: #9DB0F4;
+  --chart-1: #9DB0F4;
+  --sidebar-primary: #9DB0F4;
+  --sidebar-primary-foreground: #121211;
+}
+:root[data-accent="olive"] {
+  --primary: #4F6B23;
+  --primary-foreground: #FFFFFF;
+  --primary-text: #3F561B;
+  --primary-dark: #3F561B;
+  --primary-soft: #ECF1E0;
+  --accent: #ECF1E0;
+  --accent-foreground: #3F561B;
+  --ring: #4F6B23;
+  --chart-1: #4F6B23;
+  --sidebar-primary: #A9C45A;
+  --sidebar-primary-foreground: #121211;
+  --gradient-brand: linear-gradient(135deg, #4F6B23 0%, #3F561B 100%);
+}
+.dark[data-accent="olive"] {
+  --primary: #A9C45A;
+  --primary-foreground: #121211;
+  --primary-text: #C3D985;
+  --primary-dark: #8FAA45;
+  --primary-soft: #2A3220;
+  --accent: #2A3220;
+  --accent-foreground: #C3D985;
+  --ring: #A9C45A;
+  --chart-1: #A9C45A;
+  --sidebar-primary: #A9C45A;
+  --sidebar-primary-foreground: #121211;
+}
+
+/* الكثافة المدمجة (تخصيص العرض، المرحلة 5) — على الشاشات الواسعة فقط؛ الموبايل يبقى مريحًا (أهداف لمس 44px).
+   خارج أي @layer عمدًا: قيم :root الافتراضية أعلاه غير مطبّقة (unlayered) فتغلب أي طبقة — والتجاوز يجب أن يكون مثلها. */
+@media (min-width: 768px) {
+  :root[data-density="compact"] {
+    --space-card: var(--space-4);
+    --space-section: var(--space-4);
+    --row-h-comfortable: var(--row-h-compact);
+    --control-h: var(--control-h-compact);
+    --cell-py: 0.25rem;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -309,6 +408,8 @@
   html {
     /* المتصفح يرسم عناصر النموذج/أشرطة التمرير بلوحة الوضع الصحيحة */
     color-scheme: light;
+    /* حجم الخط لكل مستخدم (المرحلة 5): كل مقاسات rem تتبع `--font-scale` (0.9 / 1 / 1.1 / 1.25) */
+    font-size: calc(100% * var(--font-scale));
   }
   html.dark {
     color-scheme: dark;
@@ -335,15 +436,28 @@
     box-shadow: 0 0 0 4px var(--background);
   }
 
-  /* احترام تفضيل تقليل الحركة: لا حركة إجبارية في أي مكان. */
+  /* احترام تفضيل تقليل الحركة: لا حركة زخرفية إجبارية في أي مكان — لكن مؤشرات التحميل
+     (.animate-spin / progressbar) تبقى لأنها feedback وظيفي. المستخدم الذي اختار «غير مفعّل»
+     (data-reduce-motion="off") يتجاوز تفضيل النظام؛ و«مفعّل» (on) يطبّقه بلا تفضيل نظام. */
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
+    html:not([data-reduce-motion="off"]) *:not(.animate-spin):not([role="progressbar"]),
+    html:not([data-reduce-motion="off"]) *::before,
+    html:not([data-reduce-motion="off"]) *::after {
       animation-duration: 0.01ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
   }
+  html[data-reduce-motion="on"] *:not(.animate-spin):not([role="progressbar"]),
+  html[data-reduce-motion="on"] *::before,
+  html[data-reduce-motion="on"] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
 
   /* Headings ride tighter than body copy so they read as one block. */
   h1, h2, h3, h4, h5, h6 {
