@@ -629,6 +629,8 @@
 /* أهداف اللمس على الهاتف ≥44px **مهما كان حجم الخط** (تخصيص العرض 90%): أصناف 44px القياسية مبنية على rem
    (2.75rem) فتصغر مع الخط؛ هنا حد أدنى بالبكسل تحت 768px فقط. خارج أي @layer عمدًا ليغلب أصناف Tailwind. */
 @media (max-width: 767px) {
+  /* ارتفاع القائمة السفلية (MobileBottomNav: 56px + safe-area) لأشرطة الحفظ الثابتة؛ القشرات بلا قائمة تضبطه 0 */
+  :root { --bottom-nav-h: calc(57px + env(safe-area-inset-bottom)); } /* بالبكسل: القائمة min-h-[56px] + حد 1px ولا تتبع مقياس الخط */
   .min-h-11 { min-height: max(2.75rem, 44px); }
   .h-11 { height: max(2.75rem, 44px); }
   .w-11 { width: max(2.75rem, 44px); }

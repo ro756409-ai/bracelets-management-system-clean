@@ -42,12 +42,17 @@ import {
   ArrowUpDown,
   EyeOff,
   Eye,
+  MoreVertical,
 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermission";
-import { ProductVariantGroups } from "@/components/inventory/ProductVariantGroups";
-import { PageHeader } from "@/components/shared";
+import {
+  PageHeader, ScopeBar, StatCard, SectionCard, ResponsiveDataTable, StatusBadge, OfflineState, UNAVAILABLE_LABEL, type Column,
+} from "@/components/shared";
+import { SectionIcon } from "@/components/brand";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { WorkspaceTabs, StatusFilterChips, DataToolbar } from "@/components/workspace";
 import { PRIMARY_DESTINATIONS, visibleChildren } from "@/config/navigation";
 import {
@@ -65,26 +70,8 @@ import {
   type VariantMatrixValue,
 } from "@/components/inventory/VariantMatrixBuilder";
 
-const STATUS_LABELS: Record<StockStatus, string> = {
-  available: "متوفر",
-  low: "منخفض",
-  out: "نفد المخزون",
-  archived: "مؤرشف",
-};
-const STATUS_CLASSES: Record<StockStatus, string> = {
-  available: "bg-[var(--success)]/15 text-[var(--success)] border-0",
-  low: "bg-[var(--warning)]/15 text-[var(--warning)] border-0",
-  out: "bg-destructive/15 text-destructive border-0",
-  archived: "bg-muted text-muted-foreground border-0",
-};
-
-function StatusBadge({ status }: { status: StockStatus }) {
-  return (
-    <Badge className={`text-xs shrink-0 ${STATUS_CLASSES[status]}`}>
-      {STATUS_LABELS[status]}
-    </Badge>
-  );
-}
+/** هدف لمس ≥44px على الهاتف للمكوّنات المشتركة داخل هذه الصفحة فقط (شرائح الفلتر/البحث)؛ 36px على md+. */
+const TOUCH_SCOPE = "[&_button]:min-h-[max(2.75rem,44px)] [&_input]:min-h-[max(2.75rem,44px)] md:[&_button]:min-h-9 md:[&_input]:min-h-9";
 
 function variantLabel(v: any): string {
   return v.name || [v.color, v.size].filter(Boolean).join(" - ") || "بدون اسم";
@@ -92,7 +79,8 @@ function variantLabel(v: any): string {
 
 export default function Inventory() {
   const utils = trpc.useUtils();
-  const { currentBusinessIds } = useBusinessContext();
+  const { currentBusinessIds, currentBusinessId, setCurrentBusinessId, businesses } = useBusinessContext();
+  const online = useOnlineStatus();
   // المصدر الواحد لاختيار النشاط (يعالج: واحد→تلقائي، صفر→isEmpty، أكتر→اختيار).
   const brandOptions = useBrandOptions();
   const { user } = useAuth();
@@ -223,7 +211,7 @@ export default function Inventory() {
   const [priceProductId, setPriceProductId] = useState<number | null>(null);
   const [priceValue, setPriceValue] = useState("");
 
-  const { data: rawProducts, isLoading } = trpc.products.list.useQuery({
+  const { data: rawProducts, isLoading, error: productsError } = trpc.products.list.useQuery({
     ...(currentBusinessIds ? { businessIds: currentBusinessIds } : {}),
     includeInactive: true,
   });
@@ -237,11 +225,19 @@ export default function Inventory() {
   });
 
   // Variants query (all, including archived — filtered client-side by showArchived)
-  const { data: rawVariants, isLoading: variantsLoading } =
+  const { data: rawVariants, isLoading: variantsLoading, error: variantsError } =
     trpc.variants.all.useQuery({
       ...(currentBusinessIds ? { businessIds: currentBusinessIds } : {}),
       includeInactive: true,
     });
+
+  // آخر جرد (قراءة فقط، المرحلة 7C): endpoint موجود بصلاحية inventory_costing.view — يُطلب فقط لنشاط واحد محدد.
+  const scopedBusinessId = currentBusinessIds?.length === 1 ? currentBusinessIds[0] : undefined;
+  const canViewStocktake = isAdmin || permissions.includes("inventory_costing.view");
+  const stocktakes = trpc.accountingV2.stocktakeList.useQuery(
+    { businessId: scopedBusinessId ?? 0, limit: 50 },
+    { enabled: scopedBusinessId != null && canViewStocktake }
+  );
 
   const addMovementMutation = trpc.products.addMovement.useMutation({
     onSuccess: () => {
@@ -941,110 +937,234 @@ export default function Inventory() {
   const hasActiveFilters =
     !!search || stockStatusFilter !== "all" || showArchived;
 
+  // ===== المرحلة 7C: صف مسطّح لكل منتج (بلا تركيبات) أو لكل تركيبة — نفس الفلترة/الترتيب أعلاه، عرض فقط =====
+  type InvRow = {
+    key: string; kind: "product" | "variant"; product: any; variant: any | null;
+    name: string; variantLabel: string | null; sku: string | null; qty: number; min: number;
+    status: StockStatus; updatedAt: string | null; businessName: string | null;
+  };
+  const businessNameOf = (id: number | null | undefined) =>
+    id == null ? null : (businesses.find(b => b.id === id)?.name ?? null);
+  const inventoryRows: InvRow[] = useMemo(() => {
+    const out: InvRow[] = [];
+    for (const r of rows) {
+      const { product, hasVariants, visibleVariants } = r;
+      const bizName = businessNameOf(product.businessId);
+      if (hasVariants) {
+        // رصيد المنتج نفسه (السادة/بدون تركيبة) حقيقي أيضًا — الاستلام «سادة» يزيده — فيُعرض صفًا مستقلًا لو كان له رصيد
+        if ((product.currentStock ?? 0) > 0) {
+          const st0 = getStockStatus(product.isActive, product.currentStock, product.minStockLevel);
+          if (stockStatusFilter === "all" || st0 === stockStatusFilter) {
+            out.push({
+              key: `p-${product.id}`, kind: "product", product, variant: null, name: product.name,
+              variantLabel: "بدون تركيبة (رصيد المنتج)", sku: product.sku ?? null, qty: product.currentStock ?? 0, min: product.minStockLevel ?? 0,
+              status: st0, updatedAt: product.updatedAt ? String(product.updatedAt) : null, businessName: bizName,
+            });
+          }
+        }
+        for (const v of visibleVariants) {
+          const st = getStockStatus(v.isActive, v.currentStock, v.minStockLevel);
+          if (stockStatusFilter !== "all" && st !== stockStatusFilter) continue;
+          out.push({
+            key: `v-${v.id}`, kind: "variant", product, variant: v, name: product.name,
+            variantLabel: variantLabel(v), sku: v.sku ?? null, qty: v.currentStock ?? 0, min: v.minStockLevel ?? 0,
+            status: st, updatedAt: null, businessName: bizName,
+          });
+        }
+      } else {
+        out.push({
+          key: `p-${product.id}`, kind: "product", product, variant: null, name: product.name,
+          variantLabel: null, sku: product.sku ?? null, qty: product.currentStock ?? 0, min: product.minStockLevel ?? 0,
+          status: getStockStatus(product.isActive, product.currentStock, product.minStockLevel),
+          updatedAt: product.updatedAt ? String(product.updatedAt) : null, businessName: bizName,
+        });
+      }
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, stockStatusFilter, businesses]);
+
+  // ===== ملخص حقيقي (مصدر كل رقم مكتوب في hint) =====
+  const activeProducts = (rawProducts ?? []).filter((p: any) => p.isActive);
+  const activeVariants = ((rawVariants ?? []) as any[]).filter(v => v.isActive);
+  const productsWithoutVariants = activeProducts.filter((p: any) => !(variantsByProduct[p.id]?.variants?.length));
+  const countBy = (st: StockStatus) =>
+    productsWithoutVariants.filter((p: any) => getStockStatus(true, p.currentStock, p.minStockLevel) === st).length +
+    activeVariants.filter(v => getStockStatus(true, v.currentStock, v.minStockLevel) === st).length;
+  const summaryLow = countBy("low");
+  const summaryOut = countBy("out");
+  const lastStocktake = useMemo(() => {
+    const list = (stocktakes.data ?? []) as any[];
+    if (list.length === 0) return null;
+    return list.reduce((a, b) => (new Date(b.createdAt).getTime() > new Date(a.createdAt).getTime() ? b : a));
+  }, [stocktakes.data]);
+  const STOCKTAKE_STATUS: Record<string, string> = { draft: "مسودة", pending_approval: "بانتظار الاعتماد", approved: "معتمد", cancelled: "ملغي" };
+  const fmtN = (n: number) => n.toLocaleString("ar-EG");
+  const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("ar-EG", { day: "numeric", month: "short", year: "numeric" }) : UNAVAILABLE_LABEL);
+
+  const refreshAll = () => {
+    utils.products.list.invalidate(); utils.products.lowStock.invalidate(); utils.variants.all.invalidate(); utils.products.movements.invalidate();
+  };
+
+  // أزرار الحركة: وارد/صادر = نفس الحوارات/الـmutations الحالية — لا كتابة مباشرة للرصيد من الجدول
+  const movementButtons = (row: InvRow, size: "table" | "card") => {
+    const cls = size === "card" ? "min-h-11 flex-1" : "min-h-9 h-9 px-2";
+    const active = row.kind === "variant" ? row.variant.isActive !== false : row.product.isActive;
+    const onIn = () => (row.kind === "variant" ? handleVariantMovement(row.variant.id, "in") : handleMovement(row.product.id, "in"));
+    const onOut = () => (row.kind === "variant" ? handleVariantMovement(row.variant.id, "out") : handleMovement(row.product.id, "out"));
+    return (
+      <>
+        <Button type="button" size="sm" variant="outline" className={`${cls} gap-1 border-[var(--success)]/40 text-[var(--success)]`} onClick={onIn} disabled={!active} data-testid={`inv-in-${row.key}`}>
+          <ArrowDownCircle className="h-4 w-4" aria-hidden="true" /> وارد
+        </Button>
+        <Button type="button" size="sm" variant="outline" className={`${cls} gap-1 border-destructive/40 text-destructive`} onClick={onOut} disabled={!active || row.qty === 0} data-testid={`inv-out-${row.key}`}>
+          <ArrowUpCircle className="h-4 w-4" aria-hidden="true" /> صادر
+        </Button>
+      </>
+    );
+  };
+  const moreMenu = (row: InvRow, size: "table" | "card") => {
+    const p = row.product;
+    const items: Array<{ key: string; label: string; onSelect: () => void; destructive?: boolean }> =
+      row.kind === "product"
+        ? [
+            { key: "edit", label: "تعديل المنتج", onSelect: () => openEditProduct(p) },
+            { key: "price", label: "تعديل السعر", onSelect: () => openEditPrice(p) },
+            { key: "stock", label: "تعديل عدد القطع", onSelect: () => startEditStock(p) },
+            { key: "history", label: "سجل الحركات", onSelect: () => { setHistoryProductId(p.id); setShowHistory(true); } },
+            { key: "variant", label: "إضافة نوع", onSelect: () => openCreateVariant(p.id) },
+            { key: "matrix", label: "إضافة ألوان/مقاسات", onSelect: () => openAddMatrix(p.id) },
+            { key: "archive", label: p.isActive ? "أرشفة المنتج" : "إعادة تفعيل المنتج", onSelect: () => setArchiveProductTarget(p), destructive: !!p.isActive },
+          ]
+        : [
+            { key: "edit", label: "تعديل الصنف", onSelect: () => openEditVariant(row.variant) },
+            { key: "history", label: "سجل حركات المنتج", onSelect: () => { setHistoryProductId(p.id); setShowHistory(true); } },
+            { key: "archive", label: row.variant.isActive ? "أرشفة الصنف" : "إعادة تفعيل الصنف", onSelect: () => setDeleteVariantTarget(row.variant), destructive: !!row.variant.isActive },
+          ];
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button type="button" size="sm" variant="ghost" className={size === "card" ? "min-h-11 min-w-11" : "h-9 min-h-9 w-9 p-0"} aria-label="المزيد من الإجراءات" data-testid={`inv-more-${row.key}`}>
+            <MoreVertical className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          {items.map(it => (
+            <DropdownMenuItem key={it.key} className={`min-h-11 md:min-h-9 ${it.destructive ? "text-destructive focus:text-destructive" : ""}`} onClick={it.onSelect} data-testid={`inv-more-${row.key}-${it.key}`}>
+              {it.label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  };
+  const qtyCell = (row: InvRow) =>
+    row.kind === "product" && editingProductId === row.product.id ? (
+      <span className="inline-flex items-center gap-1" data-testid="inv-stock-editor">
+        <Input type="number" inputMode="numeric" min="0" value={editStockValue} onChange={e => setEditStockValue(e.target.value)} className="h-9 w-20 text-center text-sm font-bold" autoFocus aria-label="عدد القطع"
+          onKeyDown={e => { if (e.key === "Enter") saveEditStock(); if (e.key === "Escape") cancelEditStock(); }} />
+        <Button type="button" size="sm" variant="ghost" className="h-9 w-9 p-0 text-[var(--success)]" onClick={saveEditStock} disabled={updateStockMutation.isPending} aria-label="حفظ عدد القطع"><Save className="h-4 w-4" /></Button>
+      </span>
+    ) : (
+      <span className={`font-bold tabular-nums ${row.status === "low" || row.status === "out" ? "text-destructive" : ""}`}>{fmtN(row.qty)}</span>
+    );
+  const inventoryColumns: Column<InvRow>[] = [
+    { id: "product", header: "المنتج", cell: r => <div className="min-w-0"><p className="truncate font-medium">{r.name}</p>{r.kind === "product" && r.sku && <p className="font-mono text-xs text-muted-foreground" dir="ltr">{r.sku}</p>}</div>, sortable: false, alwaysVisible: true },
+    { id: "variant", header: "التركيبة", cell: r => r.variantLabel ? <span className="text-[var(--info)]">{r.variantLabel}</span> : <span className="text-muted-foreground">—</span> },
+    { id: "sku", header: "SKU / الكود", cell: r => r.sku ? <span className="font-mono text-xs" dir="ltr">{r.sku}</span> : <span className="text-xs text-muted-foreground">{UNAVAILABLE_LABEL}</span> },
+    { id: "qty", header: "الكمية", numeric: true, cell: qtyCell },
+    { id: "min", header: "حد التنبيه", numeric: true, cell: r => <span className="tabular-nums text-muted-foreground">{fmtN(r.min)}</span> },
+    { id: "status", header: "الحالة", cell: r => <StatusBadge kind="stock" status={r.status} size="sm" /> },
+    { id: "updated", header: "آخر تحديث", cell: r => <span className="text-xs tabular-nums text-muted-foreground">{fmtDate(r.updatedAt)}</span> },
+    { id: "business", header: "النشاط", cell: r => <span className="text-xs">{r.businessName ?? UNAVAILABLE_LABEL}</span> },
+    { id: "actions", header: "إجراءات", sticky: "end", alwaysVisible: true, cell: r => <div className="flex items-center justify-end gap-1">{movementButtons(r, "table")}{moreMenu(r, "table")}</div> },
+  ];
+  const mobileRow = (r: InvRow) => (
+    <article className={`space-y-2 rounded-[var(--radius-brand-md)] border bg-card p-3 ${r.status === "out" ? "border-destructive/40" : r.status === "low" ? "border-[var(--warning)]/40" : "border-border"} ${r.status === "archived" ? "opacity-70" : ""}`} data-testid={`inv-card-${r.key}`} data-status={r.status}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-semibold">{r.name}</p>
+          {r.variantLabel && <p className="text-sm text-[var(--info)]">{r.variantLabel}</p>}
+          <p className="font-mono text-xs text-muted-foreground" dir="ltr">{r.sku ?? UNAVAILABLE_LABEL}</p>
+        </div>
+        <StatusBadge kind="stock" status={r.status} size="sm" />
+      </div>
+      <dl className="grid grid-cols-3 gap-2 text-xs">
+        <div><dt className="text-muted-foreground">الكمية</dt><dd className="text-base">{qtyCell(r)}</dd></div>
+        <div><dt className="text-muted-foreground">حد التنبيه</dt><dd className="tabular-nums">{fmtN(r.min)}</dd></div>
+        <div><dt className="text-muted-foreground">النشاط</dt><dd className="truncate">{r.businessName ?? UNAVAILABLE_LABEL}</dd></div>
+        <div className="col-span-3"><dt className="text-muted-foreground">آخر تحديث</dt><dd className="tabular-nums">{fmtDate(r.updatedAt)}</dd></div>
+      </dl>
+      <div className="flex items-center gap-2">{movementButtons(r, "card")}{moreMenu(r, "card")}</div>
+    </article>
+  );
+
   return (
-    <div className="space-y-6">
-      {/* V2 Header موحّد + تبويبات Workspace المخزون (routes). التبويبات الداخلية (أصناف/
-          حركات/تكلفة) بقت إجراءات ثانوية هادية. «الجرد اليومي» اتسمّى «الحركات» عشان
-          مايتلخبطش مع «الجرد» (stocktake) الحقيقي في تبويبات الـWorkspace. */}
+    <div className="space-y-5">
+      {/* المرحلة 7C: رأس + نطاق النشاط + ملخص حقيقي + فلاتر + جدول Desktop/بطاقات Mobile. التبويبات الداخلية
+          (أصناف/حركات/تكلفة) والـWorkspaceTabs كما هي؛ كل الحوارات والـmutations بلا تغيير. */}
       <PageHeader
-        title="المخزن والجرد"
-        description="إدارة المخزون والحركات والاستلام والجرد — لكل نشاط."
-        icon={<Package className="h-5 w-5" />}
+        title="المخزون"
+        description="الأرصدة الحالية لكل منتج وتركيبة في نطاق الجلسة — الرصيد يتغيّر من حركات الوارد/الصادر والاستلام والجرد فقط."
+        icon={<SectionIcon section="inventory" fallback={Package} size="md" />}
         primaryAction={
           activeTab === "products" ? (
-            <Button onClick={openCreateProduct}>
-              <Plus className="h-4 w-4 ml-1" />
+            <Button className="min-h-11 md:min-h-9" onClick={openCreateProduct} data-testid="inv-create-product">
+              <Plus className="h-4 w-4 ml-1" aria-hidden="true" />
               إضافة منتج
             </Button>
           ) : undefined
         }
         actions={
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Button
-              variant={activeTab === "products" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setActiveTab("products")}
-            >
-              <Package className="h-4 w-4 ml-1" />
-              الأصناف
+          <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="أقسام المخزون">
+            <Button variant={activeTab === "products" ? "default" : "outline"} size="sm" className="min-h-11 md:min-h-9" role="tab" aria-selected={activeTab === "products"} onClick={() => setActiveTab("products")}>
+              <Package className="h-4 w-4 ml-1" aria-hidden="true" /> الأصناف
             </Button>
-            <Button
-              variant={activeTab === "daily" ? "default" : "outline"}
-              size="sm"
-              onClick={() => { setActiveTab("daily"); setHistoryProductId(null); }}
-            >
-              <ClipboardList className="h-4 w-4 ml-1" />
-              الحركات
+            <Button variant={activeTab === "daily" ? "default" : "outline"} size="sm" className="min-h-11 md:min-h-9" role="tab" aria-selected={activeTab === "daily"} onClick={() => { setActiveTab("daily"); setHistoryProductId(null); }}>
+              <ClipboardList className="h-4 w-4 ml-1" aria-hidden="true" /> الحركات
             </Button>
-            <Button
-              variant={activeTab === "accounting" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setActiveTab("accounting")}
-            >
-              <PackageCheck className="h-4 w-4 ml-1" />
-              التكلفة والاستلام
+            <Button variant={activeTab === "accounting" ? "default" : "outline"} size="sm" className="min-h-11 md:min-h-9" role="tab" aria-selected={activeTab === "accounting"} onClick={() => setActiveTab("accounting")}>
+              <PackageCheck className="h-4 w-4 ml-1" aria-hidden="true" /> التكلفة والاستلام
             </Button>
           </div>
         }
-      />
+      >
+        {businesses.length > 1 && (
+          <ScopeBar options={businesses.map(b => ({ id: b.id, label: b.name }))} value={currentBusinessId ?? null} onChange={id => setCurrentBusinessId(id == null ? undefined : Number(id))} />
+        )}
+      </PageHeader>
       <WorkspaceTabs tabs={inventoryTabs} />
 
-      {/* Stats Row */}
+      {!online && <OfflineState onRetry={refreshAll} />}
+
+      {/* ملخص حقيقي — مصدر كل رقم مكتوب تحته؛ لا قيمة مخزون ولا تكلفة محسوبة هنا */}
       {activeTab !== "accounting" && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="p-4 text-center">
-              <Package className="h-6 w-6 text-primary mx-auto mb-2" />
-              <p className="text-2xl font-bold text-foreground">
-                {totalStockAll.toLocaleString("ar-EG")}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                إجمالي المخزون
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <AlertTriangle
-                className={`h-6 w-6 mx-auto mb-2 ${needsRestockCount > 0 ? "text-destructive" : "text-muted-foreground"}`}
-              />
-              <p
-                className={`text-2xl font-bold ${needsRestockCount > 0 ? "text-destructive" : "text-foreground"}`}
-              >
-                {needsRestockCount}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                صنف يحتاج تخزين
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <ArrowDownCircle className="h-6 w-6 text-[var(--success)] mx-auto mb-2" />
-              <p className="text-2xl font-bold text-[var(--success)]">
-                +{todayIn}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">وارد اليوم</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4 text-center">
-              <ArrowUpCircle className="h-6 w-6 text-destructive mx-auto mb-2" />
-              <p className="text-2xl font-bold text-destructive">-{todayOut}</p>
-              <p className="text-xs text-muted-foreground mt-1">صادر اليوم</p>
-            </CardContent>
-          </Card>
-        </div>
+        <section aria-label="ملخص المخزون" className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5" data-testid="inventory-summary">
+          <StatCard label="المنتجات" value={isLoading ? "…" : fmtN(activeProducts.length)} icon={<Package className="h-5 w-5" aria-hidden="true" />} tone="primary" hint="منتج نشط في النطاق (products.list)" loading={isLoading} />
+          <StatCard label="التركيبات" value={variantsLoading ? "…" : fmtN(activeVariants.length)} icon={<Tag className="h-5 w-5" aria-hidden="true" />} hint="تركيبة نشطة (variants.all)" loading={variantsLoading} />
+          <StatCard label="منخفض المخزون" value={fmtN(summaryLow)} icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />} tone={summaryLow > 0 ? "warning" : "default"} hint="الكمية ≤ حد التنبيه (getStockStatus)" onClick={() => { setActiveTab("products"); setStockStatusFilter("low"); }} active={stockStatusFilter === "low"} loading={isLoading || variantsLoading} />
+          <StatCard label="نافد" value={fmtN(summaryOut)} icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />} tone={summaryOut > 0 ? "danger" : "default"} hint="الكمية = صفر (getStockStatus)" onClick={() => { setActiveTab("products"); setStockStatusFilter("out"); }} active={stockStatusFilter === "out"} loading={isLoading || variantsLoading} />
+          <StatCard
+            label="آخر جرد"
+            value={lastStocktake ? fmtDate(lastStocktake.createdAt) : UNAVAILABLE_LABEL}
+            icon={<ClipboardList className="h-5 w-5" aria-hidden="true" />}
+            hint={
+              scopedBusinessId == null ? "اختر نشاطًا واحدًا لعرض آخر جرد"
+              : !canViewStocktake ? "يتطلب صلاحية عرض تكلفة المخزون"
+              : lastStocktake ? `${STOCKTAKE_STATUS[lastStocktake.status] ?? lastStocktake.status} · ${lastStocktake.createdByName ?? ""} (stocktakeList)`
+              : stocktakes.isLoading ? "جارٍ التحميل" : "لا جلسات جرد بعد (stocktakeList)"
+            }
+            loading={stocktakes.isLoading}
+          />
+        </section>
       )}
 
-      {/* Low Stock Alert */}
+      {/* Low Stock Alert — من products.lowStock كما كان */}
       {lowStock && lowStock.length > 0 && activeTab === "products" && (
-        <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="h-4 w-4 text-destructive" />
-            <p className="font-semibold text-destructive text-sm">
-              تنبيه: الأصناف التالية تحتاج إعادة تخزين
-            </p>
+        <div className="rounded-[var(--radius-brand-md)] border border-destructive/20 bg-destructive/10 p-4" role="status" data-testid="inventory-low-alert">
+          <div className="mb-2 flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-destructive" aria-hidden="true" />
+            <p className="text-sm font-semibold text-destructive">تنبيه: الأصناف التالية تحتاج إعادة تخزين</p>
           </div>
           <div className="flex flex-wrap gap-2">
             {lowStock.map(p => (
@@ -1056,10 +1176,12 @@ export default function Inventory() {
         </div>
       )}
 
-      {/* ===== TAB: PRODUCTS (with nested variants) ===== */}
+      {/* ===== TAB: PRODUCTS — جدول/بطاقات ===== */}
       {activeTab === "products" && (
         <>
-          {/* فلترة حالة المخزون — المصدر الوحيد (single source) عبر StatusFilterChips. */}
+          {/* فلترة حالة المخزون — المصدر الوحيد (single source) عبر StatusFilterChips.
+              الغلاف يمنح شرائح الفلتر وحقل البحث (مكوّنات مشتركة) هدف لمس ≥44px على الهاتف داخل هذه الصفحة فقط. */}
+          <div className={TOUCH_SCOPE} data-testid="inventory-filters">
           <StatusFilterChips
             chips={[
               { key: "available", label: "متوفر", tone: "success" },
@@ -1072,8 +1194,7 @@ export default function Inventory() {
             }
           />
 
-          {/* شريط أدوات موحّد: بحث ظاهر + الترتيب/المؤرشفة في «فلاتر متقدمة» + chips + مسح.
-              نفس الـstate والمنطق — إعادة تنظيم UI فقط، ومفيش تكرار للحالة (فوق في الشرائح). */}
+          {/* شريط أدوات موحّد (superset لـFilterBar): بحث + ترتيب/مؤرشفة في «فلاتر متقدمة» + شرائح + مسح. */}
           <DataToolbar
             search={search}
             onSearch={(v) => setSearch(v)}
@@ -1095,10 +1216,10 @@ export default function Inventory() {
             advancedFilters={
               <>
                 <div>
-                  <label className="mb-1.5 block text-sm font-medium text-foreground">الترتيب</label>
+                  <label className="mb-1.5 block text-sm font-medium text-foreground" htmlFor="inv-sort">الترتيب</label>
                   <div className="flex gap-2">
                     <Select value={sortBy} onValueChange={v => setSortBy(v as typeof sortBy)}>
-                      <SelectTrigger className="h-9 w-full"><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="inv-sort" className="min-h-11 w-full md:min-h-9"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="name">ترتيب بالاسم</SelectItem>
                         <SelectItem value="stock">ترتيب بالمخزون</SelectItem>
@@ -1107,538 +1228,46 @@ export default function Inventory() {
                       </SelectContent>
                     </Select>
                     <Button
-                      size="sm" variant="outline" className="h-9 w-9 shrink-0 p-0"
+                      type="button" size="sm" variant="outline" className="min-h-11 w-11 shrink-0 p-0 md:min-h-9 md:w-9"
                       onClick={() => setSortDir(d => (d === "asc" ? "desc" : "asc"))}
-                      title={sortDir === "asc" ? "تصاعدي" : "تنازلي"}
+                      aria-label={sortDir === "asc" ? "تصاعدي" : "تنازلي"} title={sortDir === "asc" ? "تصاعدي" : "تنازلي"}
                     >
-                      <ArrowUpDown className="h-4 w-4" />
+                      <ArrowUpDown className="h-4 w-4" aria-hidden="true" />
                     </Button>
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-sm font-medium text-foreground">المؤرشفة</label>
+                  <span className="mb-1.5 block text-sm font-medium text-foreground">المؤرشفة</span>
                   <Button
-                    size="sm" variant={showArchived ? "default" : "outline"} className="h-9 w-full"
-                    onClick={() => setShowArchived(s => !s)}
+                    type="button" size="sm" variant={showArchived ? "default" : "outline"} className="min-h-11 w-full md:min-h-9"
+                    onClick={() => setShowArchived(s => !s)} aria-pressed={showArchived}
                   >
-                    {showArchived ? <Eye className="h-3.5 w-3.5 ml-1" /> : <EyeOff className="h-3.5 w-3.5 ml-1" />}
+                    {showArchived ? <Eye className="h-3.5 w-3.5 ml-1" aria-hidden="true" /> : <EyeOff className="h-3.5 w-3.5 ml-1" aria-hidden="true" />}
                     {showArchived ? "إخفاء المؤرشف" : "إظهار المؤرشف"}
                   </Button>
                 </div>
               </>
             }
           />
+          </div>
 
-          {isLoading || variantsLoading ? (
-            <div className="space-y-4">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-32 bg-muted animate-pulse rounded-xl"
-                />
-              ))}
-            </div>
-          ) : !rawProducts || rawProducts.length === 0 ? (
-            <Card>
-              <CardContent className="p-12 text-center">
-                <Package className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground">لا توجد منتجات بعد</p>
-                <Button size="sm" className="mt-3" onClick={openCreateProduct}>
-                  <Plus className="h-3.5 w-3.5 ml-1" />
-                  إضافة أول منتج
-                </Button>
-              </CardContent>
-            </Card>
-          ) : rows.length === 0 ? (
-            <Card>
-              <CardContent className="p-12 text-center">
-                <Search className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground">
-                  لا توجد نتائج مطابقة للبحث/الفلاتر الحالية
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="space-y-4">
-              {/* المخزون حسب المنتج — Accordion + جدول/كروت للأنواع (Mobile-first). العرض للجميع
-                  بنطاق الجلسة؛ تعديل المخزون للمالك/الأدمن فقط ويفتح نفس نافذة حركة النوع. */}
-              {(rawVariants?.length ?? 0) > 0 && (
-                <ProductVariantGroups
-                  variants={(rawVariants as any[]).map(v => ({
-                    id: v.id, productId: v.productId, productName: v.productName, name: v.name, sku: v.sku,
-                    price: v.price, currentStock: v.currentStock, minStockLevel: v.minStockLevel, isActive: v.isActive,
-                  }))}
-                  canEdit={isAdmin}
-                  onAdjust={v => { setSelectedVariantId(v.id); setShowVariantMovementDialog(true); }}
-                />
-              )}
-              {rows.map(
-                ({
-                  product,
-                  hasVariants,
-                  visibleVariants,
-                  totalStock,
-                  totalValue,
-                  attentionCount,
-                  forceExpand,
-                }) => {
-                  const isExpanded =
-                    forceExpand || !!expandedProducts[product.id];
-                  const productStatus = getStockStatus(
-                    product.isActive,
-                    product.currentStock,
-                    product.minStockLevel
-                  );
-                  const isLow =
-                    !hasVariants &&
-                    (productStatus === "low" || productStatus === "out");
-                  const stockPct = Math.min(
-                    100,
-                    Math.round(
-                      (product.currentStock /
-                        Math.max(product.minStockLevel * 3, 1)) *
-                        100
-                    )
-                  );
-
-                  return (
-                    <Card
-                      key={product.id}
-                      className={`transition-all ${isLow ? "border-destructive/40 bg-destructive/5" : ""} ${!product.isActive ? "opacity-60" : ""}`}
-                    >
-                      <CardHeader className="pb-3">
-                        <CardTitle className="text-base flex items-start gap-2">
-                          {hasVariants && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 w-7 p-0 shrink-0 mt-0.5"
-                              onClick={() =>
-                                setExpandedProducts(prev => ({
-                                  ...prev,
-                                  [product.id]: !prev[product.id],
-                                }))
-                              }
-                              title={isExpanded ? "طي الأنواع" : "عرض الأنواع"}
-                            >
-                              {isExpanded ? (
-                                <ChevronUp className="h-4 w-4" />
-                              ) : (
-                                <ChevronDown className="h-4 w-4" />
-                              )}
-                            </Button>
-                          )}
-                          <Package className="h-5 w-5 text-primary shrink-0 mt-0.5" />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-bold text-foreground">
-                                {product.name}
-                              </span>
-                              {!product.isActive && (
-                                <StatusBadge status="archived" />
-                              )}
-                              {product.sku && (
-                                <span className="text-xs text-muted-foreground font-mono">
-                                  {product.sku}
-                                </span>
-                              )}
-                              {hasVariants && (
-                                <>
-                                  <Badge
-                                    variant="secondary"
-                                    className="text-xs"
-                                  >
-                                    {
-                                      visibleVariants.filter(v => v.isActive)
-                                        .length
-                                    }{" "}
-                                    نوع نشط
-                                  </Badge>
-                                  <Badge variant="outline" className="text-xs">
-                                    إجمالي المخزون: {totalStock} قطعة
-                                  </Badge>
-                                  {totalValue !== null && (
-                                    <Badge
-                                      variant="outline"
-                                      className="text-xs"
-                                    >
-                                      قيمة المخزون:{" "}
-                                      {totalValue.toLocaleString("ar-EG")} ج.م
-                                    </Badge>
-                                  )}
-                                  {attentionCount > 0 && (
-                                    <Badge
-                                      variant="destructive"
-                                      className="text-xs"
-                                    >
-                                      <AlertTriangle className="h-3 w-3 ml-1" />
-                                      {attentionCount} نوع يحتاج تخزين
-                                    </Badge>
-                                  )}
-                                </>
-                              )}
-                              {isLow && <StatusBadge status={productStatus} />}
-                            </div>
-                            {product.description && (
-                              <p className="text-xs text-muted-foreground mt-1">
-                                {product.description}
-                              </p>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 text-xs"
-                              onClick={() => openCreateVariant(product.id)}
-                              title="إضافة نوع"
-                            >
-                              <Plus className="h-3.5 w-3.5 ml-1" />
-                              نوع
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8 text-xs"
-                              onClick={() => openAddMatrix(product.id)}
-                              title="إضافة ألوان/مقاسات دفعة واحدة"
-                            >
-                              <Plus className="h-3.5 w-3.5 ml-1" />
-                              ألوان/مقاسات
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-8 w-8 p-0 text-[var(--info)] hover:bg-[var(--info)]/10"
-                              onClick={() => openEditProduct(product)}
-                              title="تعديل المنتج"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className={`h-8 w-8 p-0 ${product.isActive ? "text-destructive hover:bg-destructive/10" : "text-[var(--success)] hover:bg-[var(--success)]/10"}`}
-                              onClick={() => setArchiveProductTarget(product)}
-                              title={
-                                product.isActive
-                                  ? "أرشفة المنتج"
-                                  : "إعادة تفعيل المنتج"
-                              }
-                            >
-                              {product.isActive ? (
-                                <Archive className="h-3.5 w-3.5" />
-                              ) : (
-                                <ArchiveRestore className="h-3.5 w-3.5" />
-                              )}
-                            </Button>
-                          </div>
-                        </CardTitle>
-                      </CardHeader>
-
-                      {hasVariants ? (
-                        isExpanded && (
-                          <CardContent>
-                            {visibleVariants.length === 0 ? (
-                              <p className="text-sm text-muted-foreground text-center py-4">
-                                لا توجد أنواع مطابقة
-                              </p>
-                            ) : (
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                  <thead>
-                                    <tr className="border-b border-border">
-                                      <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">
-                                        النوع
-                                      </th>
-                                      <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground">
-                                        SKU
-                                      </th>
-                                      <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">
-                                        المخزون
-                                      </th>
-                                      <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">
-                                        الحد الأدنى
-                                      </th>
-                                      <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">
-                                        سعر البيع
-                                      </th>
-                                      <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">
-                                        سعر التكلفة
-                                      </th>
-                                      <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">
-                                        الحالة
-                                      </th>
-                                      <th className="text-center py-2 px-3 text-xs font-semibold text-muted-foreground">
-                                        إجراءات
-                                      </th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {visibleVariants.map((variant: any) => {
-                                      const vStatus = getStockStatus(
-                                        variant.isActive,
-                                        variant.currentStock,
-                                        variant.minStockLevel
-                                      );
-                                      return (
-                                        <tr
-                                          key={variant.id}
-                                          className={`border-b border-border/50 hover:bg-muted/30 ${vStatus === "low" || vStatus === "out" ? "bg-destructive/5" : ""} ${!variant.isActive ? "opacity-60" : ""}`}
-                                        >
-                                          <td className="py-2.5 px-3">
-                                            <span className="font-medium text-foreground">
-                                              {variantLabel(variant)}
-                                            </span>
-                                          </td>
-                                          <td className="py-2.5 px-3">
-                                            <span className="text-xs text-muted-foreground font-mono">
-                                              {variant.sku || "-"}
-                                            </span>
-                                          </td>
-                                          <td className="py-2.5 px-3 text-center">
-                                            <span
-                                              className={`font-bold ${vStatus === "low" || vStatus === "out" ? "text-destructive" : "text-foreground"}`}
-                                            >
-                                              {variant.currentStock}
-                                            </span>
-                                          </td>
-                                          <td className="py-2.5 px-3 text-center">
-                                            <span className="text-muted-foreground">
-                                              {variant.minStockLevel}
-                                            </span>
-                                          </td>
-                                          <td className="py-2.5 px-3 text-center">
-                                            <span className="font-semibold text-foreground">
-                                              {variant.price
-                                                ? `${Number(variant.price).toLocaleString()} ج.م`
-                                                : "-"}
-                                            </span>
-                                          </td>
-                                          <td className="py-2.5 px-3 text-center">
-                                            <span className="text-muted-foreground">
-                                              {variant.costPrice
-                                                ? `${Number(variant.costPrice).toLocaleString()} ج.م`
-                                                : "-"}
-                                            </span>
-                                          </td>
-                                          <td className="py-2.5 px-3 text-center">
-                                            <StatusBadge status={vStatus} />
-                                          </td>
-                                          <td className="py-2.5 px-3">
-                                            <div className="flex items-center justify-center gap-1">
-                                              <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                className="h-7 w-7 p-0 text-[var(--success)] hover:bg-[var(--success)]/10"
-                                                onClick={() =>
-                                                  handleVariantMovement(
-                                                    variant.id,
-                                                    "in"
-                                                  )
-                                                }
-                                                title="وارد"
-                                                disabled={!variant.isActive}
-                                              >
-                                                <ArrowDownCircle className="h-3.5 w-3.5" />
-                                              </Button>
-                                              <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
-                                                onClick={() =>
-                                                  handleVariantMovement(
-                                                    variant.id,
-                                                    "out"
-                                                  )
-                                                }
-                                                disabled={
-                                                  !variant.isActive ||
-                                                  variant.currentStock === 0
-                                                }
-                                                title="صادر"
-                                              >
-                                                <ArrowUpCircle className="h-3.5 w-3.5" />
-                                              </Button>
-                                              <div className="w-px h-5 bg-border mx-0.5" />
-                                              <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                className="h-7 w-7 p-0 text-[var(--info)] hover:bg-[var(--info)]/10"
-                                                onClick={() =>
-                                                  openEditVariant(variant)
-                                                }
-                                                title="تعديل الصنف"
-                                              >
-                                                <Pencil className="h-3.5 w-3.5" />
-                                              </Button>
-                                              <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                className={`h-7 w-7 p-0 ${variant.isActive ? "text-destructive hover:bg-destructive/10" : "text-[var(--success)] hover:bg-[var(--success)]/10"}`}
-                                                onClick={() =>
-                                                  setDeleteVariantTarget(
-                                                    variant
-                                                  )
-                                                }
-                                                title={
-                                                  variant.isActive
-                                                    ? "أرشفة الصنف"
-                                                    : "إعادة تفعيل الصنف"
-                                                }
-                                              >
-                                                {variant.isActive ? (
-                                                  <Archive className="h-3.5 w-3.5" />
-                                                ) : (
-                                                  <ArchiveRestore className="h-3.5 w-3.5" />
-                                                )}
-                                              </Button>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </CardContent>
-                        )
-                      ) : (
-                        <CardContent className="pt-0">
-                          {/* Stock Bar */}
-                          <div className="mb-3">
-                            <div className="flex justify-between items-center mb-1.5">
-                              <span className="text-xs text-muted-foreground">
-                                المخزون الحالي
-                              </span>
-                              {editingProductId === product.id ? (
-                                <div className="flex items-center gap-1">
-                                  <Input
-                                    type="number"
-                                    min="0"
-                                    value={editStockValue}
-                                    onChange={e =>
-                                      setEditStockValue(e.target.value)
-                                    }
-                                    className="w-20 h-7 text-center text-sm font-bold"
-                                    autoFocus
-                                    onKeyDown={e => {
-                                      if (e.key === "Enter") saveEditStock();
-                                      if (e.key === "Escape") cancelEditStock();
-                                    }}
-                                  />
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-7 w-7 p-0 text-[var(--success)]"
-                                    onClick={saveEditStock}
-                                    disabled={updateStockMutation.isPending}
-                                  >
-                                    <Save className="h-3.5 w-3.5" />
-                                  </Button>
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-2">
-                                  <StatusBadge status={productStatus} />
-                                  <span
-                                    className={`text-xl font-bold ${isLow ? "text-destructive" : "text-foreground"}`}
-                                  >
-                                    {product.currentStock}{" "}
-                                    <span className="text-xs font-normal text-muted-foreground">
-                                      قطعة
-                                    </span>
-                                  </span>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    className="h-6 w-6 p-0 text-muted-foreground hover:text-primary"
-                                    onClick={() => startEditStock(product)}
-                                    title="تعديل عدد القطع"
-                                  >
-                                    <Pencil className="h-3 w-3" />
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-                            <div className="w-full bg-muted rounded-full h-2.5">
-                              <div
-                                className={`h-2.5 rounded-full transition-all ${isLow ? "bg-destructive" : stockPct > 60 ? "bg-[var(--success)]/100" : "bg-[var(--warning)]"}`}
-                                style={{ width: `${stockPct}%` }}
-                              />
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              الحد الأدنى: {product.minStockLevel} قطعة
-                            </p>
-                          </div>
-
-                          {/* Price */}
-                          <div className="flex items-center justify-between mb-3 pb-3 border-b border-border">
-                            <span className="text-xs text-muted-foreground">
-                              السعر
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <span className="text-sm font-semibold text-primary">
-                                {product.price != null
-                                  ? `${Number(product.price).toLocaleString("ar-EG")} ج.م`
-                                  : "بدون سعر"}
-                              </span>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-6 w-6 p-0 text-muted-foreground hover:text-primary"
-                                onClick={() => openEditPrice(product)}
-                                title="تعديل السعر"
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          </div>
-
-                          {/* Action Buttons */}
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              className="flex-1 bg-[var(--success)] hover:bg-[var(--success)] text-white h-9"
-                              onClick={() => handleMovement(product.id, "in")}
-                              disabled={!product.isActive}
-                            >
-                              <ArrowDownCircle className="h-3.5 w-3.5 ml-1" />
-                              وارد
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 h-9"
-                              onClick={() => handleMovement(product.id, "out")}
-                              disabled={
-                                !product.isActive || product.currentStock === 0
-                              }
-                            >
-                              <ArrowUpCircle className="h-3.5 w-3.5 ml-1" />
-                              صادر
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-9 w-9 p-0 shrink-0"
-                              onClick={() => {
-                                setHistoryProductId(product.id);
-                                setShowHistory(true);
-                              }}
-                              title="سجل الحركات"
-                            >
-                              <History className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </CardContent>
-                      )}
-                    </Card>
-                  );
-                }
-              )}
-            </div>
-          )}
+          <SectionCard flush testId="inventory-table" title={`الأصناف (${fmtN(inventoryRows.length)})`} description="صف لكل منتج أو تركيبة — الكمية والحد والحالة من المخزون نفسه.">
+            <ResponsiveDataTable<InvRow>
+              rows={inventoryRows}
+              columns={inventoryColumns}
+              rowKey={r => r.key}
+              loading={isLoading || variantsLoading}
+              error={productsError ? (productsError.message || "تعذّر تحميل المخزون") : variantsError ? (variantsError.message || "تعذّر تحميل التركيبات") : null}
+              onRetry={refreshAll}
+              empty={
+                !rawProducts || rawProducts.length === 0
+                  ? { title: "لا توجد منتجات بعد", description: "أضف أول منتج لتبدأ متابعة المخزون.", action: <Button size="sm" className="min-h-11 md:min-h-9" onClick={openCreateProduct}><Plus className="h-3.5 w-3.5 ml-1" aria-hidden="true" /> إضافة أول منتج</Button> }
+                  : { title: "لا توجد نتائج مطابقة", description: "عدّل البحث أو الفلاتر الحالية.", action: hasActiveFilters ? <Button size="sm" variant="outline" className="min-h-11 md:min-h-9" onClick={() => { setSearch(""); setStockStatusFilter("all"); setShowArchived(false); }}>مسح الفلاتر</Button> : undefined }
+              }
+              cardsBelow="md"
+              mobileRow={mobileRow}
+            />
+          </SectionCard>
         </>
       )}
 
@@ -1871,7 +1500,7 @@ export default function Inventory() {
           </div>
 
           <DialogFooter>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               variant="outline"
               onClick={() => setShowMovementDialog(false)}
             >
@@ -1880,8 +1509,8 @@ export default function Inventory() {
             <Button
               className={
                 movementType === "in"
-                  ? "bg-[var(--success)] hover:bg-[var(--success)]"
-                  : "bg-destructive hover:bg-destructive"
+                  ? "min-h-11 md:min-h-9 bg-[var(--success)] hover:bg-[var(--success)]"
+                  : "min-h-11 md:min-h-9 bg-destructive hover:bg-destructive"
               }
               disabled={
                 !quantity ||
@@ -2019,7 +1648,7 @@ export default function Inventory() {
           </div>
 
           <DialogFooter>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               variant="outline"
               onClick={() => setShowVariantMovementDialog(false)}
             >
@@ -2028,8 +1657,8 @@ export default function Inventory() {
             <Button
               className={
                 variantMovementType === "in"
-                  ? "bg-[var(--success)] hover:bg-[var(--success)]"
-                  : "bg-destructive hover:bg-destructive"
+                  ? "min-h-11 md:min-h-9 bg-[var(--success)] hover:bg-[var(--success)]"
+                  : "min-h-11 md:min-h-9 bg-destructive hover:bg-destructive"
               }
               disabled={
                 !variantQuantity ||
@@ -2137,7 +1766,7 @@ export default function Inventory() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowHistory(false)}>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setShowHistory(false)}>
               إغلاق
             </Button>
           </DialogFooter>
@@ -2261,10 +1890,10 @@ export default function Inventory() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={closeVariantForm}>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={closeVariantForm}>
               إلغاء
             </Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               onClick={submitVariantForm}
               disabled={
                 createVariantMutation.isPending || editVariantMutation.isPending
@@ -2316,10 +1945,10 @@ export default function Inventory() {
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowPriceDialog(false)}>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setShowPriceDialog(false)}>
               إلغاء
             </Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               onClick={submitPrice}
               disabled={updateProductPriceMutation.isPending}
             >
@@ -2368,13 +1997,13 @@ export default function Inventory() {
             )}
           </p>
           <DialogFooter>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               variant="outline"
               onClick={() => setDeleteVariantTarget(null)}
             >
               إلغاء
             </Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               variant={
                 deleteVariantTarget?.isActive ? "destructive" : "default"
               }
@@ -2525,10 +2154,10 @@ export default function Inventory() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={closeProductForm}>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={closeProductForm}>
               إلغاء
             </Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               onClick={submitProductForm}
               disabled={
                 createProductMutation.isPending ||
@@ -2580,10 +2209,10 @@ export default function Inventory() {
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={closeAddMatrix}>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={closeAddMatrix}>
               إلغاء
             </Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               onClick={submitAddMatrix}
               disabled={addVariantsToProductMutation.isPending}
             >
@@ -2640,13 +2269,13 @@ export default function Inventory() {
             )}
           </p>
           <DialogFooter>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               variant="outline"
               onClick={() => setArchiveProductTarget(null)}
             >
               إلغاء
             </Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               variant={
                 archiveProductTarget?.isActive ? "destructive" : "default"
               }

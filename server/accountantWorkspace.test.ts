@@ -85,6 +85,7 @@ describe("🔑 بوابة الاستلام والملخص على السيرفر"
 // ───────────────── التوجيه والواجهة (source guards) ─────────────────
 
 const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+const guard = fs.readFileSync("client/src/components/shell/FinancialRoute.tsx", "utf-8"); // المرحلة 7C: الحارس انتقل من App.tsx
 const login = fs.readFileSync("client/src/pages/EmployeeLogin.tsx", "utf-8");
 const goods = fs.readFileSync("client/src/pages/GoodsReceipt.tsx", "utf-8");
 const acc = (f: string) => fs.readFileSync(`client/src/pages/accountant/${f}`, "utf-8");
@@ -108,7 +109,7 @@ describe("🔑 النظام المحاسبي مجمّد — التوجيه لص�
     expect(block).not.toContain("AccountantWorkspace");
   });
   it("🔑 توجيه الهبوط والحجب المالي بقى للصفحة الآمنة", () => {
-    const homeFn = app.slice(app.indexOf("function homeForPermissions"));
+    const homeFn = guard.slice(guard.indexOf("export function homeForPermissions"));
     expect(homeFn.slice(0, homeFn.indexOf("}"))).not.toContain('"/accountant"');
     expect(homeFn.slice(0, homeFn.indexOf("}"))).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
     expect(app).toContain("<Redirect to={homeForPermissions(permissions, false)} />");

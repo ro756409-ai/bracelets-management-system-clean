@@ -1,55 +1,43 @@
 import { ClipboardCheck } from "lucide-react";
-import { PageHeader } from "@/components/shared";
+import { PageHeader, ScopeBar, EmptyState } from "@/components/shared";
+import { SectionIcon } from "@/components/brand";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
-import AccStocktake from "./accountant/AccStocktake";
-import { AccCard, AccField, AccSelect } from "./accountant/ui";
+import StocktakeBoard from "@/components/inventory/StocktakeBoard";
 
 /**
- * صفحة الجرد المستقلة للمالك/المدير — تحت DashboardLayout (مش bare زي /accountant).
+ * صفحة الجرد المستقلة للمالك/المدير/موظف المخزن — تحت DashboardLayout (أو EmployeeShell لجلسة موظف).
  *
- * بتعيد استخدام نفس مكوّن `AccStocktake` اللي المحاسب بيستخدمه جوّه مساحته — مفيش نظام
- * جرد موازي. الفرق الوحيد إن مصدر النشاط هنا `useBrandOptions` (نطاق الجلسة، P0-scoped)
- * بدل الـpicker بتاع مساحة المحاسب. زر الاعتماد جوّه المكوّن بيظهر لصاحب
+ * المرحلة 7C: العرض عبر `StocktakeBoard` (Copper Signature) على **نفس الـendpoints ونفس التدفق** الذي
+ * يستخدمه مكوّن المحاسب `AccStocktake` داخل مساحته (لم يُمس) — مفيش نظام جرد موازٍ. مصدر النشاط هنا
+ * `useBrandOptions` (نطاق الجلسة، P0-scoped). زر الاعتماد جوّه المكوّن بيظهر لصاحب
  * `inventory_costing.approve` فقط.
  */
 export default function Stocktake() {
   const { brands, selected, setSelected, selectedId, isEmpty } = useBrandOptions();
 
   return (
-    <div className="space-y-5" dir="rtl">
+    <div className="space-y-5" dir="rtl" data-testid="stocktake-page">
       <PageHeader
         title="الجرد"
-        description="جرد أرصدة المخزن، إدخال العدد الفعلي، واعتماد الفروق لتحريك المخزون وتسجيل العجز/الزيادة في الحسابات."
-        icon={<ClipboardCheck className="h-5 w-5" />}
-      />
+        description="جرد أرصدة المخزن: الكمية المسجلة، العدد الفعلي، الفرق لكل سطر، ثم اعتماد صريح يحرّك المخزون."
+        icon={<SectionIcon section="inventory" fallback={ClipboardCheck} size="md" />}
+      >
+        {brands.length > 1 && (
+          <ScopeBar
+            options={brands.map(b => ({ id: b.id, label: b.name }))}
+            value={selected ? Number(selected) : null}
+            onChange={id => setSelected(id == null ? "" : String(id))}
+            allLabel="اختر النشاط"
+          />
+        )}
+      </PageHeader>
 
       {isEmpty ? (
-        <AccCard>
-          <p className="p-4 text-center text-sm text-slate-400">مفيش نشاط متاح لحسابك.</p>
-        </AccCard>
+        <EmptyState title="مفيش نشاط متاح لحسابك" description="الجرد يتم لنشاط محدد — تأكد من ربط حسابك بنشاط." />
+      ) : selectedId != null ? (
+        <StocktakeBoard businessId={selectedId} />
       ) : (
-        <>
-          {brands.length > 1 && (
-            <AccCard>
-              <AccField label="النشاط" required>
-                <AccSelect value={selected} onChange={e => setSelected(e.target.value)}>
-                  <option value="">— اختار النشاط —</option>
-                  {brands.map(b => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
-                  ))}
-                </AccSelect>
-              </AccField>
-            </AccCard>
-          )}
-
-          {selectedId != null ? (
-            <AccStocktake businessId={selectedId} />
-          ) : (
-            <AccCard>
-              <p className="p-4 text-center text-sm text-slate-400">اختار النشاط الأول عشان تبدأ الجرد.</p>
-            </AccCard>
-          )}
-        </>
+        <EmptyState title="اختار النشاط الأول" description="اختر النشاط من الأعلى لعرض جلسات الجرد وبدء جردة جديدة." />
       )}
     </div>
   );

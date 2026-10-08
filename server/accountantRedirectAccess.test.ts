@@ -13,6 +13,7 @@ import fs from "fs";
 
 const login = fs.readFileSync("client/src/pages/EmployeeLogin.tsx", "utf-8");
 const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+const guard = fs.readFileSync("client/src/components/shell/FinancialRoute.tsx", "utf-8"); // المرحلة 7C: الحارس انتقل من App.tsx
 const routers = fs.readFileSync("server/routers.ts", "utf-8");
 const trpcCore = fs.readFileSync("server/_core/trpc.ts", "utf-8");
 
@@ -24,7 +25,7 @@ describe("🔑 توجيه المحاسب بعد الدخول", () => {
     const branch = body.slice(body.indexOf("role === 'accountant'"));
     // دفتر V3: المحاسب يهبط على /ledger؛ حارس المسار (homeForPermissions) يحوّله للصفحة الآمنة لو بلا ledger.view
     expect(branch.slice(0, branch.indexOf("else"))).toContain('setLocation("/ledger")');
-    expect(app).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
+    expect(guard).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
     expect(body).not.toContain('setLocation("/accountant")');
   });
 
@@ -37,8 +38,8 @@ describe("🔑 توجيه المحاسب بعد الدخول", () => {
 
 describe("🔑 صفحات الحسابات بتفتح للمحاسب (FinancialRoute مش ProtectedLayout)", () => {
   it("🔑 FinancialRoute بيدخّل صاحب الصلاحية مش المالك بس", () => {
-    const comp = app.slice(app.indexOf("function FinancialRoute"));
-    const body = comp.slice(0, comp.indexOf("function BlockFinancialUser"));
+    const comp = guard.slice(guard.indexOf("export function FinancialRoute"));
+    const body = comp;
     // بيعتمد على الصلاحية من usePermissions، مش على وجود user مالك
     expect(body).toContain("usePermissions()");
     expect(body).toContain('permissions.includes(permission)');
@@ -75,8 +76,8 @@ describe("🔑 المحاسب محجوب عن صفحات التشغيل", () => 
     expect(comp).toContain('user?.role !== "admin" && permissions.includes("accounting.view")');
     // التحويل عبر homeForPermissions: دفتر V3 لو ممنوح ledger.view، وإلا الصفحة الآمنة (النظام القديم مجمّد).
     expect(comp).toContain("<Redirect to={homeForPermissions(permissions, false)} />");
-    expect(app).toContain('if (perms.includes("ledger.view")) return "/ledger";');
-    expect(app).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
+    expect(guard).toContain('if (perms.includes("ledger.view")) return "/ledger";');
+    expect(guard).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
   });
 
   it("🔑 لوحات الموظفين التشغيلية متغلّفة بالحارس", () => {

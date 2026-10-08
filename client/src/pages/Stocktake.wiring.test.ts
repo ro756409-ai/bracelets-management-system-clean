@@ -42,10 +42,15 @@ describe("🔑 بند التنقّل للجرد (config/navigation)", () => {
   });
 });
 
-describe("🔑 صفحة Stocktake بتعيد استخدام AccStocktake (P0-scoped)", () => {
-  it("🔑 مصدر النشاط useBrandOptions (نطاق الجلسة) + AccStocktake", () => {
+describe("🔑 صفحة Stocktake على نفس endpoints الجرد (P0-scoped) — المرحلة 7C: StocktakeBoard بنفس التدفق، AccStocktake للمحاسب كما هو", () => {
+  it("🔑 مصدر النشاط useBrandOptions (نطاق الجلسة) + StocktakeBoard على نفس الـendpoints", () => {
     expect(page).toContain("useBrandOptions");
-    expect(page).toContain("<AccStocktake businessId={selectedId}");
+    expect(page).toContain("<StocktakeBoard businessId={selectedId}");
+    const board = fs.readFileSync("client/src/components/inventory/StocktakeBoard.tsx", "utf-8");
+    for (const ep of ["trpc.accountingV2.stocktakeList.useQuery", "trpc.accountingV2.stocktakeCreate.useMutation", "trpc.accountingV2.stocktakeGet.useQuery", "trpc.accountingV2.stocktakeLineUpdate.useMutation", "trpc.accountingV2.stocktakeSubmit.useMutation", "trpc.accountingV2.stocktakeApprove.useMutation"]) expect(board).toContain(ep);
+    expect(board).not.toMatch(/trpc\.accountingV2\.(stocktake(Cancel|Delete|Adjust)|inventoryAdjust)/);
+    expect(board).toContain('usePermission("inventory_costing.approve")');
+    expect(board).toContain("isPendingApproval && canApprove");
   });
   it("🔑 مفيش أي businessId ثابت/مُمرَّر يدوي (مفيش bypass لـP0)", () => {
     expect(page).not.toMatch(/businessId=\{[0-9]+\}/);

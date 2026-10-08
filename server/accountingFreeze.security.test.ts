@@ -17,6 +17,7 @@ import type { TrpcContext } from "./_core/context";
 const trpc = fs.readFileSync("server/_core/trpc.ts", "utf-8");
 const nav = fs.readFileSync("client/src/config/navigation.ts", "utf-8");
 const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+const guard = fs.readFileSync("client/src/components/shell/FinancialRoute.tsx", "utf-8"); // المرحلة 7C: الحارس انتقل من App.tsx
 const login = fs.readFileSync("client/src/pages/EmployeeLogin.tsx", "utf-8");
 
 const ADMIN_CTX = (): TrpcContext =>
@@ -120,13 +121,13 @@ describe("🔑 حراس المصدر — إخفاء وتعطيل الواجهة"
     expect(acc).not.toContain("AccountantWorkspace");
   });
   it("🔑 مسارات المخزون مش متأثرة (تفضل شغّالة)", () => {
-    expect(app).toContain('<FinancialRoute permission="inventory_costing.view"><GoodsReceipt /></FinancialRoute>');
-    expect(app).toContain('<FinancialRoute permission="inventory_costing.view"><Stocktake /></FinancialRoute>');
+    expect(app).toContain('<FinancialRoute permission="inventory_costing.view" employeeTitle="استلام بضاعة" employeeIcon={PackagePlus}><GoodsReceipt /></FinancialRoute>');
+    expect(app).toContain('<FinancialRoute permission="inventory_costing.view" employeeTitle="الجرد" employeeIcon={ClipboardCheck}><Stocktake /></FinancialRoute>');
   });
   it("🔑 المحاسب مايتوجّهش لـ/accountant عند الدخول — يهبط على دفتر V3 (وحارس المسار يحوّله لصفحة التجميد لو بلا ledger.view)", () => {
     expect(login).toMatch(/role === 'accountant'\) \{[\s\S]*?setLocation\("\/ledger"\)/);
     expect(login).not.toContain('setLocation("/accountant")');
-    expect(app).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
+    expect(guard).toContain('if (perms.includes("accounting.view")) return "/accounting-disabled";');
   });
 });
 

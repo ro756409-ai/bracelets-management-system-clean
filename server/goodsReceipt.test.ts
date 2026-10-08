@@ -21,6 +21,7 @@ const service = fs.readFileSync("server/inventoryV2.service.ts", "utf-8");
 const routers = fs.readFileSync("server/routers.ts", "utf-8");
 const db = fs.readFileSync("server/db.ts", "utf-8");
 const page = fs.readFileSync("client/src/pages/GoodsReceipt.tsx", "utf-8");
+const guard = fs.readFileSync("client/src/components/shell/FinancialRoute.tsx", "utf-8"); // المرحلة 7C: الحارس انتقل من App.tsx
 const ledger = fs.readFileSync("client/src/pages/DailyLedger.tsx", "utf-8");
 
 /** الكود من غير التعليقات — «لازم ماتحتويش» مالهاش معنى قدام شرح بيسمّي الحاجة. */
@@ -397,9 +398,10 @@ describe("الشاشة", () => {
     expect(page).toContain("فيه حقول ناقصة");
   });
 
-  it("موبايل: الشبكة بتنزل عمود واحد والجدول بيسكرول لوحده", () => {
+  it("موبايل: الشبكة بتنزل عمود واحد والقائمة بطاقات تحت md (ResponsiveDataTable) — المرحلة 7C", () => {
     expect(page).toContain("grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4");
     expect(page).toContain("grid-cols-2 gap-2 lg:grid-cols-4");
-    expect(page).toContain("overflow-x-auto");
+    expect(page).toContain('cardsBelow="md"');
+    expect(page).toContain("mobileRow={receiptCard}");
   });
 });

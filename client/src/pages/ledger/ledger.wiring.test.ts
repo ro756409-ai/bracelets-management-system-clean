@@ -3,6 +3,7 @@ import fs from "fs";
 
 /** حراس نصّية: المسارات والتنقل والصلاحيات وقواعد الموبايل لواجهة دفتر V3. */
 const app = fs.readFileSync("client/src/App.tsx", "utf-8");
+const guard = fs.readFileSync("client/src/components/shell/FinancialRoute.tsx", "utf-8"); // المرحلة 7C: الحارس انتقل من App.tsx
 const nav = fs.readFileSync("client/src/config/navigation.ts", "utf-8");
 const daily = fs.readFileSync("client/src/pages/ledger/LedgerDaily.tsx", "utf-8");
 const txs = fs.readFileSync("client/src/pages/ledger/LedgerTransactions.tsx", "utf-8");
@@ -19,8 +20,8 @@ describe("🔑 واجهة دفتر V3 — الربط", () => {
     // المحاسب (جلسة موظف بلا user) يهبط على الدفتر، والحارس يحوّله لصفحة التجميد الآمنة لو بلا ledger.view
     const login = fs.readFileSync("client/src/pages/EmployeeLogin.tsx", "utf-8");
     expect(login).toMatch(/role === 'accountant'\) \{[\s\S]*?setLocation\("\/ledger"\)/);
-    expect(app).toContain('if (perms.includes("ledger.view")) return "/ledger";');
-    expect(app).toContain('if (hasUser && perms.includes("dashboard.view")) return "/dashboard";');
+    expect(guard).toContain('if (perms.includes("ledger.view")) return "/ledger";');
+    expect(guard).toContain('if (hasUser && perms.includes("dashboard.view")) return "/dashboard";');
     // الأنشطة من الدفتر نفسه (نطاق السيرفر) لا من BusinessContext الذي يشترط جلسة مالك
     const ledgerHook = fs.readFileSync("client/src/pages/ledger/useLedgerBusinesses.ts", "utf-8");
     expect(ledgerHook).toContain("trpc.ledger.businesses.list.useQuery(");

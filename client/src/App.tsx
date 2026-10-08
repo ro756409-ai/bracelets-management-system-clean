@@ -62,6 +62,8 @@ import DashboardLayout from "./components/DashboardLayout";
 import { useAuth } from "./_core/hooks/useAuth";
 import { usePermissions } from "./hooks/usePermission";
 import { BusinessProvider } from "./contexts/BusinessContext";
+import { FinancialRoute, homeForPermissions } from "./components/shell/FinancialRoute";
+import { PackagePlus, ClipboardCheck } from "lucide-react";
 
 function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -70,47 +72,8 @@ function ProtectedLayout({ children }: { children: React.ReactNode }) {
   return <DashboardLayout>{children}</DashboardLayout>;
 }
 
-/** أنسب صفحة هبوط لجلسة حسب صلاحياتها — بيتستخدم لما نطرد حد من صفحة مالوش حق فيها. */
-function homeForPermissions(perms: string[], hasUser = false): string {
-  // جلسة إدارية (user موجود) → لوحة التحكم. غير ذلك (المحاسب: موظف غير إداري، لوحة التحكم تطلب
-  // جلسة مالك فتعرض له «سجّل الدخول»): دفتر V3 لو ممنوح `ledger.view`، وإلا — النظام المحاسبي
-  // القديم مجمّد — صفحة «قيد التطوير» الآمنة. المالك admin بيعدّي الحُرّاس فمابيوصلش هنا.
-  if (hasUser && perms.includes("dashboard.view")) return "/dashboard";
-  if (perms.includes("ledger.view")) return "/ledger";
-  if (perms.includes("accounting.view")) return "/accounting-disabled";
-  return "/employee-dashboard";
-}
-
-/**
- * صفحة مالية: بتفتح للمالك، أو لأي موظف **عنده الصلاحية دي فعليًا** (المحاسب).
- *
- * مش زي `ProtectedLayout` اللي بيشترط جلسة مالك — عشان المحاسب (موظف غير إداري،
- * `auth.me` بيرجّعله null) يقدر يفتح الحسابات. القايمة بتتقري من `usePermissions`
- * (نفس مصدر السيرفر)، والبيانات نفسها جاية من `permissionProcedure` اللي بيصرّح له.
- * ده توجيه واجهة فوق الحارس الحقيقي على الـendpoints — مش بديل عنه.
- *
- * المدير (صلاحياته من غير المالي) بيتحوّل بره الصفحات المالية بدل ما يشوف قشرة فاضية
- * بأخطاء — وده أنضف من السلوك القديم.
- */
-function FinancialRoute({
-  permission,
-  children,
-  bare = false,
-}: {
-  permission: string;
-  children: React.ReactNode;
-  /** `bare`: الصفحة بترندر layout بتاعها بنفسها (مساحة المحاسب) — من غير DashboardLayout. */
-  bare?: boolean;
-}) {
-  const { user, loading } = useAuth();
-  const { permissions, isLoading } = usePermissions();
-  if (loading || isLoading) return null;
-  const authed = Boolean(user) || permissions.length > 0;
-  if (!authed) return <Home />;
-  const allowed = user?.role === "admin" || permissions.includes(permission);
-  if (!allowed) return <Redirect to={homeForPermissions(permissions, Boolean(user))} />;
-  return bare ? <>{children}</> : <DashboardLayout>{children}</DashboardLayout>;
-}
+/* homeForPermissions وFinancialRoute انتقلا إلى components/shell/FinancialRoute.tsx (المرحلة 7C) —
+   ليُختبرا مباشرة، ولتعمل /goods-receipt و/stocktake لجلسة موظف مصرَّح له بلا «يرجى تسجيل الدخول». */
 
 /**
  * حارس صفحات التشغيل (لوحات الموظفين): المحاسب هو الموظف الوحيد غير الإداري اللي معاه
@@ -296,12 +259,12 @@ function Router() {
       <Route path="/closings"><AccountingDisabled /></Route>
       <Route path="/daily-ledger"><AccountingDisabled /></Route>
       <Route path="/goods-receipt">
-        <FinancialRoute permission="inventory_costing.view"><GoodsReceipt /></FinancialRoute>
+        <FinancialRoute permission="inventory_costing.view" employeeTitle="استلام بضاعة" employeeIcon={PackagePlus}><GoodsReceipt /></FinancialRoute>
       </Route>
       {/* الجرد — صفحة مستقلة للمالك/المدير تحت DashboardLayout، بتعيد استخدام AccStocktake.
           نفس حارس /goods-receipt (inventory_costing.view، غير مالي) فالمدير بيوصلها. */}
       <Route path="/stocktake">
-        <FinancialRoute permission="inventory_costing.view"><Stocktake /></FinancialRoute>
+        <FinancialRoute permission="inventory_costing.view" employeeTitle="الجرد" employeeIcon={ClipboardCheck}><Stocktake /></FinancialRoute>
       </Route>
       <Route path="/stock-transfer">
         <FinancialRoute permission="inventory_costing.view"><StockTransfer /></FinancialRoute>
