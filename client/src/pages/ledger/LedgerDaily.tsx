@@ -1,3 +1,4 @@
+import { PartnerLogo, type PartnerId } from "@/components/brand/PartnerLogo";
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { Wallet, Landmark, Smartphone, CreditCard, Truck, ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, RefreshCw, BookOpen } from "lucide-react";
@@ -23,6 +24,8 @@ import {
  * من هنا: إيراد/مصروف/تحويل فقط. كل فتح للنموذج يحمل operationId ثابتًا فإعادة الضغط لا تكرر.
  */
 const CARD_ICONS: Record<string, typeof Wallet> = { OFFICE_CASH: Wallet, BANK_MAIN: Landmark, VF_CASH: Smartphone, INSTAPAY: CreditCard, COD_BOSTA: Truck };
+// شعارات رسمية محلية للحسابات المرتبطة بجهة (المرحلة 6) — زخرفية، الاسم مكتوب على البطاقة
+const CARD_LOGOS: Record<string, PartnerId> = { VF_CASH: "vodafone_cash", INSTAPAY: "instapay", COD_BOSTA: "bosta" };
 
 export default function LedgerDaily() {
   const { has, isLoading: permsLoading } = usePermissions();
@@ -54,7 +57,8 @@ export default function LedgerDaily() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5" data-testid="ledger-balance-cards">
         {cards.map(a => {
           const Icon = CARD_ICONS[a.code] ?? Wallet;
-          return <StatCard key={a.code} label={a.name} value={`${money(a.currentBalance)} ج.م`} icon={<Icon className="h-5 w-5" />} tone={Number(a.currentBalance) < 0 ? "danger" : "primary"} />;
+          const logo = CARD_LOGOS[a.code];
+          return <StatCard key={a.code} label={a.name} value={`${money(a.currentBalance)} ج.م`} icon={logo ? <PartnerLogo partner={logo} size="sm" decorative /> : <Icon className="h-5 w-5" />} tone={Number(a.currentBalance) < 0 ? "danger" : "primary"} />;
         })}
       </div>
 

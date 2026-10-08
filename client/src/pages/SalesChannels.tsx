@@ -2,6 +2,7 @@ import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { Button } from "@/components/ui/button";
+import { PartnerLogo, type PartnerId } from "@/components/brand/PartnerLogo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,6 +40,9 @@ const PLATFORM_LABELS: Record<string, string> = {
   manual: "يدوي",
   other: "أخرى",
 };
+
+// شعارات رسمية محلية لمنصات لها أصل رسمي في المشروع (المرحلة 6) — زخرفية، الاسم مكتوب بجوارها
+const PLATFORM_LOGOS: Record<string, PartnerId | undefined> = { easyorder: "easyorders", whatsapp: "whatsapp", facebook: "facebook" };
 
 const PLATFORM_COLORS: Record<string, string> = {
   easyorder: "bg-blue-100 text-blue-800",
@@ -434,7 +438,8 @@ export default function SalesChannels() {
                       <Badge variant="secondary" className="text-xs">مؤرشف</Badge>
                     )}
                   </div>
-                  <Badge className={PLATFORM_COLORS[channel.platform] || PLATFORM_COLORS.other}>
+                  <Badge className={`gap-1 ${PLATFORM_COLORS[channel.platform] || PLATFORM_COLORS.other}`}>
+                    {PLATFORM_LOGOS[channel.platform] && <PartnerLogo partner={PLATFORM_LOGOS[channel.platform]!} size="xs" decorative className="!h-3" />}
                     {PLATFORM_LABELS[channel.platform] || channel.platform}
                   </Badge>
                 </div>

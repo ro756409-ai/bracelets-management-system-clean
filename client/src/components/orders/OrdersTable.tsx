@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { CheckCircle, Clock, Copy, Edit2, Eye, MoreVertical, PackageCheck, PhoneCall, PhoneOff, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { CheckCircle, Clock, Copy, Edit2, Eye, MoreVertical, PhoneCall, PhoneOff, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { PartnerLogo } from "@/components/brand/PartnerLogo";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
@@ -141,7 +142,7 @@ export function buildOrdersColumns(ctx: OrdersColumnsContext): Column<OrderRow>[
             {order.source && <StatusBadge status={order.source} kind="source" size="sm" label={ctx.sourceLabel(order.source)} />}
             {order.bostaShipmentId && (
               <span className="inline-flex items-center gap-0.5 rounded-[var(--radius-brand-pill)] bg-[var(--info)]/10 px-1.5 py-0.5 text-[10px] font-bold text-[var(--info)]" title={`شحنة Bosta: ${order.bostaTrackingNumber || order.bostaShipmentId}`}>
-                <PackageCheck className="h-2.5 w-2.5" aria-hidden="true" /> بوسطة
+                <PartnerLogo partner="bosta" size="xs" decorative className="!h-2.5" /> بوسطة
               </span>
             )}
             {order.bostaLastError && !order.bostaShipmentId && (

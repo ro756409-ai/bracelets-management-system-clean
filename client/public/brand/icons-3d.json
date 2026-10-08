@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "basePath": "/brand/icons-3d/",
+  "spec": {
+    "style": "neutral ceramic with a copper accent",
+    "view": "same camera angle, lighting and material across the set",
+    "background": "transparent",
+    "text": "none",
+    "format": "webp or png ≤ 40KB each at 2x (160px), optional dark variant",
+    "usage": "decorative only (aria-hidden) beside a written label; small function icons stay lucide"
+  },
+  "icons": [
+    {
+      "id": "orders",
+      "nameAr": "الطلبات",
+      "status": "placeholder"
+    },
+    {
+      "id": "inventory",
+      "nameAr": "المخزون",
+      "status": "placeholder"
+    },
+    {
+      "id": "accounts",
+      "nameAr": "الحسابات",
+      "status": "placeholder"
+    },
+    {
+      "id": "shipping",
+      "nameAr": "الشحن",
+      "status": "placeholder"
+    },
+    {
+      "id": "employees",
+      "nameAr": "الموظفون",
+      "status": "placeholder"
+    },
+    {
+      "id": "reports",
+      "nameAr": "التقارير",
+      "status": "placeholder"
+    },
+    {
+      "id": "integrations",
+      "nameAr": "التكاملات",
+      "status": "placeholder"
+    },
+    {
+      "id": "settings",
+      "nameAr": "الإعدادات",
+      "status": "placeholder"
+    }
+  ]
+}

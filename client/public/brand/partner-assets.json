@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "basePath": "/brand/partners/",
+  "rules": [
+    "official sources only",
+    "no redraw / no recolor / no 3D",
+    "local files only (no hotlink)",
+    "svg sanitized: no script/metadata/editor ids"
+  ],
+  "partners": [
+    {
+      "id": "bosta",
+      "name": "Bosta",
+      "nameAr": "بوسطة",
+      "light": {
+        "file": "bosta.png",
+        "width": 111,
+        "height": 34,
+        "format": "png"
+      },
+      "source": "https://bosta.co/en (asset: https://storage.googleapis.com/bosta-fe/website/Bosta_Logo.png)",
+      "downloadedAt": "2026-10-08",
+      "originalFormat": "png 111×34 (official site asset; no SVG published)",
+      "note": "دقة منخفضة (34px) — يُستخدم حتى 28px؛ مطلوب أصل أعلى دقة من بوسطة"
+    },
+    {
+      "id": "easyorders",
+      "name": "Easy Orders",
+      "nameAr": "إيزي أوردرز",
+      "light": {
+        "file": "easyorders.svg",
+        "width": 49.0,
+        "height": 48.0,
+        "format": "svg"
+      },
+      "source": "https://easy-orders.net/theme3/Logo.svg",
+      "downloadedAt": "2026-10-08",
+      "originalFormat": "svg"
+    },
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp",
+      "nameAr": "واتساب",
+      "light": {
+        "file": "whatsapp-glyph.svg",
+        "width": 720.0,
+        "height": 720.0,
+        "format": "svg"
+      },
+      "source": "https://about.meta.com/brand/resources/whatsapp/whatsapp-brand/ (WhatsApp-Brand-Resource-Center.zip → 01_Glyph/Digital RGB/Digital_Glyph_Green_RGB_2026.svg)",
+      "downloadedAt": "2026-10-08",
+      "originalFormat": "svg (Digital RGB)"
+    },
+    {
+      "id": "meta",
+      "name": "Meta",
+      "nameAr": "ميتا",
+      "light": {
+        "file": "meta-mono-black.svg",
+        "width": 6962.36,
+        "height": 3000.0,
+        "format": "svg"
+      },
+      "dark": {
+        "file": "meta-mono-white.svg",
+        "width": 6962.36,
+        "height": 3000.0,
+        "format": "svg"
+      },
+      "source": "https://about.meta.com/brand/resources/meta/company-brand/ (Meta_Company-Lockup.zip → 3 Mono Black/RGB, 4 Mono White/RGB)",
+      "downloadedAt": "2026-10-08",
+      "originalFormat": "svg (mono RGB; النسخة الملوّنة الرسمية 374KB لم تُعتمد لحجمها)"
+    },
+    {
+      "id": "facebook",
+      "name": "Facebook",
+      "nameAr": "فيسبوك",
+      "light": {
+        "file": "facebook.png",
+        "width": 256,
+        "height": 256,
+        "format": "png"
+      },
+      "source": "https://about.meta.com/brand/resources/facebook/logo/ (Facebook-Brand-Asset-Pack.zip → Logo/Primary Logo/Facebook_Logo_Primary.png)",
+      "downloadedAt": "2026-10-08",
+      "originalFormat": "png 2084×2084 (resized proportionally to 256px)"
+    },
+    {
+      "id": "instapay",
+      "name": "InstaPay",
+      "nameAr": "إنستا باي",
+      "light": {
+        "file": "instapay.png",
+        "width": 256,
+        "height": 256,
+        "format": "png"
+      },
+      "source": "https://www.instapay.eg/wp-content/uploads/2022/03/logo.png",
+      "downloadedAt": "2026-10-08",
+      "originalFormat": "png 512×512 (resized proportionally to 256px)"
+    },
+    {
+      "id": "vodafone_cash",
+      "name": "Vodafone Cash",
+      "nameAr": "فودافون كاش",
+      "light": {
+        "file": "vodafone.svg",
+        "width": 48,
+        "height": 48,
+        "format": "svg"
+      },
+      "source": "https://web.vodafone.com.eg/en/vodafone-cash (inline sprite symbol #icon-vodafone-logo — Vodafone speechmark)",
+      "downloadedAt": "2026-10-08",
+      "originalFormat": "svg symbol (extracted verbatim; clip-path reference removed)",
+      "note": "لا يوجد lockup رسمي باسم «Vodafone Cash» منشورًا على الموقع الرسمي؛ العلامة هي Vodafone speechmark ويُكتب اسم «فودافون كاش» بجوارها دائمًا"
+    }
+  ]
+}

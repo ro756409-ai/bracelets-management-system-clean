@@ -9,8 +9,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { BostaWebhookEvents } from "@/components/BostaWebhookEvents";
+import { PartnerLogo } from "@/components/brand/PartnerLogo";
 import { BostaPackageImageField } from "@/components/BostaPackageImageField";
-import { Truck, CheckCircle, Unplug, RefreshCw } from "lucide-react";
+import { CheckCircle, Unplug, RefreshCw } from "lucide-react";
 
 /**
  * ربط حساب Bosta **للنشاط الحالي** — مفتاح + اختبار + مكان استلام من حساب Bosta نفسه.
@@ -57,7 +58,7 @@ export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOp
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" dir="rtl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Truck className="h-5 w-5 text-[var(--info)]" /> ربط حساب Bosta{activeBusiness ? ` — ${activeBusiness.name}` : ""}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><PartnerLogo partner="bosta" size="sm" decorative eager /> ربط حساب Bosta{activeBusiness ? ` — ${activeBusiness.name}` : ""}</DialogTitle>
         </DialogHeader>
 
         {needsPick ? (

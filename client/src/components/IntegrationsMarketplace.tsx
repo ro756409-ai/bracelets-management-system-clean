@@ -1,3 +1,4 @@
+import { PartnerLogo, type PartnerId } from "@/components/brand/PartnerLogo";
 import { useMemo, useState } from "react";
 import {
   Search, ExternalLink, PlugZap, CheckCircle2,
@@ -26,6 +27,8 @@ interface CatalogItem {
   /** المنصة اللي تتفتح في نموذج الإضافة عند "ربط" (للمتاح فقط). */
   connectPlatform?: string;
   website?: string;
+  /** شعار رسمي محلي (المرحلة 6) — يحلّ محلّ أيقونة الفئة على البطاقة؛ الاسم يبقى مكتوبًا */
+  logo?: PartnerId;
 }
 
 const CATEGORIES: { key: CategoryKey | "all"; label: string }[] = [
@@ -52,7 +55,7 @@ const CATEGORY_LABEL: Record<CategoryKey, string> = {
 
 // كتالوج ثابت — الحالة بتعكس الدعم الفعلي في الـBackend (EasyOrder بس هو الـwebhook الحقيقي).
 const CATALOG: CatalogItem[] = [
-  { id: "easyorder", name: "EasyOrder", category: "stores", status: "available", connectPlatform: "easyorder",
+  { id: "easyorder", name: "EasyOrder", category: "stores", status: "available", connectPlatform: "easyorder", logo: "easyorders",
     description: "استقبل أوردرات متجرك أوتوماتيك عبر Webhook فور إنشائها.", website: "https://easy-orders.net" },
   { id: "manual", name: "قناة يدوية / أخرى", category: "stores", status: "available", connectPlatform: "manual",
     description: "سجّل قناة بيع تدخّل أوردراتها يدويًا (متجر بسيط أو مصدر آخر)." },
@@ -60,7 +63,7 @@ const CATALOG: CatalogItem[] = [
     description: "ربط متجر شوبيفاي واستقبال أوردراته تلقائيًا.", website: "https://www.shopify.com" },
   { id: "woocommerce", name: "WooCommerce", category: "stores", status: "coming_soon",
     description: "ربط متجر ووردبريس/ووكومرس واستقبال أوردراته." },
-  { id: "bosta", name: "Bosta", category: "shipping", status: "available", connectPlatform: "bosta",
+  { id: "bosta", name: "Bosta", category: "shipping", status: "available", connectPlatform: "bosta", logo: "bosta",
     description: "إنشاء شحنات ومتابعة حالتها مع بوسطة — حساب ومفتاح ومكان استلام لكل نشاط.", website: "https://bosta.co" },
   { id: "shipping_other", name: "شركات شحن أخرى", category: "shipping", status: "coming_soon",
     description: "تكاملات شحن إضافية قيد التحضير." },
@@ -148,8 +151,8 @@ export function IntegrationsMarketplace({
               >
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-brand-card,0.75rem)] bg-primary/10 text-primary">
-                      <Icon className="h-5 w-5" />
+                    <div className={`flex h-10 items-center justify-center rounded-[var(--radius-brand-card,0.75rem)] ${item.logo ? "w-auto min-w-10 bg-card px-1.5 ring-1 ring-border" : "w-10 bg-primary/10 text-primary"}`}>
+                      {item.logo ? <PartnerLogo partner={item.logo} size="md" decorative eager /> : <Icon className="h-5 w-5" />}
                     </div>
                     <div>
                       <p className="font-semibold leading-tight text-foreground">{item.name}</p>

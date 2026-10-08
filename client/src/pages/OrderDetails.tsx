@@ -3,6 +3,8 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
+import { PartnerLogo } from "@/components/brand/PartnerLogo";
+import { sourceLogo } from "@/components/shared/StatusBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -255,7 +257,8 @@ export default function OrderDetails() {
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[order.status]}`}>
                 {STATUS_LABELS[order.status]}
               </span>
-              <span className="text-sm text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                {sourceLogo(order.source) && <PartnerLogo partner={sourceLogo(order.source)!} size="xs" decorative />}
                 {SOURCE_LABELS[order.source] || order.source}
               </span>
             </div>
@@ -524,7 +527,10 @@ export default function OrderDetails() {
               </div>
               <div>
                 <Label className="text-muted-foreground text-xs">المصدر</Label>
-                <p className="font-medium">{SOURCE_LABELS[order.source] || order.source}</p>
+                <p className="inline-flex items-center gap-1.5 font-medium">
+                  {sourceLogo(order.source) && <PartnerLogo partner={sourceLogo(order.source)!} size="xs" decorative />}
+                  {SOURCE_LABELS[order.source] || order.source}
+                </p>
               </div>
               <div>
                 <Label className="text-muted-foreground text-xs">اسم الإعلان</Label>

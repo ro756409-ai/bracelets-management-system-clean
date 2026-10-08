@@ -4,6 +4,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PartnerLogo, type PartnerId } from "@/components/brand/PartnerLogo";
 
 /**
  * Order status presentation, in one place.
@@ -47,7 +48,7 @@ const TONE_ICON: Record<StatusTone, LucideIcon> = {
   purple: CircleDot, cyan: Truck, amber: Clock, orange: Clock, delivered: PackageCheck,
 };
 
-type StatusDef = { label: string; tone: StatusTone; icon?: LucideIcon };
+type StatusDef = { label: string; tone: StatusTone; icon?: LucideIcon; /** شعار رسمي محلي (المرحلة 6) — للمصادر فقط، والاسم يبقى مكتوبًا بجواره */ logo?: PartnerId };
 
 /**
  * Canonical order statuses. Labels match the wording staff already read on screen.
@@ -72,15 +73,18 @@ export const ORDER_STATUS: Record<string, StatusDef> = {
 
 /** Where an order came from. Deliberately neutral — source is context, not a warning. */
 export const ORDER_SOURCE: Record<string, StatusDef> = {
-  easyorder: { label: "Easy Order", tone: "neutral" },
-  easyorder_farhat: { label: "Easy Order — فرحات", tone: "neutral" },
-  easyorder_ataba: { label: "Easy Order — عتبة", tone: "neutral" },
-  facebook: { label: "فيسبوك", tone: "neutral" },
-  whatsapp: { label: "واتساب", tone: "neutral" },
+  easyorder: { label: "Easy Order", tone: "neutral", logo: "easyorders" },
+  easyorder_farhat: { label: "Easy Order — فرحات", tone: "neutral", logo: "easyorders" },
+  easyorder_ataba: { label: "Easy Order — عتبة", tone: "neutral", logo: "easyorders" },
+  facebook: { label: "فيسبوك", tone: "neutral", logo: "facebook" },
+  whatsapp: { label: "واتساب", tone: "neutral", logo: "whatsapp" },
   shopify: { label: "Shopify", tone: "neutral" },
   manual: { label: "يدوي", tone: "neutral" },
   import: { label: "استيراد", tone: "neutral" },
 };
+
+/** الشعار الرسمي لمصدر أوردر (إن وُجد) — لعرضه بجوار اسم المصدر في أي صفحة. */
+export const sourceLogo = (source: string | null | undefined): PartnerId | undefined => (source ? ORDER_SOURCE[source]?.logo : undefined);
 
 /** Stock health, shared by the inventory page and its variant rows. */
 export const STOCK_STATUS: Record<string, StatusDef> = {
@@ -138,6 +142,8 @@ export function StatusBadge({
     >
       {icon !== undefined && icon !== null ? (
         <span className={cn("inline-flex shrink-0 [&>svg]:h-full [&>svg]:w-full", iconSize)} aria-hidden="true">{icon}</span>
+      ) : icon === undefined && def?.logo ? (
+        <PartnerLogo partner={def.logo} size="xs" decorative className={size === "sm" ? "!h-3" : "!h-3.5"} />
       ) : Icon ? (
         <Icon className={cn("shrink-0", iconSize)} aria-hidden="true" />
       ) : (
