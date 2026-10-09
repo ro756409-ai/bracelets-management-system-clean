@@ -94,6 +94,17 @@ export const ALL_PERMISSIONS = [
   "employee_performance.view_self",
   "employee_performance.view_all",
   "employee_performance.export",
+  // ==================== الحضور والانصراف (0042) ====================
+  // self: الموظف نفسه. الإدارة: المالك/الأدمن افتراضيًا، المدير والمحاسب بالمنح. view_team مؤجّل.
+  "attendance.clock_self",
+  "attendance.view_self",
+  "attendance.request_correction",
+  "attendance.view_all",
+  "attendance.manage_shifts",
+  "attendance.correct",
+  "attendance.approve_corrections",
+  "attendance.manage_leaves",
+  "attendance.export",
 ] as const;
 
 /** صلاحيات دفتر V3 التي يملكها المالك وحده افتراضيًا (لا يأخذها admin إلا بمنح صريح لكل tenant). */
@@ -108,9 +119,18 @@ export type Permission = (typeof ALL_PERMISSIONS)[number];
 export const MANAGER_GRANT_ONLY_PERMISSIONS: readonly Permission[] = [
   "employee_performance.view_all",
   "employee_performance.export",
+  "attendance.view_all",
+  "attendance.manage_shifts",
+  "attendance.correct",
+  "attendance.approve_corrections",
+  "attendance.manage_leaves",
+  "attendance.export",
 ];
-/** صلاحية «أدائي» لكل دور تشغيلي (ما عدا viewer). */
-const SELF_PERFORMANCE: readonly Permission[] = ["employee_performance.view_self"];
+/** «أدائي» + حضوري (تسجيل/عرض/طلب تصحيح) لكل دور تشغيلي (ما عدا viewer). */
+const SELF_PERFORMANCE: readonly Permission[] = [
+  "employee_performance.view_self",
+  "attendance.clock_self", "attendance.view_self", "attendance.request_correction",
+];
 
 /**
  * الصلاحيات **المالية** — الأقسام اللي بتحرّك فلوس أو بتوريها: الحسابات، المصاريف،

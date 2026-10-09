@@ -109,6 +109,8 @@ import {
 import { eq, and, gte, lte, desc, sql, inArray, or, isNull } from "drizzle-orm";
 import { orderEventsEnabled, type OrderEventContext } from "./orderEvents.service";
 import { loadPerformance } from "./employeePerformance.service";
+import * as attendanceSvc from "./attendance.service";
+import { attendanceCsv } from "../shared/attendanceCalc";
 import { performanceCsv } from "../shared/employeePerformance";
 import {
   broadcastScopeCondition,
@@ -1042,6 +1044,26 @@ async function resolveActingEmployeeIdAndName(
     : emps.find((e: any) => e.userId === ctx.user?.id);
   return { id: emp?.id, name: emp?.name ?? ctx.user?.name ?? undefined };
 }
+
+/** صلاحية فعلية للجلسة (ويب): المدير بالمنح الصريح، المالك/الأدمن الصناعي نعم، غير ذلك خريطة الشركة. */
+async function sessionHasPermission(ctx: any, permission: Permission): Promise<boolean> {
+  if (ctx.tenantId == null) return false;
+  if (ctx.employee?.role === "manager") return hasTenantPermission(ctx.tenantId, "manager", permission);
+  if (ctx.user?.role === "admin") return true;
+  return hasTenantPermission(ctx.tenantId, ctx.employee?.role, permission);
+}
+
+/** الفاعل في الحضور من **الجلسة** فقط (ويب): tenant الجلسة + صف الموظف الحقيقي. */
+function webAttendanceActor(ctx: any): attendanceSvc.AttendanceActor {
+  if (!ctx.employee || ctx.tenantId == null) throw new TRPCError({ code: "FORBIDDEN", message: "تعذّر تحديد الموظف" });
+  return { tenantId: ctx.tenantId, employeeId: ctx.employee.id, role: ctx.employee.role ?? null, businessId: ctx.employee.businessId ?? null, name: ctx.employee.name ?? null };
+}
+/** الفاعل في الحضور لجلسة البوابة — كوكي الموظف فقط (لا صلاحيات جلسة مالك مفتوحة). */
+function portalAttendanceActor(ctx: any): attendanceSvc.AttendanceActor {
+  const emp = ctx.employee;
+  return { tenantId: requireTenantId(emp), employeeId: emp.id, role: emp.role ?? null, businessId: emp.businessId ?? null, name: emp.name ?? null };
+}
+const attendanceRange = z.object({ dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
 
 /** معرّف العملية من الواجهة (ثابت طوال دورة العملية) — يُستخدم فقط والعلم مفعّل. */
 const operationIdInput = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/).optional();
@@ -4376,6 +4398,23 @@ export const appRouter = router({
       return tenantPermissionsForRole(requireTenantId(emp), emp.role);
     }),
 
+    // ==================== حضوري (0042) — هوية البوابة فقط ====================
+    attendanceMine: requireEmployeeTenantPermission("attendance.view_self")
+      .input(attendanceRange.strict())
+      .query(async ({ ctx, input }) => {
+        if (!attendanceSvc.attendanceEnabled()) return { enabled: false as const };
+        return { enabled: true as const, ...(await attendanceSvc.myDays(portalAttendanceActor(ctx), input.dateFrom, input.dateTo)) };
+      }),
+    attendanceClock: requireEmployeeTenantPermission("attendance.clock_self")
+      .input(z.object({ action: z.enum(["clock_in", "break_start", "break_end", "clock_out"]), operationId: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/), source: z.enum(["web", "mobile_web"]).optional() }).strict())
+      .mutation(async ({ ctx, input }) => attendanceSvc.clock(portalAttendanceActor(ctx), input.action, input.operationId, input.source ?? "web")),
+    attendanceRequestCorrection: requireEmployeeTenantPermission("attendance.request_correction")
+      .input(attendanceSvc.correctionRequestInput)
+      .mutation(async ({ ctx, input }) => attendanceSvc.requestCorrection(portalAttendanceActor(ctx), input)),
+    attendanceCancelRequest: requireEmployeeTenantPermission("attendance.request_correction")
+      .input(z.object({ requestId: z.number().int().positive() }).strict())
+      .mutation(async ({ ctx, input }) => attendanceSvc.cancelCorrection(portalAttendanceActor(ctx), input.requestId)),
+
     // «أدائي» من سجل الأحداث — هوية البوابة فقط، نشاط الموظف فقط، بلا ترتيب.
     myPerformance: requireEmployeeTenantPermission("employee_performance.view_self")
       .input(z.object({ dateFrom: z.string(), dateTo: z.string() }).strict())
@@ -6520,6 +6559,65 @@ export const appRouter = router({
         const report = await loadPerformance({ tenantId: ctx.tenantId, businessIds, fromDate: input.dateFrom, toDate: input.dateTo });
         return report.enabled ? { enabled: true as const, csv: performanceCsv(report.rows) } : { enabled: false as const, csv: "" };
       }),
+  }),
+
+  // ==================== الحضور والانصراف — الإدارة (0042، خلف ATTENDANCE_ENABLED) ====================
+  // الفاعل والنطاق من الجلسة؛ المدخلات strict؛ القراءة والعلم معطل = { enabled: false } بلا وصول للجداول.
+  attendance: router({
+    status: authenticatedProcedure.query(() => ({ enabled: attendanceSvc.attendanceEnabled() })),
+    team: permissionProcedure("attendance.view_all")
+      .input(attendanceRange.extend({ businessIds: z.array(z.number()).optional() }).strict())
+      .query(async ({ ctx, input }) => {
+        if (!attendanceSvc.attendanceEnabled()) return { enabled: false as const };
+        const businessIds = (await scopeBusinessIds(ctx, input)) ?? [NO_BUSINESS];
+        return { enabled: true as const, ...(await attendanceSvc.teamDays(ctx.tenantId, businessIds, input.dateFrom, input.dateTo)) };
+      }),
+    exportCsv: permissionProcedure("attendance.export")
+      .input(attendanceRange.extend({ businessIds: z.array(z.number()).optional() }).strict())
+      .query(async ({ ctx, input }) => {
+        if (!attendanceSvc.attendanceEnabled()) return { enabled: false as const, csv: "" };
+        const businessIds = (await scopeBusinessIds(ctx, input)) ?? [NO_BUSINESS];
+        const t = await attendanceSvc.teamDays(ctx.tenantId, businessIds, input.dateFrom, input.dateTo);
+        return { enabled: true as const, csv: attendanceCsv(t.days as any) };
+      }),
+    shifts: permissionProcedure("attendance.manage_shifts").query(async ({ ctx }) => {
+      if (!attendanceSvc.attendanceEnabled()) return { enabled: false as const, rows: [] as any[] };
+      return { enabled: true as const, rows: await attendanceSvc.listShifts(ctx.tenantId) };
+    }),
+    createShift: permissionProcedure("attendance.manage_shifts")
+      .input(attendanceSvc.shiftInput)
+      .mutation(async ({ ctx, input }) => attendanceSvc.createShift(webAttendanceActor(ctx), input, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
+    updateShift: permissionProcedure("attendance.manage_shifts")
+      .input(z.object({ id: z.number().int().positive(), version: z.number().int().positive(), shift: attendanceSvc.shiftInput }).strict())
+      .mutation(async ({ ctx, input }) => attendanceSvc.updateShift(webAttendanceActor(ctx), input.id, input.version, input.shift, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
+    setShiftActive: permissionProcedure("attendance.manage_shifts")
+      .input(z.object({ id: z.number().int().positive(), isActive: z.boolean() }).strict())
+      .mutation(async ({ ctx, input }) => attendanceSvc.setShiftActive(webAttendanceActor(ctx), input.id, input.isActive)),
+    assignments: permissionProcedure("attendance.manage_shifts").query(async ({ ctx }) => {
+      if (!attendanceSvc.attendanceEnabled()) return { enabled: false as const, rows: [] as any[] };
+      return { enabled: true as const, rows: await attendanceSvc.listAssignments(ctx.tenantId) };
+    }),
+    assign: permissionProcedure("attendance.manage_shifts")
+      .input(attendanceSvc.assignmentInput)
+      .mutation(async ({ ctx, input }) => attendanceSvc.assignShift(webAttendanceActor(ctx), input, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
+    endAssignment: permissionProcedure("attendance.manage_shifts")
+      .input(z.object({ id: z.number().int().positive() }).strict())
+      .mutation(async ({ ctx, input }) => attendanceSvc.endAssignment(webAttendanceActor(ctx), input.id)),
+    review: authenticatedProcedure
+      .input(z.object({ requestId: z.number().int().positive(), decision: z.enum(["approve", "reject"]), reviewReason: z.string().max(500).nullable().optional() }).strict())
+      .mutation(async ({ ctx, input }) => {
+        const perms = { approveCorrections: await sessionHasPermission(ctx, "attendance.approve_corrections"), manageLeaves: await sessionHasPermission(ctx, "attendance.manage_leaves") };
+        if (!perms.approveCorrections && !perms.manageLeaves) throw new TRPCError({ code: "FORBIDDEN", message: "ليس لديك صلاحية مراجعة الطلبات" });
+        return attendanceSvc.reviewCorrection(webAttendanceActor(ctx), input, perms, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []));
+      }),
+    adminCorrect: permissionProcedure("attendance.correct")
+      .input(z.object({
+        employeeId: z.number().int().positive(), workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        punchType: z.enum(["clock_in", "break_start", "break_end", "clock_out", "day_close", "day_reopen"]),
+        at: z.string().datetime({ offset: true }).nullable().optional(), correctionOfEventId: z.number().int().positive().nullable().optional(),
+        voidEvent: z.boolean().optional(), reason: z.string().min(3).max(200), operationId: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/),
+      }).strict())
+      .mutation(async ({ ctx, input: { punchType, ...rest } }) => attendanceSvc.adminCorrect(webAttendanceActor(ctx), { ...rest, eventType: punchType }, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
   }),
 
   // ==================== BROADCAST (Admin OAuth) ====================

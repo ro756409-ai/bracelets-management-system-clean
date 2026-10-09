@@ -36,8 +36,8 @@ describe("🔑 مصفوفة صلاحيات data_entry", () => {
     expect(hasPermission("order_confirmation", "orders.confirm")).toBe(true);
     expect(hasPermission("agent", "orders.confirm")).toBe(true);
     expect(hasPermission("order_confirmation", "orders.create")).toBe(false); // معناها ما اتوسّعش
-    // orders.view + orders.create + «أدائي» (employee_performance.view_self — قرار المالك لكل دور تشغيلي)
-    expect([...permissionsForRole("data_entry")].sort()).toEqual(["employee_performance.view_self", "orders.create", "orders.view"]);
+    // orders.view + orders.create + «أدائي» + حضوري (قرار المالك لكل دور تشغيلي) — لا شيء غير ذلك
+    expect([...permissionsForRole("data_entry")].sort()).toEqual(["attendance.clock_self", "attendance.request_correction", "attendance.view_self", "employee_performance.view_self", "orders.create", "orders.view"]);
   });
 });
 

@@ -160,3 +160,12 @@ export function pickAssignment(cands: AssignmentCandidate[], emp: { id: number; 
 export function rangesOverlap(aFrom: string, aTo: string | null, bFrom: string, bTo: string | null): boolean {
   return (aTo == null || bFrom <= aTo) && (bTo == null || aFrom <= bTo);
 }
+
+/** CSV الحضور للتصدير — الأوقات بتوقيت اليوم (IANA)، الدقائق كما هي. */
+export function attendanceCsv(days: { employeeName: string; workDate: string; status: string; firstInMs: number | null; lastOutMs: number | null; timezone: string; workedMinutes: number; breakMinutes: number; lateMinutes: number; earlyLeaveMinutes: number; overtimeMinutes: number; excessBreakMinutes: number; requiresReview: number | boolean; reviewReason: string | null }[]): string {
+  const fmt = (ms: number | null, tz: string) => (ms == null ? "" : new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(Number(ms))));
+  const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const head = ["الموظف", "التاريخ", "الحالة", "الحضور", "الانصراف", "دقائق العمل", "الاستراحة", "التأخير", "الخروج المبكر", "الإضافي", "استراحة زائدة", "يحتاج مراجعة", "السبب"];
+  const lines = days.map(d => [d.employeeName, d.workDate, d.status, fmt(d.firstInMs, d.timezone), fmt(d.lastOutMs, d.timezone), d.workedMinutes, d.breakMinutes, d.lateMinutes, d.earlyLeaveMinutes, d.overtimeMinutes, d.excessBreakMinutes, Number(d.requiresReview) ? "نعم" : "لا", d.reviewReason ?? ""].map(esc).join(","));
+  return "﻿" + [head.join(","), ...lines].join("\n");
+}
