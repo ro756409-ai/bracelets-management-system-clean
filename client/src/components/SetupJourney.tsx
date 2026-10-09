@@ -28,7 +28,7 @@ export function SetupJourney({ current }: { current: "business" | "channel" | "e
                 type="button"
                 onClick={() => setLocation(s.path)}
                 title={s.hint}
-                className={`inline-flex items-center gap-1.5 rounded-[var(--radius-brand-pill,9999px)] border px-2.5 py-1 text-xs font-medium transition-colors ${
+                className={`inline-flex min-h-11 items-center gap-1.5 rounded-[var(--radius-brand-pill,9999px)] border px-3 py-1 text-xs font-medium transition-colors duration-[var(--duration-fast)] md:min-h-0 md:px-2.5 ${
                   isActive
                     ? "border-primary bg-primary/10 text-primary"
                     : "border-border bg-card text-muted-foreground hover:bg-muted"

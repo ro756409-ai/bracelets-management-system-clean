@@ -4,7 +4,19 @@ import { getLoginUrl } from "@/const";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { useEffect } from "react";
+import { Package, Users, Warehouse, BarChart3 } from "lucide-react";
 
+const FEATURES = [
+  { icon: Package, label: "إدارة الأوردرات" },
+  { icon: Users, label: "فريق التأكيدات" },
+  { icon: Warehouse, label: "إدارة المخزون" },
+  { icon: BarChart3, label: "تقارير الأداء" },
+];
+
+/**
+ * الصفحة الرئيسية العامة — المستخدم المسجّل يُحوَّل للوحة التحكم (كما كان). المرحلة 7H (عرض فقط):
+ * أيقونات lucide بدل الإيموجي، tokens الهوية، `<main>` واحد، وزر 44px.
+ */
 export default function Home() {
   const { user, loading } = useAuth();
   const [, setLocation] = useLocation();
@@ -18,52 +30,48 @@ export default function Home() {
   if (loading) return null;
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <div className="max-w-md w-full">
+    <main dir="rtl" className="flex min-h-screen items-center justify-center bg-background p-4" data-testid="home-page">
+      <div className="w-full max-w-md">
         {/* Logo & Title */}
-        <div className="text-center mb-10">
-          <div className="inline-flex justify-center mb-6 shadow-xl rounded-3xl">
-            <BrandLogo variant="icon" size="xl" className="rounded-3xl" />
+        <div className="mb-10 text-center">
+          <div className="mb-6 inline-flex justify-center rounded-[var(--radius-brand-xl,1.5rem)] shadow-[var(--shadow-card)]">
+            <BrandLogo variant="icon" size="xl" className="rounded-[var(--radius-brand-xl,1.5rem)]" />
           </div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">
+          <h1 className="mb-2 text-3xl font-bold text-foreground">
             متجرك
           </h1>
-          <p className="text-muted-foreground text-lg">
+          <p className="text-lg text-muted-foreground">
             كل أعمالك في مكان واحد
           </p>
         </div>
 
         {/* Features */}
-        <div className="grid grid-cols-2 gap-3 mb-8">
-          {[
-            { icon: "📦", label: "إدارة الأوردرات" },
-            { icon: "👥", label: "فريق التأكيدات" },
-            { icon: "🏪", label: "إدارة المخزون" },
-            { icon: "📊", label: "تقارير الأداء" },
-          ].map((f) => (
-            <div
+        <ul className="mb-8 grid grid-cols-2 gap-3">
+          {FEATURES.map((f) => (
+            <li
               key={f.label}
-              className="bg-card/80 backdrop-blur rounded-xl p-4 flex items-center gap-3 shadow-sm border border-border"
+              className="flex items-center gap-3 rounded-[var(--radius-brand-md)] border border-border bg-card p-4 shadow-[var(--shadow-card)]"
             >
-              <span className="text-2xl">{f.icon}</span>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-brand-md)] bg-accent text-accent-foreground" aria-hidden="true"><f.icon className="h-5 w-5" /></span>
               <span className="text-sm font-medium text-foreground">{f.label}</span>
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
 
         {/* Login Button */}
         <Button
           onClick={() => { window.location.href = getLoginUrl(); }}
           size="lg"
-          className="w-full h-12 text-base font-semibold shadow-lg"
+          className="h-12 w-full text-base font-semibold"
+          data-testid="home-login"
         >
           تسجيل الدخول للمنصة
         </Button>
 
-        <p className="text-center text-xs text-muted-foreground mt-4">
+        <p className="mt-4 text-center text-xs text-muted-foreground">
           منصة لإدارة الطلبات والمخزون والشحن والتحصيل لتجار الأونلاين
         </p>
       </div>
-    </div>
+    </main>
   );
 }

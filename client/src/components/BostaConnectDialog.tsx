@@ -12,6 +12,7 @@ import { BostaWebhookEvents } from "@/components/BostaWebhookEvents";
 import { PartnerLogo } from "@/components/brand/PartnerLogo";
 import { BostaPackageImageField } from "@/components/BostaPackageImageField";
 import { CheckCircle, Unplug, RefreshCw } from "lucide-react";
+import { StatusBadge } from "@/components/shared";
 
 /**
  * ربط حساب Bosta **للنشاط الحالي** — مفتاح + اختبار + مكان استلام من حساب Bosta نفسه.
@@ -65,7 +66,7 @@ export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOp
           <div className="space-y-2" data-testid="bosta-pick-business">
             <Label className="text-xs">اختر النشاط الذي تريد ربط حساب بوسطة به</Label>
             <Select value="" onValueChange={v => setCurrentBusinessId(Number(v))}>
-              <SelectTrigger data-testid="bosta-business-select"><SelectValue placeholder="اختر النشاط" /></SelectTrigger>
+              <SelectTrigger className="min-h-11" data-testid="bosta-business-select" aria-label="اختر النشاط"><SelectValue placeholder="اختر النشاط" /></SelectTrigger>
               <SelectContent>
                 {businesses.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
               </SelectContent>
@@ -76,39 +77,42 @@ export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOp
           <p className="text-sm text-muted-foreground">لا يوجد نشاط متاح لهذه الجلسة.</p>
         ) : connected ? (
           <div className="space-y-3 text-sm" data-testid="bosta-connected">
-            <div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-[var(--success)]" /> مربوط — المفتاح ينتهي بـ <Badge variant="secondary" dir="ltr">…{s?.apiKeyLast4}</Badge></div>
+            <div className="flex flex-wrap items-center gap-2"><StatusBadge status="connected" label="متصل" tone="success" size="sm" icon={<CheckCircle className="h-3 w-3" aria-hidden="true" />} /> المفتاح ينتهي بـ <Badge variant="secondary" dir="ltr">…{s?.apiKeyLast4}</Badge></div>
             <div><span className="text-muted-foreground">مكان الاستلام:</span> {s?.pickupLocationName ?? s?.pickupLocationId ?? "—"}</div>
             <div><span className="text-muted-foreground">فتح الشحنة افتراضيًا:</span> {s?.allowOpenPackageDefault ? "نعم" : "لا"}</div>
             <p className="text-xs text-muted-foreground">لتغيير المفتاح: افصل الحساب ثم اربطه بمفتاح جديد. تاريخ الشحنات يظل محفوظًا.</p>
-            <Button variant="outline" size="sm" className="text-destructive" onClick={() => disconnect.mutate({ businessId })} disabled={disconnect.isPending} data-testid="bosta-disconnect">
+            <Button variant="outline" size="sm" className="min-h-11 text-destructive md:min-h-9" onClick={() => disconnect.mutate({ businessId })} disabled={disconnect.isPending} data-testid="bosta-disconnect">
               <Unplug className="h-4 w-4 ml-1" /> فصل الحساب
             </Button>
           </div>
         ) : (
           <div className="space-y-3">
-            {s?.status === "legacy" && (
-              <p className="text-xs rounded-md border border-[var(--warning)] bg-[var(--warning)]/5 p-2 text-[var(--warning)]">{s.reason}</p>
+            {s?.status === "legacy" ? (
+              <div className="space-y-1 rounded-[var(--radius-brand-md)] border border-[var(--warning)]/40 bg-[var(--warning)]/5 p-2 text-xs text-[var(--warning)]" role="status"><StatusBadge status="error" label="يحتاج إعادة ربط" tone="warning" size="sm" /> <span>{s.reason}</span></div>
+            ) : (
+              <StatusBadge status="disconnected" label="غير متصل" tone="neutral" size="sm" icon={<Unplug className="h-3 w-3" aria-hidden="true" />} />
             )}
             <div>
-              <Label className="text-xs">API Key من لوحة بوسطة (صلاحية Read/Write)</Label>
-              <Input type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); setLocations(null); }} dir="ltr" className="mt-1" autoComplete="off" data-testid="bosta-api-key" />
+              <Label htmlFor="bosta-api-key" className="text-xs">API Key من لوحة بوسطة (صلاحية Read/Write)</Label>
+              <Input id="bosta-api-key" type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); setLocations(null); }} dir="ltr" className="mt-1 min-h-11" autoComplete="off" data-testid="bosta-api-key" />
+              <p className="mt-1 text-xs text-muted-foreground">يُرسل مرة واحدة للحفظ بعد نجاح الاختبار ولا يُعرض مرة أخرى — يظهر آخر 4 أحرف فقط.</p>
             </div>
-            <Button type="button" variant="outline" size="sm" onClick={() => test.mutate({ businessId, apiKey })} disabled={apiKey.trim().length < 8 || test.isPending} data-testid="bosta-test">
+            <Button type="button" variant="outline" size="sm" className="min-h-11 md:min-h-9" onClick={() => test.mutate({ businessId, apiKey })} disabled={apiKey.trim().length < 8 || test.isPending} data-testid="bosta-test">
               {test.isPending ? <RefreshCw className="h-4 w-4 ml-1 animate-spin" /> : null} اختبار الاتصال
             </Button>
             {locations && (
               <>
                 <div>
-                  <Label className="text-xs">مكان الاستلام الافتراضي (من حساب بوسطة)</Label>
+                  <Label htmlFor="bosta-pickup" className="text-xs">مكان الاستلام الافتراضي (من حساب بوسطة)</Label>
                   <Select value={pickupId} onValueChange={setPickupId}>
-                    <SelectTrigger className="mt-1" data-testid="bosta-pickup"><SelectValue placeholder={locations.length ? "اختر مكان الاستلام" : "لا توجد أماكن استلام في الحساب"} /></SelectTrigger>
+                    <SelectTrigger id="bosta-pickup" className="mt-1 min-h-11" data-testid="bosta-pickup"><SelectValue placeholder={locations.length ? "اختر مكان الاستلام" : "لا توجد أماكن استلام في الحساب"} /></SelectTrigger>
                     <SelectContent>
                       {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={allowOpen} onChange={e => setAllowOpen(e.target.checked)} /> السماح بفتح الشحنة افتراضيًا (فليكس شيب)
+                <label className="flex min-h-11 items-center gap-2 text-sm">
+                  <input type="checkbox" className="h-4 w-4 accent-[var(--primary)]" checked={allowOpen} onChange={e => setAllowOpen(e.target.checked)} /> السماح بفتح الشحنة افتراضيًا (فليكس شيب)
                 </label>
               </>
             )}
@@ -119,9 +123,10 @@ export function BostaConnectDialog({ open, onOpenChange }: { open: boolean; onOp
         {open && businessId > 0 && !needsPick && <BostaWebhookEvents businessId={businessId} />}
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>إغلاق</Button>
+          <Button variant="outline" className="min-h-11 md:min-h-9" onClick={() => onOpenChange(false)}>إغلاق</Button>
           {!connected && businessId > 0 && (
             <Button
+              className="min-h-11 md:min-h-9"
               onClick={() => connect.mutate({ businessId, apiKey, pickupLocationId: pickupId || null, pickupLocationName: pickup?.name ?? null, allowOpenPackageDefault: allowOpen })}
               disabled={!locations || connect.isPending}
               data-testid="bosta-save"

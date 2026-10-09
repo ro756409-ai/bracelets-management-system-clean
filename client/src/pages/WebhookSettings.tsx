@@ -1,32 +1,30 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { SetupJourney } from "@/components/SetupJourney";
+import { PartnerLogo } from "@/components/brand/PartnerLogo";
+import { PageHeader, StatCard, SectionCard, StatusBadge, SearchInput, EmptyState, LoadingSkeleton, OfflineState } from "@/components/shared";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import {
   Copy, CheckCircle, XCircle, AlertCircle, RefreshCw, Zap,
-  Package, Phone, MapPin, Calendar, ChevronDown, ChevronUp, Info
+  Package, Phone, MapPin, Calendar, ChevronDown, Info, Check, ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 
 const WEBHOOK_URL = `${window.location.origin}/api/webhooks/easyorder`;
+const TOUCH = "min-h-11 md:min-h-9";
 
-function StatusBadge({ status }: { status: string }) {
-  if (status === "success") return <Badge className="bg-[var(--success)]/15 text-[var(--success)] border-[var(--success)]/30 text-xs">✓ نجح</Badge>;
-  if (status === "duplicate") return <Badge className="bg-[var(--warning)]/15 text-[var(--warning)] border-[var(--warning)]/30 text-xs">⟳ مكرر</Badge>;
-  if (status === "error") return <Badge className="bg-destructive/15 text-destructive border-destructive/30 text-xs">✗ خطأ</Badge>;
-  if (status === "status_update") return <Badge className="bg-[var(--info)]/15 text-[var(--info)] border-[var(--info)]/30 text-xs">↺ تحديث حالة</Badge>;
-  return <Badge variant="outline" className="text-xs">{status}</Badge>;
-}
+const STATUS_META: Record<string, { label: string; tone: "success" | "warning" | "danger" | "info" | "neutral"; icon: typeof CheckCircle }> = {
+  success: { label: "نجح", tone: "success", icon: CheckCircle },
+  duplicate: { label: "مكرر", tone: "warning", icon: AlertCircle },
+  error: { label: "خطأ", tone: "danger", icon: XCircle },
+  status_update: { label: "تحديث حالة", tone: "info", icon: Zap },
+};
 
-function StatusIcon({ status }: { status: string }) {
-  if (status === "success") return <CheckCircle className="w-4 h-4 text-[var(--success)] shrink-0 mt-0.5" />;
-  if (status === "duplicate") return <AlertCircle className="w-4 h-4 text-[var(--warning)] shrink-0 mt-0.5" />;
-  if (status === "error") return <XCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />;
-  if (status === "status_update") return <Zap className="w-4 h-4 text-[var(--info)] shrink-0 mt-0.5" />;
-  return <Info className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />;
+function EventStatusBadge({ status }: { status: string }) {
+  const meta = STATUS_META[status];
+  const Icon = meta?.icon ?? Info;
+  return <StatusBadge status={status} label={meta?.label ?? status} tone={meta?.tone ?? "neutral"} size="sm" icon={<Icon className="h-3 w-3" aria-hidden="true" />} />;
 }
 
 function formatTime(val: string | Date | null | undefined): string {
@@ -47,78 +45,84 @@ function formatTime(val: string | Date | null | undefined): string {
 
 function LogRow({ entry }: { entry: any }) {
   const [expanded, setExpanded] = useState(false);
+  const meta = STATUS_META[entry.status];
+  const Icon = meta?.icon ?? Info;
+  const toneClass = meta?.tone === "success" ? "text-[var(--success)]" : meta?.tone === "warning" ? "text-[var(--warning)]" : meta?.tone === "danger" ? "text-destructive" : meta?.tone === "info" ? "text-[var(--info)]" : "text-muted-foreground";
 
   return (
-    <div className="border rounded-lg bg-card overflow-hidden">
-      <div
-        className="flex items-start gap-3 p-3 hover:bg-muted/30 transition-colors cursor-pointer"
+    <li className="overflow-hidden rounded-[var(--radius-brand-md)] border border-border bg-card" data-testid={`webhook-log-${entry.id}`}>
+      <button
+        type="button"
+        className="flex min-h-11 w-full items-start gap-3 p-3 text-start transition-colors duration-[var(--duration-fast)] hover:bg-muted/30"
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        aria-controls={`webhook-log-details-${entry.id}`}
       >
-        <StatusIcon status={entry.status} />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <StatusBadge status={entry.status} />
+        <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${toneClass}`} aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <EventStatusBadge status={entry.status} />
             {entry.customerName && (
               <span className="text-sm font-semibold text-foreground">{entry.customerName}</span>
             )}
             {entry.externalOrderId && (
-              <span className="text-xs text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded">
+              <span className="rounded-[var(--radius-brand-sm,0.375rem)] bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground" dir="ltr">
                 #{entry.externalOrderId}
               </span>
             )}
             {entry.governorate && (
-              <span className="text-xs text-muted-foreground flex items-center gap-0.5">
-                <MapPin className="w-3 h-3" />{entry.governorate}
+              <span className="flex items-center gap-0.5 text-xs text-muted-foreground">
+                <MapPin className="h-3 w-3" aria-hidden="true" />{entry.governorate}
               </span>
             )}
             {entry.importedCount != null && entry.importedCount > 0 && (
-              <span className="text-xs text-[var(--success)] bg-[var(--success)]/10 px-1.5 py-0.5 rounded flex items-center gap-0.5">
-                <Package className="w-3 h-3" />{entry.importedCount} أوردر
+              <span className="flex items-center gap-0.5 rounded-[var(--radius-brand-sm,0.375rem)] bg-[var(--success)]/10 px-1.5 py-0.5 text-xs text-[var(--success)]">
+                <Package className="h-3 w-3" aria-hidden="true" />{entry.importedCount} أوردر
               </span>
             )}
           </div>
-          <p className="text-xs text-muted-foreground mt-1 truncate">{entry.message}</p>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{entry.message}</p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs text-muted-foreground">{formatTime(entry.receivedAt)}</span>
-          {expanded ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-xs tabular-nums text-muted-foreground">{formatTime(entry.receivedAt)}</span>
+          <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform duration-[var(--duration-fast)] ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
         </div>
-      </div>
+      </button>
 
       {expanded && (
-        <div className="border-t bg-muted/20 p-3 space-y-2 text-sm" dir="rtl">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <div id={`webhook-log-details-${entry.id}`} className="space-y-2 border-t border-border bg-muted/20 p-3 text-sm" dir="rtl">
+          <div className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
             {entry.customerPhone && (
               <div className="flex items-center gap-1.5 text-muted-foreground">
-                <Phone className="w-3.5 h-3.5" />
-                <span className="font-mono">{entry.customerPhone}</span>
+                <Phone className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="font-mono" dir="ltr">{entry.customerPhone}</span>
               </div>
             )}
             {entry.totalAmount && (
               <div className="text-muted-foreground">
                 <span className="font-medium">الإجمالي: </span>
-                <span>{Number(entry.totalAmount).toLocaleString("ar-EG")} ج.م</span>
+                <span className="tabular-nums">{Number(entry.totalAmount).toLocaleString("ar-EG")} ج.م</span>
               </div>
             )}
             {entry.itemsCount != null && (
               <div className="text-muted-foreground">
                 <span className="font-medium">عدد المنتجات: </span>
-                <span>{entry.itemsCount}</span>
+                <span className="tabular-nums">{entry.itemsCount}</span>
               </div>
             )}
             {entry.eventType && (
               <div className="text-muted-foreground">
                 <span className="font-medium">نوع الحدث: </span>
-                <span className="font-mono">{entry.eventType}</span>
+                <span className="font-mono" dir="ltr">{entry.eventType}</span>
               </div>
             )}
           </div>
           {entry.rawPayload && (
             <details className="mt-2">
-              <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+              <summary className="min-h-11 cursor-pointer text-xs text-muted-foreground hover:text-foreground md:min-h-0">
                 عرض الـ Payload الكامل
               </summary>
-              <pre className="mt-2 text-xs bg-background border rounded p-2 overflow-x-auto max-h-40 text-left ltr">
+              <pre className="ltr mt-2 max-h-40 overflow-x-auto rounded-[var(--radius-brand-sm,0.375rem)] border border-border bg-background p-2 text-left text-xs">
                 {(() => {
                   try { return JSON.stringify(JSON.parse(entry.rawPayload), null, 2); }
                   catch { return entry.rawPayload; }
@@ -128,15 +132,30 @@ function LogRow({ entry }: { entry: any }) {
           )}
         </div>
       )}
-    </div>
+    </li>
   );
 }
 
+const FILTERS = [
+  { key: "all", label: "الكل" },
+  { key: "success", label: "نجح" },
+  { key: "duplicate", label: "مكرر" },
+  { key: "error", label: "خطأ" },
+  { key: "status_update", label: "تحديث حالة" },
+];
+
+/**
+ * سجل Easy Order (Webhook) — نفس الاستعلام (webhook.log كل 30 ثانية) ونفس الفلاتر والبحث والإحصاءات.
+ * المرحلة 7H (عرض فقط): PageHeader بشعار EasyOrder الرسمي، بطاقات إحصاء تعمل كفلتر، خطوات الإعداد في
+ * قسم قابل للطي بزر aria-expanded، الـSecret لا يُعرض أبدًا، صفوف السجل أزرار 44px مع تفاصيل، وحالات
+ * Loading/Empty/Offline.
+ */
 export default function WebhookSettings() {
   const [copied, setCopied] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [showSetup, setShowSetup] = useState(false);
+  const online = useOnlineStatus();
 
   const { data, isLoading, refetch, isFetching } = trpc.webhook.log.useQuery(undefined, {
     refetchInterval: 30_000,
@@ -178,185 +197,112 @@ export default function WebhookSettings() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  const toggleFilter = (key: string) => setStatusFilter(statusFilter === key ? "all" : key);
+
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6" dir="rtl">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <Zap className="w-6 h-6 text-[var(--warning)]" />
-            سجل Easy Order
-          </h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            إعداد ومتابعة ربط Easy Order: كل الأوردرات الواردة عبر الـWebhook مسجّلة هنا بشكل دائم —
-            حتى بعد إعادة تشغيل السيرفر. لإضافة/تعديل بيانات الربط، افتح قناة EasyOrder من صفحة قنوات البيع.
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => refetch()}
-          disabled={isFetching}
-        >
-          <RefreshCw className={`w-4 h-4 ml-1 ${isFetching ? "animate-spin" : ""}`} />
-          تحديث
-        </Button>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-6" dir="rtl" data-testid="webhook-settings-page">
+      <PageHeader
+        title="سجل Easy Order"
+        description="إعداد ومتابعة ربط Easy Order: كل الأوردرات الواردة عبر الـWebhook مسجّلة هنا بشكل دائم — حتى بعد إعادة تشغيل السيرفر. لإضافة/تعديل بيانات الربط، افتح قناة EasyOrder من صفحة قنوات البيع."
+        icon={<PartnerLogo partner="easyorders" size="sm" decorative />}
+        actions={
+          <Button variant="outline" size="sm" className={TOUCH} onClick={() => refetch()} disabled={isFetching} data-testid="webhook-refresh">
+            <RefreshCw className={`h-4 w-4 ml-1 ${isFetching ? "animate-spin" : ""}`} aria-hidden="true" />
+            تحديث
+          </Button>
+        }
+      >
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="إحصاءات الأحداث" data-testid="webhook-stats">
+          <StatCard label="إجمالي الأحداث" value={stats.total.toLocaleString("ar-EG")} hint="من webhook.log" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} loading={isLoading} />
+          <StatCard label="أوردر استُقبل" value={stats.success.toLocaleString("ar-EG")} tone="success" active={statusFilter === "success"} onClick={() => toggleFilter("success")} loading={isLoading} />
+          <StatCard label="مكرر (تم تخطيه)" value={stats.duplicate.toLocaleString("ar-EG")} tone="warning" active={statusFilter === "duplicate"} onClick={() => toggleFilter("duplicate")} loading={isLoading} />
+          <StatCard label="خطأ" value={stats.error.toLocaleString("ar-EG")} tone="danger" active={statusFilter === "error"} onClick={() => toggleFilter("error")} loading={isLoading} />
+        </section>
+      </PageHeader>
 
       <SetupJourney current="easyorder" />
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card
-          className={`cursor-pointer transition-all ${statusFilter === "all" ? "ring-2 ring-primary" : "hover:shadow-md"}`}
-          onClick={() => setStatusFilter("all")}
-        >
-          <CardContent className="pt-4 pb-3 text-center">
-            <div className="text-2xl font-bold text-foreground">{stats.total}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">إجمالي الأحداث</div>
-          </CardContent>
-        </Card>
-        <Card
-          className={`cursor-pointer transition-all ${statusFilter === "success" ? "ring-2 ring-green-500" : "hover:shadow-md"}`}
-          onClick={() => setStatusFilter(statusFilter === "success" ? "all" : "success")}
-        >
-          <CardContent className="pt-4 pb-3 text-center">
-            <div className="text-2xl font-bold text-[var(--success)]">{stats.success}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">أوردر استُقبل</div>
-          </CardContent>
-        </Card>
-        <Card
-          className={`cursor-pointer transition-all ${statusFilter === "duplicate" ? "ring-2 ring-yellow-500" : "hover:shadow-md"}`}
-          onClick={() => setStatusFilter(statusFilter === "duplicate" ? "all" : "duplicate")}
-        >
-          <CardContent className="pt-4 pb-3 text-center">
-            <div className="text-2xl font-bold text-[var(--warning)]">{stats.duplicate}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">مكرر (تم تخطيه)</div>
-          </CardContent>
-        </Card>
-        <Card
-          className={`cursor-pointer transition-all ${statusFilter === "error" ? "ring-2 ring-red-500" : "hover:shadow-md"}`}
-          onClick={() => setStatusFilter(statusFilter === "error" ? "all" : "error")}
-        >
-          <CardContent className="pt-4 pb-3 text-center">
-            <div className="text-2xl font-bold text-destructive">{stats.error}</div>
-            <div className="text-xs text-muted-foreground mt-0.5">خطأ</div>
-          </CardContent>
-        </Card>
-      </div>
+      {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}
 
       {/* Setup Section (collapsible) */}
-      <Card>
-        <CardHeader
-          className="cursor-pointer select-none"
-          onClick={() => setShowSetup(!showSetup)}
-        >
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Zap className="w-4 h-4 text-[var(--warning)]" />
-              إعداد الـ Webhook في Easy Order
-            </CardTitle>
-            {showSetup ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </div>
-        </CardHeader>
-        {showSetup && (
-          <CardContent className="space-y-4 pt-0">
-            <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-              <li>افتح حساب Easy Order → الإعدادات → Public API → Webhooks</li>
+      <SectionCard
+        title={<span className="inline-flex items-center gap-2"><Zap className="h-4 w-4 text-primary" aria-hidden="true" /> إعداد الـ Webhook في Easy Order</span>}
+        action={<Button variant="ghost" size="sm" className={`${TOUCH} gap-1`} onClick={() => setShowSetup(!showSetup)} aria-expanded={showSetup} aria-controls="webhook-setup" data-testid="webhook-setup-toggle"><ChevronDown className={`h-4 w-4 transition-transform duration-[var(--duration-fast)] ${showSetup ? "rotate-180" : ""}`} aria-hidden="true" /> {showSetup ? "إخفاء الخطوات" : "عرض الخطوات"}</Button>}
+        testId="webhook-setup-card"
+      >
+        {showSetup ? (
+          <div id="webhook-setup" className="space-y-4">
+            <ol className="list-inside list-decimal space-y-2 text-sm text-muted-foreground">
+              <li>افتح حساب Easy Order ← الإعدادات ← Public API ← Webhooks</li>
               <li>اضغط "إنشاء Webhook"</li>
               <li>انسخ الـ URL التالي وضعه في خانة URL</li>
               <li>استخدم الـ Secret المحفوظ في إعدادات قناة البيع كـ query parameter أو header</li>
               <li>اختر النوع: <strong>Orders</strong></li>
               <li>احفظ — الأوردرات الجديدة ستصل تلقائيًا</li>
             </ol>
-            <div className="p-3 bg-[var(--warning)]/10 border border-[var(--warning)]/30 rounded-lg text-sm text-[var(--warning)] mb-2">
-              <strong>مهم:</strong> النظام لا يعرض الـ Secret في المتصفح. اضبطه من إعدادات قناة البيع فقط.
+            <div className="flex items-start gap-2 rounded-[var(--radius-brand-md)] border border-[var(--warning)]/30 bg-[var(--warning)]/10 p-3 text-sm text-[var(--warning)]">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p><strong>مهم:</strong> النظام لا يعرض الـ Secret في المتصفح. اضبطه من إعدادات قناة البيع فقط.</p>
             </div>
-            <div className="flex items-center gap-2 p-3 bg-muted rounded-lg border">
-              <code className="flex-1 text-xs font-mono text-foreground break-all">
+            <div className="flex items-center gap-2 rounded-[var(--radius-brand-md)] border border-border bg-muted p-3">
+              <code className="min-w-0 flex-1 break-all font-mono text-xs text-foreground" dir="ltr" data-testid="webhook-url">
                 {WEBHOOK_URL}
               </code>
-              <Button variant="outline" size="sm" onClick={copyUrl} className="shrink-0">
-                <Copy className="w-4 h-4" />
-                نسخ
+              <Button variant="outline" size="sm" onClick={copyUrl} className={`${TOUCH} shrink-0`} data-testid="webhook-copy">
+                {copied ? <Check className="h-4 w-4 text-[var(--success)]" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+                {copied ? "تم النسخ" : "نسخ"}
               </Button>
             </div>
-            <div className="p-3 bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-lg text-sm text-[var(--info)]">
-              <strong>ملاحظة:</strong> الطلبات من غير Secret مربوط بقناة نشطة يتم رفضها لحماية عزل بيانات التجار.
+            <div className="flex items-start gap-2 rounded-[var(--radius-brand-md)] border border-[var(--info)]/30 bg-[var(--info)]/10 p-3 text-sm text-[var(--info)]">
+              <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p><strong>ملاحظة:</strong> الطلبات من غير Secret مربوط بقناة نشطة يتم رفضها لحماية عزل بيانات التجار.</p>
             </div>
-          </CardContent>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">خطوات الربط ورابط الـWebhook — اضغط «عرض الخطوات».</p>
         )}
-      </Card>
+      </SectionCard>
 
       {/* Log Section */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Calendar className="w-4 h-4" />
-              سجل الأحداث
-              {filtered.length !== log.length && (
-                <Badge variant="outline" className="text-xs font-normal">
-                  {filtered.length} من {log.length}
-                </Badge>
-              )}
-            </CardTitle>
+      <SectionCard
+        title={<span className="inline-flex items-center gap-2"><Calendar className="h-4 w-4" aria-hidden="true" /> سجل الأحداث {filtered.length !== log.length && <StatusBadge status="count" label={`${filtered.length.toLocaleString("ar-EG")} من ${log.length.toLocaleString("ar-EG")}`} tone="neutral" size="sm" icon={null} />}</span>}
+        testId="webhook-log"
+      >
+        {/* Filters */}
+        <div className="mb-4 flex flex-wrap items-center gap-2" data-testid="webhook-filters">
+          <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو التليفون أو رقم الأوردر..." className="w-full sm:max-w-xs" />
+          <div className="flex flex-wrap gap-1" role="group" aria-label="فلتر الحالة">
+            {FILTERS.map(f => (
+              <Button
+                key={f.key}
+                variant={statusFilter === f.key ? "default" : "outline"}
+                size="sm"
+                className={`${TOUCH} rounded-[var(--radius-brand-pill)] text-xs`}
+                aria-pressed={statusFilter === f.key}
+                onClick={() => setStatusFilter(f.key)}
+                data-testid={`webhook-filter-${f.key}`}
+              >
+                {f.label}
+              </Button>
+            ))}
           </div>
-          {/* Filters */}
-          <div className="flex gap-2 flex-wrap mt-2">
-            <Input
-              placeholder="بحث بالاسم أو التليفون أو رقم الأوردر..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="max-w-xs text-sm h-8"
-            />
-            <div className="flex gap-1">
-              {[
-                { key: "all", label: "الكل" },
-                { key: "success", label: "نجح" },
-                { key: "duplicate", label: "مكرر" },
-                { key: "error", label: "خطأ" },
-                { key: "status_update", label: "تحديث حالة" },
-              ].map(f => (
-                <Button
-                  key={f.key}
-                  variant={statusFilter === f.key ? "default" : "outline"}
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => setStatusFilter(f.key)}
-                >
-                  {f.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="text-center text-muted-foreground py-8">جاري التحميل...</div>
-          ) : filtered.length === 0 ? (
-            <div className="text-center py-12 space-y-3">
-              <Zap className="w-12 h-12 text-muted-foreground/30 mx-auto" />
-              {log.length === 0 ? (
-                <>
-                  <p className="text-muted-foreground font-medium">لم يصل أي Webhook بعد</p>
-                  <p className="text-sm text-muted-foreground">
-                    بعد إعداد الـ Webhook في Easy Order، ستظهر الأوردرات هنا تلقائيًا وتُحفظ في قاعدة البيانات
-                  </p>
-                </>
-              ) : (
-                <p className="text-muted-foreground">لا توجد نتائج تطابق الفلتر</p>
-              )}
-            </div>
+        </div>
+        {isLoading ? (
+          <LoadingSkeleton variant="table" rows={4} />
+        ) : filtered.length === 0 ? (
+          log.length === 0 ? (
+            <EmptyState icon={<Zap className="h-6 w-6" aria-hidden="true" />} title="لم يصل أي Webhook بعد" description="بعد إعداد الـ Webhook في Easy Order، ستظهر الأوردرات هنا تلقائيًا وتُحفظ في قاعدة البيانات" />
           ) : (
-            <div className="space-y-2">
-              {filtered.map((entry) => (
-                <LogRow key={entry.id} entry={entry} />
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            <EmptyState title="لا توجد نتائج تطابق الفلتر" description="عدّل البحث أو اختر حالة أخرى." />
+          )
+        ) : (
+          <ul className="space-y-2">
+            {filtered.map((entry) => (
+              <LogRow key={entry.id} entry={entry} />
+            ))}
+          </ul>
+        )}
+      </SectionCard>
     </div>
   );
 }

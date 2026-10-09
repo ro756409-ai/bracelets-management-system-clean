@@ -1,9 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { ShieldCheck, LogOut, RefreshCw, CheckCircle2, XCircle } from "lucide-react";
+import { ShieldCheck, LogOut, RefreshCw, CheckCircle2, XCircle, ChevronDown } from "lucide-react";
+import { StatusBadge, EmptyState, LoadingSkeleton } from "@/components/shared";
 
 type Status = "pending" | "approved" | "rejected";
 interface SignupRequest {
@@ -13,17 +12,20 @@ interface SignupRequest {
 }
 
 const STATUS_LABEL: Record<Status, string> = { pending: "قيد المراجعة", approved: "مقبول", rejected: "مرفوض" };
-const STATUS_CLS: Record<Status, string> = {
-  pending: "bg-[var(--warning)]/10 text-[var(--warning)] border-[var(--warning)]/30",
-  approved: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/30",
-  rejected: "bg-destructive/10 text-destructive border-destructive/30",
-};
+const STATUS_TONE: Record<Status, "warning" | "success" | "danger"> = { pending: "warning", approved: "success", rejected: "danger" };
+const TOUCH = "min-h-11 md:min-h-9";
 
+/**
+ * لوحة إدارة المنصة (طلبات التسجيل) — نفس الـREST (/api/platform/*) ونفس القبول/الرفض بتأكيد.
+ * المرحلة 7H (عرض فقط): tokens الهوية، تبويبات 44px مع aria-pressed، شارات الحالة، صفوف قابلة للفتح
+ * بزر aria-expanded، حالات Loading/Empty، وحارس `busy` كما هو على القبول/الرفض.
+ */
 export default function PlatformAdmin() {
   const [, setLocation] = useLocation();
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Status>("pending");
   const [rows, setRows] = useState<SignupRequest[]>([]);
+  const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<SignupRequest | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -38,11 +40,13 @@ export default function PlatformAdmin() {
   }, [setLocation]);
 
   const load = useCallback(async (status: Status) => {
-    setMsg("");
-    const res = await fetch(`/api/platform/signup-requests?status=${status}`, { credentials: "include" });
-    if (res.status === 401) { setLocation("/platform-admin/login"); return; }
-    const data = await res.json().catch(() => ({ requests: [] }));
-    setRows(data.requests ?? []);
+    setMsg(""); setLoading(true);
+    try {
+      const res = await fetch(`/api/platform/signup-requests?status=${status}`, { credentials: "include" });
+      if (res.status === 401) { setLocation("/platform-admin/login"); return; }
+      const data = await res.json().catch(() => ({ requests: [] }));
+      setRows(data.requests ?? []);
+    } finally { setLoading(false); }
   }, [setLocation]);
 
   useEffect(() => { if (ready) load(tab); }, [ready, tab, load]);
@@ -80,58 +84,66 @@ export default function PlatformAdmin() {
   if (!ready) return null;
 
   return (
-    <div className="min-h-screen bg-muted/30" dir="rtl">
-      <header className="flex items-center justify-between border-b bg-card px-6 py-3">
-        <div className="flex items-center gap-2 font-bold"><ShieldCheck className="h-5 w-5 text-primary" /> لوحة إدارة المنصة</div>
-        <Button variant="outline" size="sm" onClick={logout} className="gap-1"><LogOut className="h-4 w-4" /> خروج</Button>
+    <div className="min-h-screen bg-background" dir="rtl" data-testid="platform-admin">
+      <header className="sticky top-0 z-20 flex items-center justify-between border-b border-border bg-card/95 px-4 py-2 backdrop-blur sm:px-6">
+        <div className="flex items-center gap-2 font-bold"><span className="flex h-9 w-9 items-center justify-center rounded-[var(--radius-brand-md)] bg-accent text-accent-foreground" aria-hidden="true"><ShieldCheck className="h-5 w-5" /></span> لوحة إدارة المنصة</div>
+        <Button variant="outline" size="sm" onClick={logout} className={`${TOUCH} gap-1`} data-testid="platform-logout"><LogOut className="h-4 w-4" aria-hidden="true" /> خروج</Button>
       </header>
 
-      <main className="mx-auto max-w-5xl p-6 space-y-4">
-        <div className="flex items-center gap-2">
+      <main className="mx-auto max-w-5xl space-y-4 p-4 sm:p-6">
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="حالة الطلبات">
           {(["pending", "approved", "rejected"] as Status[]).map(s => (
-            <button key={s} onClick={() => setTab(s)}
-              className={`rounded-[var(--radius-brand-pill,9999px)] border px-3 py-1.5 text-sm font-medium ${tab === s ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted"}`}>
+            <button key={s} type="button" onClick={() => setTab(s)} aria-pressed={tab === s} data-testid={`platform-tab-${s}`}
+              className={`min-h-11 rounded-[var(--radius-brand-pill,9999px)] border px-4 text-sm font-medium transition-colors duration-[var(--duration-fast)] md:min-h-9 ${tab === s ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted"}`}>
               {STATUS_LABEL[s]}
             </button>
           ))}
-          <Button variant="ghost" size="sm" className="ms-auto gap-1" onClick={() => load(tab)}><RefreshCw className="h-4 w-4" /> تحديث</Button>
+          <Button variant="ghost" size="sm" className={`${TOUCH} ms-auto gap-1`} onClick={() => load(tab)} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} aria-hidden="true" /> تحديث</Button>
         </div>
 
-        {msg && <div className="rounded-lg border bg-card p-3 text-sm">{msg}</div>}
+        {msg && <div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-3 text-sm" role="status" data-testid="platform-msg">{msg}</div>}
 
-        {rows.length === 0 ? (
-          <Card><CardContent className="py-10 text-center text-muted-foreground">لا توجد طلبات في هذه الحالة.</CardContent></Card>
+        {loading && rows.length === 0 ? (
+          <LoadingSkeleton variant="cards" rows={3} />
+        ) : rows.length === 0 ? (
+          <EmptyState title="لا توجد طلبات في هذه الحالة." description={tab === "pending" ? "طلبات التسجيل الجديدة تظهر هنا للمراجعة." : undefined} />
         ) : (
-          <div className="space-y-2">
-            {rows.map(r => (
-              <Card key={r.id} className="cursor-pointer" onClick={() => setSelected(selected?.id === r.id ? null : r)}>
-                <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-                  <div>
-                    <p className="font-semibold text-foreground">{r.businessName}</p>
-                    <p className="text-sm text-muted-foreground">{r.ownerName} · {r.email} · {r.phone}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge className={`border ${STATUS_CLS[r.status]}`}>{STATUS_LABEL[r.status]}</Badge>
-                    {r.status === "pending" && (
-                      <>
-                        <Button size="sm" className="gap-1" disabled={busy} onClick={e => { e.stopPropagation(); approve(r); }}><CheckCircle2 className="h-4 w-4" /> قبول</Button>
-                        <Button size="sm" variant="outline" className="gap-1" disabled={busy} onClick={e => { e.stopPropagation(); reject(r); }}><XCircle className="h-4 w-4" /> رفض</Button>
-                      </>
-                    )}
-                  </div>
-                  {selected?.id === r.id && (
-                    <div className="w-full border-t pt-3 text-sm text-muted-foreground grid grid-cols-2 gap-2">
-                      <div>اسم المستخدم: <span className="text-foreground" dir="ltr">{r.username}</span></div>
-                      <div>تاريخ الطلب: {new Date(r.createdAt).toLocaleString("ar-EG")}</div>
-                      {r.reviewedAt && <div>تاريخ المراجعة: {new Date(r.reviewedAt).toLocaleString("ar-EG")}</div>}
-                      {r.createdTenantId && <div>Tenant: #{r.createdTenantId}</div>}
-                      {r.rejectionReason && <div className="col-span-2">سبب الرفض: {r.rejectionReason}</div>}
+          <ul className="space-y-2" data-testid="platform-requests">
+            {rows.map(r => {
+              const openRow = selected?.id === r.id;
+              return (
+                <li key={r.id} className="rounded-[var(--radius-brand-md)] border border-border bg-card" data-testid={`platform-request-${r.id}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+                    <button type="button" className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-start md:min-h-0" onClick={() => setSelected(openRow ? null : r)} aria-expanded={openRow} aria-controls={`platform-request-details-${r.id}`}>
+                      <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-[var(--duration-fast)] ${openRow ? "rotate-180" : ""}`} aria-hidden="true" />
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold text-foreground">{r.businessName}</span>
+                        <span className="block truncate text-sm text-muted-foreground">{r.ownerName} · <span dir="ltr">{r.email}</span> · <span dir="ltr">{r.phone}</span></span>
+                      </span>
+                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge status={r.status} label={STATUS_LABEL[r.status]} tone={STATUS_TONE[r.status]} size="sm" />
+                      {r.status === "pending" && (
+                        <>
+                          <Button size="sm" className={`${TOUCH} gap-1`} disabled={busy} onClick={() => approve(r)} data-testid={`platform-approve-${r.id}`}><CheckCircle2 className="h-4 w-4" aria-hidden="true" /> قبول</Button>
+                          <Button size="sm" variant="outline" className={`${TOUCH} gap-1`} disabled={busy} onClick={() => reject(r)} data-testid={`platform-reject-${r.id}`}><XCircle className="h-4 w-4" aria-hidden="true" /> رفض</Button>
+                        </>
+                      )}
                     </div>
+                  </div>
+                  {openRow && (
+                    <dl id={`platform-request-details-${r.id}`} className="grid grid-cols-1 gap-2 border-t border-border px-4 py-3 text-sm text-muted-foreground sm:grid-cols-2">
+                      <div><dt className="inline">اسم المستخدم: </dt><dd className="inline text-foreground" dir="ltr">{r.username}</dd></div>
+                      <div><dt className="inline">تاريخ الطلب: </dt><dd className="inline">{new Date(r.createdAt).toLocaleString("ar-EG")}</dd></div>
+                      {r.reviewedAt && <div><dt className="inline">تاريخ المراجعة: </dt><dd className="inline">{new Date(r.reviewedAt).toLocaleString("ar-EG")}</dd></div>}
+                      {r.createdTenantId && <div><dt className="inline">Tenant: </dt><dd className="inline" dir="ltr">#{r.createdTenantId}</dd></div>}
+                      {r.rejectionReason && <div className="sm:col-span-2"><dt className="inline">سبب الرفض: </dt><dd className="inline">{r.rejectionReason}</dd></div>}
+                    </dl>
                   )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </main>
     </div>

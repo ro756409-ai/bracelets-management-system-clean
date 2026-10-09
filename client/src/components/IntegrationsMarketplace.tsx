@@ -112,7 +112,8 @@ export function IntegrationsMarketplace({
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="ابحث عن منصة أو خدمة"
-            className="pr-9"
+            className="min-h-11 pr-9 md:min-h-9"
+            aria-label="ابحث عن منصة أو خدمة"
           />
         </div>
         <div className="flex flex-wrap gap-2">
@@ -121,7 +122,8 @@ export function IntegrationsMarketplace({
               key={c.key}
               type="button"
               onClick={() => setCategory(c.key)}
-              className={`rounded-[var(--radius-brand-pill,9999px)] border px-3 py-1.5 text-sm font-medium transition-colors ${
+              aria-pressed={category === c.key}
+              className={`min-h-11 rounded-[var(--radius-brand-pill,9999px)] border px-3 py-1.5 text-sm font-medium transition-colors duration-[var(--duration-fast)] md:min-h-9 ${
                 category === c.key
                   ? "border-primary bg-primary text-primary-foreground"
                   : "border-border bg-card text-muted-foreground hover:bg-muted"
@@ -147,7 +149,9 @@ export function IntegrationsMarketplace({
             return (
               <div
                 key={item.id}
-                className="flex flex-col rounded-[var(--radius-brand-card,0.75rem)] border border-border bg-card p-4 transition-shadow hover:shadow-sm"
+                className="flex flex-col rounded-[var(--radius-brand-card,0.75rem)] border border-border bg-card p-4 transition-shadow duration-[var(--duration-fast)] hover:shadow-[var(--shadow-card)]"
+                data-testid={`integration-${item.id}`}
+                data-status={isConnected ? "connected" : item.status}
               >
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3">
@@ -159,7 +163,8 @@ export function IntegrationsMarketplace({
                       <p className="text-xs text-muted-foreground">{CATEGORY_LABEL[item.category]}</p>
                     </div>
                   </div>
-                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${badge.cls}`}>
+                  <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${isConnected ? STATUS_BADGE.available.cls : badge.cls}`}>
+                    {isConnected && <CheckCircle2 className="h-3 w-3" aria-hidden="true" />}
                     {isConnected ? "مربوط" : badge.label}
                   </span>
                 </div>
@@ -169,18 +174,18 @@ export function IntegrationsMarketplace({
                 <div className="flex items-center gap-2">
                   {item.status === "available" ? (
                     isConnected ? (
-                      <Button variant="outline" size="sm" className="gap-1.5" onClick={() => item.connectPlatform && onConnect(item.connectPlatform)}>
+                      <Button variant="outline" size="sm" className="min-h-11 gap-1.5 md:min-h-9" onClick={() => item.connectPlatform && onConnect(item.connectPlatform)}>
                         <CheckCircle2 className="h-4 w-4 text-[var(--success)]" />
                         إضافة قناة أخرى
                       </Button>
                     ) : (
-                      <Button size="sm" className="gap-1.5" onClick={() => item.connectPlatform && onConnect(item.connectPlatform)}>
+                      <Button size="sm" className="min-h-11 gap-1.5 md:min-h-9" onClick={() => item.connectPlatform && onConnect(item.connectPlatform)}>
                         <PlugZap className="h-4 w-4" />
                         ربط الحساب
                       </Button>
                     )
                   ) : (
-                    <Button variant="outline" size="sm" disabled className="gap-1.5">
+                    <Button variant="outline" size="sm" disabled className="min-h-11 gap-1.5 md:min-h-9">
                       {STATUS_BADGE[item.status].label}
                     </Button>
                   )}
@@ -189,7 +194,7 @@ export function IntegrationsMarketplace({
                       href={item.website}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted"
+                      className="inline-flex min-h-11 items-center gap-1 rounded-[var(--radius-brand-md)] border border-border px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-muted md:min-h-9"
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
                       الموقع

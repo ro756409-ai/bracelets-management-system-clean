@@ -2,13 +2,14 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { BrandLogo } from "@/components/BrandLogo";
-import { Eye, EyeOff, CheckCircle2 } from "lucide-react";
+import { Eye, EyeOff, CheckCircle2, Loader2 } from "lucide-react";
 
 /**
  * صفحة إنشاء حساب تاجر جديد (عام). بتبعت طلب pending لـ/api/signup — الحساب مايتفعّلش إلا
  * بعد موافقة إدارة المنصة. مفيش businessId/tenantId من العميل إطلاقًا.
+ * المرحلة 7H (عرض فقط): `<main>` واحد، حقول معنونة 44px، حالة «قيد المراجعة» واضحة بعد الإرسال،
+ * الخطأ role=alert، وبلا ألوان خام. نفس التحقق ونفس الـpayload.
  */
 export default function Register() {
   const [form, setForm] = useState({
@@ -67,85 +68,91 @@ export default function Register() {
     }
   };
 
+  const field = "mt-1.5 min-h-11";
+
   return (
-    <div
-      className="min-h-screen flex items-center justify-center p-4"
+    <main
+      dir="rtl"
+      className="flex min-h-screen items-center justify-center p-4"
       style={{ background: "linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%)" }}
+      data-testid="register-page"
     >
       <div className="relative w-full max-w-md">
-        <Card className="border-0 shadow-2xl bg-card/95 backdrop-blur">
-          <CardHeader className="pb-4 pt-8 text-center">
-            <div className="flex justify-center mb-4">
+        <div className="rounded-[var(--radius-brand-lg,var(--radius-brand-md))] border-0 bg-card/95 shadow-[var(--shadow-card)] backdrop-blur">
+          <div className="px-6 pb-4 pt-8 text-center">
+            <div className="mb-4 flex justify-center">
               <BrandLogo variant="vertical" size="xl" showEnglishName />
             </div>
-            <p className="text-sm text-muted-foreground">إنشاء حساب تاجر جديد</p>
-          </CardHeader>
+            <h1 className="text-sm text-muted-foreground">إنشاء حساب تاجر جديد</h1>
+          </div>
 
-          <CardContent className="pb-8 px-6">
+          <div className="px-6 pb-8">
             {done ? (
-              <div className="flex flex-col items-center gap-3 py-6 text-center">
-                <CheckCircle2 className="h-12 w-12 text-[var(--success)]" />
+              <div className="flex flex-col items-center gap-3 py-6 text-center" role="status" data-testid="register-pending">
+                <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--success)]/10 text-[var(--success)]" aria-hidden="true"><CheckCircle2 className="h-8 w-8" /></span>
                 <h2 className="text-lg font-semibold text-foreground">تم استلام طلبك</h2>
                 <p className="text-sm text-muted-foreground">
                   حسابك قيد المراجعة من إدارة المنصة. هيتم إبلاغك عند التفعيل، وبعدها تقدر تسجّل الدخول.
                 </p>
-                <a href="/login" className="text-primary hover:underline text-sm font-medium mt-2">العودة لتسجيل الدخول</a>
+                <a href="/login" className="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-primary hover:underline">العودة لتسجيل الدخول</a>
               </div>
             ) : (
-              <form onSubmit={handleSubmit} className="space-y-3">
+              <form onSubmit={handleSubmit} className="space-y-3" noValidate>
                 <div>
-                  <Label className="text-sm font-medium">اسم صاحب النشاط</Label>
-                  <Input value={form.ownerName} onChange={set("ownerName")} placeholder="الاسم الكامل" className="mt-1.5 text-right" autoComplete="name" />
+                  <Label htmlFor="reg-owner" className="text-sm font-medium">اسم صاحب النشاط</Label>
+                  <Input id="reg-owner" value={form.ownerName} onChange={set("ownerName")} placeholder="الاسم الكامل" className={`${field} text-right`} autoComplete="name" />
                 </div>
                 <div>
-                  <Label className="text-sm font-medium">اسم النشاط</Label>
-                  <Input value={form.businessName} onChange={set("businessName")} placeholder="مثال: متجر النور" className="mt-1.5 text-right" />
+                  <Label htmlFor="reg-business" className="text-sm font-medium">اسم النشاط</Label>
+                  <Input id="reg-business" value={form.businessName} onChange={set("businessName")} placeholder="مثال: متجر النور" className={`${field} text-right`} autoComplete="organization" />
                 </div>
                 <div>
-                  <Label className="text-sm font-medium">رقم الهاتف</Label>
-                  <Input value={form.phone} onChange={set("phone")} placeholder="01xxxxxxxxx" className="mt-1.5" dir="ltr" autoComplete="tel" inputMode="tel" />
+                  <Label htmlFor="reg-phone" className="text-sm font-medium">رقم الهاتف</Label>
+                  <Input id="reg-phone" value={form.phone} onChange={set("phone")} placeholder="01xxxxxxxxx" className={field} dir="ltr" autoComplete="tel" inputMode="tel" />
                 </div>
                 <div>
-                  <Label className="text-sm font-medium">البريد الإلكتروني</Label>
-                  <Input type="email" value={form.email} onChange={set("email")} placeholder="you@example.com" className="mt-1.5" dir="ltr" autoComplete="email" />
+                  <Label htmlFor="reg-email" className="text-sm font-medium">البريد الإلكتروني</Label>
+                  <Input id="reg-email" type="email" value={form.email} onChange={set("email")} placeholder="you@example.com" className={field} dir="ltr" autoComplete="email" inputMode="email" />
                 </div>
                 <div>
-                  <Label className="text-sm font-medium">اسم المستخدم</Label>
-                  <Input value={form.username} onChange={set("username")} placeholder="username" className="mt-1.5" dir="ltr" autoComplete="username" />
+                  <Label htmlFor="reg-username" className="text-sm font-medium">اسم المستخدم</Label>
+                  <Input id="reg-username" value={form.username} onChange={set("username")} placeholder="username" className={field} dir="ltr" autoComplete="username" />
                 </div>
                 <div>
-                  <Label className="text-sm font-medium">كلمة المرور</Label>
-                  <div className="relative mt-1.5">
+                  <Label htmlFor="reg-password" className="text-sm font-medium">كلمة المرور</Label>
+                  <div className="relative">
                     <Input
+                      id="reg-password"
                       type={showPassword ? "text" : "password"}
                       value={form.password}
                       onChange={set("password")}
                       placeholder="12 حرفًا على الأقل"
-                      className="pl-10 text-right"
+                      className={`${field} pl-12 text-right`}
                       dir="ltr"
                       autoComplete="new-password"
                     />
                     <button type="button" onClick={() => setShowPassword(v => !v)}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      className="absolute left-0 top-[calc(50%+0.1875rem)] flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground hover:text-foreground"
+                      aria-label={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"} aria-pressed={showPassword}>
+                      {showPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
                     </button>
                   </div>
                 </div>
                 <div>
-                  <Label className="text-sm font-medium">تأكيد كلمة المرور</Label>
-                  <Input type={showPassword ? "text" : "password"} value={form.confirmPassword} onChange={set("confirmPassword")} placeholder="أعد كتابة كلمة المرور" className="mt-1.5 text-right" dir="ltr" autoComplete="new-password" />
+                  <Label htmlFor="reg-confirm" className="text-sm font-medium">تأكيد كلمة المرور</Label>
+                  <Input id="reg-confirm" type={showPassword ? "text" : "password"} value={form.confirmPassword} onChange={set("confirmPassword")} placeholder="أعد كتابة كلمة المرور" className={`${field} text-right`} dir="ltr" autoComplete="new-password" />
                 </div>
 
                 {error && (
-                  <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm text-destructive text-center">
+                  <div className="rounded-[var(--radius-brand-md)] border border-destructive/20 bg-destructive/10 p-3 text-center text-sm text-destructive" role="alert">
                     {error}
                   </div>
                 )}
 
-                <Button type="submit" className="w-full h-11 text-base font-semibold mt-2" disabled={isLoading}>
+                <Button type="submit" className="mt-2 h-11 w-full text-base font-semibold" disabled={isLoading}>
                   {isLoading ? (
                     <span className="flex items-center gap-2">
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                       جاري الإرسال...
                     </span>
                   ) : "إنشاء الحساب"}
@@ -157,13 +164,13 @@ export default function Register() {
               <div className="mt-6 text-center">
                 <p className="text-xs text-muted-foreground">
                   عندك حساب بالفعل؟{" "}
-                  <a href="/login" className="text-primary hover:underline font-medium">تسجيل الدخول</a>
+                  <a href="/login" className="inline-flex min-h-11 items-center font-medium text-primary hover:underline md:min-h-0">تسجيل الدخول</a>
                 </p>
               </div>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
-    </div>
+    </main>
   );
 }

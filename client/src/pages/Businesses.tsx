@@ -1,25 +1,16 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Plus, Edit, Building2, ToggleLeft, ToggleRight } from "lucide-react";
 import { SetupJourney } from "@/components/SetupJourney";
 import { BusinessAvatar } from "@/components/BusinessAvatar";
@@ -36,6 +27,13 @@ import {
   ORDER_ENTRY_MODE_LABEL,
   type OrderEntryMode,
 } from "@shared/orderEntryMode";
+import { PageHeader, SectionCard, StatusBadge, ResponsiveDataTable, EmptyState, LoadingSkeleton, OfflineState, type Column } from "@/components/shared";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { createInFlightGuard } from "@/components/orders/confirmGuard";
+import { toast } from "sonner";
+
+const TOUCH = "min-h-11 md:min-h-9";
+const ICON_BTN = "min-h-11 min-w-11 p-0 md:min-h-9 md:min-w-9 md:h-9 md:w-9";
 
 /**
  * قالب شاشة إدخال الأوردر لنشاط واحد — إعداد المالك. الموظف مالوش المسار ده أصلًا
@@ -57,7 +55,7 @@ function OrderEntryModeSelect({ businessId }: { businessId: number }) {
       onValueChange={v => set.mutate({ businessId, mode: v as OrderEntryMode })}
       disabled={isLoading || set.isPending}
     >
-      <SelectTrigger className="h-8 w-56" data-testid={`entry-mode-${businessId}`}>
+      <SelectTrigger className={`${TOUCH} w-full sm:w-56`} data-testid={`entry-mode-${businessId}`} aria-label="قالب إدخال الأوردر">
         <SelectValue placeholder="..." />
       </SelectTrigger>
       <SelectContent>
@@ -68,14 +66,21 @@ function OrderEntryModeSelect({ businessId }: { businessId: number }) {
     </Select>
   );
 }
-import { toast } from "sonner";
 
+/**
+ * إدارة الأنشطة — نفس الاستعلامات والـmutations (businesses.list/create/update + orderEntryMode/
+ * setOrderEntryMode) ونفس اشتقاق الـslug. المرحلة 7H (عرض فقط): PageHeader + SetupJourney كما هي،
+ * جدول Desktop/بطاقات Mobile عبر ResponsiveDataTable، شارات الحالة، أزرار 44px، حوارات بحقول معنونة
+ * وحارس ضغط مكرر، وحالات Loading/Empty/Error/Offline. التاجر الجديد يرى فراغًا واضحًا مع خطوات الإعداد.
+ */
 export default function Businesses() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editingBusiness, setEditingBusiness] = useState<any>(null);
   const [formData, setFormData] = useState({ name: "", slug: "" });
+  const online = useOnlineStatus();
+  const guard = useRef(createInFlightGuard<string>()).current;
 
-  const { data: businesses, isLoading } = trpc.businesses.list.useQuery();
+  const { data: businesses, isLoading, isError, error, refetch } = trpc.businesses.list.useQuery();
   const utils = trpc.useUtils();
 
   const createMutation = trpc.businesses.create.useMutation({
@@ -114,23 +119,23 @@ export default function Businesses() {
   const handleCreate = () => {
     if (!formData.name.trim()) return;
     const slug = formData.slug.trim() || formData.name.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]/g, "");
-    createMutation.mutate({ name: formData.name.trim(), slug });
+    guard.run("create", createMutation.isPending, done => createMutation.mutate({ name: formData.name.trim(), slug }, { onSettled: done }));
   };
 
   const handleUpdate = () => {
     if (!editingBusiness || !formData.name.trim()) return;
-    updateMutation.mutate({
+    guard.run("update", updateMutation.isPending, done => updateMutation.mutate({
       id: editingBusiness.id,
       name: formData.name.trim(),
       slug: formData.slug.trim() || undefined,
-    });
+    }, { onSettled: done }));
   };
 
   const handleToggle = (business: any) => {
-    toggleMutation.mutate({
+    guard.run(`toggle:${business.id}`, toggleMutation.isPending, done => toggleMutation.mutate({
       id: business.id,
       isActive: !business.isActive,
-    });
+    }, { onSettled: done }));
   };
 
   const openEdit = (business: any) => {
@@ -138,168 +143,135 @@ export default function Businesses() {
     setFormData({ name: business.name, slug: business.slug || "" });
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
-    );
-  }
+  const statusBadge = (b: any) => b.isActive
+    ? <StatusBadge status="active" label="نشط" tone="success" size="sm" />
+    : <StatusBadge status="disabled" label="معطل" tone="neutral" size="sm" icon={null} />;
+
+  const actions = (b: any) => (
+    <span className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>
+      <Button variant="ghost" size="sm" className={ICON_BTN} onClick={() => openEdit(b)} aria-label={`تعديل ${b.name}`} title="تعديل" data-testid={`biz-edit-${b.id}`}>
+        <Edit className="h-4 w-4" aria-hidden="true" />
+      </Button>
+      <Button variant="ghost" size="sm" className={ICON_BTN} onClick={() => handleToggle(b)} disabled={toggleMutation.isPending} aria-label={b.isActive ? `تعطيل ${b.name}` : `تفعيل ${b.name}`} aria-pressed={!!b.isActive} title={b.isActive ? "تعطيل" : "تفعيل"} data-testid={`biz-toggle-${b.id}`}>
+        {b.isActive ? <ToggleRight className="h-4 w-4 text-[var(--success)]" aria-hidden="true" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" aria-hidden="true" />}
+      </Button>
+    </span>
+  );
+
+  const columns: Column<any>[] = [
+    { id: "id", header: "#", cell: b => <span className="tabular-nums text-muted-foreground">{b.id}</span> },
+    { id: "name", header: "اسم النشاط", alwaysVisible: true, cell: b => <span className="flex items-center gap-2 font-medium"><BusinessAvatar name={b.name} logoUrl={b.logoUrl ?? null} className="h-7 w-7" textClassName="text-xs" />{b.name}</span> },
+    { id: "slug", header: "Slug", cell: b => <span className="font-mono text-sm text-muted-foreground" dir="ltr">{b.slug}</span> },
+    { id: "status", header: "الحالة", alwaysVisible: true, cell: statusBadge },
+    { id: "created", header: "تاريخ الإنشاء", cell: b => <span className="text-sm text-muted-foreground">{b.createdAt ? new Date(b.createdAt).toLocaleDateString("ar-EG") : "-"}</span> },
+    { id: "entryMode", header: "قالب إدخال الأوردر", alwaysVisible: true, cell: b => <span onClick={e => e.stopPropagation()}><OrderEntryModeSelect businessId={b.id} /></span> },
+    { id: "actions", header: <span className="sr-only">إجراءات</span>, alwaysVisible: true, sticky: "end", cell: actions },
+  ];
+
+  const addDialog = (
+    <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+      <DialogTrigger asChild>
+        <Button className={TOUCH} data-testid="biz-add">
+          <Plus className="h-4 w-4 ml-2" aria-hidden="true" />
+          إضافة نشاط جديد
+        </Button>
+      </DialogTrigger>
+      <DialogContent dir="rtl" data-testid="biz-add-dialog">
+        <DialogHeader>
+          <DialogTitle>إضافة نشاط جديد</DialogTitle>
+          <DialogDescription>كل نشاط له أوردراته ومخزنه وموظفوه وحساباته بشكل منفصل.</DialogDescription>
+        </DialogHeader>
+        <div className="mt-2 space-y-4">
+          <div>
+            <Label htmlFor="biz-name">اسم النشاط</Label>
+            <Input
+              id="biz-name"
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              placeholder="مثال: فرحات للنحاس"
+              className={`mt-1 ${TOUCH}`}
+              data-testid="biz-field-name"
+            />
+          </div>
+          <div>
+            <Label htmlFor="biz-slug">Slug (اختياري)</Label>
+            <Input
+              id="biz-slug"
+              value={formData.slug}
+              onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
+              placeholder="farhat-brass"
+              className={`mt-1 ${TOUCH}`}
+              dir="ltr"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">يُستخدم كمعرف فريد. يُنشأ تلقائياً إذا تُرك فارغاً.</p>
+          </div>
+          <Button onClick={handleCreate} disabled={createMutation.isPending} className={`w-full ${TOUCH}`} data-testid="biz-create">
+            {createMutation.isPending ? "جاري الإنشاء..." : "إنشاء النشاط"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">إدارة الأنشطة</h1>
-          <p className="text-muted-foreground mt-1">
-            أنشئ وأدِر البراندات/الأنشطة التجارية. كل نشاط له أوردراته ومخزنه وموظفيه وحساباته
-            بشكل منفصل. ابدأ بإنشاء نشاط، وبعدها اربط له قنوات البيع.
-          </p>
-        </div>
-        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 ml-2" />
-              إضافة نشاط جديد
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>إضافة نشاط جديد</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 mt-4">
-              <div>
-                <Label>اسم النشاط</Label>
-                <Input
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="مثال: فرحات للنحاس"
-                  className="mt-1"
-                />
-              </div>
-              <div>
-                <Label>Slug (اختياري)</Label>
-                <Input
-                  value={formData.slug}
-                  onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
-                  placeholder="farhat-brass"
-                  className="mt-1"
-                  dir="ltr"
-                />
-                <p className="text-xs text-muted-foreground mt-1">يُستخدم كمعرف فريد. يُنشأ تلقائياً إذا تُرك فارغاً.</p>
-              </div>
-              <Button onClick={handleCreate} disabled={createMutation.isPending} className="w-full">
-                {createMutation.isPending ? "جاري الإنشاء..." : "إنشاء النشاط"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      </div>
+    <div className="space-y-6" dir="rtl" data-testid="businesses-page">
+      <PageHeader
+        title="إدارة الأنشطة"
+        description="أنشئ وأدِر البراندات/الأنشطة التجارية. كل نشاط له أوردراته ومخزنه وموظفيه وحساباته بشكل منفصل. ابدأ بإنشاء نشاط، وبعدها اربط له قنوات البيع."
+        icon={<Building2 className="h-5 w-5" aria-hidden="true" />}
+        primaryAction={addDialog}
+      />
 
       <SetupJourney current="business" />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Building2 className="h-5 w-5" />
-            الأنشطة التجارية ({businesses?.length || 0})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-right">#</TableHead>
-                <TableHead className="text-right">اسم النشاط</TableHead>
-                <TableHead className="text-right">Slug</TableHead>
-                <TableHead className="text-right">الحالة</TableHead>
-                <TableHead className="text-right">تاريخ الإنشاء</TableHead>
-                <TableHead className="text-right">قالب إدخال الأوردر</TableHead>
-                <TableHead className="text-right">إجراءات</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(businesses?.length ?? 0) === 0 && (
-                <TableRow>
-                  <TableCell colSpan={6}>
-                    <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                        <Building2 className="h-6 w-6 text-muted-foreground" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-foreground">لا توجد أنشطة بعد</p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          ابدأ بإنشاء أول نشاط تجاري (براند/فرع) — بعدها تقدر تربطله قنوات بيع وتستقبل أوردرات.
-                        </p>
-                      </div>
-                      <Button onClick={() => setIsAddOpen(true)}>
-                        <Plus className="h-4 w-4 ml-2" />
-                        إنشاء أول نشاط
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-              {businesses?.map((business: any) => (
-                <TableRow key={business.id}>
-                  <TableCell>{business.id}</TableCell>
-                  <TableCell className="font-medium">
-                    <span className="flex items-center gap-2">
-                      <BusinessAvatar name={business.name} logoUrl={business.logoUrl ?? null} className="h-7 w-7" textClassName="text-xs" />
-                      {business.name}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground font-mono text-sm" dir="ltr">
-                    {business.slug}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={business.isActive ? "default" : "secondary"}>
-                      {business.isActive ? "نشط" : "معطل"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-sm">
-                    {business.createdAt ? new Date(business.createdAt).toLocaleDateString("ar-EG") : "-"}
-                  </TableCell>
-                  <TableCell>
-                    <OrderEntryModeSelect businessId={business.id} />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openEdit(business)}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleToggle(business)}
-                        disabled={toggleMutation.isPending}
-                      >
-                        {business.isActive ? (
-                          <ToggleRight className="h-4 w-4 text-[var(--success)]" />
-                        ) : (
-                          <ToggleLeft className="h-4 w-4 text-muted-foreground" />
-                        )}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}
+
+      <SectionCard title={<span className="inline-flex items-center gap-2"><Building2 className="h-5 w-5" aria-hidden="true" /> الأنشطة التجارية <span className="text-sm font-normal text-muted-foreground tabular-nums">({(businesses?.length || 0).toLocaleString("ar-EG")})</span></span>} flush testId="biz-list">
+        {isLoading ? (
+          <LoadingSkeleton variant="table" rows={3} className="p-4" />
+        ) : isError ? (
+          <div className="p-4 text-sm text-destructive" role="alert">{(error as any)?.message ?? "تعذّر تحميل الأنشطة"}</div>
+        ) : (businesses?.length ?? 0) === 0 ? (
+          <EmptyState
+            title="لا توجد أنشطة بعد"
+            description="ابدأ بإنشاء أول نشاط تجاري (براند/فرع) — بعدها تقدر تربطله قنوات بيع وتستقبل أوردرات."
+            icon={<Building2 className="h-6 w-6" aria-hidden="true" />}
+            action={<Button className={TOUCH} onClick={() => setIsAddOpen(true)} data-testid="biz-add-empty"><Plus className="h-4 w-4 ml-2" aria-hidden="true" /> إنشاء أول نشاط</Button>}
+          />
+        ) : (
+          <ResponsiveDataTable<any>
+            rows={businesses ?? []}
+            columns={columns}
+            rowKey={b => b.id}
+            cardsBelow="md"
+            mobileRow={b => (
+              <article className="space-y-3 rounded-[var(--radius-brand-md)] border border-border bg-card p-3" data-testid={`biz-card-${b.id}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-2"><BusinessAvatar name={b.name} logoUrl={b.logoUrl ?? null} className="h-9 w-9" textClassName="text-sm" /><span className="min-w-0"><span className="block truncate font-semibold">{b.name}</span><span className="block font-mono text-xs text-muted-foreground" dir="ltr">{b.slug}</span></span></span>
+                  {statusBadge(b)}
+                </div>
+                <div>
+                  <p className="mb-1 text-xs text-muted-foreground">قالب إدخال الأوردر</p>
+                  <OrderEntryModeSelect businessId={b.id} />
+                </div>
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>أُنشئ {b.createdAt ? new Date(b.createdAt).toLocaleDateString("ar-EG") : "-"}</span>
+                  {actions(b)}
+                </div>
+              </article>
+            )}
+          />
+        )}
+      </SectionCard>
 
       {/* Edit Dialog */}
       <Dialog open={!!editingBusiness} onOpenChange={(open) => !open && setEditingBusiness(null)}>
-        <DialogContent>
+        <DialogContent dir="rtl" data-testid="biz-edit-dialog">
           <DialogHeader>
             <DialogTitle>تعديل النشاط</DialogTitle>
+            <DialogDescription>الاسم والشعار والـslug — بلا تأثير على الأوردرات أو المخزون.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 mt-4">
+          <div className="mt-2 space-y-4">
             {editingBusiness && (
               <BusinessLogoField
                 businessId={editingBusiness.id}
@@ -308,23 +280,26 @@ export default function Businesses() {
               />
             )}
             <div>
-              <Label>اسم النشاط (البراند)</Label>
+              <Label htmlFor="biz-edit-name">اسم النشاط (البراند)</Label>
               <Input
+                id="biz-edit-name"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="mt-1"
+                className={`mt-1 ${TOUCH}`}
+                data-testid="biz-edit-name"
               />
             </div>
             <div>
-              <Label>Slug</Label>
+              <Label htmlFor="biz-edit-slug">Slug</Label>
               <Input
+                id="biz-edit-slug"
                 value={formData.slug}
                 onChange={(e) => setFormData({ ...formData, slug: e.target.value })}
-                className="mt-1"
+                className={`mt-1 ${TOUCH}`}
                 dir="ltr"
               />
             </div>
-            <Button onClick={handleUpdate} disabled={updateMutation.isPending} className="w-full">
+            <Button onClick={handleUpdate} disabled={updateMutation.isPending} className={`w-full ${TOUCH}`} data-testid="biz-save">
               {updateMutation.isPending ? "جاري التحديث..." : "حفظ التعديلات"}
             </Button>
           </div>
