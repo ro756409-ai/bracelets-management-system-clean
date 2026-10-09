@@ -196,13 +196,17 @@ describe("الواجهة", () => {
   });
 
   it("🔑 الحالة بالعربي: عند الورشة / تم الاستلام", () => {
-    expect(page).toContain('"تم الاستلام" : "عند الورشة"');
+    // المرحلة 7D: الحالة المشتقّة تُعرض بـStatusBadge بنفس التسميتين
+    expect(page).toContain('label="تم الاستلام" tone="success"');
+    expect(page).toContain('label="عند الورشة" tone="warning"');
   });
 
   it("عربي RTL وموبايل", () => {
     expect(page).toContain('dir="rtl"');
     expect(page).toContain("grid-cols-1 gap-2 sm:grid-cols-3");
-    expect(page).toContain("overflow-x-auto");
+    // المرحلة 7D: الجدول عبر ResponsiveDataTable (يتمرّج داخل حاويته، بطاقات على الهاتف)
+    expect(page).toContain("<ResponsiveDataTable");
+    expect(page).toContain('cardsBelow="md"');
   });
 
   it("الخطأ بيتقال بالعربي", () => {
