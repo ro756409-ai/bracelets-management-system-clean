@@ -63,9 +63,11 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("🔑 عزل الموظف
     const dbi = await getDb(); if (!dbi) return;
     const id = insId(await dbi.insert(orders).values({
       businessId,
-      orderNumber: `T-${tag}-${Math.random().toString(36).slice(2, 8)}`,
+      // orders.orderNumber = varchar(20) في الـschema الحقيقي — الرقم يبقى ≤ 20 حرفًا (كان 22)
+      orderNumber: `T-${tag.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       customerName: "cust", customerPhone: "01000000000", customerAddress: "addr",
       governorate: "القاهرة", productName: "prod", quantity: 1, totalAmount: "100.00",
+      source: "manual", // orders.source NOT NULL بلا default في الـschema الحقيقي
       assignedEmployeeId: assignedEmployeeId ?? undefined,
       ...opts,
     } as any));

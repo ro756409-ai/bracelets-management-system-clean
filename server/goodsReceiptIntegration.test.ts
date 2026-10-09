@@ -7,7 +7,7 @@ import {
 import { getDb, updateProductStock } from "./db";
 import {
   approvePurchaseReceipt, createPurchaseReceiptDraft, makeInventoryKey,
-  submitPurchaseReceipt, voidPurchaseReceipt,
+  submitPurchaseReceipt, transferStock, voidPurchaseReceipt,
 } from "./inventoryV2.service";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 
@@ -225,16 +225,26 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
     });
 
     it("🔑 مخزنين منفصلين — الاستلام في الورشة مايلمسش رصيد المكتب", async () => {
-      // الورشة لسه مالهاش صف رصيد، فالافتتاحي هو اللي بينشئه.
+      // قواعد الخدمة الحالية (inventoryV2.service): «الافتتاحي» أول حركة على مستوى النشاط كله (اتسجّل
+      // في المكتب فوق)، والاستلام بيحتاج صف رصيد موجود في المخزن. فالورشة بتاخد صف رصيدها بالطريق
+      // الحقيقي — تحويل عهدة من المكتب (transferStock) — وبعدها استلام شراء فيها. الاختبار بيثبت نفس
+      // القصد: الاستلام في الورشة مايلمسش رصيد المكتب، والعدّاد التشغيلي بيزيد بالكمية المستلمة بس.
+      await transferStock({
+        businessId: fx.businessId, fromWarehouseId: fx.warehouseId, toWarehouseId: secondWarehouseId,
+        reference: `TR-${Date.now().toString(36)}`, reason: "عهدة للورشة", occurredAt: new Date(),
+        actor: ACTOR_MAKER, lines: [{ productId: fx.productId, quantity: 1 }],
+      });
       const officeBefore = (await v2(fx.warehouseId, fx.productId))!.onHandQuantity;
+      const workshopBefore = (await v2(secondWarehouseId, fx.productId))!.onHandQuantity;
       const legacyBefore = await legacyProduct(fx.productId);
+      expect(workshopBefore).toBe(1);
 
       await receive({
-        warehouseId: secondWarehouseId, receiptType: "opening_inventory",
+        warehouseId: secondWarehouseId, receiptType: "purchase",
         items: [{ productId: fx.productId, quantity: 15, unitCost: "11.0000" }],
       });
 
-      expect((await v2(secondWarehouseId, fx.productId))!.onHandQuantity).toBe(15);
+      expect((await v2(secondWarehouseId, fx.productId))!.onHandQuantity).toBe(workshopBefore + 15);
       expect((await v2(fx.warehouseId, fx.productId))!.onHandQuantity).toBe(officeBefore);
       // العدّاد التشغيلي رقم واحد مالوش بُعد مخزن، فبيجمع الاتنين — وده سلوكه الأصلي
       expect(await legacyProduct(fx.productId)).toBe(legacyBefore + 15);

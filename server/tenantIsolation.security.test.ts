@@ -60,8 +60,8 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("🔑 عزل A ≠ B فع
     cleanup.empIds.push(insId(await createEmployee({ name: "empA", role: "agent", isActive: true, tenantId: A.tenantId, businessId: A.businessId, username: `empA_${tag}` } as any)));
     cleanup.empIds.push(insId(await createEmployee({ name: "empB", role: "agent", isActive: true, tenantId: B.tenantId, businessId: B.businessId, username: `empB_${tag}` } as any)));
     // سجل أنشطة
-    await addActivityLog({ action: "test", entityType: "x", description: "A", performedBy: 1, businessId: A.businessId } as any);
-    await addActivityLog({ action: "test", entityType: "x", description: "B", performedBy: 1, businessId: B.businessId } as any);
+    await addActivityLog({ action: "test", entityType: "x", description: "A", performedBy: 1, performedByName: "test", performedByRole: "admin", businessId: A.businessId });
+    await addActivityLog({ action: "test", entityType: "x", description: "B", performedBy: 1, performedByName: "test", performedByRole: "admin", businessId: B.businessId });
   });
 
   afterAll(async () => {

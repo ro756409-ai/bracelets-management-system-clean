@@ -47,10 +47,12 @@ describe.runIf(CAN)("📒 Ledger V3 service — قاعدتان كاملتان م
       await c.end();
     }
   }, 180_000);
+  // حذف نسخ المخطط الكاملة (≥80 جدولًا لكل قاعدة) تحت حمل الـsuite المتوازية على Docker مؤقت أبطأ من
+  // المهلة الافتراضية 10 ثوانٍ؛ كل الاتصالات مغلقة قبله (afterAll الداخلية) فلا قفل معلّق — نفس مهلة الإنشاء.
   afterAll(async () => {
     for (const name of dbNames) await admin.query(`DROP DATABASE IF EXISTS \`${name}\``);
     await admin.end();
-  });
+  }, 120_000);
 
   for (const [i, name] of dbNames.entries()) {
     describe(`قاعدة ${i + 1}`, () => {

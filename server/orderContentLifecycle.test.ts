@@ -360,6 +360,8 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
           totalAmount: "250",
           source: "easyorder",
           status: "new",
+          // الأوردر مسند لموظف التأكيدات — editOrderItems بقى يشترط الإسناد (assertEmployeeOwnsOrder)
+          assignedEmployeeId: editor.id,
         } as any,
         [
           {
@@ -389,11 +391,11 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
           id: editor.id,
           name: editor.name,
           role: "order_confirmation",
-          tenantId: 1,
+          tenantId: fixture.tenantId,
           businessId: fixture.businessId,
           isActive: true,
         },
-        tenantId: 1,
+        tenantId: fixture.tenantId, // شركة الـfixture المعزولة — لا افتراض لـTenant #1
       } as any);
       await employeeCaller.employeePortal.editOrderItems({
         orderId,

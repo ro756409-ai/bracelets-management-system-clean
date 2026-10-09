@@ -54,10 +54,12 @@ describe.runIf(CAN)("🏗️ Migration 0040 — نسختان كاملتان من
       await c.end();
     }
   }, 120_000);
+  // حذف نسخ المخطط الكاملة (≥80 جدولًا لكل قاعدة) تحت حمل الـsuite المتوازية على Docker مؤقت أبطأ من
+  // المهلة الافتراضية 10 ثوانٍ؛ كل الاتصالات مغلقة قبله (afterAll الداخلية) فلا قفل معلّق — نفس مهلة الإنشاء.
   afterAll(async () => {
     for (const name of dbNames) await admin.query(`DROP DATABASE IF EXISTS \`${name}\``);
     await admin.end();
-  });
+  }, 120_000);
 
   for (const [i, name] of dbNames.entries()) {
     it(`نسخة ${i + 1}: preflight → تطبيق → تحقق → إعادة تشغيل آمنة → الحالات الدقيقة → rollback → المخطط القديم كما كان`, async () => {

@@ -1,8 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
 type AuthenticatedUser = NonNullable<TrpcContext["user"]>;
+
+/**
+ * شركة ونشاط معزولان من الـfixture عند وجود قاعدة اختبار — بدل افتراض Tenant #1 / Business #1
+ * (على قاعدة جديدة مش موجودين فكان النطاق بيرفض كل إنشاء). بدون قاعدة تفضل القيم 1 والاختبارات
+ * بتتخطى زي ما كانت (isNoDbError).
+ */
+let FX: CoreTestFixture | null = null;
+let TENANT = 1;
+let BIZ = 1;
+beforeAll(async () => {
+  if (!process.env.TEST_DATABASE_URL) return;
+  FX = await createCoreTestFixture("sales-channels");
+  TENANT = FX.tenantId;
+  BIZ = FX.businessId;
+});
+afterAll(async () => {
+  if (!FX) return;
+  const { getDb } = await import("./db");
+  const { salesChannels } = await import("../drizzle/schema");
+  const { eq } = await import("drizzle-orm");
+  const db = await getDb();
+  if (db) await db.delete(salesChannels).where(eq(salesChannels.businessId, FX.businessId));
+  await FX.cleanup();
+});
 
 function createAdminContext(): TrpcContext {
   const user: AuthenticatedUser = {
@@ -18,7 +43,7 @@ function createAdminContext(): TrpcContext {
   };
   return {
     user,
-    tenantId: 1,
+    tenantId: TENANT,
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
     res: { clearCookie: () => {} } as TrpcContext["res"],
   };
@@ -38,7 +63,7 @@ function createUserContext(): TrpcContext {
   };
   return {
     user,
-    tenantId: 1,
+    tenantId: TENANT,
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
     res: { clearCookie: () => {} } as TrpcContext["res"],
   };
@@ -91,7 +116,7 @@ describe("salesChannels — access control", () => {
 
   it("non-admin cannot create / update / delete / reactivate / clearSecret", async () => {
     const caller = appRouter.createCaller(createUserContext());
-    await expect(caller.salesChannels.create({ businessId: 1, name: "قناة اختبار" })).rejects.toThrow();
+    await expect(caller.salesChannels.create({ businessId: BIZ, name: "قناة اختبار" })).rejects.toThrow();
     await expect(caller.salesChannels.update({ id: 1, name: "تعديل" })).rejects.toThrow();
     await expect(caller.salesChannels.delete({ id: 1 })).rejects.toThrow();
     await expect(caller.salesChannels.reactivate({ id: 1 })).rejects.toThrow();
@@ -115,7 +140,7 @@ describe("salesChannels — production role reality (regression guard)", () => {
     await expect(caller.salesChannels.list()).rejects.toThrow();
     await expect(caller.salesChannels.activeList()).rejects.toThrow();
     await expect(caller.salesChannels.get({ id: 1 })).rejects.toThrow();
-    await expect(caller.salesChannels.create({ businessId: 1, name: "قناة" })).rejects.toThrow();
+    await expect(caller.salesChannels.create({ businessId: BIZ, name: "قناة" })).rejects.toThrow();
     await expect(caller.salesChannels.update({ id: 1, name: "قناة" })).rejects.toThrow();
     await expect(caller.salesChannels.delete({ id: 1 })).rejects.toThrow();
     await expect(caller.salesChannels.reactivate({ id: 1 })).rejects.toThrow();
@@ -171,7 +196,7 @@ describe("salesChannels — secrets are never returned to clients", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1,
+        businessId: BIZ,
         name: "قناة أسرار " + Date.now(),
         platform: "easyorder",
         apiToken: secret,
@@ -198,24 +223,24 @@ describe("salesChannels — validation", () => {
   it("rejects a name shorter than 2 characters", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     await expect(
-      caller.salesChannels.create({ businessId: 1, name: "ق" })
+      caller.salesChannels.create({ businessId: BIZ, name: "ق" })
     ).rejects.toThrow();
   });
 
   it("rejects a malformed domain / webhookUrl", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     await expect(
-      caller.salesChannels.create({ businessId: 1, name: "قناة دومين", domain: "not-a-url" })
+      caller.salesChannels.create({ businessId: BIZ, name: "قناة دومين", domain: "not-a-url" })
     ).rejects.toThrow();
     await expect(
-      caller.salesChannels.create({ businessId: 1, name: "قناة ويبهوك", webhookUrl: "also-not-a-url" })
+      caller.salesChannels.create({ businessId: BIZ, name: "قناة ويبهوك", webhookUrl: "also-not-a-url" })
     ).rejects.toThrow();
   });
 
   it("rejects a webhook secret shorter than 8 characters", async () => {
     const caller = appRouter.createCaller(createAdminContext());
     await expect(
-      caller.salesChannels.create({ businessId: 1, name: "قناة سر قصير", webhookSecret: "short" })
+      caller.salesChannels.create({ businessId: BIZ, name: "قناة سر قصير", webhookSecret: "short" })
     ).rejects.toThrow();
   });
 
@@ -224,7 +249,7 @@ describe("salesChannels — validation", () => {
     const sharedSecret = "duplicate-secret-" + Date.now();
     try {
       await caller.salesChannels.create({
-        businessId: 1, name: "قناة أولى " + Date.now(), webhookSecret: sharedSecret,
+        businessId: BIZ, name: "قناة أولى " + Date.now(), webhookSecret: sharedSecret,
       });
     } catch (err) {
       if (isNoDbError(err)) return;
@@ -232,7 +257,7 @@ describe("salesChannels — validation", () => {
     }
     await expect(
       caller.salesChannels.create({
-        businessId: 1, name: "قناة ثانية " + Date.now(), webhookSecret: sharedSecret,
+        businessId: BIZ, name: "قناة ثانية " + Date.now(), webhookSecret: sharedSecret,
       })
     ).rejects.toThrow();
   });
@@ -241,13 +266,13 @@ describe("salesChannels — validation", () => {
     const caller = appRouter.createCaller(createAdminContext());
     const name = "قناة مكررة " + Date.now();
     try {
-      await caller.salesChannels.create({ businessId: 1, name });
+      await caller.salesChannels.create({ businessId: BIZ, name });
     } catch (err) {
       if (isNoDbError(err)) return;
       throw err;
     }
     await expect(
-      caller.salesChannels.create({ businessId: 1, name })
+      caller.salesChannels.create({ businessId: BIZ, name })
     ).rejects.toThrow();
   });
 });
@@ -259,7 +284,7 @@ describe("salesChannels — secret lifecycle", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1, name: "قناة إبقاء " + Date.now(), apiToken: token,
+        businessId: BIZ, name: "قناة إبقاء " + Date.now(), apiToken: token,
       });
     } catch (err) {
       if (isNoDbError(err)) return;
@@ -284,7 +309,7 @@ describe("salesChannels — secret lifecycle", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1, name: "قناة استبدال " + Date.now(), apiToken: "original-token-0000",
+        businessId: BIZ, name: "قناة استبدال " + Date.now(), apiToken: "original-token-0000",
       });
     } catch (err) {
       if (isNoDbError(err)) return;
@@ -300,7 +325,7 @@ describe("salesChannels — secret lifecycle", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1, name: "قناة مسح " + Date.now(), apiToken: "to-be-cleared-1234",
+        businessId: BIZ, name: "قناة مسح " + Date.now(), apiToken: "to-be-cleared-1234",
       });
     } catch (err) {
       if (isNoDbError(err)) return;
@@ -328,7 +353,7 @@ describe("salesChannels — connection test", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1,
+        businessId: BIZ,
         name: "قناة بلا توكن " + Date.now(),
         platform: "easyorder",
       });
@@ -353,7 +378,7 @@ describe("salesChannels — connection test", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1,
+        businessId: BIZ,
         name: "قناة اختبار اتصال " + Date.now(),
         platform: "easyorder",
         apiToken: secret,
@@ -375,7 +400,7 @@ describe("salesChannels — connection test", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1,
+        businessId: BIZ,
         name: "قناة بدون استيراد " + Date.now(),
         platform: "easyorder",
         apiToken: "some-token-value",
@@ -398,7 +423,7 @@ describe("salesChannels — archive / reactivate", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1, name: "قناة أرشفة " + Date.now(),
+        businessId: BIZ, name: "قناة أرشفة " + Date.now(),
       });
     } catch (err) {
       if (isNoDbError(err)) return;
@@ -424,7 +449,7 @@ describe("salesChannels — archive / reactivate", () => {
     let created;
     try {
       created = await caller.salesChannels.create({
-        businessId: 1, name: "قناة إخفاء " + Date.now(),
+        businessId: BIZ, name: "قناة إخفاء " + Date.now(),
       });
     } catch (err) {
       if (isNoDbError(err)) return;

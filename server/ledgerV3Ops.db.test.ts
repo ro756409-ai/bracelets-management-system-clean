@@ -46,10 +46,12 @@ describe.runIf(CAN)("🛠️ Ledger V3 ops — migrate-0040 وdisable على ق�
       await c.end();
     }
   }, 180_000);
+  // حذف نسخ المخطط الكاملة (≥80 جدولًا لكل قاعدة) تحت حمل الـsuite المتوازية على Docker مؤقت أبطأ من
+  // المهلة الافتراضية 10 ثوانٍ؛ كل الاتصالات مغلقة قبله (afterAll الداخلية) فلا قفل معلّق — نفس مهلة الإنشاء.
   afterAll(async () => {
     for (const name of [DB_STAGING, DB_PARTIAL, DB_PROD]) await admin.query(`DROP DATABASE IF EXISTS \`${name}\``);
     await admin.end();
-  });
+  }, 120_000);
 
   describe("migrate-0040", () => {
     it("check (افتراضي): not_applied، العبارات التسع ناقصة، لا كتابة، ولا أسرار في المخرجات", async () => {

@@ -114,7 +114,9 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
         name: "آية الكرسي",
         currentStock: 0,
       });
-      const variantId = (variantInsert as any).insertId as number;
+      // mysql2 + drizzle بيرجّع [ResultSetHeader, …] — insertId في العنصر الأول (كان undefined فالنوع ماكانش بيتربط)
+      const variantId = Number((Array.isArray(variantInsert) ? (variantInsert as any)[0] : variantInsert as any).insertId);
+      expect(variantId).toBeGreaterThan(0);
 
       try {
         await replaceOrderItems(testOrderId, [
@@ -137,6 +139,10 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
     });
 
     it("يجلب بنود عدة أوردرات دفعة واحدة مفهرسة حسب orderId", async () => {
+      // الاختبار مستقل عن ترتيب اللي قبله: بيحدد البنود بنفسه بدل ما يعتمد على حالة سابقة
+      await replaceOrderItems(testOrderId, [
+        { productName: "صنف بسعر", quantity: 3, unitPrice: 250 },
+      ]);
       const map = await getOrderItemsForOrders([testOrderId]);
       const list = map.get(testOrderId);
       expect(list).toBeDefined();

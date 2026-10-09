@@ -51,9 +51,11 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("🔒 عزل قائمة �
   async function makeOrder(businessId: number, label: string) {
     const d = await getDb(); if (!d) return;
     const id = insId(await d.insert(orders).values({
-      businessId, orderNumber: `${label}-${tag}-${Math.random().toString(36).slice(2, 7)}`,
+      // orders.orderNumber = varchar(20) في الـschema الحقيقي — الرقم يبقى ≤ 20 حرفًا
+      businessId, orderNumber: `${label.slice(0, 4)}-${tag.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       customerName: label, customerPhone: "01000000000", customerAddress: "addr",
       governorate: "القاهرة", productName: "prod", quantity: 1, totalAmount: "100.00", status: "new",
+      source: "manual", // orders.source NOT NULL بلا default في الـschema الحقيقي
     } as any));
     ids.push(id);
   }

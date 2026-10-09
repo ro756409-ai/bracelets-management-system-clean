@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { getDb, getOrderStatusCounts, createOrder } from "./db";
 import { orders } from "../drizzle/schema";
 import { inArray } from "drizzle-orm";
+import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 
 /**
  * Header stat cards on the Orders page (getOrderStatusCounts). Needs a real database —
@@ -10,20 +11,25 @@ import { inArray } from "drizzle-orm";
  */
 describe("getOrderStatusCounts", () => {
   const createdIds: number[] = [];
+  // نشاط معزول من الـfixture بدل افتراض Business #1 — على قاعدة جديدة مفيش صف #1 فعدّ «اليوم»
+  // (اللي بيقرا منطقة النشاط الزمنية من جدول businesses) كان بيرجع 0.
+  let fixture: CoreTestFixture | null = null;
+  const bid = () => fixture!.businessId;
 
   beforeAll(async () => {
     const db = await getDb();
     if (!db) return;
+    fixture = await createCoreTestFixture("status-counts");
     const stamp = Date.now() % 100000000;
 
     const confirmed = await createOrder({
-      businessId: 1,
+      businessId: bid(),
       orderNumber: `TSC-A${stamp}`,
       customerName: "عميل اختبار الإحصاءات 1",
       customerPhone: "01000000091",
       governorate: "القاهرة",
       customerAddress: "عنوان اختبار",
-      productId: 1,
+      productId: fixture!.productId,
       productName: "صنف اختبار",
       quantity: 1,
       totalAmount: "100",
@@ -33,7 +39,7 @@ describe("getOrderStatusCounts", () => {
     if (confirmed) createdIds.push(confirmed);
 
     const needsReview = await createOrder({
-      businessId: 1,
+      businessId: bid(),
       orderNumber: `TSC-B${stamp}`,
       customerName: "عميل اختبار الإحصاءات 2",
       customerPhone: "01000000092",
@@ -52,14 +58,15 @@ describe("getOrderStatusCounts", () => {
 
   afterAll(async () => {
     const db = await getDb();
-    if (!db || createdIds.length === 0) return;
-    await db.delete(orders).where(inArray(orders.id, createdIds));
+    if (!db) return;
+    if (createdIds.length) await db.delete(orders).where(inArray(orders.id, createdIds));
+    await fixture?.cleanup();
   });
 
   it("counts orders by status and totals them", async () => {
     const db = await getDb();
     if (!db) return;
-    const counts = await getOrderStatusCounts([1]);
+    const counts = await getOrderStatusCounts([bid()]);
     expect(counts.byStatus.confirmed).toBeGreaterThanOrEqual(1);
     expect(counts.byStatus.new).toBeGreaterThanOrEqual(1);
     expect(counts.total).toBeGreaterThanOrEqual(2);
@@ -68,14 +75,14 @@ describe("getOrderStatusCounts", () => {
   it("counts orders flagged needsReview", async () => {
     const db = await getDb();
     if (!db) return;
-    const counts = await getOrderStatusCounts([1]);
+    const counts = await getOrderStatusCounts([bid()]);
     expect(counts.needsReview).toBeGreaterThanOrEqual(1);
   });
 
   it("counts today's orders — both seeded rows were created just now", async () => {
     const db = await getDb();
     if (!db) return;
-    const counts = await getOrderStatusCounts([1]);
+    const counts = await getOrderStatusCounts([bid()]);
     expect(counts.today).toBeGreaterThanOrEqual(2);
   });
 
