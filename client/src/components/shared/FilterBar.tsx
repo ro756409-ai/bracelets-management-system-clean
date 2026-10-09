@@ -61,7 +61,7 @@ export function SearchInput({
         value={local}
         onChange={(e) => setLocal(e.target.value)}
         placeholder={placeholder}
-        className="h-9 pr-9 pl-9"
+        className="h-11 min-h-11 pr-9 pl-10 md:h-9 md:min-h-9 md:pl-9"
         aria-label={rest["aria-label"] ?? placeholder}
       />
       {local && (
@@ -69,7 +69,7 @@ export function SearchInput({
           type="button"
           onClick={() => setLocal("")}
           aria-label="مسح البحث"
-          className="absolute left-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="absolute left-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:left-2 md:h-6 md:w-6 md:hover:bg-muted"
         >
           <X className="h-3.5 w-3.5" />
         </button>

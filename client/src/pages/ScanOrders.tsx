@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { PageHeader } from "@/components/shared";
 import { QrCode, CheckCircle2, XCircle, AlertTriangle, Camera, CameraOff, Package, User, MapPin, Phone, Hash } from "lucide-react";
 
 type ScanResult = {
@@ -171,21 +172,13 @@ export default function ScanOrders() {
 
   return (
     <div className="max-w-lg mx-auto" dir="rtl">
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
-        <div className="bg-primary p-2.5 rounded-xl">
-          <QrCode className="h-6 w-6 text-primary-foreground" />
-        </div>
-        <div>
-          <h1 className="text-xl font-bold">تجهيز الأوردرات</h1>
-          <p className="text-sm text-muted-foreground">امسح QR Code لتجهيز الأوردر</p>
-        </div>
-        {scanCount > 0 && (
-          <Badge className="mr-auto bg-accent text-accent-foreground border-primary/20">
-            {scanCount} مسح
-          </Badge>
-        )}
-      </div>
+      <PageHeader
+        title="تجهيز الأوردرات"
+        description="امسح QR Code لتجهيز الأوردر"
+        icon={<QrCode className="h-5 w-5" aria-hidden="true" />}
+        actions={scanCount > 0 ? <Badge className="bg-accent text-accent-foreground border-primary/20 tabular-nums" data-testid="scan-count">{scanCount} مسح</Badge> : undefined}
+        className="mb-5"
+      />
 
       {/* Camera Scanner */}
       <Card className="mb-4 overflow-hidden">
@@ -238,7 +231,7 @@ export default function ScanOrders() {
           <div className="mt-3 flex gap-2">
             {!isScanning ? (
               <Button
-                className="flex-1"
+                className="min-h-11 md:min-h-9 flex-1"
                 onClick={startCamera}
                 disabled={scanMutation.isPending}
               >
@@ -248,7 +241,7 @@ export default function ScanOrders() {
             ) : (
               <Button
                 variant="outline"
-                className="flex-1 border-destructive/30 text-destructive hover:bg-destructive/10"
+                className="min-h-11 md:min-h-9 flex-1 border-destructive/30 text-destructive hover:bg-destructive/10"
                 onClick={stopCamera}
               >
                 <CameraOff className="h-4 w-4 ml-2" />
@@ -273,10 +266,12 @@ export default function ScanOrders() {
               placeholder="ORD-2026-000001"
               value={manualSerial}
               onChange={(e) => setManualSerial(e.target.value)}
-              className="font-mono text-sm flex-1"
+              className="min-h-11 flex-1 font-mono text-sm md:min-h-9"
               dir="ltr"
+              inputMode="text"
+              aria-label="الرقم التسلسلي"
             />
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               type="submit"
               disabled={scanMutation.isPending || !manualSerial.trim()}
             >
@@ -332,7 +327,7 @@ export default function ScanOrders() {
             <Button
               variant="outline"
               size="sm"
-              className="mt-3 w-full"
+              className="min-h-11 md:min-h-9 mt-3 w-full"
               onClick={() => { setScanResult(null); startCamera(); }}
             >
               مسح أوردر جديد
@@ -343,7 +338,7 @@ export default function ScanOrders() {
 
       {/* Instructions */}
       {!scanResult && (
-        <Card className="bg-[var(--info)]/10 border-[var(--info)]/20">
+        <Card className="border-[var(--info)]/20 bg-[var(--info)]/10">
           <CardContent className="pt-4 pb-4">
             <p className="text-sm font-medium text-[var(--info)] mb-2">كيفية الاستخدام:</p>
             <ol className="text-sm text-[var(--info)] space-y-1 list-decimal list-inside">

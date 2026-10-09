@@ -1,27 +1,34 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Download, Printer, Search, RefreshCw } from "lucide-react";
+import { Download, Printer, RefreshCw, X } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { cairoDateKey, cairoDayRange, previousDateKey } from "@/lib/cairoDate";
+import {
+  PageHeader, StatCard, SearchInput, StatusBadge, ResponsiveDataTable, StickyActionBar, OfflineState, type Column,
+} from "@/components/shared";
+import { PartnerLogo } from "@/components/brand";
 
-const STATUS_LABELS: Record<string, string> = {
-  printed: "مطبوع",
-  confirmed: "مؤكد",
-  preparing: "قيد التحضير",
-  shipped: "تم الشحن",
-  delivered: "تم التوصيل",
-};
+const TOUCH = "min-h-11 md:min-h-9";
 
+/**
+ * المطبوعات — الأوردرات المطبوعة في يوم محدد (اليوم/أمس/تاريخ) بنطاق الجلسة، مع إعادة طباعة وتصدير Excel.
+ * المرحلة 7D (عرض فقط): PageHeader + بطاقات ملخص حقيقية (من القائمة نفسها)، جدول Desktop/بطاقات Mobile
+ * بنفس التحديد، شعار Bosta فقط للأوردرات التي سجّلتها بوسطة (نفس قاعدة bostaLastError السابقة)،
+ * شريط إعادة طباعة ثابت على الهاتف مع حارس ضغط مكرر. نفس الاستعلام ونفس الروابط.
+ */
 export default function PrintedOrders() {
   const { currentBusinessIds } = useBusinessContext();
+  const online = useOnlineStatus();
   const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'custom'>('today');
   const [customDate, setCustomDate] = useState('');
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [printing, setPrinting] = useState(false);
   const utils = trpc.useUtils();
 
   // حساب نطاق التاريخ
@@ -49,29 +56,24 @@ export default function PrintedOrders() {
     businessIds: currentBusinessIds,
   }), [dateRange, search, currentBusinessIds]);
 
-  const { data, isLoading, refetch } = trpc.orders.list.useQuery(queryParams);
+  const { data, isLoading, isError, error, refetch } = trpc.orders.list.useQuery(queryParams);
   const orders = data?.orders ?? [];
 
-  // إحصائيات
+  // إحصائيات (من القائمة المعروضة نفسها)
   const totalAmount = orders.reduce((s, o) => s + Number(o.totalAmount), 0);
   const totalQty = orders.reduce((s, o) => s + Number(o.quantity), 0);
   const bostaCount = orders.filter(o => o.bostaLastError?.includes('successfully')).length;
   const nonBostaCount = orders.length - bostaCount;
 
-  const currentPageIds = orders.map(o => o.id);
-  const allSelected = currentPageIds.length > 0 && selectedIds.length === currentPageIds.length;
-
   const toggleSelect = (id: number) => {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
-
-  const toggleAll = () => {
-    if (allSelected) setSelectedIds([]);
-    else setSelectedIds(currentPageIds);
-  };
+  const selectedKeys = useMemo(() => new Set<string | number>(selectedIds), [selectedIds]);
 
   const handleReprint = () => {
     if (selectedIds.length === 0) return;
+    if (printing) return;
+    setPrinting(true);
     const params = new URLSearchParams();
     params.set('orderIds', selectedIds.join(','));
     window.open(`/api/export/print-labels?${params.toString()}`, '_blank');
@@ -79,6 +81,7 @@ export default function PrintedOrders() {
     setTimeout(() => {
       utils.orders.list.invalidate();
       setSelectedIds([]);
+      setPrinting(false);
     }, 2000);
   };
 
@@ -110,211 +113,139 @@ export default function PrintedOrders() {
     ? new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
     : dateFilter === 'yesterday'
     ? new Date(Date.now() - 86400000).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-    : customDate ? new Date(customDate + 'T00:00:00').toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : '';
+    : customDate ? new Date(customDate + 'T00:00:00').toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : 'اختر تاريخًا';
+
+  const carrierCell = (o: any) => {
+    const isBosta = o.bostaLastError?.includes('successfully');
+    return isBosta ? (
+      <span className="inline-flex items-center gap-1.5 text-xs"><PartnerLogo partner="bosta" size="xs" decorative /> بوسطة</span>
+    ) : (
+      <StatusBadge status="other" label="شركة أخرى" tone="warning" size="sm" icon={null} />
+    );
+  };
+
+  const columns: Column<any>[] = [
+    { id: "number", header: "رقم الأوردر", alwaysVisible: true, cell: o => <span className="font-mono text-xs font-medium" dir="ltr">{o.easyOrderShortId || o.orderNumber}</span> },
+    { id: "customer", header: "العميل", alwaysVisible: true, cell: o => <div className="min-w-0"><p className="truncate text-sm font-medium">{o.customerName}</p><p className="font-mono text-xs text-muted-foreground" dir="ltr">{o.customerPhone}</p></div> },
+    { id: "governorate", header: "المحافظة", cell: o => <span className="text-xs">{o.governorate || "—"}</span> },
+    { id: "product", header: "المنتج", cell: o => <span className="block max-w-[180px] truncate text-xs" title={o.productName}>{o.productName}</span> },
+    { id: "qty", header: "الكمية", numeric: true, cell: o => <span className="text-xs font-medium tabular-nums">{o.quantity}</span> },
+    { id: "total", header: "المبلغ", numeric: true, cell: o => <span className="text-xs font-medium tabular-nums text-[var(--success)]">{Number(o.totalAmount).toLocaleString('ar-EG')} ج.م</span> },
+    { id: "printedAt", header: "تاريخ الطباعة", cell: o => <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{o.printedAt ? new Date(o.printedAt).toLocaleString('ar-EG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span> },
+    { id: "carrier", header: "شحن", alwaysVisible: true, cell: carrierCell },
+  ];
+
+  const mobileRow = (o: any) => {
+    const isSelected = selectedIds.includes(o.id);
+    return (
+      <article className={`rounded-[var(--radius-brand-md)] border bg-card p-3 ${isSelected ? "border-primary/50 bg-accent/40" : "border-border"}`} data-testid={`printed-card-${o.id}`}>
+        <label className="flex items-start gap-3">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center"><Checkbox checked={isSelected} onCheckedChange={() => toggleSelect(o.id)} aria-label={`تحديد الأوردر ${o.easyOrderShortId || o.orderNumber}`} /></span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-start justify-between gap-2">
+              <span className="min-w-0"><span className="block truncate font-semibold">{o.customerName}</span><span className="block font-mono text-xs text-muted-foreground" dir="ltr">{o.easyOrderShortId || o.orderNumber}</span></span>
+              {carrierCell(o)}
+            </span>
+            <span className="mt-1 block text-xs text-muted-foreground" dir="ltr">{o.customerPhone}</span>
+            <span className="mt-1 flex items-center justify-between text-xs"><span className="truncate">{o.productName} × {o.quantity}</span><span className="shrink-0 font-semibold tabular-nums text-[var(--success)]">{Number(o.totalAmount).toLocaleString('ar-EG')} ج.م</span></span>
+            <span className="mt-1 block text-xs tabular-nums text-muted-foreground">{o.governorate || "—"} · طُبع {o.printedAt ? new Date(o.printedAt).toLocaleString('ar-EG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+          </span>
+        </label>
+      </article>
+    );
+  };
+
+  const dateChip = (key: typeof dateFilter, label: string) => (
+    <button
+      type="button"
+      key={key}
+      onClick={() => setDateFilter(key)}
+      className={`${TOUCH} rounded-[var(--radius-brand-pill)] border px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${dateFilter === key ? "border-primary/40 bg-primary-soft text-primary-text" : "border-border bg-card text-muted-foreground hover:text-foreground"}`}
+      aria-pressed={dateFilter === key}
+      data-testid={`printed-date-${key}`}
+    >
+      {label}
+    </button>
+  );
 
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <Printer className="h-6 w-6 text-[var(--info)]" />
-            المطبوعات
-          </h1>
-          <p className="text-muted-foreground text-sm mt-1">{dateLabel}</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1">
-            <RefreshCw className="h-4 w-4" />
-            تحديث
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-[var(--success)]/30 text-[var(--success)] hover:bg-[var(--success)]/10 gap-1"
-            onClick={handleExcelExport}
-            disabled={orders.length === 0}
-          >
-            <Download className="h-4 w-4" />
-            تصدير Excel
-          </Button>
-          <Button
-            size="sm"
-            className="bg-[var(--info)] hover:bg-[var(--info)] text-white gap-1"
-            disabled={selectedIds.length === 0}
-            onClick={handleReprint}
-          >
-            <Printer className="h-4 w-4" />
+    <div className={`space-y-5 ${selectedIds.length > 0 ? "pb-[120px] md:pb-0" : ""}`} data-testid="printed-orders-page">
+      <PageHeader
+        title="المطبوعات"
+        description={dateLabel}
+        icon={<Printer className="h-5 w-5" aria-hidden="true" />}
+        primaryAction={
+          <Button size="sm" className={`${TOUCH} gap-1`} disabled={selectedIds.length === 0 || printing} onClick={handleReprint} aria-busy={printing || undefined} data-testid="printed-reprint">
+            <Printer className="h-4 w-4" aria-hidden="true" />
             إعادة طباعة {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
           </Button>
-        </div>
-      </div>
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-1`}>
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              تحديث
+            </Button>
+            <Button variant="outline" size="sm" className={`${TOUCH} gap-1`} onClick={handleExcelExport} disabled={orders.length === 0}>
+              <Download className="h-4 w-4" aria-hidden="true" />
+              تصدير Excel
+            </Button>
+          </>
+        }
+      >
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="ملخص المطبوعات" data-testid="printed-summary">
+          <StatCard label="أوردرات مطبوعة" value={orders.length.toLocaleString('ar-EG')} hint="في التاريخ المختار (orders.list)" loading={isLoading} />
+          <StatCard label="القطع" value={totalQty.toLocaleString('ar-EG')} hint="مجموع الكميات" loading={isLoading} />
+          <StatCard label="المبالغ" value={`${totalAmount.toLocaleString('ar-EG')} ج.م`} hint="قيمة الأوردرات، ليست نقدًا محصّلًا" loading={isLoading} />
+          <StatCard label="بوسطة / أخرى" value={`${bostaCount.toLocaleString('ar-EG')} / ${nonBostaCount.toLocaleString('ar-EG')}`} hint="سجّلتها بوسطة فعلًا / شركة أخرى" loading={isLoading} />
+        </section>
+      </PageHeader>
+
+      {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}
 
       {/* فلاتر التاريخ والبحث */}
-      <div className="flex flex-col gap-3 bg-[var(--info)]/10 border border-[var(--info)]/30 rounded-xl px-4 py-3">
-        <div className="flex items-center gap-3 flex-wrap">
-          {/* فلتر التاريخ */}
-          <div className="flex gap-1 bg-card rounded-lg border border-[var(--info)]/40 p-0.5">
-            {(['today', 'yesterday', 'custom'] as const).map(f => (
-              <button
-                key={f}
-                onClick={() => setDateFilter(f)}
-                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                  dateFilter === f ? 'bg-[var(--info)] text-white' : 'text-[var(--info)] hover:bg-[var(--info)]/15'
-                }`}
-              >
-                {f === 'today' ? 'اليوم' : f === 'yesterday' ? 'أمس' : 'تاريخ مخصص'}
-              </button>
-            ))}
-          </div>
-          {dateFilter === 'custom' && (
-            <input
-              type="date"
-              value={customDate}
-              onChange={e => setCustomDate(e.target.value)}
-              className="text-xs border border-[var(--info)]/40 bg-card rounded-lg px-3 py-1.5 text-[var(--info)] focus:outline-none focus:ring-2 focus:ring-[var(--info)]"
-            />
-          )}
-          {/* بحث */}
-          <div className="relative flex-1 min-w-48 max-w-xs">
-            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="بحث بالاسم أو الهاتف..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="pr-8 text-xs h-8"
-            />
-          </div>
+      <div className="flex flex-wrap items-center gap-2" data-testid="printed-filters">
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="التاريخ">
+          {dateChip('today', 'اليوم')}{dateChip('yesterday', 'أمس')}{dateChip('custom', 'تاريخ مخصص')}
         </div>
-
-        {/* إحصائيات */}
-        <div className="flex items-center gap-4 flex-wrap text-xs">
-          <span className="text-[var(--info)] font-semibold">إجمالي: {orders.length} أوردر</span>
-          <span className="text-[var(--info)]">الكمية: {totalQty} قطعة</span>
-          <span className="text-[var(--info)]">المبالغ: {totalAmount.toLocaleString('ar-EG')} ج.م</span>
-          <span className="text-[var(--info)] font-medium">في بوسطة: {bostaCount}</span>
-          <span className="text-[var(--warning)] font-medium">شركة أخرى: {nonBostaCount}</span>
-        </div>
-      </div>
-
-      {/* الجدول */}
-      <div className="bg-background border rounded-xl overflow-hidden">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-16 text-muted-foreground">
-            <RefreshCw className="h-5 w-5 animate-spin ml-2" />
-            جاري التحميل...
-          </div>
-        ) : orders.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-            <Printer className="h-12 w-12 mb-3 opacity-20" />
-            <p className="text-sm">لا توجد أوردرات مطبوعة في هذا التاريخ</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-[var(--info)]/10 border-b border-[var(--info)]/20">
-                  <th className="p-3 text-right w-10">
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={toggleAll}
-                      className="rounded"
-                    />
-                  </th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">#</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">رقم الأوردر</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">العميل</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">التليفون</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">المحافظة</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">المنتج</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">الكمية</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">المبلغ</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">تاريخ الطباعة</th>
-                  <th className="p-3 text-right text-xs font-semibold text-[var(--info)]">شحن</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((order, idx) => {
-                  const isBosta = order.bostaLastError?.includes('successfully');
-                  const isSelected = selectedIds.includes(order.id);
-                  return (
-                    <tr
-                      key={order.id}
-                      className={`border-b transition-colors cursor-pointer ${
-                        isSelected
-                          ? 'bg-[var(--info)]/10'
-                          : idx % 2 === 0
-                          ? 'bg-background hover:bg-muted/30'
-                          : 'bg-muted/10 hover:bg-muted/30'
-                      }`}
-                      onClick={() => toggleSelect(order.id)}
-                    >
-                      <td className="p-3" onClick={e => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelect(order.id)}
-                          className="rounded"
-                        />
-                      </td>
-                      <td className="p-3 text-muted-foreground text-xs">{idx + 1}</td>
-                      <td className="p-3 font-mono text-xs font-medium">
-                        {order.easyOrderShortId || order.orderNumber}
-                      </td>
-                      <td className="p-3 font-medium text-xs">{order.customerName}</td>
-                      <td className="p-3 text-xs font-mono text-muted-foreground">{order.customerPhone}</td>
-                      <td className="p-3 text-xs">{order.governorate || '—'}</td>
-                      <td className="p-3 text-xs max-w-[180px] truncate" title={order.productName}>
-                        {order.productName}
-                      </td>
-                      <td className="p-3 text-center text-xs font-medium">{order.quantity}</td>
-                      <td className="p-3 text-xs font-medium text-[var(--success)]">
-                        {Number(order.totalAmount).toLocaleString('ar-EG')} ج.م
-                      </td>
-                      <td className="p-3 text-xs text-muted-foreground whitespace-nowrap">
-                        {order.printedAt
-                          ? new Date(order.printedAt).toLocaleString('ar-EG', {
-                              month: 'short', day: 'numeric',
-                              hour: '2-digit', minute: '2-digit'
-                            })
-                          : '—'}
-                      </td>
-                      <td className="p-3">
-                        {isBosta ? (
-                          <Badge className="bg-[var(--info)]/15 text-[var(--info)] text-xs px-1.5 py-0.5">بوسطة</Badge>
-                        ) : (
-                          <Badge className="bg-[var(--warning)]/15 text-[var(--warning)] text-xs px-1.5 py-0.5">أخرى</Badge>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+        {dateFilter === 'custom' && (
+          <Input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)} className={`${TOUCH} w-44 text-sm`} aria-label="تاريخ الطباعة" />
         )}
+        <div className="min-w-0 flex-1 sm:max-w-xs [&_input]:min-h-11 md:[&_input]:min-h-9">
+          <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو الهاتف..." debounceMs={300} />
+        </div>
       </div>
 
-      {/* شريط التحديد */}
+      {/* جدول Desktop / بطاقات Mobile */}
+      <ResponsiveDataTable<any>
+        rows={orders}
+        columns={columns}
+        rowKey={o => o.id}
+        loading={isLoading}
+        error={isError ? ((error as any)?.message || "تعذّر تحميل المطبوعات") : null}
+        onRetry={() => refetch()}
+        empty={{ title: "لا توجد أوردرات مطبوعة في هذا التاريخ", description: "اختر تاريخًا آخر أو عدّل البحث." }}
+        selectedKeys={selectedKeys}
+        onSelectionChange={keys => setSelectedIds([...keys].map(Number))}
+        onRowClick={o => toggleSelect(o.id)}
+        cardsBelow="md"
+        mobileRow={mobileRow}
+      />
+
+      {/* شريط التحديد — ثابت فوق القائمة السفلية على الهاتف */}
       {selectedIds.length > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[var(--info)] text-white rounded-2xl shadow-2xl px-6 py-3 flex items-center gap-4">
-          <span className="text-sm font-medium">{selectedIds.length} أوردر محدد</span>
-          <Button
-            size="sm"
-            className="bg-card text-[var(--info)] hover:bg-[var(--info)]/10 gap-1"
-            onClick={handleReprint}
-          >
-            <Printer className="h-4 w-4" />
-            إعادة طباعة
+        <StickyActionBar
+          className="fixed inset-x-0 bottom-[var(--bottom-nav-h,0px)] z-30 mx-0 mt-0 mb-0 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:static md:mx-0 md:mt-4 md:rounded-[var(--radius-brand-md)] md:border md:px-4 md:pb-3"
+          info={<span className="text-sm font-medium tabular-nums">{selectedIds.length} أوردر محدد</span>}
+        >
+          <Button type="button" size="sm" className={`${TOUCH} gap-1`} onClick={handleReprint} disabled={printing} data-testid="printed-reprint-bar">
+            <Printer className="h-4 w-4" aria-hidden="true" />
+            {printing ? "جاري الطباعة…" : "إعادة طباعة"}
           </Button>
-          <button
-            onClick={() => setSelectedIds([])}
-            className="text-white/70 hover:text-white text-xs underline"
-          >
-            إلغاء
-          </button>
-        </div>
+          <Button type="button" size="sm" variant="ghost" className={`${TOUCH} min-w-11 px-2`} onClick={() => setSelectedIds([])} aria-label="إلغاء التحديد">
+            <X className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </StickyActionBar>
       )}
     </div>
   );

@@ -1,23 +1,14 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { Download, RotateCcw, QrCode, Clock } from "lucide-react";
 import {
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Clock,
-  Download,
-  Search,
-  Filter,
-  RotateCcw,
-  Calendar,
-  QrCode,
-} from "lucide-react";
-import { PageHeader, StatCard } from "@/components/shared";
+  PageHeader, StatCard, StatusBadge, SearchInput, ResponsiveDataTable, SectionCard, OfflineState, type Column,
+} from "@/components/shared";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import {
   Select,
   SelectContent,
@@ -43,13 +34,26 @@ type ScanLog = {
   };
 };
 
+const TOUCH = "min-h-11 md:min-h-9";
+const RESULT: Record<ScanLog["result"], { label: string; tone: "success" | "warning" | "danger" }> = {
+  success: { label: "نجح", tone: "success" },
+  duplicate: { label: "مكرر", tone: "warning" },
+  cancelled: { label: "ملغي", tone: "danger" },
+  failed: { label: "فشل", tone: "danger" },
+};
+
+/**
+ * سجل المسحات — مسحات QR للموظف الحالي (employeePortal.scanLogs) بفلاتر النتيجة/التاريخ/بحث محلي وتصدير CSV.
+ * المرحلة 7D (عرض فقط): بطاقات ملخص من إحصاءات الاستعلام نفسه، جدول Desktop/بطاقات Mobile، StatusBadge للنتيجة.
+ */
 export default function ScanLogs() {
+  const online = useOnlineStatus();
   const [search, setSearch] = useState("");
   const [resultFilter, setResultFilter] = useState<string>("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  const { data: scanLogsData, isLoading, refetch } = (trpc.employeePortal as any).scanLogs.useQuery(
+  const { data: scanLogsData, isLoading, isError, error, refetch } = (trpc.employeePortal as any).scanLogs.useQuery(
     {
       limit: 500,
       dateFrom: dateFrom ? new Date(dateFrom) : undefined,
@@ -57,7 +61,7 @@ export default function ScanLogs() {
       result: resultFilter !== "all" ? (resultFilter as any) : undefined,
     },
     { enabled: true }
-  )
+  );
 
   const scanLogs = (scanLogsData?.logs || []) as ScanLog[];
   const stats = scanLogsData?.stats || {
@@ -82,27 +86,6 @@ export default function ScanLogs() {
     );
   }, [scanLogs, search]);
 
-  const resultColors = {
-    success: { bg: "bg-[var(--success)]/5 border-[var(--success)]/20", text: "text-[var(--success)]", badge: "bg-[var(--success)]/10 text-[var(--success)]" },
-    duplicate: { bg: "bg-[var(--warning)]/5 border-[var(--warning)]/20", text: "text-[var(--warning)]", badge: "bg-[var(--warning)]/10 text-[var(--warning)]" },
-    cancelled: { bg: "bg-destructive/5 border-destructive/20", text: "text-destructive", badge: "bg-destructive/10 text-destructive" },
-    failed: { bg: "bg-destructive/5 border-destructive/20", text: "text-destructive", badge: "bg-destructive/10 text-destructive" },
-  };
-
-  const resultIcons = {
-    success: <CheckCircle2 className="h-4 w-4 text-[var(--success)]" />,
-    duplicate: <AlertTriangle className="h-4 w-4 text-[var(--warning)]" />,
-    cancelled: <XCircle className="h-4 w-4 text-destructive" />,
-    failed: <XCircle className="h-4 w-4 text-destructive" />,
-  };
-
-  const resultLabels = {
-    success: "✓ نجح",
-    duplicate: "⚠️ مكرر",
-    cancelled: "🚫 ملغي",
-    failed: "❌ فشل",
-  };
-
   const handleExportCSV = () => {
     if (filteredLogs.length === 0) {
       toast.error("لا توجد بيانات للتصدير");
@@ -117,7 +100,7 @@ export default function ScanLogs() {
       log.order?.customerName || "-",
       log.order?.customerPhone || "-",
       log.order?.governorate || "-",
-      resultLabels[log.result],
+      RESULT[log.result]?.label ?? log.result,
       log.scannedByName,
     ]);
 
@@ -130,189 +113,101 @@ export default function ScanLogs() {
     toast.success("تم تصدير البيانات بنجاح");
   };
 
+  const resultBadge = (r: ScanLog["result"]) => <StatusBadge status={r} label={RESULT[r]?.label ?? r} tone={RESULT[r]?.tone ?? "neutral"} size="sm" />;
+
+  const columns: Column<ScanLog>[] = [
+    { id: "at", header: "التاريخ والوقت", alwaysVisible: true, cell: l => <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs tabular-nums"><Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />{new Date(l.createdAt).toLocaleString("ar-EG")}</span> },
+    { id: "serial", header: "الرقم التسلسلي", cell: l => <span className="font-mono text-xs" dir="ltr">{l.serialNumber}</span> },
+    { id: "order", header: "رقم الأوردر", cell: l => l.order ? <span className="font-mono text-xs" dir="ltr">#{l.order.orderNumber}</span> : <span className="text-muted-foreground">-</span> },
+    { id: "customer", header: "العميل", cell: l => <div className="min-w-0"><p className="text-sm">{l.order?.customerName || "-"}</p><p className="text-xs text-muted-foreground" dir="ltr">{l.order?.customerPhone || "-"}</p></div> },
+    { id: "result", header: "النتيجة", alwaysVisible: true, cell: l => resultBadge(l.result) },
+    { id: "by", header: "المسح بواسطة", cell: l => <span className="text-sm">{l.scannedByName}</span> },
+  ];
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6" dir="rtl">
+    <div className="mx-auto max-w-6xl space-y-5" dir="rtl" data-testid="scan-logs-page">
       <PageHeader
         title="سجل المسحات"
         description="عرض كل مسحات QR الخاصة بك"
-        icon={<QrCode className="h-5 w-5" />}
-      />
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <StatCard label="إجمالي المسحات" value={stats.total} />
-        <StatCard label="نجح" value={stats.success} tone="success" />
-        <StatCard label="مكرر" value={stats.duplicate} tone="warning" />
-        <StatCard label="فشل" value={stats.failed} tone="danger" />
-        <StatCard label="ملغي" value={stats.cancelled} tone="danger" />
-      </div>
-
-      {/* Filters */}
-      <Card className="mb-6 border-0 shadow-sm">
-        <CardHeader className="pb-3 pt-4">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Filter className="h-4 w-4" />
-            الفلاتر
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pb-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute right-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="ابحث عن رقم أوردر أو رقم تسلسلي..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pr-10"
-              />
-            </div>
-
-            {/* Result Filter */}
-            <Select value={resultFilter} onValueChange={setResultFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="النتيجة" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">الكل</SelectItem>
-                <SelectItem value="success">✓ نجح</SelectItem>
-                <SelectItem value="duplicate">⚠️ مكرر</SelectItem>
-                <SelectItem value="failed">❌ فشل</SelectItem>
-                <SelectItem value="cancelled">🚫 ملغي</SelectItem>
-              </SelectContent>
-            </Select>
-
-            {/* Date From */}
-            <div className="relative">
-              <Calendar className="absolute right-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="pr-10"
-              />
-            </div>
-
-            {/* Date To */}
-            <div className="relative">
-              <Calendar className="absolute right-3 top-3 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="pr-10"
-              />
-            </div>
-          </div>
-
-          <div className="flex gap-2 mt-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setSearch("");
-                setResultFilter("all");
-                setDateFrom("");
-                setDateTo("");
-              }}
-              className="gap-1"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
+        icon={<QrCode className="h-5 w-5" aria-hidden="true" />}
+        actions={
+          <>
+            <Button type="button" variant="outline" size="sm" onClick={() => { setSearch(""); setResultFilter("all"); setDateFrom(""); setDateTo(""); }} className={`${TOUCH} gap-1`}>
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
               إعادة تعيين
             </Button>
-            <Button
-              size="sm"
-              onClick={handleExportCSV}
-              className="gap-1"
-            >
-              <Download className="h-3.5 w-3.5" />
+            <Button type="button" size="sm" onClick={handleExportCSV} className={`${TOUCH} gap-1`} disabled={filteredLogs.length === 0}>
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
               تصدير CSV
             </Button>
-          </div>
-        </CardContent>
-      </Card>
+          </>
+        }
+      >
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-5" aria-label="ملخص المسحات" data-testid="scan-summary">
+          <StatCard label="إجمالي المسحات" value={Number(stats.total).toLocaleString("ar-EG")} hint="من stats الاستعلام" loading={isLoading} />
+          <StatCard label="نجح" value={Number(stats.success).toLocaleString("ar-EG")} tone="success" loading={isLoading} />
+          <StatCard label="مكرر" value={Number(stats.duplicate).toLocaleString("ar-EG")} tone="warning" loading={isLoading} />
+          <StatCard label="فشل" value={Number(stats.failed).toLocaleString("ar-EG")} tone="danger" loading={isLoading} />
+          <StatCard label="ملغي" value={Number(stats.cancelled).toLocaleString("ar-EG")} tone="danger" loading={isLoading} />
+        </section>
+      </PageHeader>
 
-      {/* Logs Table */}
-      <Card className="border-0 shadow-sm">
-        <CardHeader className="pb-3 pt-4">
-          <CardTitle className="text-base">
-            {filteredLogs.length} مسح
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pb-4">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="text-muted-foreground">جاري التحميل...</div>
-            </div>
-          ) : filteredLogs.length === 0 ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="text-center">
-                <p className="text-muted-foreground">لا توجد مسحات</p>
+      {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}
+
+      {/* Filters */}
+      <SectionCard title="الفلاتر" testId="scan-filters">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4 [&_input]:min-h-11 md:[&_input]:min-h-9 [&_[role=combobox]]:min-h-11 md:[&_[role=combobox]]:min-h-9">
+          <SearchInput value={search} onChange={setSearch} placeholder="ابحث عن رقم أوردر أو رقم تسلسلي..." debounceMs={200} />
+          <div>
+            <Label htmlFor="scan-result" className="sr-only">النتيجة</Label>
+            <Select value={resultFilter} onValueChange={setResultFilter}>
+              <SelectTrigger id="scan-result" aria-label="النتيجة"><SelectValue placeholder="النتيجة" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل النتائج</SelectItem>
+                <SelectItem value="success">نجح</SelectItem>
+                <SelectItem value="duplicate">مكرر</SelectItem>
+                <SelectItem value="failed">فشل</SelectItem>
+                <SelectItem value="cancelled">ملغي</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="scan-from" className="sr-only">من تاريخ</Label>
+            <Input id="scan-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} aria-label="من تاريخ" />
+          </div>
+          <div>
+            <Label htmlFor="scan-to" className="sr-only">إلى تاريخ</Label>
+            <Input id="scan-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} aria-label="إلى تاريخ" />
+          </div>
+        </div>
+      </SectionCard>
+
+      {/* Logs */}
+      <SectionCard title={`${filteredLogs.length.toLocaleString("ar-EG")} مسح`} flush testId="scan-logs-list">
+        <ResponsiveDataTable<ScanLog>
+          rows={filteredLogs}
+          columns={columns}
+          rowKey={l => l.id}
+          loading={isLoading}
+          error={isError ? ((error as any)?.message || "تعذّر تحميل سجل المسحات") : null}
+          onRetry={() => refetch()}
+          empty={{ title: "لا توجد مسحات", description: "عدّل الفلاتر أو ابدأ المسح من شاشة التجهيز." }}
+          cardsBelow="md"
+          mobileRow={l => (
+            <article className="space-y-1.5 rounded-[var(--radius-brand-md)] border border-border bg-card p-3" data-testid={`scan-card-${l.id}`} data-result={l.result}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-semibold">{l.order?.customerName || "-"}</p>
+                  <p className="font-mono text-xs text-muted-foreground" dir="ltr">{l.order ? `#${l.order.orderNumber} · ` : ""}{l.serialNumber}</p>
+                </div>
+                {resultBadge(l.result)}
               </div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border bg-muted/50">
-                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">التاريخ والوقت</th>
-                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">الرقم التسلسلي</th>
-                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">رقم الأوردر</th>
-                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">العميل</th>
-                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">النتيجة</th>
-                    <th className="text-right py-3 px-4 font-semibold text-muted-foreground">المسح بواسطة</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredLogs.map((log) => {
-                    const colors = resultColors[log.result];
-                    return (
-                      <tr
-                        key={log.id}
-                        className={`border-b border-border hover:bg-muted/30 transition-colors ${colors.bg}`}
-                      >
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2 text-foreground">
-                            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                            {new Date(log.createdAt).toLocaleString("ar-EG")}
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 font-mono text-foreground dir-ltr">{log.serialNumber}</td>
-                        <td className="py-3 px-4">
-                          {log.order ? (
-                            <Badge variant="outline" className="text-xs">
-                              #{log.order.orderNumber}
-                            </Badge>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="text-foreground">
-                            {log.order?.customerName || "-"}
-                          </div>
-                          <div className="text-xs text-muted-foreground dir-ltr">
-                            {log.order?.customerPhone || "-"}
-                          </div>
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-1.5">
-                            {resultIcons[log.result]}
-                            <Badge className={colors.badge}>
-                              {resultLabels[log.result]}
-                            </Badge>
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 text-foreground">{log.scannedByName}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+              <p className="text-xs tabular-nums text-muted-foreground">{new Date(l.createdAt).toLocaleString("ar-EG")} · {l.scannedByName}</p>
+              {l.order?.customerPhone && <p className="text-xs text-muted-foreground" dir="ltr">{l.order.customerPhone}</p>}
+            </article>
           )}
-        </CardContent>
-      </Card>
+        />
+      </SectionCard>
     </div>
   );
 }

@@ -7,43 +7,22 @@ import type { AgentGroup, ShipmentOrder } from "@/lib/shippingOperations";
  * كشف شحنات اليوم — كارت لكل شركة شحن (محافظاتها + جدول أوردراتها + إجمالي) + الإجمالي الكلي.
  *
  * مكوّن عرض واحد لجمهورين: صفحة بوابة الموظفين (TodayShipments) وتبويب «شحنات اليوم» في
- * Operations workspace. اتنقل من TodayShipments كما هو — نفس الشكل ونفس سلوك الطباعة.
- * الصفحة المستضيفة مسؤولة عن البيانات والتحميل والحالة الفاضية.
+ * Operations workspace. الصفحة المستضيفة مسؤولة عن البيانات والتحميل والحالة الفاضية.
+ *
+ * المرحلة 7D: ألوان الوكلاء من tokens الرسوم (--chart-1..4) بدل لوحات Tailwind الخام — تعمل في
+ * الوضعين الفاتح/الداكن ومع الألوان الأربعة؛ الجدول يبقى جدول كشف (طباعة) داخل حاوية تتمرر أفقيًا.
  */
 
-const AGENT_COLORS: Record<string, { bg: string; border: string; text: string; badge: string; headerBg: string }> = {
-  "الشبح": {
-    bg: "bg-blue-50",
-    border: "border-blue-200",
-    text: "text-blue-800",
-    badge: "bg-blue-600",
-    headerBg: "bg-gradient-to-r from-blue-700 to-blue-900",
-  },
-  "العالمية": {
-    bg: "bg-emerald-50",
-    border: "border-emerald-200",
-    text: "text-emerald-800",
-    badge: "bg-emerald-600",
-    headerBg: "bg-gradient-to-r from-emerald-700 to-emerald-900",
-  },
-  "المتخصص": {
-    bg: "bg-amber-50",
-    border: "border-amber-200",
-    text: "text-amber-800",
-    badge: "bg-amber-600",
-    headerBg: "bg-gradient-to-r from-amber-700 to-amber-900",
-  },
-  "غير محدد": {
-    bg: "bg-muted/50",
-    border: "border-border",
-    text: "text-foreground",
-    badge: "bg-gray-600",
-    headerBg: "bg-gradient-to-r from-gray-600 to-gray-800",
-  },
+const AGENT_TOKEN: Record<string, string> = {
+  "الشبح": "--chart-2",
+  "العالمية": "--chart-3",
+  "المتخصص": "--chart-4",
+  "غير محدد": "--chart-5",
 };
+const FALLBACK_TOKENS = ["--chart-1", "--chart-2", "--chart-3", "--chart-4", "--chart-5"];
 
-function getAgentColor(name: string) {
-  return AGENT_COLORS[name] || AGENT_COLORS["غير محدد"];
+function agentToken(name: string, index: number) {
+  return AGENT_TOKEN[name] ?? FALLBACK_TOKENS[index % FALLBACK_TOKENS.length];
 }
 
 /** Classify product as سادة or حفر */
@@ -61,54 +40,57 @@ export function ShipmentsManifest({ agents, totalOrders }: { agents: AgentGroup[
   };
 
   return (
-    <div className="space-y-6">
-      {agents.map((agent: AgentGroup) => {
-        const colors = getAgentColor(agent.agentName);
+    <div className="space-y-5" data-testid="shipments-manifest">
+      {agents.map((agent: AgentGroup, agentIndex: number) => {
+        const token = agentToken(agent.agentName, agentIndex);
         const isExpanded = expandedAgents[agent.agentName] !== false; // default expanded
+        const tint = { background: `color-mix(in srgb, var(${token}) 10%, transparent)` };
+        const edge = { borderColor: `var(${token})` };
 
         return (
-          <div
+          <section
             key={agent.agentName}
-            className={`rounded-xl border-2 ${colors.border} overflow-hidden shadow-sm print:break-inside-avoid`}
+            className="overflow-hidden rounded-[var(--radius-brand-md)] border border-border bg-card shadow-[var(--shadow-card)] print:break-inside-avoid"
+            style={{ borderInlineStartWidth: 4, ...edge }}
+            data-testid={`manifest-agent-${agentIndex}`}
           >
             {/* Agent Header */}
             <button
+              type="button"
               onClick={() => toggleAgent(agent.agentName)}
-              className={`w-full ${colors.headerBg} text-white px-4 py-3 flex items-center justify-between print:bg-gray-800`}
+              className="flex min-h-11 w-full items-center justify-between gap-3 px-4 py-3 text-start"
+              aria-expanded={isExpanded}
+              style={tint}
             >
-              <div className="flex items-center gap-3">
-                <Truck className="h-5 w-5" />
-                <span className="text-lg font-bold">{agent.agentName}</span>
-                <Badge className="bg-white/20 text-white border-none text-sm">
+              <div className="flex min-w-0 items-center gap-3">
+                <Truck className="h-5 w-5 shrink-0" style={{ color: `var(${token})` }} aria-hidden="true" />
+                <span className="truncate text-lg font-bold">{agent.agentName}</span>
+                <Badge variant="secondary" className="shrink-0 text-sm tabular-nums">
                   {agent.orderCount} أوردر
                 </Badge>
               </div>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium opacity-90">
-                  إجمالي: {agent.totalAmount.toLocaleString()} ج.م
+              <div className="flex shrink-0 items-center gap-3">
+                <span className="text-sm font-medium tabular-nums text-muted-foreground">
+                  إجمالي: {agent.totalAmount.toLocaleString("ar-EG")} ج.م
                 </span>
                 {isExpanded ? (
-                  <ChevronUp className="h-5 w-5 print:hidden" />
+                  <ChevronUp className="h-5 w-5 print:hidden" aria-hidden="true" />
                 ) : (
-                  <ChevronDown className="h-5 w-5 print:hidden" />
+                  <ChevronDown className="h-5 w-5 print:hidden" aria-hidden="true" />
                 )}
               </div>
             </button>
 
             {/* Governorates served today */}
             {isExpanded && agent.governorates.length > 0 && (
-              <div className={`${colors.bg} px-4 py-2 border-b ${colors.border}`}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`text-xs font-medium ${colors.text}`}>
-                    <MapPin className="h-3 w-3 inline ml-1" />
+              <div className="border-b border-border px-4 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    <MapPin className="ml-1 inline h-3 w-3" aria-hidden="true" />
                     محافظات اليوم:
                   </span>
                   {agent.governorates.map((gov: string) => (
-                    <Badge
-                      key={gov}
-                      variant="outline"
-                      className={`text-xs ${colors.border} ${colors.text} bg-white/60`}
-                    >
+                    <Badge key={gov} variant="outline" className="text-xs">
                       {gov}
                     </Badge>
                   ))}
@@ -116,62 +98,55 @@ export function ShipmentsManifest({ agents, totalOrders }: { agents: AgentGroup[
               </div>
             )}
 
-            {/* Orders Table */}
+            {/* Orders Table — كشف للطباعة؛ يتمرر داخل حاويته ولا يوسّع الصفحة */}
             {isExpanded && (
               <div className="overflow-x-auto">
                 {agent.orders.length === 0 ? (
-                  <div className={`${colors.bg} px-4 py-8 text-center`}>
-                    <p className={`${colors.text} text-sm`}>لا توجد أوردرات لهذا الوكيل اليوم</p>
+                  <div className="px-4 py-8 text-center">
+                    <p className="text-sm text-muted-foreground">لا توجد أوردرات لهذا الوكيل اليوم</p>
                   </div>
                 ) : (
-                  <table className="w-full text-sm">
+                  <table className="w-full min-w-[40rem] text-sm">
                     <thead>
-                      <tr className={`${colors.bg} border-b ${colors.border}`}>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text}`}>#</th>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text}`}>رقم الأوردر</th>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text}`}>العميل</th>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text}`}>التليفون</th>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text}`}>المحافظة</th>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text}`}>القطعة</th>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text}`}>الكمية</th>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text}`}>الإجمالي</th>
-                        <th className={`px-3 py-2 text-right font-semibold ${colors.text} print:hidden`}>ملاحظات</th>
+                      <tr className="border-b border-border bg-muted/40">
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground">#</th>
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground">رقم الأوردر</th>
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground">العميل</th>
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground">التليفون</th>
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground">المحافظة</th>
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground">القطعة</th>
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground">الكمية</th>
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground">الإجمالي</th>
+                        <th className="px-3 py-2 text-right font-semibold text-muted-foreground print:hidden">ملاحظات</th>
                       </tr>
                     </thead>
                     <tbody>
                       {agent.orders.map((order: ShipmentOrder, idx: number) => (
-                        <tr
-                          key={order.id}
-                          className={`border-b border-stone-100 ${idx % 2 === 0 ? "bg-card" : colors.bg} hover:bg-stone-50 transition-colors`}
-                        >
-                          <td className="px-3 py-2 text-stone-500 font-mono text-xs">{idx + 1}</td>
-                          <td className="px-3 py-2 font-medium text-stone-800">{order.orderNumber}</td>
-                          <td className="px-3 py-2 text-stone-700">{order.customerName}</td>
-                          <td className="px-3 py-2 text-stone-600 font-mono text-xs" dir="ltr">
-                            <a href={`tel:${order.customerPhone}`} className="hover:text-amber-700">
+                        <tr key={order.id} className="border-b border-border/60 transition-colors hover:bg-muted/30">
+                          <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{idx + 1}</td>
+                          <td className="px-3 py-2 font-medium">{order.orderNumber}</td>
+                          <td className="px-3 py-2">{order.customerName}</td>
+                          <td className="px-3 py-2 font-mono text-xs text-muted-foreground" dir="ltr">
+                            <a href={`tel:${order.customerPhone}`} className="inline-flex min-h-11 items-center hover:text-primary-text md:min-h-0">
                               {order.customerPhone}
                             </a>
                           </td>
                           <td className="px-3 py-2">
-                            <Badge variant="outline" className="text-xs">
-                              {order.governorate}
-                            </Badge>
+                            <Badge variant="outline" className="text-xs">{order.governorate}</Badge>
                           </td>
-                          <td className="px-3 py-2 text-stone-700 text-xs">
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-                              classifyProduct(order.productName) === "سادة"
-                                ? "bg-stone-100 text-stone-700"
-                                : "bg-amber-100 text-amber-800"
+                          <td className="px-3 py-2 text-xs">
+                            <span className={`inline-flex items-center gap-1 rounded-[var(--radius-brand-pill)] px-2 py-0.5 text-xs font-medium ${
+                              classifyProduct(order.productName) === "سادة" ? "bg-muted text-muted-foreground" : "bg-accent text-accent-foreground"
                             }`}>
                               {classifyProduct(order.productName)}
                               <span className="text-[10px] opacity-70">× {order.quantity}</span>
                             </span>
                           </td>
-                          <td className="px-3 py-2 text-center text-stone-700">{order.quantity}</td>
-                          <td className="px-3 py-2 font-semibold text-stone-800">
-                            {Number(order.totalAmount).toLocaleString()} ج.م
+                          <td className="px-3 py-2 text-center tabular-nums">{order.quantity}</td>
+                          <td className="px-3 py-2 font-semibold tabular-nums">
+                            {Number(order.totalAmount).toLocaleString("ar-EG")} ج.م
                           </td>
-                          <td className="px-3 py-2 text-stone-500 text-xs max-w-[150px] truncate print:hidden">
+                          <td className="max-w-[150px] truncate px-3 py-2 text-xs text-muted-foreground print:hidden">
                             {order.notes || "—"}
                           </td>
                         </tr>
@@ -179,15 +154,15 @@ export function ShipmentsManifest({ agents, totalOrders }: { agents: AgentGroup[
                     </tbody>
                     {/* Summary Row */}
                     <tfoot>
-                      <tr className={`${colors.bg} border-t-2 ${colors.border} font-bold`}>
-                        <td colSpan={6} className={`px-3 py-2 text-right ${colors.text}`}>
+                      <tr className="border-t-2 border-border font-bold" style={tint}>
+                        <td colSpan={6} className="px-3 py-2 text-right">
                           الإجمالي ({agent.orderCount} أوردر)
                         </td>
-                        <td className={`px-3 py-2 text-center ${colors.text}`}>
+                        <td className="px-3 py-2 text-center tabular-nums">
                           {agent.orders.reduce((sum: number, o: ShipmentOrder) => sum + o.quantity, 0)}
                         </td>
-                        <td className={`px-3 py-2 ${colors.text}`}>
-                          {agent.totalAmount.toLocaleString()} ج.م
+                        <td className="px-3 py-2 tabular-nums">
+                          {agent.totalAmount.toLocaleString("ar-EG")} ج.م
                         </td>
                         <td className="print:hidden"></td>
                       </tr>
@@ -196,25 +171,25 @@ export function ShipmentsManifest({ agents, totalOrders }: { agents: AgentGroup[
                 )}
               </div>
             )}
-          </div>
+          </section>
         );
       })}
 
       {/* Grand Total */}
-      <div className="bg-gradient-to-r from-stone-800 to-stone-900 text-white rounded-xl px-6 py-4 flex items-center justify-between shadow-lg">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-brand-md)] border border-primary/30 bg-accent px-5 py-4 text-accent-foreground shadow-[var(--shadow-card)]" data-testid="manifest-total">
         <div className="flex items-center gap-3">
-          <Package className="h-6 w-6 text-amber-400" />
+          <Package className="h-6 w-6 text-primary-text" aria-hidden="true" />
           <span className="text-lg font-bold">الإجمالي الكلي</span>
         </div>
-        <div className="flex items-center gap-6 text-sm">
+        <div className="flex flex-wrap items-center gap-6 text-sm">
           <div>
-            <span className="text-stone-400 ml-1">عدد الأوردرات:</span>
-            <span className="font-bold text-lg">{totalOrders}</span>
+            <span className="ml-1 text-muted-foreground">عدد الأوردرات:</span>
+            <span className="text-lg font-bold tabular-nums">{totalOrders.toLocaleString("ar-EG")}</span>
           </div>
           <div>
-            <span className="text-stone-400 ml-1">المبلغ:</span>
-            <span className="font-bold text-lg text-amber-400">
-              {agents.reduce((sum: number, a: AgentGroup) => sum + a.totalAmount, 0).toLocaleString()} ج.م
+            <span className="ml-1 text-muted-foreground">المبلغ:</span>
+            <span className="text-lg font-bold tabular-nums text-primary-text">
+              {agents.reduce((sum: number, a: AgentGroup) => sum + a.totalAmount, 0).toLocaleString("ar-EG")} ج.م
             </span>
           </div>
         </div>

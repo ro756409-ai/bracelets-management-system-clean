@@ -47,13 +47,13 @@ export default function TodayShipmentsWorkspace() {
       description="الأوردرات المؤكدة موزّعة على شركات الشحن حسب جدول اليوم."
       icon={<Truck className="h-5 w-5" />}
       primaryAction={
-        <Button size="sm" className="gap-1.5 print:hidden" onClick={() => window.print()}>
+        <Button size="sm" className="min-h-11 md:min-h-9 gap-1.5 print:hidden" onClick={() => window.print()}>
           <Printer className="h-3.5 w-3.5" />
           طباعة
         </Button>
       }
       actions={
-        <Button variant="outline" size="sm" className="gap-1.5 print:hidden" onClick={() => shipments.refetch()}>
+        <Button variant="outline" size="sm" className="min-h-11 md:min-h-9 gap-1.5 print:hidden" onClick={() => shipments.refetch()}>
           <RefreshCw className="h-3.5 w-3.5" />
           تحديث
         </Button>
@@ -67,13 +67,13 @@ export default function TodayShipmentsWorkspace() {
           onSearch={setSearch}
           searchPlaceholder="بحث بالاسم أو التليفون أو رقم الأوردر..."
           filters={
-            <label className="flex h-9 shrink-0 items-center gap-2 rounded-md border border-input bg-background px-3">
+            <label className="flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-input bg-background px-3 md:min-h-9">
               <Calendar className="h-4 w-4 text-muted-foreground" />
               <input
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent text-sm font-medium outline-none"
+                className="min-h-11 bg-transparent text-sm font-medium outline-none md:min-h-9"
                 aria-label="تاريخ الشحن"
               />
             </label>

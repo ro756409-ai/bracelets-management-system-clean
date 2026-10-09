@@ -21,6 +21,9 @@ import {
   WhatsAppButton,
 } from "@/components/shared";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { PartnerLogo } from "@/components/brand";
+
+const TOUCH = "min-h-11 md:min-h-9";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 
 type BostaCategory =
@@ -66,7 +69,8 @@ function CategoryBadge({ order }: { order: any }) {
   return (
     <div className="flex flex-col gap-1">
       <span
-        className={`inline-flex w-fit items-center px-2 py-0.5 rounded-full text-xs font-medium ${tone.bg} ${tone.text}`}
+        className={`inline-flex w-fit items-center rounded-[var(--radius-brand-pill)] px-2 py-0.5 text-xs font-medium ${tone.bg} ${tone.text}`}
+        data-category={cat}
       >
         {CATEGORY_LABELS[cat]}
       </span>
@@ -224,12 +228,12 @@ export default function BostaOrders() {
             phone={order.customerPhone}
             iconOnly
             size="icon-sm"
-            className="h-7 w-7"
+            className="min-h-11 min-w-11 md:min-h-8 md:min-w-8"
           />
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 w-7 p-0 text-[var(--info)] hover:bg-[var(--info)]/10"
+            className="min-h-11 min-w-11 p-0 text-[var(--info)] hover:bg-[var(--info)]/10 md:min-h-8 md:min-w-8"
             onClick={() => setLocation(`/order/${order.id}`)}
             title="عرض تفاصيل الأوردر"
             aria-label="عرض تفاصيل الأوردر"
@@ -240,7 +244,7 @@ export default function BostaOrders() {
             <Button
               size="sm"
               variant="ghost"
-              className="h-7 w-7 p-0 text-primary hover:bg-primary/10"
+              className="min-h-11 min-w-11 p-0 text-primary hover:bg-primary/10 md:min-h-8 md:min-w-8"
               onClick={() =>
                 window.open(
                   `/api/orders/${order.id}/bosta-awb`,
@@ -263,7 +267,8 @@ export default function BostaOrders() {
     <div className="space-y-6">
       <PageHeader
         title="طلبات بوسطة"
-        description={`إجمالي: ${total.toLocaleString("ar-EG")} طلب`}
+        description={`إجمالي: ${total.toLocaleString("ar-EG")} طلب — الأوردرات التي أُرسلت فعلًا إلى بوسطة`}
+        icon={<PartnerLogo partner="bosta" size="sm" decorative />}
       >
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <StatCard
@@ -335,7 +340,7 @@ export default function BostaOrders() {
             setPage(1);
           }}
           placeholder="بحث برقم التتبع، الهاتف، أو رقم الأوردر"
-          className="w-64"
+          className="w-full sm:w-64 [&_input]:min-h-11 md:[&_input]:min-h-9"
         />
         <Select
           value={governorate ?? "all"}
@@ -344,7 +349,7 @@ export default function BostaOrders() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-40 h-9">
+          <SelectTrigger className={`w-40 ${TOUCH}`} aria-label="المحافظة">
             <SelectValue placeholder="المحافظة" />
           </SelectTrigger>
           <SelectContent>
@@ -357,7 +362,7 @@ export default function BostaOrders() {
           </SelectContent>
         </Select>
         {category && (
-          <Button
+          <Button className="min-h-11 md:min-h-9"
             variant="ghost"
             size="sm"
             onClick={() => setCategory(undefined)}
@@ -376,6 +381,7 @@ export default function BostaOrders() {
           title: "لا توجد طلبات بوسطة",
           description: "لسه مفيش أي أوردر اتبعت لبوسطة يطابق الفلتر الحالي",
         }}
+        cardsBelow="md"
         mobileRow={(order: any) => (
           <MobileOrderCard
             orderNumber={order.orderNumber}
@@ -401,7 +407,7 @@ export default function BostaOrders() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 gap-1"
+                  className="min-h-11 gap-1"
                   onClick={() => setLocation(`/order/${order.id}`)}
                 >
                   <Eye className="h-3.5 w-3.5" /> تفاصيل
@@ -410,7 +416,7 @@ export default function BostaOrders() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 gap-1"
+                    className="min-h-11 gap-1"
                     onClick={() =>
                       window.open(
                         `/api/orders/${order.id}/bosta-awb`,
