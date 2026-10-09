@@ -201,7 +201,15 @@ export function applicationState(snapshot: SchemaSnapshot): ApplicationState {
   const tables = LEDGER_V3_TABLES.filter(t => snapshot.tables.has(t)).length;
   const oldIdx = LEDGER_V3_OLD_TABLE_INDEXES.filter(i => Boolean(snapshot.uniques[i.table]?.[i.name])).length;
   const total = tables + oldIdx, max = LEDGER_V3_TABLES.length + LEDGER_V3_OLD_TABLE_INDEXES.length;
+  // الفهرسان المركّبان قد يسبقان 0040 (ينشئهما 0041 إن كانا غائبين): وجودهما **بالتعريف الصحيح** بلا أي جدول ledger_*
+  // = غير مطبَّقة (عبارتاهما تُتخطّيان عند التطبيق). واحد فقط أو تعريف مختلف = partial.
+  if (tables === 0 && oldIdx === LEDGER_V3_OLD_TABLE_INDEXES.length && compositeIndexesCorrect(snapshot)) return "not_applied";
   return total === 0 ? "not_applied" : total === max ? "applied" : "partial";
+}
+
+/** الفهرسان المركّبان موجودان بنفس الأعمدة والترتيب المطلوبين؟ */
+export function compositeIndexesCorrect(snapshot: SchemaSnapshot): boolean {
+  return LEDGER_V3_OLD_TABLE_INDEXES.every(i => (snapshot.uniques[i.table]?.[i.name] ?? []).join(",") === i.columns.join(","));
 }
 
 /** صورة قاعدة البيانات كما يقرؤها information_schema (مُحمَّلة من الخارج). */

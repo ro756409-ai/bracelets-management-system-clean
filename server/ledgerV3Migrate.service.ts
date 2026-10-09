@@ -1,6 +1,6 @@
 import mysql from "mysql2/promise";
 import { looksLikeProductionTarget } from "../shared/balanceReconciliation";
-import { splitMigrationStatements, type ApplicationState, type VerifyIssue } from "../shared/ledgerV3Spec";
+import { LEDGER_V3_OLD_TABLE_INDEXES, splitMigrationStatements, type ApplicationState, type VerifyIssue } from "../shared/ledgerV3Spec";
 import { openReadOnlyExecutor } from "./balanceReconciliation.service";
 import { verifyLedgerV3OnDatabase } from "./ledgerV3Verify.service";
 
@@ -55,6 +55,16 @@ async function statementTable(conn: mysql.Connection, sqlText: string): Promise<
   return out;
 }
 
+/** أعمدة فهرس فريد بالترتيب ("" لو غير موجود أو غير فريد). */
+async function indexColumns(conn: mysql.Connection, table: string, name: string): Promise<string> {
+  const [rows] = await conn.query(
+    "SELECT COLUMN_NAME c FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? AND NON_UNIQUE = 0 ORDER BY SEQ_IN_INDEX",
+    [table, name]
+  );
+  return (rows as any[]).map(r => r.c).join(",");
+}
+const expectedIndexColumns = (name: string) => LEDGER_V3_OLD_TABLE_INDEXES.find(i => i.name === name)?.columns.join(",") ?? "\u0000";
+
 const fmt = (s: StatementStatus) => `  ${s.present ? "✓" : "✗"} [${s.n}/9] ${s.kind === "index" ? `فهرس فريد ${s.table}.${s.name}` : `جدول ${s.name}`} — ${s.present ? "منفَّذ" : "ناقص"}`;
 
 const looksLikeStaging = (database: string) => /staging|stage|test/i.test(database);
@@ -103,6 +113,12 @@ export async function runMigrate0040(opts: { databaseUrl: string; mode: MigrateM
     const described = describeStatements(opts.sqlText);
     let applied = 0;
     for (const [i, s] of described.entries()) {
+      // الفهرس المركّب موجود مسبقًا بالتعريف الصحيح (أنشأه 0041) → تخطٍّ لعبارته فقط؛ لا تعديل لجداول Ledger.
+      if (s.kind === "index" && (await indexColumns(conn, s.table, s.name)) === expectedIndexColumns(s.name)) {
+        applied++;
+        lines.push(`  ↷ [${i + 1}/9] فهرس فريد ${s.table}.${s.name} — موجود مسبقًا بالتعريف الصحيح (skip)`);
+        continue;
+      }
       try {
         await conn.query(s.sql);
       } catch (e: any) {

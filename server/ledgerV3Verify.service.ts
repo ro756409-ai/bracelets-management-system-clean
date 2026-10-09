@@ -57,7 +57,15 @@ export async function ledgerV3Preflight(exec: ReadOnlyExecutor): Promise<{ label
   const nullEmpTenant = await one<{ n: number }>(`SELECT COUNT(*) n FROM employees WHERE tenantId IS NULL`);
   const orphanBiz = await one<{ n: number }>(`SELECT COUNT(*) n FROM businesses b LEFT JOIN tenants t ON t.id = b.tenantId WHERE b.tenantId IS NOT NULL AND t.id IS NULL`);
   const orphanEmp = await one<{ n: number }>(`SELECT COUNT(*) n FROM employees e LEFT JOIN tenants t ON t.id = e.tenantId WHERE e.tenantId IS NOT NULL AND t.id IS NULL`);
-  const oldIdx = await one<{ n: number }>(`SELECT COUNT(DISTINCT INDEX_NAME) n FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME IN ('businesses_tenant_id','employees_tenant_id')`);
+  // الفهرسان المركّبان: غائبان، أو موجودان **بالتعريف الصحيح** (أنشأهما 0041 — عبارتاهما تُتخطّيان). غير ذلك = مانع.
+  const idxRows = await exec.query<{ TABLE_NAME: string; INDEX_NAME: string; COLUMN_NAME: string; NON_UNIQUE: number }>(
+    `SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME IN ('businesses_tenant_id','employees_tenant_id') ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`
+  );
+  const idxCols: Record<string, string[]> = {};
+  for (const r of idxRows) (idxCols[`${r.TABLE_NAME}.${r.INDEX_NAME}:${Number(r.NON_UNIQUE)}`] ??= []).push(r.COLUMN_NAME);
+  const presentIdx = new Set(idxRows.map(r => r.INDEX_NAME)).size;
+  const correctIdx = LEDGER_V3_OLD_TABLE_INDEXES.filter(i => (idxCols[`${i.table}.${i.name}:0`] ?? []).join(",") === i.columns.join(",")).length;
+  const oldIdxState = presentIdx === 0 ? "0" : correctIdx === LEDGER_V3_OLD_TABLE_INDEXES.length && presentIdx === correctIdx ? "2 صحيحان" : `${presentIdx} (تعريف غير مكتمل/مختلف)`;
   const fkChecks = await one<{ v: number }>(`SELECT @@foreign_key_checks v`);
   const idTypes = await exec.query<{ TABLE_NAME: string; COLUMN_TYPE: string }>(
     `SELECT TABLE_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'id' AND TABLE_NAME IN ('tenants','businesses','employees')`
@@ -66,7 +74,7 @@ export async function ledgerV3Preflight(exec: ReadOnlyExecutor): Promise<{ label
   const rows = [
     { label: "جداول ledger_* موجودة مسبقًا", expected: "0", actual: String(Number(existing?.n ?? 0)) },
     { label: "الجداول المرجعية tenants/businesses/employees", expected: "3", actual: String(Number(base?.n ?? 0)) },
-    { label: "الفهرسان المركّبان businesses_tenant_id/employees_tenant_id موجودان مسبقًا", expected: "0", actual: String(Number(oldIdx?.n ?? 0)) },
+    { label: "الفهرسان المركّبان businesses_tenant_id/employees_tenant_id: غائبان أو موجودان بالتعريف الصحيح", expected: oldIdxState === "2 صحيحان" ? "2 صحيحان" : "0", actual: oldIdxState },
     { label: "businesses.tenantId = NULL", expected: "0", actual: String(Number(nullBizTenant?.n ?? 0)) },
     { label: "employees.tenantId = NULL", expected: "0", actual: String(Number(nullEmpTenant?.n ?? 0)) },
     { label: "أنشطة يتيمة (tenantId لا يشير إلى tenant)", expected: "0", actual: String(Number(orphanBiz?.n ?? 0)) },
