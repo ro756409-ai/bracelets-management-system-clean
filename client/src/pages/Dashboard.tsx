@@ -7,8 +7,7 @@ import { useLocation } from "wouter";
 import { useState, useMemo } from "react";
 import {
   ShoppingCart, CheckCircle, Clock, Package, TrendingUp, Users, RefreshCw,
-  Phone, MapPin, CheckCircle2, Download, Truck, PackageCheck, BarChart3, Briefcase, Boxes, Wallet,
-} from "lucide-react";
+  Phone, MapPin, CheckCircle2, Download, Truck, PackageCheck, BarChart3, Briefcase, Boxes, Wallet, Megaphone } from "lucide-react";
 import DateRangePicker, { DateRange as PickerRange } from "@/components/DateRangePicker";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -467,7 +466,7 @@ export default function Dashboard() {
         <details className="rounded-[var(--radius-brand-lg)] border border-border bg-card" data-testid="dashboard-owner-tools">
           <summary className="flex min-h-11 cursor-pointer list-none items-center px-5 py-3 text-sm font-semibold text-foreground">
             <span className="inline-flex items-center gap-2">
-              <span className="text-base" aria-hidden="true">📢</span> رسالة للفريق وأدوات
+              <Megaphone className="h-4 w-4 text-primary" aria-hidden="true" /> رسالة للفريق وأدوات
             </span>
           </summary>
           <div className="space-y-3 border-t border-border p-5">

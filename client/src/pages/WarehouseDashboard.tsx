@@ -159,7 +159,7 @@ export default function WarehouseDashboard() {
     <div className="min-h-screen bg-background" dir="rtl">
       {/* Header */}
       <header
-        className="text-white px-4 py-3 flex items-center justify-between sticky top-0 z-50 shadow-md"
+        className="sticky top-0 z-50 flex items-center justify-between px-4 py-3 text-primary-foreground shadow-md"
         style={{
           background:
             "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)",
@@ -169,7 +169,7 @@ export default function WarehouseDashboard() {
           <BrandMark className="h-9 w-9" />
           <div>
             <h1 className="font-bold text-sm">متجرك</h1>
-            <p className="text-xs text-white/70">
+            <p className="text-xs text-primary-foreground/70">
               أهلاً، {empSession?.name || "موظف المخزن"}
             </p>
           </div>
@@ -178,7 +178,8 @@ export default function WarehouseDashboard() {
           <Button
             variant="ghost"
             size="sm"
-            className="text-white hover:bg-white/10"
+            className="min-h-11 min-w-11 text-primary-foreground hover:bg-primary-foreground/10 md:min-h-9 md:min-w-9"
+            aria-label="تحديث"
             onClick={() => {
               utils.employeePortal.productsList.invalidate();
               utils.employeePortal.lowStockProducts.invalidate();
@@ -190,7 +191,8 @@ export default function WarehouseDashboard() {
           <Button
             variant="ghost"
             size="sm"
-            className="text-white hover:bg-white/10"
+            className="min-h-11 min-w-11 text-primary-foreground hover:bg-primary-foreground/10 md:min-h-9 md:min-w-9"
+            aria-label="خروج"
             onClick={handleLogout}
           >
             <LogOut className="h-4 w-4" />
@@ -198,15 +200,15 @@ export default function WarehouseDashboard() {
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto p-4 space-y-6">
+      <main className="mx-auto max-w-4xl space-y-6 p-4">
         {/* Stats */}
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-card rounded-xl border p-4 text-center shadow-sm">
+          <div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-4 text-center shadow-[var(--shadow-card)]">
             <Box className="h-6 w-6 mx-auto text-[var(--warning)] mb-1" />
             <p className="text-2xl font-bold text-foreground">{totalStock}</p>
             <p className="text-xs text-muted-foreground">إجمالي المخزون</p>
           </div>
-          <div className="bg-card rounded-xl border p-4 text-center shadow-sm">
+          <div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-4 text-center shadow-[var(--shadow-card)]">
             <AlertTriangle className="h-6 w-6 mx-auto text-destructive mb-1" />
             <p className="text-2xl font-bold text-destructive">
               {lowStockCount}
@@ -217,7 +219,7 @@ export default function WarehouseDashboard() {
 
         {/* Low Stock Alert */}
         {lowStockCount > 0 && (
-          <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-4">
+          <div className="rounded-[var(--radius-brand-md)] border border-destructive/30 bg-destructive/10 p-4" role="status">
             <h3 className="font-bold text-destructive text-sm flex items-center gap-2 mb-2">
               <AlertTriangle className="h-4 w-4" />
               تنبيه: منتجات تحتاج تعبئة
@@ -239,7 +241,7 @@ export default function WarehouseDashboard() {
         )}
 
         {/* Products List */}
-        <div className="bg-card rounded-xl border shadow-sm">
+        <div className="rounded-[var(--radius-brand-md)] border border-border bg-card shadow-[var(--shadow-card)]">
           <div className="p-4 border-b flex items-center justify-between">
             <h2 className="font-bold text-foreground flex items-center gap-2">
               <Package className="h-5 w-5 text-[var(--warning)]" />
@@ -248,7 +250,7 @@ export default function WarehouseDashboard() {
             <Button
               size="sm"
               variant="outline"
-              className="gap-1 text-xs"
+              className="min-h-11 md:min-h-9 gap-1 text-xs"
               onClick={() => {
                 setShowHistory(true);
                 setHistoryProductId(null);
@@ -259,6 +261,9 @@ export default function WarehouseDashboard() {
             </Button>
           </div>
           <div className="divide-y">
+            {(!products || products.length === 0) && (
+              <p className="p-6 text-center text-sm text-muted-foreground">لا توجد منتجات في مخزنك بعد.</p>
+            )}
             {products?.map((product: any) => (
               <div
                 key={product.id}
@@ -284,7 +289,7 @@ export default function WarehouseDashboard() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 w-8 p-0 border-[var(--success)]/30 text-[var(--success)] hover:bg-[var(--success)]/10"
+                    className="min-h-11 md:h-8 min-w-11 md:min-w-8 md:w-8 p-0 border-[var(--success)]/30 text-[var(--success)] hover:bg-[var(--success)]/10"
                     onClick={() => {
                       setSelectedProductId(product.id);
                       setMovementType("in");
@@ -296,7 +301,7 @@ export default function WarehouseDashboard() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 w-8 p-0 border-destructive/30 text-destructive hover:bg-destructive/10"
+                    className="min-h-11 md:h-8 min-w-11 md:min-w-8 md:w-8 p-0 border-destructive/30 text-destructive hover:bg-destructive/10"
                     onClick={() => {
                       setSelectedProductId(product.id);
                       setMovementType("out");
@@ -310,7 +315,7 @@ export default function WarehouseDashboard() {
             ))}
           </div>
         </div>
-      </div>
+      </main>
 
       {/* Movement Dialog */}
       <Dialog open={showMovementDialog} onOpenChange={setShowMovementDialog}>
@@ -339,19 +344,22 @@ export default function WarehouseDashboard() {
               </p>
             </div>
             <div>
-              <Label>الكمية</Label>
+              <Label htmlFor="wh-qty">الكمية</Label>
               <Input
+                id="wh-qty"
                 type="number"
                 min="1"
+                inputMode="numeric"
+                dir="ltr"
                 value={quantity}
                 onChange={e => setQuantity(e.target.value)}
-                className="mt-1"
+                className="mt-1 min-h-11"
               />
             </div>
             <div>
-              <Label>السبب</Label>
+              <Label htmlFor="wh-reason">السبب</Label>
               <Select value={reason} onValueChange={setReason}>
-                <SelectTrigger className="mt-1">
+                <SelectTrigger id="wh-reason" className="mt-1 min-h-11">
                   <SelectValue placeholder="اختر السبب" />
                 </SelectTrigger>
                 <SelectContent>
@@ -368,7 +376,8 @@ export default function WarehouseDashboard() {
               </Select>
               {reason === "custom" && (
                 <Input
-                  className="mt-2"
+                  className="mt-2 min-h-11"
+                  aria-label="سبب آخر"
                   placeholder="اكتب السبب..."
                   value={customReason}
                   onChange={e => setCustomReason(e.target.value)}
@@ -377,7 +386,7 @@ export default function WarehouseDashboard() {
             </div>
           </div>
           <DialogFooter>
-            <Button
+            <Button className="min-h-11 md:min-h-9"
               variant="outline"
               onClick={() => setShowMovementDialog(false)}
             >
@@ -386,11 +395,11 @@ export default function WarehouseDashboard() {
             <Button
               onClick={handleAddMovement}
               disabled={addMovementMutation.isPending}
-              className={
+              className={`min-h-11 md:min-h-9 ${
                 movementType === "in"
-                  ? "bg-[var(--success)] hover:bg-[var(--success)] text-white"
-                  : "bg-destructive hover:bg-destructive text-white"
-              }
+                  ? "bg-[var(--success)] text-[var(--success-foreground,#fff)] hover:opacity-90"
+                  : "bg-destructive text-destructive-foreground hover:opacity-90"
+              }`}
             >
               {addMovementMutation.isPending ? "جاري التسجيل..." : "تأكيد"}
             </Button>
@@ -415,7 +424,7 @@ export default function WarehouseDashboard() {
               movements.map((m: any, i: number) => (
                 <div
                   key={i}
-                  className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
+                  className="flex items-center justify-between rounded-[var(--radius-brand-md)] border border-border bg-muted/30 p-3"
                 >
                   <div className="flex items-center gap-2">
                     {m.type === "in" ? (

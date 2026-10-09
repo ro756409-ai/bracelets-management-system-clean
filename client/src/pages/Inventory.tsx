@@ -1063,7 +1063,7 @@ export default function Inventory() {
       <span className="inline-flex items-center gap-1" data-testid="inv-stock-editor">
         <Input type="number" inputMode="numeric" min="0" value={editStockValue} onChange={e => setEditStockValue(e.target.value)} className="h-9 w-20 text-center text-sm font-bold" autoFocus aria-label="عدد القطع"
           onKeyDown={e => { if (e.key === "Enter") saveEditStock(); if (e.key === "Escape") cancelEditStock(); }} />
-        <Button type="button" size="sm" variant="ghost" className="h-9 w-9 p-0 text-[var(--success)]" onClick={saveEditStock} disabled={updateStockMutation.isPending} aria-label="حفظ عدد القطع"><Save className="h-4 w-4" /></Button>
+        <Button type="button" size="sm" variant="ghost" className="min-h-11 min-w-11 p-0 text-[var(--success)] md:h-9 md:w-9 md:min-h-9 md:min-w-9" onClick={saveEditStock} disabled={updateStockMutation.isPending} aria-label="حفظ عدد القطع"><Save className="h-4 w-4" /></Button>
       </span>
     ) : (
       <span className={`font-bold tabular-nums ${row.status === "low" || row.status === "out" ? "text-destructive" : ""}`}>{fmtN(row.qty)}</span>

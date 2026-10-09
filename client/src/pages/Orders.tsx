@@ -566,7 +566,7 @@ export default function Orders() {
         ...(itemsDirty ? {} : { shippingFees }),
       });
     }
-    toast.success("✅ تم حفظ التعديلات");
+    toast.success("تم حفظ التعديلات");
     utils.orders.list.invalidate();
     utils.orders.todayConfirmed.invalidate();
     utils.orders.orderItems.invalidate({ orderId });
@@ -574,7 +574,7 @@ export default function Orders() {
 
   const duplicateOrderMutation = trpc.orders.duplicate.useMutation({
     onSuccess: (data) => {
-      toast.success(`✅ تم تكرار الأوردر — أوردر جديد #${data.newOrderNumber}`);
+      toast.success(`تم تكرار الأوردر — أوردر جديد #${data.newOrderNumber}`);
       utils.orders.list.invalidate();
       utils.orders.todayConfirmed.invalidate();
       utils.orders.statusCounts.invalidate();
@@ -584,7 +584,7 @@ export default function Orders() {
 
   const returnMutation = trpc.returns.markAsReturned.useMutation({
     onSuccess: () => {
-      toast.success("✅ تم تسجيل المرتجع بنجاح");
+      toast.success("تم تسجيل المرتجع بنجاح");
       utils.orders.list.invalidate();
       setShowReturnDialog(false);
       setReturnReason(""); setReturnNotes("");
@@ -613,14 +613,14 @@ export default function Orders() {
   const bulkSendToBostaMutation = trpc.orders.bulkSendToBosta.useMutation({
     onSuccess: (data) => {
       if (data.failed === 0) {
-        toast.success(`✅ تم إرسال ${data.success} أوردر لـ Bosta بنجاح`);
+        toast.success(`تم إرسال ${data.success} أوردر لـ Bosta بنجاح`);
       } else {
         const details = (data.errors ?? [])
           .slice(0, 5)
           .map((e) => `أوردر #${e.orderId}: ${e.error}`)
           .join("\n");
         const more = (data.errors?.length ?? 0) > 5 ? `\n… و${(data.errors!.length - 5)} أخرى` : "";
-        toast.warning(`تم إرسال ${data.success} ✅ وفشل ${data.failed} ❌ ${details}${more}`);
+        toast.warning(`تم إرسال ${data.success} وفشل ${data.failed} ${details}${more}`);
       }
       utils.orders.list.invalidate();
       setSelectedOrderIds([]);
@@ -1092,12 +1092,12 @@ export default function Orders() {
         onSelectionChange={isAdmin ? (keys) => setSelectedOrderIds(Array.from(keys) as number[]) : undefined}
         bulkActions={() => (
           <>
-            <Button variant="outline" size="sm" className="h-9" onClick={() => setShowAssignDialog(true)}>
+            <Button variant="outline" size="sm" className="min-h-11 md:h-9" onClick={() => setShowAssignDialog(true)}>
               <UserPlus className="h-4 w-4 ml-1" aria-hidden="true" /> توزيع
             </Button>
             <Button
               variant="outline" size="sm"
-              className="h-9 border-destructive/30 text-destructive hover:bg-destructive/10"
+              className="min-h-11 md:h-9 border-destructive/30 text-destructive hover:bg-destructive/10"
               onClick={() => setPendingConfirm({ type: "bulkDelete" })}
             >
               <Trash2 className="h-4 w-4 ml-1" aria-hidden="true" /> حذف
@@ -1129,11 +1129,11 @@ export default function Orders() {
               <span className="text-sm font-medium">أوردر محدد</span>
             </div>
             <div className="w-px h-5 bg-background/20" />
-            <Button size="sm" variant="ghost" className="h-8 px-3 text-background hover:bg-background/20 text-xs font-medium"
+            <Button size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-background hover:bg-background/20 text-xs font-medium"
               onClick={() => setShowAssignDialog(true)}>
               <UserPlus className="h-3.5 w-3.5 ml-1" /> توزيع
             </Button>
-            <Button size="sm" variant="ghost" className="h-8 px-3 text-background hover:bg-background/20 text-xs font-medium"
+            <Button size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-background hover:bg-background/20 text-xs font-medium"
               onClick={() => {
                 const params = new URLSearchParams();
                 params.set('orderIds', selectedOrderIds.join(','));
@@ -1146,11 +1146,11 @@ export default function Orders() {
               }}>
               <Printer className="h-3.5 w-3.5 ml-1" /> طباعة
             </Button>
-            <Button size="sm" variant="ghost" className="h-8 px-3 text-[var(--info)] hover:bg-background/20 text-xs font-medium"
+            <Button size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-[var(--info)] hover:bg-background/20 text-xs font-medium"
               disabled={bulkSendToBostaMutation.isPending} onClick={() => setShowBostaDialog(true)}>
               <Truck className="h-3.5 w-3.5 ml-1" /> {bulkSendToBostaMutation.isPending ? 'جاري الإرسال...' : 'Bosta'}
             </Button>
-            <Button size="sm" variant="ghost" className="h-8 px-3 text-[var(--info)] hover:bg-background/20 text-xs font-medium"
+            <Button size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-[var(--info)] hover:bg-background/20 text-xs font-medium"
               onClick={() => {
                 const params = new URLSearchParams();
                 params.set('ids', selectedOrderIds.join(','));
@@ -1160,7 +1160,7 @@ export default function Orders() {
             </Button>
             {/* الأحمر هنا دلالة "إجراء مدمّر"، فبياخده من --destructive زي أي إجراء حذف
                 في المنتج — مش من درجات Tailwind الخام زي باقي الأزرار المجاورة. */}
-            <Button size="sm" variant="ghost" className="h-8 px-3 text-destructive hover:bg-background/20 text-xs font-medium"
+            <Button size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-destructive hover:bg-background/20 text-xs font-medium"
               onClick={() => setPendingConfirm({ type: "bulkDelete" })}>
               <Trash2 className="h-3.5 w-3.5 ml-1" /> حذف
             </Button>
@@ -1247,8 +1247,8 @@ export default function Orders() {
             )}
           </div>
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setShowBostaDialog(false)}>إلغاء</Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setShowBostaDialog(false)}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9"
               onClick={() => {
                 bulkSendToBostaMutation.mutate({
                   orderIds: selectedOrderIds,
@@ -1319,8 +1319,8 @@ export default function Orders() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowReturnDialog(false)}>إلغاء</Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setShowReturnDialog(false)}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9"
               variant="destructive"
               disabled={!returnReason || returnMutation.isPending}
               onClick={() => {
@@ -1352,8 +1352,8 @@ export default function Orders() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCancelDialog(false)}>إلغاء</Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setShowCancelDialog(false)}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9"
               variant="destructive"
               disabled={!cancelReason || cancelMutation.isPending}
               onClick={() => {
@@ -1382,8 +1382,8 @@ export default function Orders() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowPostponeDialog(false)}>إلغاء</Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setShowPostponeDialog(false)}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9"
               disabled={!postponeDate || postponeMutation.isPending}
               onClick={() => {
                 if (!selectedOrderId || !postponeDate) return;
@@ -1421,8 +1421,8 @@ export default function Orders() {
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowNoAnswerDialog(false)}>إلغاء</Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setShowNoAnswerDialog(false)}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9"
               disabled={noAnswerMutation.isPending}
               onClick={() => {
                 if (!selectedOrderId) return;
@@ -1504,7 +1504,7 @@ export default function Orders() {
             {selectedOrderIds.length > 0 && (
               <div className="bg-[var(--info)]/10 text-[var(--info)] rounded-lg p-3 text-sm">
                 <strong>ملاحظة:</strong> لديك {selectedOrderIds.length} أوردر محدد.
-                <Button size="sm" variant="outline" className="text-xs mt-2 flex" onClick={() => {
+                <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 text-xs mt-2 flex" onClick={() => {
                   setIsExporting(true);
                   const params = new URLSearchParams();
                   params.set('orderIds', selectedOrderIds.join(','));
@@ -1523,8 +1523,8 @@ export default function Orders() {
             )}
           </div>
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => { setShowExportDialog(false); resetExportFilters(); }}>إلغاء</Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => { setShowExportDialog(false); resetExportFilters(); }}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9"
               disabled={isExporting}
               onClick={() => {
                 setIsExporting(true);
@@ -1579,11 +1579,11 @@ export default function Orders() {
               <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
                 {(detailIndex + 1).toLocaleString('ar-EG')} / {orders.length.toLocaleString('ar-EG')}
               </span>
-              <Button variant="ghost" size="icon" className="h-8 w-8" title="الأوردر السابق (→)"
+              <Button variant="ghost" size="icon" className="min-h-11 md:h-8 min-w-11 md:min-w-8 md:w-8" title="الأوردر السابق (→)"
                 disabled={detailIndex <= 0} onClick={() => goToOrderAt(detailIndex - 1)}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8" title="الأوردر التالي (←)"
+              <Button variant="ghost" size="icon" className="min-h-11 md:h-8 min-w-11 md:min-w-8 md:w-8" title="الأوردر التالي (←)"
                 disabled={detailIndex >= orders.length - 1} onClick={() => goToOrderAt(detailIndex + 1)}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
@@ -1608,18 +1608,18 @@ export default function Orders() {
                 </SelectContent>
               </Select>
               <WhatsAppButton phone={drawerOrder.customerPhone} size="sm" className="h-9" />
-              <Button size="sm" variant="outline" className="h-9 gap-1 border-[var(--info)]/30 text-[var(--info)]"
+              <Button size="sm" variant="outline" className="min-h-11 md:h-9 gap-1 border-[var(--info)]/30 text-[var(--info)]"
                 onClick={() => { window.location.href = `tel:${drawerOrder.customerPhone}`; }}>
                 <PhoneCall className="h-4 w-4" /> اتصال
               </Button>
               {(drawerOrder.status === 'new' || drawerOrder.status === 'postponed') && (
                 <>
-                  <Button size="sm" className="h-9 gap-1 bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90"
+                  <Button size="sm" className="min-h-11 md:h-9 gap-1 bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90"
                     disabled={confirmMutation.isPending}
                     onClick={() => confirmOrder(drawerOrder.id)}>
                     <CheckCircle className="h-4 w-4" /> تأكيد
                   </Button>
-                  <Button size="sm" variant="outline" className="h-9 gap-1 border-destructive/30 text-destructive"
+                  <Button size="sm" variant="outline" className="min-h-11 md:h-9 gap-1 border-destructive/30 text-destructive"
                     onClick={() => { setSelectedOrderId(drawerOrder.id); setShowCancelDialog(true); }}>
                     <XCircle className="h-4 w-4" /> إلغاء
                   </Button>
@@ -1631,17 +1631,17 @@ export default function Orders() {
         footer={
           drawerOrder ? (
             <div className="flex w-full gap-2">
-              <Button variant="outline" className="flex-1 gap-1"
+              <Button variant="outline" className="min-h-11 md:min-h-9 flex-1 gap-1"
                 onClick={() => { setDetailOrderId(null); navigate(`/order/${drawerOrder.id}`); }}>
                 <Eye className="h-4 w-4" /> الصفحة الكاملة
               </Button>
               {isAdmin && (
-                <Button variant="outline" className="flex-1 gap-1" disabled={duplicateOrderMutation.isPending}
+                <Button variant="outline" className="min-h-11 md:min-h-9 flex-1 gap-1" disabled={duplicateOrderMutation.isPending}
                   onClick={() => setPendingConfirm({ type: "duplicateOrder", orderId: drawerOrder.id, orderNumber: drawerOrder.orderNumber, customerName: drawerOrder.customerName })}>
                   <Copy className="h-4 w-4" /> تكرار
                 </Button>
               )}
-              <Button className="flex-1 gap-1" onClick={() => { openEditFor(drawerOrder); setDetailOrderId(null); }}>
+              <Button className="min-h-11 md:min-h-9 flex-1 gap-1" onClick={() => { openEditFor(drawerOrder); setDetailOrderId(null); }}>
                 <Edit2 className="h-4 w-4" /> تعديل
               </Button>
             </div>
@@ -1669,7 +1669,7 @@ export default function Orders() {
                   <CardTitle className="type-subheading">بيانات العميل</CardTitle>
                   <CardAction className="flex items-center gap-1.5">
                     <WhatsAppButton phone={order.customerPhone} size="sm" />
-                    <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
+                    <Button size="sm" variant="outline" className="min-h-11 md:h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
                       onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}>
                       <PhoneCall className="h-3.5 w-3.5" /> اتصال
                     </Button>
@@ -1692,7 +1692,7 @@ export default function Orders() {
                   <CardTitle className="type-subheading">الشحن</CardTitle>
                   {order.bostaShipmentId && (
                     <CardAction>
-                      <Button size="sm" variant="outline" className="h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
+                      <Button size="sm" variant="outline" className="min-h-11 md:h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
                         onClick={() => window.open(`/api/orders/${order.id}/bosta-awb`, "_blank", "noopener,noreferrer")}>
                         <Printer className="h-3.5 w-3.5" /> طباعة AWB
                       </Button>
@@ -1737,7 +1737,7 @@ export default function Orders() {
                   {(order as any).contentChangedAfterShipment && (
                     /* بوسطة أخدت نسختها قبل التعديل ده، ومفيش مسار تحديث شحنة. */
                     <div className="col-span-2 rounded-md border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2.5 py-2 text-xs font-semibold text-[var(--warning)]">
-                      ⚠️ {SHIPMENT_STALE_WARNING}
+                      {SHIPMENT_STALE_WARNING}
                     </div>
                   )}
                   <div><span className="text-muted-foreground">المنتج:</span> <span className="font-semibold">{order.productName}</span></div>
@@ -1873,7 +1873,7 @@ export default function Orders() {
                         <div>
                           <span className="type-caption">حالة التجهيز</span>
                           <p className={`font-bold text-sm mt-0.5 ${order.isPrepared ? 'text-[var(--success)]' : 'text-[var(--warning)]'}`}>
-                            {order.isPrepared ? `✅ تم التجهيز بواسطة ${order.preparedByName || 'موظف'}` : '⏳ لم يتم التجهيز بعد'}
+                            {order.isPrepared ? `تم التجهيز بواسطة ${order.preparedByName || 'موظف'}` : 'لم يتم التجهيز بعد'}
                           </p>
                           {order.preparedAt && <p className="type-caption">{new Date(order.preparedAt).toLocaleString('ar-EG')}</p>}
                         </div>
@@ -2143,8 +2143,8 @@ function CreateOrderDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>إلغاء</Button>
-          <Button onClick={handleSubmit} disabled={createMutation.isPending}>{createMutation.isPending ? "جاري الحفظ..." : "حفظ الأوردر"}</Button>
+          <Button className="min-h-11 md:min-h-9" variant="outline" onClick={onClose}>إلغاء</Button>
+          <Button className="min-h-11 md:min-h-9" onClick={handleSubmit} disabled={createMutation.isPending}>{createMutation.isPending ? "جاري الحفظ..." : "حفظ الأوردر"}</Button>
         </DialogFooter>
         {/* نوافذ «أضف الآن» — فوق النموذج؛ بعد الحفظ تُعاد القائمة وتُختار القيمة الجديدة فورًا. */}
         {businessId != null && (
@@ -2214,8 +2214,8 @@ function AssignDialog({
           <div>
             <Label className="mb-2 block">المحافظات المراد توزيعها</Label>
             <div className="flex gap-2 mb-2">
-              <Button size="sm" variant={govMode === "all" ? "default" : "outline"} onClick={() => setGovMode("all")}>كل المحافظات ({selectedOrders.length})</Button>
-              <Button size="sm" variant={govMode === "select" ? "default" : "outline"} onClick={() => setGovMode("select")}>اختر محافظات</Button>
+              <Button className="min-h-11 md:min-h-9" size="sm" variant={govMode === "all" ? "default" : "outline"} onClick={() => setGovMode("all")}>كل المحافظات ({selectedOrders.length})</Button>
+              <Button className="min-h-11 md:min-h-9" size="sm" variant={govMode === "select" ? "default" : "outline"} onClick={() => setGovMode("select")}>اختر محافظات</Button>
             </div>
             {govMode === "select" && (
               <div className="border rounded-lg p-3 max-h-48 overflow-y-auto space-y-1">
@@ -2252,8 +2252,8 @@ function AssignDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={handleClose}>إلغاء</Button>
-          <Button
+          <Button className="min-h-11 md:min-h-9" variant="outline" onClick={handleClose}>إلغاء</Button>
+          <Button className="min-h-11 md:min-h-9"
             disabled={!assignEmployeeId || filteredOrders.length === 0 || isPending}
             onClick={() => { if (!assignEmployeeId) return; onAssign(Number(assignEmployeeId), filteredOrders.map((o: any) => o.id)); }}
           >

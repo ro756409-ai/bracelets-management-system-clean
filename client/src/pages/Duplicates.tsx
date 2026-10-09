@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Trash2, RotateCcw, Phone, MapPin, Package, AlertTriangle, Trash } from "lucide-react";
-import { PageHeader } from "@/components/shared";
+import { PageHeader, EmptyState, LoadingSkeleton } from "@/components/shared";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +23,7 @@ export default function Duplicates() {
 
   const deleteMutation = trpc.duplicates.delete.useMutation({
     onSuccess: () => {
-      toast.success("✅ تم حذف الأوردر");
+      toast.success("تم حذف الأوردر");
       utils.duplicates.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -39,7 +39,7 @@ export default function Duplicates() {
 
   const deleteAllMutation = trpc.duplicates.deleteAll.useMutation({
     onSuccess: (data) => {
-      toast.success(`✅ تم حذف ${data.deleted} أوردر مكرر`);
+      toast.success(`تم حذف ${data.deleted} أوردر مكرر`);
       utils.duplicates.list.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -54,7 +54,7 @@ export default function Duplicates() {
         primaryAction={duplicates.length > 0 ? (
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" className="gap-2">
+              <Button variant="destructive" size="sm" className="min-h-11 md:min-h-9 gap-2">
                 <Trash className="h-4 w-4" />
                 حذف الكل ({duplicates.length})
               </Button>
@@ -67,9 +67,9 @@ export default function Duplicates() {
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                <AlertDialogCancel className="min-h-11 md:min-h-9">إلغاء</AlertDialogCancel>
                 <AlertDialogAction
-                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  className="min-h-11 bg-destructive text-destructive-foreground hover:bg-destructive/90 md:min-h-9"
                   onClick={() => deleteAllMutation.mutate()}
                   disabled={deleteAllMutation.isPending}
                 >
@@ -83,18 +83,15 @@ export default function Duplicates() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="text-center py-16 text-muted-foreground">جاري التحميل...</div>
+        <LoadingSkeleton variant="cards" rows={3} />
       ) : duplicates.length === 0 ? (
-        <div className="text-center py-16">
-          <AlertTriangle className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-          <p className="text-muted-foreground">لا توجد أوردرات مكررة حالياً</p>
-        </div>
+        <EmptyState icon={<AlertTriangle className="h-6 w-6" aria-hidden="true" />} title="لا توجد أوردرات مكررة حالياً" description="الأوردرات التي يعلّمها الموظفون كمكررة تظهر هنا للمراجعة." />
       ) : (
         <div className="space-y-3">
           {duplicates.map((order: any) => (
             <div
               key={order.id}
-              className="bg-card border border-[var(--warning)]/30 rounded-xl p-4 shadow-[var(--shadow-card)]"
+              className="bg-card border border-[var(--warning)]/30 rounded-[var(--radius-brand-md)] p-4 shadow-[var(--shadow-card)]"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -103,8 +100,8 @@ export default function Duplicates() {
                     <Badge variant="outline" className="text-xs font-mono border-[var(--warning)]/40 text-[var(--warning)] bg-[var(--warning)]/10">
                       #{order.orderNumber}
                     </Badge>
-                    <Badge className="text-xs bg-[var(--warning)]/15 text-[var(--warning)] border-0">
-                      ⚠️ مكرر
+                    <Badge className="text-xs bg-[var(--warning)]/15 text-[var(--warning)] border-0 gap-1">
+                      <AlertTriangle className="h-3 w-3" aria-hidden="true" /> مكرر
                     </Badge>
                     {order.source && (
                       <Badge variant="outline" className="text-xs">
@@ -148,7 +145,7 @@ export default function Duplicates() {
                       <Button
                         size="sm"
                         variant="destructive"
-                        className="h-8 text-xs gap-1"
+                        className="min-h-11 md:h-8 text-xs gap-1"
                         disabled={deleteMutation.isPending}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -163,9 +160,9 @@ export default function Duplicates() {
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
-                        <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                        <AlertDialogCancel className="min-h-11 md:min-h-9">إلغاء</AlertDialogCancel>
                         <AlertDialogAction
-                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          className="min-h-11 bg-destructive text-destructive-foreground hover:bg-destructive/90 md:min-h-9"
                           onClick={() => deleteMutation.mutate({ orderId: order.id })}
                         >
                           حذف
@@ -177,7 +174,7 @@ export default function Duplicates() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 text-xs gap-1 border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10"
+                    className="min-h-11 md:h-8 text-xs gap-1 border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10"
                     onClick={() => restoreMutation.mutate({ orderId: order.id })}
                     disabled={restoreMutation.isPending}
                     title="إعادة للأوردرات العادية"

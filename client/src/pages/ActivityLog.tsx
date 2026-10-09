@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RefreshCw, Activity, Filter } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { PageHeader, SectionCard, StatusBadge, ResponsiveDataTable, Pagination, OfflineState, type Column } from "@/components/shared";
 
 const ACTION_LABELS: Record<string, string> = {
   confirm_order: "تأكيد أوردر",
@@ -27,17 +29,29 @@ const ENTITY_LABELS: Record<string, string> = {
   inventory: "مخزون",
 };
 
+const ACTION_TONE = (a: string): "success" | "danger" | "warning" | "info" | "neutral" =>
+  a === "confirm_order" ? "success" : a === "cancel_order" || a.includes("delete") ? "danger" : a === "postpone_order" ? "warning" : a ? "info" : "neutral";
+
+const TOUCH = "min-h-11 md:min-h-9";
+const LIMIT = 50;
+
+/**
+ * سجل الأنشطة — نفس الاستعلام (activityLog.list بحد 50 ونطاق النشاط). المرحلة 7I (عرض فقط): PageHeader،
+ * فلاتر معنونة 44px («الكل» يعني بلا فلتر — كان يُرسل "all" حرفيًا للسيرفر)، جدول Desktop/بطاقات Mobile،
+ * شارات للعملية والدور، ترقيم مشترك، وحالات Loading/Empty/Error/Offline.
+ */
 export default function ActivityLogPage() {
   const { currentBusinessIds } = useBusinessContext();
+  const online = useOnlineStatus();
   const [page, setPage] = useState(1);
   const [actionFilter, setActionFilter] = useState<string>("");
   const [entityFilter, setEntityFilter] = useState<string>("");
 
-  const { data, isLoading, refetch } = trpc.activityLog.list.useQuery({
+  const { data, isLoading, isError, error, refetch } = trpc.activityLog.list.useQuery({
     page,
-    limit: 50,
-    action: actionFilter || undefined,
-    entityType: entityFilter || undefined,
+    limit: LIMIT,
+    action: actionFilter && actionFilter !== "all" ? actionFilter : undefined,
+    entityType: entityFilter && entityFilter !== "all" ? entityFilter : undefined,
     businessId: currentBusinessIds && currentBusinessIds.length === 1 ? currentBusinessIds[0] : undefined,
   });
 
@@ -52,28 +66,42 @@ export default function ActivityLogPage() {
     });
   };
 
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const hasFilters = (actionFilter && actionFilter !== "all") || (entityFilter && entityFilter !== "all");
+
+  const roleBadge = (role: string) => role === "admin"
+    ? <StatusBadge status="admin" label="مدير" tone="danger" size="sm" icon={null} />
+    : <StatusBadge status="employee" label="موظف" tone="info" size="sm" icon={null} />;
+  const actionBadge = (a: string) => <StatusBadge status={a} label={ACTION_LABELS[a] || a} tone={ACTION_TONE(a)} size="sm" icon={null} />;
+
+  const columns: Column<any>[] = [
+    { id: "date", header: "التاريخ", alwaysVisible: true, cell: l => <span className="whitespace-nowrap text-xs tabular-nums">{formatDate(l.createdAt)}</span> },
+    { id: "action", header: "العملية", alwaysVisible: true, cell: l => actionBadge(l.action) },
+    { id: "description", header: "الوصف", alwaysVisible: true, cell: l => <span className="block max-w-[300px] truncate" title={l.description}>{l.description}</span> },
+    { id: "by", header: "بواسطة", cell: l => <span className="whitespace-nowrap">{l.performedByName}</span> },
+    { id: "role", header: "الدور", cell: l => roleBadge(l.performedByRole) },
+  ];
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Activity className="h-6 w-6 text-[var(--warning)]" />
-          <div>
-            <h1 className="text-2xl font-bold">سجل الأنشطة</h1>
-            <p className="text-sm text-muted-foreground">تتبع كل العمليات داخل النظام</p>
-          </div>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()}>
-          <RefreshCw className="h-4 w-4 ml-1" /> تحديث
-        </Button>
-      </div>
+    <div className="space-y-6" dir="rtl" data-testid="activity-log-page">
+      <PageHeader
+        title="سجل الأنشطة"
+        description="تتبع كل العمليات داخل النظام"
+        icon={<Activity className="h-5 w-5" aria-hidden="true" />}
+        actions={<Button variant="outline" size="sm" className={TOUCH} onClick={() => refetch()} data-testid="activity-refresh"><RefreshCw className="h-4 w-4 ml-1" aria-hidden="true" /> تحديث</Button>}
+      />
+
+      {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}
 
       {/* Filters */}
-      <Card>
-        <CardContent className="pt-4">
-          <div className="flex items-center gap-4 flex-wrap">
-            <Filter className="h-4 w-4 text-muted-foreground" />
-            <Select value={actionFilter} onValueChange={setActionFilter}>
-              <SelectTrigger className="w-[180px]">
+      <SectionCard testId="activity-filters">
+        <div className="flex flex-wrap items-end gap-3 [&_[role=combobox]]:min-h-11 md:[&_[role=combobox]]:min-h-9">
+          <Filter className="mb-3 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          <div>
+            <Label htmlFor="activity-action" className="mb-1 block text-xs text-muted-foreground">نوع العملية</Label>
+            <Select value={actionFilter} onValueChange={v => { setActionFilter(v); setPage(1); }}>
+              <SelectTrigger id="activity-action" className="w-[180px]" data-testid="activity-action">
                 <SelectValue placeholder="نوع العملية" />
               </SelectTrigger>
               <SelectContent>
@@ -83,8 +111,11 @@ export default function ActivityLogPage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={entityFilter} onValueChange={setEntityFilter}>
-              <SelectTrigger className="w-[180px]">
+          </div>
+          <div>
+            <Label htmlFor="activity-entity" className="mb-1 block text-xs text-muted-foreground">نوع الكيان</Label>
+            <Select value={entityFilter} onValueChange={v => { setEntityFilter(v); setPage(1); }}>
+              <SelectTrigger id="activity-entity" className="w-[180px]" data-testid="activity-entity">
                 <SelectValue placeholder="نوع الكيان" />
               </SelectTrigger>
               <SelectContent>
@@ -95,84 +126,31 @@ export default function ActivityLogPage() {
               </SelectContent>
             </Select>
           </div>
-        </CardContent>
-      </Card>
+          {hasFilters && <Button variant="ghost" size="sm" className={TOUCH} onClick={() => { setActionFilter(""); setEntityFilter(""); setPage(1); }}>مسح الفلاتر</Button>}
+        </div>
+      </SectionCard>
 
       {/* Log Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">
-            {data?.total ? `${data.total} عملية مسجلة` : "لا توجد عمليات مسجلة"}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="text-center py-8 text-muted-foreground">جاري التحميل...</div>
-          ) : !data?.items.length ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Activity className="h-12 w-12 mx-auto mb-3 opacity-30" />
-              <p>لا توجد أنشطة مسجلة بعد</p>
-              <p className="text-xs mt-1">سيتم تسجيل كل عملية تأكيد أو إلغاء أو توزيع أو حذف تلقائياً</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-right">
-                    <th className="py-3 px-2 font-medium">التاريخ</th>
-                    <th className="py-3 px-2 font-medium">العملية</th>
-                    <th className="py-3 px-2 font-medium">الوصف</th>
-                    <th className="py-3 px-2 font-medium">بواسطة</th>
-                    <th className="py-3 px-2 font-medium">الدور</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.items.map((log: any) => (
-                    <tr key={log.id} className="border-b hover:bg-muted/50">
-                      <td className="py-3 px-2 text-xs whitespace-nowrap">{formatDate(log.createdAt)}</td>
-                      <td className="py-3 px-2">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--warning)]/15 text-[var(--warning)]">
-                          {ACTION_LABELS[log.action] || log.action}
-                        </span>
-                      </td>
-                      <td className="py-3 px-2 max-w-[300px] truncate">{log.description}</td>
-                      <td className="py-3 px-2 whitespace-nowrap">{log.performedByName}</td>
-                      <td className="py-3 px-2">
-                        <span className={`text-xs px-2 py-0.5 rounded ${log.performedByRole === 'admin' ? 'bg-destructive/15 text-destructive' : 'bg-[var(--info)]/15 text-[var(--info)]'}`}>
-                          {log.performedByRole === 'admin' ? 'مدير' : 'موظف'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+      <SectionCard title={<span>{total ? `${total.toLocaleString("ar-EG")} عملية مسجلة` : "لا توجد عمليات مسجلة"}</span>} flush testId="activity-list">
+        <ResponsiveDataTable<any>
+          rows={items}
+          columns={columns}
+          rowKey={l => l.id}
+          loading={isLoading}
+          error={isError ? ((error as any)?.message || "تعذّر تحميل السجل") : null}
+          onRetry={() => refetch()}
+          empty={{ title: "لا توجد أنشطة مسجلة بعد", description: hasFilters ? "عدّل الفلاتر." : "سيتم تسجيل كل عملية تأكيد أو إلغاء أو توزيع أو حذف تلقائياً" }}
+          cardsBelow="md"
+          mobileRow={l => (
+            <article className="space-y-1.5 rounded-[var(--radius-brand-md)] border border-border bg-card p-3" data-testid={`activity-card-${l.id}`}>
+              <div className="flex items-start justify-between gap-2">{actionBadge(l.action)}<span className="text-xs tabular-nums text-muted-foreground">{formatDate(l.createdAt)}</span></div>
+              <p className="text-sm">{l.description}</p>
+              <div className="flex items-center justify-between text-xs text-muted-foreground"><span>{l.performedByName}</span>{roleBadge(l.performedByRole)}</div>
+            </article>
           )}
-
-          {/* Pagination */}
-          {data && data.total > 50 && (
-            <div className="flex justify-center gap-2 mt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => setPage(p => p - 1)}
-              >
-                السابق
-              </Button>
-              <span className="text-sm self-center">صفحة {page} من {Math.ceil(data.total / 50)}</span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={page >= Math.ceil(data.total / 50)}
-                onClick={() => setPage(p => p + 1)}
-              >
-                التالي
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        />
+        {total > LIMIT && <div className="border-t border-border p-3"><Pagination page={page} pageSize={LIMIT} total={total} onPageChange={setPage} /></div>}
+      </SectionCard>
     </div>
   );
 }

@@ -12,7 +12,8 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { PageHeader, SectionCard } from "@/components/shared";
+import { PageHeader, SectionCard, OfflineState } from "@/components/shared";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
 import { toast } from "sonner";
 
@@ -32,6 +33,7 @@ const newLine = (): Line => ({
 
 export default function StockTransfer() {
   const { currentBusinessIds } = useBusinessContext();
+  const online = useOnlineStatus();
 
   const {
     brands, selected: businessId, setSelected: setBusinessId,
@@ -115,7 +117,7 @@ export default function StockTransfer() {
   };
 
   const showError = (k: string) =>
-    errors[k] ? <p className="mt-1 text-xs text-destructive">{errors[k]}</p> : null;
+    errors[k] ? <p className="mt-1 text-xs text-destructive" role="alert">{errors[k]}</p> : null;
 
   const wh = warehouses.data ?? [];
 
@@ -124,7 +126,10 @@ export default function StockTransfer() {
       <PageHeader
         title="تحويل مخزون"
         description="نقل أصناف بين مخزنين — ومنها تسليم عهدة للورشة واستلام المشغول منها."
+        icon={<ArrowLeftRight className="h-5 w-5" aria-hidden="true" />}
       />
+
+      {!online && <OfflineState className="py-6" />}
 
       <SectionCard>
         <p className="mb-3 flex items-start gap-1.5 rounded-md bg-info/10 p-2 text-xs text-muted-foreground">
@@ -148,7 +153,7 @@ export default function StockTransfer() {
               <Select value={businessId} onValueChange={v => {
                 setBusinessId(v); setFromWarehouseId(""); setToWarehouseId("");
               }}>
-                <SelectTrigger className="mt-1"><SelectValue placeholder="اختار النشاط" /></SelectTrigger>
+                <SelectTrigger className="mt-1 min-h-11 md:min-h-9" aria-label="النشاط"><SelectValue placeholder="اختار النشاط" /></SelectTrigger>
                 <SelectContent>
                   {brands.map(b => <SelectItem key={b.id} value={String(b.id)}>{b.name}</SelectItem>)}
                 </SelectContent>
@@ -159,7 +164,7 @@ export default function StockTransfer() {
           <div>
             <Label>من <span className="text-destructive">*</span></Label>
             <Select value={fromWarehouseId} onValueChange={setFromWarehouseId} disabled={!bid}>
-              <SelectTrigger className="mt-1">
+              <SelectTrigger className="mt-1 min-h-11 md:min-h-9" aria-label="من">
                 <SelectValue placeholder={bid ? "مكان الإرسال" : "اختار النشاط الأول"} />
               </SelectTrigger>
               <SelectContent>
@@ -171,7 +176,7 @@ export default function StockTransfer() {
           <div>
             <Label>إلى <span className="text-destructive">*</span></Label>
             <Select value={toWarehouseId} onValueChange={setToWarehouseId} disabled={!bid}>
-              <SelectTrigger className="mt-1">
+              <SelectTrigger className="mt-1 min-h-11 md:min-h-9" aria-label="إلى">
                 <SelectValue placeholder={bid ? "مكان الاستلام" : "اختار النشاط الأول"} />
               </SelectTrigger>
               <SelectContent>
@@ -183,18 +188,18 @@ export default function StockTransfer() {
           </div>
           <div>
             <Label>رقم الإذن <span className="text-destructive">*</span></Label>
-            <Input className="mt-1" value={reference} dir="ltr" placeholder="TR-2026-007"
+            <Input className="mt-1 min-h-11 md:min-h-9" value={reference} dir="ltr" placeholder="TR-2026-007" aria-label="رقم الإذن" aria-invalid={!!errors.reference}
               onChange={e => setReference(e.target.value)} />
             {showError("reference")}
           </div>
           <div>
             <Label>التاريخ <span className="text-destructive">*</span></Label>
-            <Input className="mt-1" type="date" value={occurredAt}
+            <Input className="mt-1 min-h-11 md:min-h-9" type="date" value={occurredAt} aria-label="التاريخ" dir="ltr"
               onChange={e => setOccurredAt(e.target.value)} />
           </div>
           <div className="sm:col-span-2 lg:col-span-3">
             <Label>سبب التحويل <span className="text-destructive">*</span></Label>
-            <Textarea className="mt-1" rows={2} value={reason}
+            <Textarea className="mt-1" rows={2} value={reason} aria-label="سبب التحويل" aria-invalid={!!errors.reason}
               placeholder="مثال: تسليم خام نحاس للورشة للحفر"
               onChange={e => setReason(e.target.value)} />
             {showError("reason")}
@@ -207,7 +212,7 @@ export default function StockTransfer() {
           <h3 className="flex items-center gap-2 text-sm font-bold">
             <ArrowLeftRight className="h-4 w-4" /> الأصناف المحوّلة
           </h3>
-          <Button size="sm" variant="outline" className="gap-1.5"
+          <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 gap-1.5"
             onClick={() => setLines(ls => [...ls, newLine()])}>
             <Plus className="h-4 w-4" /> صنف جديد
           </Button>
@@ -217,11 +222,11 @@ export default function StockTransfer() {
           {lines.map((l, i) => {
             const vs = variantsFor(l.productId);
             return (
-              <div key={l.key} className="rounded-lg border bg-muted/30 p-3">
+              <div key={l.key} className="rounded-[var(--radius-brand-md)] border border-border bg-muted/30 p-3">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="text-xs font-bold text-muted-foreground">صنف {i + 1}</span>
                   {lines.length > 1 && (
-                    <Button size="sm" variant="ghost" className="h-7 gap-1 text-destructive"
+                    <Button size="sm" variant="ghost" className="min-h-11 md:h-7 gap-1 text-destructive"
                       onClick={() => setLines(ls => ls.filter(x => x.key !== l.key))}>
                       <Trash2 className="h-3.5 w-3.5" /> حذف
                     </Button>
@@ -232,7 +237,7 @@ export default function StockTransfer() {
                     <Label className="text-xs">الصنف <span className="text-destructive">*</span></Label>
                     <Select value={l.productId}
                       onValueChange={v => patchLine(l.key, { productId: v, variantId: "" })}>
-                      <SelectTrigger className="mt-1 w-full min-w-0 [&>span]:truncate">
+                      <SelectTrigger className="mt-1 min-h-11 w-full min-w-0 md:min-h-9 [&>span]:truncate" aria-label="الصنف">
                         <SelectValue placeholder="اختار" />
                       </SelectTrigger>
                       <SelectContent>
@@ -246,7 +251,7 @@ export default function StockTransfer() {
                     <Label className="text-xs">نوع الحفر / المقاس</Label>
                     <Select value={l.variantId} onValueChange={v => patchLine(l.key, { variantId: v })}
                       disabled={vs.length === 0}>
-                      <SelectTrigger className="mt-1 w-full min-w-0 [&>span]:truncate">
+                      <SelectTrigger className="mt-1 min-h-11 w-full min-w-0 md:min-h-9 [&>span]:truncate" aria-label="النوع">
                         <SelectValue placeholder={vs.length ? "اختار" : "مفيش أنواع"} />
                       </SelectTrigger>
                       <SelectContent>
@@ -257,7 +262,7 @@ export default function StockTransfer() {
                   </div>
                   <div>
                     <Label className="text-xs">الكمية <span className="text-destructive">*</span></Label>
-                    <Input className="mt-1" type="number" min="1" dir="ltr" value={l.quantity}
+                    <Input className="mt-1 min-h-11 md:min-h-9" type="number" min="1" dir="ltr" value={l.quantity} aria-label="الكمية" inputMode="numeric"
                       onChange={e => patchLine(l.key, { quantity: e.target.value })} />
                     {showError(`line-${i}-qty`)}
                   </div>
@@ -268,7 +273,7 @@ export default function StockTransfer() {
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <Button className="gap-1.5" onClick={submit} disabled={transferMutation.isPending}>
+          <Button className="min-h-11 md:min-h-9 gap-1.5" onClick={submit} disabled={transferMutation.isPending}>
             <Send className="h-4 w-4" />
             {transferMutation.isPending ? "جاري التحويل..." : "تنفيذ التحويل"}
           </Button>

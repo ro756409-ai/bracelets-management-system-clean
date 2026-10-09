@@ -345,7 +345,7 @@ describe("واجهة الشاشة", () => {
 
   it("🔑 النافذة مابتتقفلش لو الحفظ فشل", () => {
     // closeEditDialog بتتنادى بعد الـawait مش في onSuccess بتاع كل mutation
-    expect(page).toContain("toast.success(\"✅ تم حفظ التعديلات\");");
+    expect(page).toContain("toast.success(\"تم حفظ التعديلات\");"); // المرحلة 7I: بلا إيموجي
     const save = page.slice(page.indexOf("async function saveEdit("));
     expect(dialog).toContain("} catch {");
   });

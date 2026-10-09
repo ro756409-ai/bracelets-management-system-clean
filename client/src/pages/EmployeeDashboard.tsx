@@ -19,8 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, Clock, Phone, PhoneOff, MapPin, Package,
   LogOut, RefreshCw, Search, ChevronDown, ChevronUp, User,
-  ShoppingBag, TrendingUp, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle
-} from "lucide-react";
+  ShoppingBag, TrendingUp, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle, Megaphone } from "lucide-react";
 import QRCodeLib from "qrcode";
 import jsQR from "jsqr";
 import { BusinessAvatar } from "@/components/BusinessAvatar";
@@ -390,7 +389,7 @@ export default function EmployeeDashboard() {
 
   const markDuplicateMutation = trpc.employeePortal.markDuplicate.useMutation({
     onSuccess: () => {
-      toast.success("✅ تم تعليم الأوردر كمكرر");
+      toast.success("تم تعليم الأوردر كمكرر");
       utils.employeePortal.myOrders.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -409,13 +408,13 @@ export default function EmployeeDashboard() {
     onSuccess: (data: any) => {
       setScanResult(data);
       if (data.success) {
-        toast.success("✅ تم تجهيز الأوردر بنجاح!");
+        toast.success("تم تجهيز الأوردر بنجاح!");
       } else if (data.result === "duplicate") {
-        toast.warning("⚠️ هذا الأوردر تم تجهيزه من قبل");
+        toast.warning("هذا الأوردر تم تجهيزه من قبل");
       } else if (data.result === "cancelled") {
-        toast.error("🚫 هذا الأوردر ملغي");
+        toast.error("هذا الأوردر ملغي");
       } else {
-        toast.error("❌ QR غير صحيح");
+        toast.error("QR غير صحيح");
       }
     },
     onError: (e) => toast.error(e.message),
@@ -627,7 +626,7 @@ export default function EmployeeDashboard() {
         ...(itemsDirty ? {} : { shippingFees }),
       });
     }
-    toast.success("✅ تم حفظ التعديلات");
+    toast.success("تم حفظ التعديلات");
     utils.employeePortal.myOrders.invalidate();
     utils.employeePortal.stats.invalidate();
     utils.employeePortal.orderItems.invalidate({ orderId });
@@ -829,7 +828,7 @@ export default function EmployeeDashboard() {
               <p className="text-xs text-white/75">
                 {remainingCount > 0
                   ? <>متبقّي <span className="font-bold tabular-nums text-white">{remainingCount.toLocaleString('ar-EG')}</span> طلب</>
-                  : 'خلصت كل الطلبات ✅'}
+                  : 'خلصت كل الطلبات'}
               </p>
             </div>
           </div>
@@ -1198,9 +1197,9 @@ export default function EmployeeDashboard() {
                       scanResult.success ? 'text-[var(--success)]' :
                       scanResult.result === 'duplicate' ? 'text-[var(--warning)]' : 'text-destructive'
                     }`}>
-                      {scanResult.success ? '✅ تم التجهيز بنجاح' :
-                       scanResult.result === 'duplicate' ? '⚠️ تم تجهيزه من قبل' :
-                       scanResult.result === 'cancelled' ? '🚫 أوردر ملغي' : `❌ QR غير صحيح`}
+                      {scanResult.success ? 'تم التجهيز بنجاح' :
+                       scanResult.result === 'duplicate' ? 'تم تجهيزه من قبل' :
+                       scanResult.result === 'cancelled' ? 'أوردر ملغي' : `QR غير صحيح`}
                     </span>
                   </div>
                   {scanResult.message && !scanResult.order && (
@@ -1239,7 +1238,7 @@ export default function EmployeeDashboard() {
             <div className="absolute top-0 left-0 w-1 h-full bg-[var(--warning)]"></div>
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-full bg-[var(--warning)]/10 border border-[var(--warning)]/30 flex items-center justify-center shrink-0">
-                <span className="text-lg">📢</span>
+                <Megaphone className="h-5 w-5" aria-hidden="true" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-1">
@@ -1693,7 +1692,7 @@ export default function EmployeeDashboard() {
                             disabled={unmarkDuplicateMutation.isPending}
                             title="إلغاء تعليم التكرار"
                           >
-                            <span>⚠️ مكرر</span>
+                            <span>مكرر</span>
                           </button>
                         ) : (
                           <button

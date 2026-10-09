@@ -1,17 +1,15 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -20,28 +18,26 @@ import {
 } from "@/components/orders/OrderEditDialog";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { usePermission } from "@/hooks/usePermission";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { createInFlightGuard } from "@/components/orders/confirmGuard";
+import { PageHeader, StatCard, SectionCard, StatusBadge, EmptyState, LoadingSkeleton, OfflineState } from "@/components/shared";
 import { toast } from "sonner";
-import { CheckCircle, XCircle, Clock, Phone, MapPin, Package, Calendar, User, Edit2 } from "lucide-react";
+import { CheckCircle, XCircle, Clock, Phone, MapPin, Package, Calendar, Edit2, ChevronRight, ChevronLeft, Briefcase } from "lucide-react";
 
-const STATUS_LABELS: Record<string, string> = {
-  new: "جديد", confirmed: "مؤكد", postponed: "مؤجل",
-  cancelled: "ملغي", preparing: "قيد التحضير", shipped: "تم الشحن", delivered: "تم التوصيل",
-};
+const TOUCH = "min-h-11 md:min-h-9";
 
-const STATUS_COLORS: Record<string, string> = {
-  new: "bg-accent text-accent-foreground border-primary/30",
-  confirmed: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/30",
-  postponed: "bg-[var(--warning)]/10 text-[var(--warning)] border-[var(--warning)]/30",
-  cancelled: "bg-destructive/10 text-destructive border-destructive/30",
-  preparing: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/30",
-  shipped: "bg-[var(--info)]/10 text-[var(--info)] border-[var(--info)]/30",
-  delivered: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/30",
-};
-
+/**
+ * مساحة عمل موظف التأكيد (جلسة لوحة التحكم) — نفس الاستعلامات والـmutations (orders.myOrders/confirm/cancel/
+ * editOrder/editOrderItems/orderItems/postpone + products.list/variants.all) ونفس الـpayload ونفس محرر البنود
+ * المشترك. المرحلة 7I (عرض فقط): PageHeader، بطاقات إحصاء تعمل كفلتر (StatCard)، تنقّل أيام 44px، شارات
+ * الحالة المشتركة، أزرار 44px، حارس ضغط مكرر على التأكيد، وحالات Loading/Empty/Offline.
+ */
 export default function AgentWorkspace() {
   const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
   const { user } = useAuth();
   const utils = trpc.useUtils();
+  const online = useOnlineStatus();
+  const guard = useRef(createInFlightGuard<number>()).current;
 
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showCancelDialog, setShowCancelDialog] = useState(false);
@@ -78,7 +74,7 @@ export default function AgentWorkspace() {
   const total = data?.total ?? 0;
 
   const confirmMutation = trpc.orders.confirm.useMutation({
-    onSuccess: () => { toast.success("✅ تم تأكيد الأوردر"); utils.orders.myOrders.invalidate(); },
+    onSuccess: () => { toast.success("تم تأكيد الأوردر"); utils.orders.myOrders.invalidate(); },
     onError: (e) => toast.error(e.message),
   });
 
@@ -148,7 +144,7 @@ export default function AgentWorkspace() {
         ...(itemsDirty ? {} : { shippingFees }),
       });
     }
-    toast.success("✅ تم تعديل الأوردر بنجاح");
+    toast.success("تم تعديل الأوردر بنجاح");
     utils.orders.myOrders.invalidate();
     utils.orders.orderItems.invalidate({ orderId });
     setShowEditDialog(false);
@@ -163,6 +159,10 @@ export default function AgentWorkspace() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  const handleConfirm = (orderId: number) => {
+    guard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId }, { onSettled: done }));
+  };
 
   // Stats for this agent
   const newCount = orders.filter(o => o.status === 'new').length;
@@ -180,95 +180,54 @@ export default function AgentWorkspace() {
   }
   const isToday = assignedDate === todayCairo;
   const displayDate = new Date(assignedDate + 'T12:00:00').toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const toggle = (s: string) => setStatusFilter(statusFilter === s ? 'all' : s);
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">مساحة العمل</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            أوردراتك المُسندة إليك - {user?.name}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 bg-muted/50 rounded-xl px-3 py-2">
-          <button
-            onClick={() => changeDay(-1)}
-            className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-            title="اليوم السابق"
-          >‹</button>
-          <div className="text-center min-w-[140px]">
-            <p className="text-xs font-semibold text-foreground">{displayDate}</p>
-            {isToday && <span className="text-xs text-[var(--success)] font-medium">• اليوم</span>}
+    <div className="space-y-6" dir="rtl" data-testid="agent-workspace">
+      <PageHeader
+        title="مساحة العمل"
+        description={`أوردراتك المُسندة إليك - ${user?.name ?? ""}`}
+        icon={<Briefcase className="h-5 w-5" aria-hidden="true" />}
+        actions={
+          <div className="flex items-center gap-1 rounded-[var(--radius-brand-md)] bg-muted/50 px-2 py-1" role="group" aria-label="يوم التوزيع" data-testid="agent-day-nav">
+            <Button type="button" variant="ghost" size="sm" className="min-h-11 min-w-11 md:min-h-9 md:min-w-9" onClick={() => changeDay(-1)} aria-label="اليوم السابق" title="اليوم السابق"><ChevronRight className="h-4 w-4" aria-hidden="true" /></Button>
+            <div className="min-w-[140px] text-center">
+              <p className="text-xs font-semibold text-foreground">{displayDate}</p>
+              {isToday && <span className="text-xs font-medium text-[var(--success)]">اليوم</span>}
+            </div>
+            <Button type="button" variant="ghost" size="sm" className="min-h-11 min-w-11 md:min-h-9 md:min-w-9" onClick={() => changeDay(1)} disabled={isToday} aria-label="اليوم التالي" title="اليوم التالي"><ChevronLeft className="h-4 w-4" aria-hidden="true" /></Button>
+            {!isToday && (
+              <Button type="button" variant="link" size="sm" className={`${TOUCH} text-xs`} onClick={() => { setAssignedDate(todayCairo); setStatusFilter('all'); }}>عودة لليوم</Button>
+            )}
           </div>
-          <button
-            onClick={() => changeDay(1)}
-            disabled={isToday}
-            className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground disabled:opacity-30"
-            title="اليوم التالي"
-          >›</button>
-          {!isToday && (
-            <button
-              onClick={() => { setAssignedDate(todayCairo); setStatusFilter('all'); }}
-              className="text-xs text-primary hover:underline mr-1"
-            >عودة لليوم</button>
-          )}
-        </div>
-      </div>
+        }
+      >
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="إحصاءات اليوم" data-testid="agent-stats">
+          <StatCard label="جديدة" value={newCount.toLocaleString("ar-EG")} tone="info" active={statusFilter === 'new'} onClick={() => toggle('new')} loading={isLoading} />
+          <StatCard label="مؤكدة" value={confirmedCount.toLocaleString("ar-EG")} tone="success" active={statusFilter === 'confirmed'} onClick={() => toggle('confirmed')} loading={isLoading} />
+          <StatCard label="مؤجلة" value={postponedCount.toLocaleString("ar-EG")} tone="warning" active={statusFilter === 'postponed'} onClick={() => toggle('postponed')} loading={isLoading} />
+          <StatCard label="ملغية" value={cancelledCount.toLocaleString("ar-EG")} tone="danger" active={statusFilter === 'cancelled'} onClick={() => toggle('cancelled')} loading={isLoading} />
+        </section>
+      </PageHeader>
 
-      {/* Agent Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div
-          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'new' ? 'border-[var(--info)]/50 bg-[var(--info)]/10' : 'border-transparent bg-[var(--info)]/10/50 hover:bg-[var(--info)]/10'}`}
-          onClick={() => setStatusFilter(statusFilter === 'new' ? 'all' : 'new')}
-        >
-          <p className="text-2xl font-bold text-[var(--info)]">{newCount}</p>
-          <p className="text-xs font-medium text-[var(--info)] mt-1">جديدة</p>
-        </div>
-        <div
-          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'confirmed' ? 'border-[var(--success)]/50 bg-[var(--success)]/10' : 'border-transparent bg-[var(--success)]/10/50 hover:bg-[var(--success)]/10'}`}
-          onClick={() => setStatusFilter(statusFilter === 'confirmed' ? 'all' : 'confirmed')}
-        >
-          <p className="text-2xl font-bold text-[var(--success)]">{confirmedCount}</p>
-          <p className="text-xs font-medium text-[var(--success)] mt-1">مؤكدة</p>
-        </div>
-        <div
-          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'postponed' ? 'border-[var(--warning)]/50 bg-[var(--warning)]/10' : 'border-transparent bg-[var(--warning)]/10/50 hover:bg-[var(--warning)]/10'}`}
-          onClick={() => setStatusFilter(statusFilter === 'postponed' ? 'all' : 'postponed')}
-        >
-          <p className="text-2xl font-bold text-[var(--warning)]">{postponedCount}</p>
-          <p className="text-xs font-medium text-[var(--warning)] mt-1">مؤجلة</p>
-        </div>
-        <div
-          className={`rounded-xl p-4 cursor-pointer transition-all border-2 ${statusFilter === 'cancelled' ? 'border-destructive/50 bg-destructive/10' : 'border-transparent bg-destructive/10/50 hover:bg-destructive/10'}`}
-          onClick={() => setStatusFilter(statusFilter === 'cancelled' ? 'all' : 'cancelled')}
-        >
-          <p className="text-2xl font-bold text-destructive">{cancelledCount}</p>
-          <p className="text-xs font-medium text-destructive mt-1">ملغية</p>
-        </div>
-      </div>
+      {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}
 
-      {/* Confirm Rate */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-foreground">نسبة التأكيد</span>
-            <span className="text-lg font-bold text-primary">{confirmRate}%</span>
-          </div>
-          <div className="w-full bg-muted rounded-full h-2.5">
-            <div
-              className="h-2.5 rounded-full bg-primary transition-all"
-              style={{ width: `${confirmRate}%` }}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground mt-2">
-            {confirmedCount} مؤكد من أصل {total} أوردر
-          </p>
-        </CardContent>
-      </Card>
+      {/* Confirm Rate — من أوردرات اليوم المعروضة */}
+      <SectionCard testId="agent-rate">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-medium text-foreground">نسبة التأكيد</span>
+          <span className="text-lg font-bold tabular-nums text-primary">{confirmRate}%</span>
+        </div>
+        <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
+          <div className="h-2.5 rounded-full bg-primary transition-all duration-[var(--duration-base,200ms)]" style={{ width: `${confirmRate}%` }} />
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {confirmedCount} مؤكد من أصل {total} أوردر في هذا اليوم
+        </p>
+      </SectionCard>
 
       {/* Filter */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex flex-wrap gap-2" role="group" aria-label="فلتر الحالة" data-testid="agent-filters">
         {[
           { value: "all", label: "الكل" },
           { value: "new", label: "جديد" },
@@ -280,6 +239,8 @@ export default function AgentWorkspace() {
             key={f.value}
             variant={statusFilter === f.value ? "default" : "outline"}
             size="sm"
+            className={`${TOUCH} rounded-[var(--radius-brand-pill)]`}
+            aria-pressed={statusFilter === f.value}
             onClick={() => setStatusFilter(f.value)}
           >
             {f.label}
@@ -289,124 +250,114 @@ export default function AgentWorkspace() {
 
       {/* Orders Cards */}
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-48 bg-muted animate-pulse rounded-xl" />
-          ))}
-        </div>
+        <LoadingSkeleton variant="cards" rows={4} />
       ) : orders.length === 0 ? (
-        <Card>
-          <CardContent className="p-12 text-center">
-            <Package className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="text-muted-foreground font-medium">لا توجد أوردرات مُسندة إليك</p>
-            <p className="text-sm text-muted-foreground mt-1">انتظر حتى يقوم المدير بتوزيع الأوردرات</p>
-          </CardContent>
-        </Card>
+        <EmptyState icon={<Package className="h-6 w-6" aria-hidden="true" />} title="لا توجد أوردرات مُسندة إليك" description="انتظر حتى يقوم المدير بتوزيع الأوردرات" />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ul className="grid grid-cols-1 gap-4 md:grid-cols-2" data-testid="agent-orders">
           {orders.map(order => (
-            <Card key={order.id} className="transition-all hover:shadow-md">
-              <CardContent className="p-4">
-                {/* Order Header */}
-                <div className="flex items-start justify-between mb-3">
-                  <div>
-                    <p className="font-mono text-xs text-primary font-bold">{order.orderNumber}</p>
-                    <p className="font-bold text-foreground mt-0.5">{order.customerName}</p>
-                  </div>
-                  <Badge className={`${STATUS_COLORS[order.status]} border text-xs`}>
-                    {STATUS_LABELS[order.status]}
-                  </Badge>
+            <li key={order.id} className="rounded-[var(--radius-brand-md)] border border-border bg-card p-4 shadow-[var(--shadow-card)]" data-testid={`agent-order-${order.id}`}>
+              {/* Order Header */}
+              <div className="mb-3 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-mono text-xs font-bold text-primary" dir="ltr">{order.orderNumber}</p>
+                  <p className="mt-0.5 truncate font-bold text-foreground">{order.customerName}</p>
                 </div>
+                <StatusBadge status={order.status} size="sm" />
+              </div>
 
-                {/* Order Details */}
-                <div className="space-y-2 mb-4">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Phone className="h-3.5 w-3.5 shrink-0" />
-                    <span dir="ltr">{order.customerPhone}</span>
-                  </div>
-                  <div className="flex items-start gap-2 text-sm">
-                    <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-semibold text-foreground">{order.governorate}</span>
-                      <span className="text-muted-foreground leading-snug">{order.customerAddress}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Package className="h-3.5 w-3.5 shrink-0" />
-                    <span>{order.productName} × {order.quantity}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-bold text-foreground">
-                      {Number(order.totalAmount).toLocaleString('ar-EG')} ج.م
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {new Date(order.createdAt).toLocaleDateString('ar-EG')}
-                    </span>
-                  </div>
-                  {order.postponedTo && (
-                    <div className="flex items-center gap-2 text-sm text-[var(--warning)]">
-                      <Calendar className="h-3.5 w-3.5 shrink-0" />
-                      <span>متابعة: {new Date(order.postponedTo).toLocaleDateString('ar-EG')}</span>
-                    </div>
-                  )}
-                  {order.notes && (
-                    <p className="text-xs text-muted-foreground bg-muted rounded p-2">{order.notes}</p>
-                  )}
+              {/* Order Details */}
+              <div className="mb-4 space-y-2">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span dir="ltr">{order.customerPhone}</span>
                 </div>
-
-                {/* Edit Button - always visible */}
-                <div className="flex justify-end mb-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs border-[var(--info)]/30 text-[var(--info)] hover:bg-[var(--info)]/10"
-                    onClick={() => {
-                      setEditOrderData(order);
-                      setSelectedOrderId(order.id);
-                      setShowEditDialog(true);
-                    }}
-                  >
-                    <Edit2 className="h-3 w-3 ml-1" />
-                    تعديل
-                  </Button>
+                <div className="flex items-start gap-2 text-sm">
+                  <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-foreground">{order.governorate}</span>
+                    <span className="leading-snug text-muted-foreground">{order.customerAddress}</span>
+                  </div>
                 </div>
-
-                {/* Action Buttons */}
-                {(order.status === 'new' || order.status === 'postponed') && (
-                  <div className="flex gap-2">
-                    <Button
-                      className="flex-1 bg-[var(--success)] hover:bg-[var(--success)] text-white h-9"
-                      size="sm"
-                      onClick={() => confirmMutation.mutate({ orderId: order.id })}
-                      disabled={confirmMutation.isPending}
-                    >
-                      <CheckCircle className="h-4 w-4 ml-1" />
-                      تأكيد
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 h-9"
-                      size="sm"
-                      onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}
-                    >
-                      <Clock className="h-4 w-4 ml-1" />
-                      تأجيل
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 h-9"
-                      size="sm"
-                      onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}
-                    >
-                      <XCircle className="h-4 w-4 ml-1" />
-                      إلغاء
-                    </Button>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Package className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>{order.productName} × {order.quantity}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold tabular-nums text-foreground">
+                    {Number(order.totalAmount).toLocaleString('ar-EG')} ج.م
+                  </span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {new Date(order.createdAt).toLocaleDateString('ar-EG')}
+                  </span>
+                </div>
+                {order.postponedTo && (
+                  <div className="flex items-center gap-2 text-sm text-[var(--warning)]">
+                    <Calendar className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>متابعة: {new Date(order.postponedTo).toLocaleDateString('ar-EG')}</span>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+                {order.notes && (
+                  <p className="rounded-[var(--radius-brand-sm,0.375rem)] bg-muted p-2 text-xs text-muted-foreground">{order.notes}</p>
+                )}
+              </div>
+
+              {/* Edit Button - always visible */}
+              <div className="mb-2 flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={`${TOUCH} border-[var(--info)]/30 text-xs text-[var(--info)] hover:bg-[var(--info)]/10`}
+                  onClick={() => {
+                    setEditOrderData(order);
+                    setSelectedOrderId(order.id);
+                    setShowEditDialog(true);
+                  }}
+                  data-testid={`agent-edit-${order.id}`}
+                >
+                  <Edit2 className="h-3 w-3 ml-1" aria-hidden="true" />
+                  تعديل
+                </Button>
+              </div>
+
+              {/* Action Buttons */}
+              {(order.status === 'new' || order.status === 'postponed') && (
+                <div className="flex gap-2">
+                  <Button
+                    className="min-h-11 flex-1 bg-[var(--success)] text-[var(--success-foreground,#fff)] hover:opacity-90 md:min-h-9"
+                    size="sm"
+                    onClick={() => handleConfirm(order.id)}
+                    disabled={confirmMutation.isPending}
+                    data-testid={`agent-confirm-${order.id}`}
+                  >
+                    <CheckCircle className="h-4 w-4 ml-1" aria-hidden="true" />
+                    تأكيد
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="min-h-11 flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 md:min-h-9"
+                    size="sm"
+                    onClick={() => { setSelectedOrderId(order.id); setShowPostponeDialog(true); }}
+                    data-testid={`agent-postpone-${order.id}`}
+                  >
+                    <Clock className="h-4 w-4 ml-1" aria-hidden="true" />
+                    تأجيل
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="min-h-11 flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 md:min-h-9"
+                    size="sm"
+                    onClick={() => { setSelectedOrderId(order.id); setShowCancelDialog(true); }}
+                    data-testid={`agent-cancel-${order.id}`}
+                  >
+                    <XCircle className="h-4 w-4 ml-1" aria-hidden="true" />
+                    إلغاء
+                  </Button>
+                </div>
+              )}
+            </li>
           ))}
-        </div>
+        </ul>
       )}
 
       {/* تعديل الأوردر — نفس محرر البنود المشترك اللي في صفحة الأوردرات */}
@@ -428,15 +379,16 @@ export default function AgentWorkspace() {
 
       {/* Cancel Dialog */}
       <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" dir="rtl" data-testid="agent-cancel-dialog">
           <DialogHeader>
             <DialogTitle>إلغاء الأوردر</DialogTitle>
+            <DialogDescription>السبب إلزامي ويُسجَّل على الأوردر.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>سبب الإلغاء <span className="text-destructive">*</span></Label>
+              <Label htmlFor="agent-cancel-reason">سبب الإلغاء <span className="text-destructive">*</span></Label>
               <Select value={cancelReason} onValueChange={setCancelReason}>
-                <SelectTrigger className="mt-1">
+                <SelectTrigger id="agent-cancel-reason" className={`mt-1 ${TOUCH}`}>
                   <SelectValue placeholder="اختر السبب" />
                 </SelectTrigger>
                 <SelectContent>
@@ -447,8 +399,9 @@ export default function AgentWorkspace() {
               </Select>
             </div>
             <div>
-              <Label>ملاحظات</Label>
+              <Label htmlFor="agent-cancel-notes">ملاحظات</Label>
               <Textarea
+                id="agent-cancel-notes"
                 value={cancelNotes}
                 onChange={e => setCancelNotes(e.target.value)}
                 placeholder="تفاصيل إضافية..."
@@ -457,10 +410,11 @@ export default function AgentWorkspace() {
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCancelDialog(false)}>رجوع</Button>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" className={TOUCH} onClick={() => setShowCancelDialog(false)}>رجوع</Button>
             <Button
               variant="destructive"
+              className={TOUCH}
               disabled={!cancelReason || cancelMutation.isPending}
               onClick={() => {
                 if (!selectedOrderId || !cancelReason) return;
@@ -470,6 +424,7 @@ export default function AgentWorkspace() {
                   notes: cancelNotes || undefined,
                 });
               }}
+              data-testid="agent-cancel-confirm"
             >
               تأكيد الإلغاء
             </Button>
@@ -479,24 +434,28 @@ export default function AgentWorkspace() {
 
       {/* Postpone Dialog */}
       <Dialog open={showPostponeDialog} onOpenChange={setShowPostponeDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" dir="rtl" data-testid="agent-postpone-dialog">
           <DialogHeader>
             <DialogTitle>تأجيل الأوردر</DialogTitle>
+            <DialogDescription>حدّد تاريخ المتابعة.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>تاريخ المتابعة <span className="text-destructive">*</span></Label>
+              <Label htmlFor="agent-postpone-date">تاريخ المتابعة <span className="text-destructive">*</span></Label>
               <Input
+                id="agent-postpone-date"
                 type="date"
                 value={postponeDate}
                 onChange={e => setPostponeDate(e.target.value)}
-                className="mt-1"
+                className={`mt-1 ${TOUCH}`}
+                dir="ltr"
                 min={new Date().toISOString().split('T')[0]}
               />
             </div>
             <div>
-              <Label>ملاحظات</Label>
+              <Label htmlFor="agent-postpone-notes">ملاحظات</Label>
               <Textarea
+                id="agent-postpone-notes"
                 value={postponeNotes}
                 onChange={e => setPostponeNotes(e.target.value)}
                 placeholder="سبب التأجيل..."
@@ -505,9 +464,10 @@ export default function AgentWorkspace() {
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowPostponeDialog(false)}>رجوع</Button>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" className={TOUCH} onClick={() => setShowPostponeDialog(false)}>رجوع</Button>
             <Button
+              className={TOUCH}
               disabled={!postponeDate || postponeMutation.isPending}
               onClick={() => {
                 if (!selectedOrderId || !postponeDate) return;
@@ -517,6 +477,7 @@ export default function AgentWorkspace() {
                   notes: postponeNotes || undefined,
                 });
               }}
+              data-testid="agent-postpone-confirm"
             >
               تأكيد التأجيل
             </Button>

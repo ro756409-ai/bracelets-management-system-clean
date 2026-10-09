@@ -22,8 +22,7 @@ import {
   LogOut, RefreshCw, Search, Plus, CheckCircle2, XCircle, Clock,
   Phone, MapPin, ChevronDown, ChevronUp, TrendingUp, AlertTriangle,
   UserPlus, Key, ArrowRight, ArrowLeft, Menu, X, Eye, EyeOff,
-  Briefcase, FileText, Hash, Calendar, User, Lock
-} from "lucide-react";
+  Briefcase, FileText, Hash, Calendar, User, Lock, Megaphone } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new:       { label: "جديد",         color: "text-primary",           bg: "bg-accent border-primary/30" },
@@ -269,7 +268,7 @@ function ManagerDashboardTab() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center">
-              <span className="text-sm">📢</span>
+              <Megaphone className="h-4 w-4 text-accent-foreground" aria-hidden="true" />
             </div>
             إرسال رسالة لجميع الموظفين
           </CardTitle>
@@ -292,7 +291,7 @@ function ManagerDashboardTab() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="text-destructive border-destructive/30 hover:bg-destructive/10 shrink-0"
+                  className="min-h-11 md:min-h-9 text-destructive border-destructive/30 hover:bg-destructive/10 shrink-0"
                   onClick={() => clearBroadcastMutation.mutate()}
                   disabled={clearBroadcastMutation.isPending}
                 >
@@ -321,7 +320,7 @@ function ManagerDashboardTab() {
                 }
               }}
               disabled={!broadcastMsg.trim() || sendBroadcastMutation.isPending}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground shrink-0"
+              className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground shrink-0"
             >
               {sendBroadcastMutation.isPending ? 'جاري...' : 'إرسال'}
             </Button>
@@ -498,7 +497,7 @@ function ManagerOrdersTab() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-foreground">الأوردرات</h1>
         {selectedOrders.length > 0 && (
-          <Button onClick={() => setAssignDialog(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+          <Button onClick={() => setAssignDialog(true)} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
             <Users className="h-4 w-4 ml-2" />
             توزيع {selectedOrders.length} أوردر
           </Button>
@@ -641,13 +640,13 @@ function ManagerOrdersTab() {
 
                     {canAct && (
                       <div className="flex gap-2 pt-1">
-                        <Button size="sm" className="flex-1 bg-[var(--success)] hover:bg-[var(--success)] text-white h-9" onClick={() => confirmMutation.mutate({ orderId: order.id })} disabled={confirmMutation.isPending}>
+                        <Button size="sm" className="flex-1 bg-[var(--success)] hover:bg-[var(--success)] text-white min-h-11 md:h-9" onClick={() => confirmMutation.mutate({ orderId: order.id })} disabled={confirmMutation.isPending}>
                           <CheckCircle2 className="h-4 w-4 ml-1" />تأكيد
                         </Button>
-                        <Button size="sm" variant="outline" className="flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 h-9" onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}>
+                        <Button size="sm" variant="outline" className="flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 min-h-11 md:h-9" onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}>
                           <Clock className="h-4 w-4 ml-1" />تأجيل
                         </Button>
-                        <Button size="sm" variant="outline" className="flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 h-9" onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); }}>
+                        <Button size="sm" variant="outline" className="flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 min-h-11 md:h-9" onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); }}>
                           <XCircle className="h-4 w-4 ml-1" />إلغاء
                         </Button>
                       </div>
@@ -676,8 +675,8 @@ function ManagerOrdersTab() {
             </Select>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAssignDialog(false)}>إلغاء</Button>
-            <Button onClick={handleBulkAssign} disabled={bulkAssignMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setAssignDialog(false)}>إلغاء</Button>
+            <Button onClick={handleBulkAssign} disabled={bulkAssignMutation.isPending} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
               {bulkAssignMutation.isPending ? "جاري..." : "توزيع"}
             </Button>
           </DialogFooter>
@@ -699,12 +698,12 @@ function ManagerOrdersTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPostponeDialog({ open: false, orderId: null })}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setPostponeDialog({ open: false, orderId: null })}>إلغاء</Button>
             <Button onClick={() => {
               if (!postponeDate) { toast.error("حدد التاريخ"); return; }
               if (!postponeDialog.orderId) return;
               postponeMutation.mutate({ orderId: postponeDialog.orderId, postponedTo: new Date(postponeDate), notes: postponeNotes || undefined });
-            }} disabled={postponeMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+            }} disabled={postponeMutation.isPending} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
               {postponeMutation.isPending ? "جاري..." : "تأجيل"}
             </Button>
           </DialogFooter>
@@ -731,8 +730,8 @@ function ManagerOrdersTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelDialog({ open: false, orderId: null })}>رجوع</Button>
-            <Button onClick={() => {
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setCancelDialog({ open: false, orderId: null })}>رجوع</Button>
+            <Button className="min-h-11 md:min-h-9" onClick={() => {
               if (!cancelReason) { toast.error("اختر سبب الإلغاء"); return; }
               if (!cancelDialog.orderId) return;
               cancelMutation.mutate({ orderId: cancelDialog.orderId, cancelReason: cancelReason as any, notes: cancelNotes || undefined });
@@ -801,10 +800,10 @@ function ManagerInventoryTab() {
                     <p className="text-sm font-semibold text-[var(--warning)]">{Number(p.price).toLocaleString()} ج.م</p>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" variant="outline" className="flex-1 text-[var(--success)] border-[var(--success)]/40 hover:bg-[var(--success)]/10" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "in" })}>
+                    <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 text-[var(--success)] border-[var(--success)]/40 hover:bg-[var(--success)]/10" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "in" })}>
                       + وارد
                     </Button>
-                    <Button size="sm" variant="outline" className="flex-1 text-destructive border-destructive/40 hover:bg-destructive/10" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "out" })}>
+                    <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 text-destructive border-destructive/40 hover:bg-destructive/10" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "out" })}>
                       - صادر
                     </Button>
                   </div>
@@ -857,7 +856,7 @@ function ManagerInventoryTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setMovementDialog({ open: false, productId: null, type: "in" })}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setMovementDialog({ open: false, productId: null, type: "in" })}>إلغاء</Button>
             <Button onClick={() => {
               if (!movementQty || parseInt(movementQty) < 1) { toast.error("أدخل كمية صحيحة"); return; }
               if (!movementDialog.productId) return;
@@ -867,7 +866,7 @@ function ManagerInventoryTab() {
                 quantity: parseInt(movementQty),
                 reason: movementReason || undefined,
               });
-            }} disabled={addMovementMutation.isPending} className={movementDialog.type === "in" ? "bg-[var(--success)] hover:bg-[var(--success)] text-white" : "bg-destructive hover:bg-destructive text-white"}>
+            }} disabled={addMovementMutation.isPending} className={`min-h-11 md:min-h-9 ${movementDialog.type === "in" ? "bg-[var(--success)] hover:bg-[var(--success)] text-white" : "bg-destructive hover:bg-destructive text-white"}`}>
               {addMovementMutation.isPending ? "جاري..." : "تأكيد"}
             </Button>
           </DialogFooter>
@@ -1032,7 +1031,7 @@ function ManagerEmployeesTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-foreground">الموظفين</h1>
-        <Button onClick={() => setAddDialog(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+        <Button onClick={() => setAddDialog(true)} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
           <UserPlus className="h-4 w-4 ml-2" />
           إضافة موظف
         </Button>
@@ -1081,7 +1080,7 @@ function ManagerEmployeesTab() {
                   </div>
                   <div className="flex items-center gap-2">
                     {!emp.username && (
-                      <Button size="sm" variant="outline" onClick={() => {
+                      <Button className="min-h-11 md:min-h-9" size="sm" variant="outline" onClick={() => {
                         setCredDialog({ open: true, empId: emp.id, empName: emp.name });
                         setCredUsername(""); setCredPassword("");
                       }}>
@@ -1090,7 +1089,7 @@ function ManagerEmployeesTab() {
                       </Button>
                     )}
                     {emp.username && (
-                      <Button size="sm" variant="outline" onClick={() => {
+                      <Button className="min-h-11 md:min-h-9" size="sm" variant="outline" onClick={() => {
                         setCredDialog({ open: true, empId: emp.id, empName: emp.name });
                         setCredUsername(emp.username); setCredPassword("");
                       }}>
@@ -1098,7 +1097,7 @@ function ManagerEmployeesTab() {
                         تغيير كلمة المرور
                       </Button>
                     )}
-                    <Button
+                    <Button className="min-h-11 md:min-h-9"
                       size="sm"
                       variant={emp.isActive ? "destructive" : "default"}
                       onClick={() => updateMutation.mutate({ id: emp.id, isActive: !emp.isActive })}
@@ -1139,11 +1138,11 @@ function ManagerEmployeesTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddDialog(false)}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setAddDialog(false)}>إلغاء</Button>
             <Button onClick={() => {
               if (!newEmp.name.trim()) { toast.error("أدخل اسم الموظف"); return; }
               createMutation.mutate({ name: newEmp.name, phone: newEmp.phone || undefined, role: newEmp.role });
-            }} disabled={createMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+            }} disabled={createMutation.isPending} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
               {createMutation.isPending ? "جاري..." : "إضافة"}
             </Button>
           </DialogFooter>
@@ -1176,12 +1175,12 @@ function ManagerEmployeesTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCredDialog({ open: false, empId: null, empName: "" })}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setCredDialog({ open: false, empId: null, empName: "" })}>إلغاء</Button>
             <Button onClick={() => {
               if (!credUsername.trim() || !credPassword.trim()) { toast.error("أدخل اسم المستخدم وكلمة المرور"); return; }
               if (!credDialog.empId) return;
               setCredMutation.mutate({ id: credDialog.empId, username: credUsername.trim(), password: credPassword });
-            }} disabled={setCredMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+            }} disabled={setCredMutation.isPending} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
               {setCredMutation.isPending ? "جاري..." : "حفظ"}
             </Button>
           </DialogFooter>
@@ -1237,7 +1236,7 @@ function ManagerTasksTab() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-foreground">توزيع المهام</h1>
-        <Button onClick={() => setShowCreateDialog(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+        <Button onClick={() => setShowCreateDialog(true)} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
           <Plus className="h-4 w-4 ml-2" />
           إنشاء مهمة جديدة
         </Button>
@@ -1256,7 +1255,7 @@ function ManagerTasksTab() {
             size="sm"
             variant={statusFilter === f.key ? "default" : "outline"}
             onClick={() => setStatusFilter(f.key)}
-            className={statusFilter === f.key ? "bg-primary hover:bg-primary/90 text-primary-foreground" : ""}
+            className={`min-h-11 md:min-h-9 ${statusFilter === f.key ? "bg-primary hover:bg-primary/90 text-primary-foreground" : ""}`}
           >
             {f.label}
           </Button>
@@ -1322,7 +1321,7 @@ function ManagerTasksTab() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="text-destructive border-destructive/30 hover:bg-destructive/10 h-8"
+                        className="text-destructive border-destructive/30 hover:bg-destructive/10 min-h-11 md:h-8"
                         onClick={() => {
                           if (confirm("هل أنت متأكد من حذف هذه المهمة؟")) {
                             deleteMutation.mutate({ taskId: task.id });
@@ -1383,7 +1382,7 @@ function ManagerTasksTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>إلغاء</Button>
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setShowCreateDialog(false)}>إلغاء</Button>
             <Button
               onClick={() => {
                 if (!newTask.title.trim()) { toast.error("أدخل عنوان المهمة"); return; }
@@ -1394,7 +1393,7 @@ function ManagerTasksTab() {
                 });
               }}
               disabled={createMutation.isPending}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground"
+              className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {createMutation.isPending ? "جاري..." : "إنشاء المهمة"}
             </Button>

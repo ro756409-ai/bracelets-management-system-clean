@@ -32,13 +32,13 @@ export default function ScanOrders() {
       setScanResult(data as ScanResult);
       setScanCount((c) => c + 1);
       if (data.success) {
-        toast.success("✅ تم تجهيز الأوردر بنجاح!");
+        toast.success("تم تجهيز الأوردر بنجاح!");
       } else if (data.result === "duplicate") {
-        toast.warning("⚠️ هذا الأوردر تم تجهيزه من قبل");
+        toast.warning("هذا الأوردر تم تجهيزه من قبل");
       } else if (data.result === "cancelled") {
-        toast.error("🚫 هذا الأوردر ملغي أو مرتجع");
+        toast.error("هذا الأوردر ملغي أو مرتجع");
       } else {
-        toast.error("❌ QR غير صحيح - الأوردر غير موجود");
+        toast.error("QR غير صحيح - الأوردر غير موجود");
       }
     },
     onError: (err) => {

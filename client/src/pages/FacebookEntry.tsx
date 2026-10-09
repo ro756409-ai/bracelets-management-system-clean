@@ -237,7 +237,7 @@ export default function FacebookEntry() {
 
   const addOrderMutation = trpc.facebookEntry.addOrder.useMutation({
     onSuccess: data => {
-      toast.success(`✅ تم إضافة الأوردر — رقم: ${data.orderNumber}`);
+      toast.success(`تم إضافة الأوردر — رقم: ${data.orderNumber}`);
       setCust(EMPTY_CUSTOMER);
       setItems([]);
       resetParseState(); setManualMode(false); setPasteText("");
@@ -247,11 +247,11 @@ export default function FacebookEntry() {
     onError: e => toast.error(`خطأ: ${e.message}`),
   });
   const updateOrderMutation = trpc.facebookEntry.updateOrder.useMutation({
-    onSuccess: () => { toast.success("✅ تم تعديل الأوردر"); setEditingOrder(null); refetchOrders(); },
+    onSuccess: () => { toast.success("تم تعديل الأوردر"); setEditingOrder(null); refetchOrders(); },
     onError: e => toast.error(`خطأ: ${e.message}`),
   });
   const deleteOrderMutation = trpc.facebookEntry.deleteOrder.useMutation({
-    onSuccess: () => { toast.success("✅ تم حذف الأوردر"); setDeletingOrderId(null); refetchOrders(); },
+    onSuccess: () => { toast.success("تم حذف الأوردر"); setDeletingOrderId(null); refetchOrders(); },
     onError: e => toast.error(`خطأ: ${e.message}`),
   });
 

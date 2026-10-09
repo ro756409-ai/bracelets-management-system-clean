@@ -201,7 +201,7 @@ export default function OrderDetails() {
         ...(itemsDirty ? {} : { shippingFees }),
       });
     }
-    toast.success("✅ تم حفظ التعديلات");
+    toast.success("تم حفظ التعديلات");
     setShowItemsEditor(false);
     refetch();
   }
