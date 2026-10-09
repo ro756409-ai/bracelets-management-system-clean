@@ -121,7 +121,9 @@ export async function prepareOrderEvent(tx: any, order: LockedOrder, rawCtx: Ord
     .select({ id: orderActivityEvents.id, payloadHash: orderActivityEvents.payloadHash })
     .from(orderActivityEvents)
     .where(and(eq(orderActivityEvents.tenantId, tenantId), eq(orderActivityEvents.idempotencyKey, key)))
-    .limit(1);
+    .limit(1)
+    // قراءة قافلة: ترى آخر التزام فعلي (لا لقطة REPEATABLE READ) وتسلسل نفس المفتاح بين الطلبات المتزامنة.
+    .for("update");
   if (existing) {
     if (existing.payloadHash === payloadHash) return { replay: true };
     throw new TRPCError({ code: "CONFLICT", message: "نفس معرّف العملية استُخدم لطلب مختلف — لم يُنفَّذ أي تغيير" });
