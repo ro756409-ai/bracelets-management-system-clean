@@ -6189,7 +6189,7 @@ export const appRouter = router({
       }),
 
     // جلب قائمة المنتجات — مقصورة على نشاط الموظف (عزل).
-    products: requireEmployeeTenantPermission("orders.create").query(async ({ ctx }) => {
+    products: requireEmployeeTenantPermission("orders.view").query(async ({ ctx }) => {
       // نطاق نشاط الموظف الواحد — منتجاته النشطة فقط، معزولة عن أي نشاط/tenant تاني (الأسورة).
       // fail-closed: بلا نشاط → صفر (مش كل المنتجات).
       const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
@@ -6208,7 +6208,7 @@ export const appRouter = router({
      * Active catalog (products + their variants) for the item picker — SCOPED to the
      * employee's own business (تركيبات المخزون بتاعت نشاطه بس، مش كل التينانتات).
      */
-    catalog: requireEmployeeTenantPermission("orders.create").query(async ({ ctx }) => {
+    catalog: requireEmployeeTenantPermission("orders.view").query(async ({ ctx }) => {
       // نطاق نشاط الموظف الواحد فقط — معزول عن أي نشاط تاني (الأسورة) حتى داخل نفس الـtenant.
       const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
       if (businessIds.length === 0) return { products: [], variants: [] };
@@ -6225,7 +6225,7 @@ export const appRouter = router({
      * طريقة يبعت بيها قالبًا أو نشاطًا. قراءة الإعداد fail-safe (الافتراضي عند أي خطأ)،
      * فالشاشة مابتقعش أبدًا بسبب إعداد عرض.
      */
-    entryConfig: requireEmployeeTenantPermission("orders.create").query(async ({ ctx }) => {
+    entryConfig: requireEmployeeTenantPermission("orders.view").query(async ({ ctx }) => {
       const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
       const mode =
         businessIds.length === 1
@@ -6234,7 +6234,7 @@ export const appRouter = router({
       return { mode };
     }),
 
-    parsePaste: requireEmployeeTenantPermission("orders.create")
+    parsePaste: requireEmployeeTenantPermission("orders.view")
       .input(z.object({ text: z.string().min(1) }))
       .query(async ({ ctx, input }) => {
         // نطاق نشاط الموظف الواحد فقط — نفس كتالوج شاشة الإدخال، معزول عن أي نشاط تاني.
@@ -6265,7 +6265,7 @@ export const appRouter = router({
       }),
 
     // جلب variants منتج معين (للكفر ووتر بروف)
-    productVariants: requireEmployeeTenantPermission("orders.create")
+    productVariants: requireEmployeeTenantPermission("orders.view")
       .input(
         z.object({
           productId: z.number().int().min(1),

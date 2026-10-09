@@ -44,7 +44,7 @@ describe("🔒 حراس المصدر", () => {
   const businessesPage = fs.readFileSync("client/src/pages/Businesses.tsx", "utf-8");
 
   it("🔒 entryConfig بلا input — القالب من نشاط الجلسة", () => {
-    const i = routers.indexOf('entryConfig: requireEmployeeTenantPermission("orders.create").query(');
+    const i = routers.indexOf('entryConfig: requireEmployeeTenantPermission("orders.view").query(');
     expect(i).toBeGreaterThan(-1);
     // لحد نهاية الإجراء نفسه بس — مش الإجراء اللي بعده.
     const block = routers.slice(i, routers.indexOf("}),", i));

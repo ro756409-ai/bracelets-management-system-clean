@@ -323,7 +323,10 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
       const db = await getDb();
       if (!db) return;
       const fixture = await createCoreTestFixture("order-content");
-      const editor = { id: 1, name: "موظف تأكيدات", role: "agent" };
+      // موظف حقيقي في شركة الـfixture — البوابة تحلّ الهوية من كوكيه (صف موظف فعّال) لا من ctx.employee.
+      const { createEmployee, deleteEmployee } = await import("./db");
+      const created: any = await createEmployee({ name: "موظف تأكيدات", role: "order_confirmation", isActive: true, tenantId: fixture.tenantId, businessId: fixture.businessId, username: `ocl_${Date.now()}` } as any);
+      const editor = { id: Number((Array.isArray(created) ? created[0] : created)?.insertId ?? created?.id), name: "موظف تأكيدات", role: "order_confirmation" };
 
       const [engravingA] = await db
         .insert(productVariants)
@@ -383,8 +386,10 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
       // من خلال الراوتر بجلسة موظف تأكيدات حقيقية — يعني الصلاحية والرحلة بيتختبروا
       // مع بعض، مش كل واحد لوحده.
       const { appRouter } = await import("./routers");
+      // البوابة تقرأ الهوية من كوكي الموظف الموقّع فقط (لا ctx.employee ولا جلسة مالك).
+      const jwt = (await import("jsonwebtoken")).default;
       const employeeCaller = appRouter.createCaller({
-        req: { protocol: "https", headers: {}, cookies: {} },
+        req: { protocol: "https", headers: {}, cookies: { employee_token: jwt.sign({ employeeId: editor.id }, process.env.JWT_SECRET as string) } },
         res: { clearCookie: () => {} },
         user: null,
         employee: {
@@ -493,6 +498,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))(
       await db
         .delete(productVariants)
         .where(eq(productVariants.productId, fixture.productId));
+      await deleteEmployee(editor.id);
       await fixture.cleanup();
     });
   }

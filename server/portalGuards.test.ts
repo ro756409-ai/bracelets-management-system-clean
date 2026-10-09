@@ -62,4 +62,9 @@ describe("🔐 البوابة — حارس موحّد", () => {
     expect(t.match(/await requireSessionPermission\(ctx, "employees\.manage"\);/g)!.length).toBe(3);
     expect(t.match(/await requireSessionPermission\(ctx, "employees\.view"\);/g)!.length).toBe(1);
   });
+  it("التوحيد بلا تغيير افتراضي: قراءات الكتالوج/الإدخال على orders.view (كانت لأي موظف، وكل الأدوار معها orders.view)", () => {
+    const got = Object.fromEntries(procs(fbEntry).map(p => [p.name, p.arg?.replace(/"/g, "")]));
+    for (const name of ["products", "catalog", "entryConfig", "parsePaste", "productVariants", "scanLogs"]) expect(got[name], name).toBe("orders.view");
+    for (const name of ["addOrder", "updateOrder", "deleteOrder"]) expect(got[name], name).toBe("orders.create");
+  });
 });
