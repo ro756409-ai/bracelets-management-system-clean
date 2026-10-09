@@ -28,7 +28,8 @@ describe("🔌 Queries/Mutations قبل = بعد", () => {
   it("ManagerDashboard و EmployeeDashboard: لم تتغيّر hooks (لمسات 44px وtokens فقط)", () => {
     expect(hooks(read("pages/ManagerDashboard.tsx")).length).toBe(31);
     // 23 أصلية + employeePortal.myPermissions (روابط الشحن حسب صلاحية هوية البوابة — إضافة مقصودة)
-    expect(hooks(read("pages/EmployeeDashboard.tsx")).length).toBe(24);
+    // + performance.status (رابط «أدائي» بعد تفعيل سجل الأحداث)
+    expect(hooks(read("pages/EmployeeDashboard.tsx")).length).toBe(25);
   });
 });
 

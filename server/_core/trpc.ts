@@ -2,7 +2,7 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
-import { hasTenantPermission, isFinancialPermission, isFrozenAccountingWrite, ACCOUNTING_FROZEN_MESSAGE, type Permission } from "../permissions";
+import { hasTenantPermission, isFinancialPermission, isFrozenAccountingWrite, ACCOUNTING_FROZEN_MESSAGE, MANAGER_GRANT_ONLY_PERMISSIONS, type Permission } from "../permissions";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -56,6 +56,13 @@ export function permissionProcedure(permission: Permission) {
     // المالك الحقيقي (super_admin/admin) والمحاسب بس بيعدّوا على المالي.
     if (ctx.employee?.role === "manager" && isFinancialPermission(permission)) {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+    }
+    // صلاحيات «بالمنح فقط» للمدير (قرار المالك: مقارنة/تصدير الأداء): جلسة الـadmin الصناعية لا تكفي —
+    // لازم منح صريح للدور manager في هذه الشركة (tenant_role_permissions). لا تأثير على أي صلاحية أخرى.
+    if (ctx.employee?.role === "manager" && MANAGER_GRANT_ONLY_PERMISSIONS.includes(permission)) {
+      if (!(await hasTenantPermission(ctx.tenantId, "manager", permission)))
+        throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+      return next({ ctx });
     }
     const ownerOrAdmin = ctx.user?.role === "admin";
     if (!ownerOrAdmin && !await hasTenantPermission(ctx.tenantId, ctx.employee?.role, permission)) {

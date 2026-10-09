@@ -58,6 +58,8 @@ describe("EmployeeDashboard — Phase A view layer", () => {
     expect(hooks(src)).toEqual([
       // أُضيف عن قصد (روابط الشحن): صلاحيات هوية البوابة — قراءة بس، قبل باقي الـhooks.
       "trpc.employeePortal.myPermissions.useQuery",
+      // أُضيف عن قصد (رابط «أدائي»): حالة سجل الأحداث — يظهر الرابط فقط بعد التفعيل.
+      "trpc.performance.status.useQuery",
       "trpc.employeePortal.me.useQuery",
       "trpc.businesses.groupsWithBusinesses.useQuery",
       "trpc.employeePortal.stats.useQuery",

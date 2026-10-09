@@ -88,6 +88,12 @@ export const ALL_PERMISSIONS = [
   "ledger.period.lock",
   "ledger.period.reopen",
   "ledger.activate",
+  // ==================== أداء الموظفين (سجل الأحداث 0041) ====================
+  // view_self: الموظف يرى نفسه فقط. view_all: مقارنة الموظفين (المالك/الأدمن افتراضيًا، المدير بالمنح).
+  // export: تصدير التقرير. لا Leaderboard عام. view_team مؤجّل (لا نموذج فريق).
+  "employee_performance.view_self",
+  "employee_performance.view_all",
+  "employee_performance.export",
 ] as const;
 
 /** صلاحيات دفتر V3 التي يملكها المالك وحده افتراضيًا (لا يأخذها admin إلا بمنح صريح لكل tenant). */
@@ -97,6 +103,14 @@ const LEDGER_PERMISSIONS: readonly Permission[] = [
 ];
 
 export type Permission = (typeof ALL_PERMISSIONS)[number];
+
+/** صلاحيات لا يأخذها المدير افتراضيًا — تُمنح له لكل شركة عبر tenant_role_permissions (قرار المالك). */
+export const MANAGER_GRANT_ONLY_PERMISSIONS: readonly Permission[] = [
+  "employee_performance.view_all",
+  "employee_performance.export",
+];
+/** صلاحية «أدائي» لكل دور تشغيلي (ما عدا viewer). */
+const SELF_PERFORMANCE: readonly Permission[] = ["employee_performance.view_self"];
 
 /**
  * الصلاحيات **المالية** — الأقسام اللي بتحرّك فلوس أو بتوريها: الحسابات، المصاريف،
@@ -205,7 +219,7 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
   // admin: كل شيء عدا ما هو للمالك وحده في دفتر V3 (إعادة فتح الفترة والتفعيل).
   admin: ALL_PERMISSIONS.filter(p => !LEDGER_OWNER_ONLY_PERMISSIONS.includes(p)),
   // المدير تشغيلي: كل الصلاحيات القديمة كما كانت، وبلا أي صلاحية على دفتر V3 (مالي).
-  manager: ALL_PERMISSIONS.filter(p => !LEDGER_PERMISSIONS.includes(p)),
+  manager: ALL_PERMISSIONS.filter(p => !LEDGER_PERMISSIONS.includes(p) && !MANAGER_GRANT_ONLY_PERMISSIONS.includes(p)),
   // المحاسب هو الدور الوحيد غير الإداري اللي بيدخل حركات على الخزنة — الدور كان موجود
   // في القائمة من غير أي صلاحية محاسبية، فكان بيشوف الأوردرات وبس.
   accountant: [
@@ -224,6 +238,7 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     // الاتنين دول (`accounting.approve` و`reports.view_profit`) بيمنحهم المالك يدويًا لو
     // حب — عن طريق tenant_role_permissions من غير أي Deploy.
     "accounting.create", "treasury.transfer", "settlements.create",
+    ...SELF_PERFORMANCE,
   ],
   viewer: ["dashboard.view", "orders.view"],
   // مشرف تشغيلي: بيشوف ويشتغل على كل الأوردرات ويصدّر ويستورد ويتابع الموظفين والشحن —
@@ -233,14 +248,15 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     "orders.view", "orders.create", "orders.update", "orders.edit_items",
     "orders.confirm", "orders.cancel", "orders.export", "orders.import",
     "employees.view", "audit.view",
+    ...SELF_PERFORMANCE,
   ],
-  order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items"],
-  agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items"],
-  data_entry: ["orders.view", "orders.create"],
-  facebook_entry: ["orders.view", "orders.create"],
-  shipping: ["orders.view", "orders.export", "shipping_ops.view"],
-  scanner: ["orders.view"],
-  warehouse: ["dashboard.view", "orders.view"],
+  order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items", ...SELF_PERFORMANCE],
+  agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items", ...SELF_PERFORMANCE],
+  data_entry: ["orders.view", "orders.create", ...SELF_PERFORMANCE],
+  facebook_entry: ["orders.view", "orders.create", ...SELF_PERFORMANCE],
+  shipping: ["orders.view", "orders.export", "shipping_ops.view", ...SELF_PERFORMANCE],
+  scanner: ["orders.view", ...SELF_PERFORMANCE],
+  warehouse: ["dashboard.view", "orders.view", ...SELF_PERFORMANCE],
 };
 
 export function permissionsForRole(role: string | null | undefined): readonly Permission[] {

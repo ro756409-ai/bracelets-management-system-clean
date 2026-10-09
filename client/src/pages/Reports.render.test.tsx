@@ -11,7 +11,8 @@ const st = vi.hoisted(() => ({ q: {} as Record<string, Q>, role: "admin", deskto
 const { mkQuery } = vi.hoisted(() => ({
   mkQuery: (key: string) => (input: any, opts: any) => { st.calls.push({ key, input, enabled: opts?.enabled }); const q = st.q[key] ?? {}; return { data: opts?.enabled === false ? undefined : q.data, isLoading: q.isLoading ?? false, isError: q.isError ?? false, error: q.error, refetch: vi.fn() }; },
 }));
-vi.mock("@/lib/trpc", () => ({ trpc: { reports: { employeePerformance: { useQuery: mkQuery("perf") }, cancellationReasons: { useQuery: mkQuery("cancel") }, dailyChart: { useQuery: mkQuery("chart") } } } }));
+vi.mock("@/lib/trpc", () => ({ trpc: { reports: { employeePerformance: { useQuery: mkQuery("perf") }, cancellationReasons: { useQuery: mkQuery("cancel") }, dailyChart: { useQuery: mkQuery("chart") } }, performance: { status: { useQuery: mkQuery("perfStatus") } } } }));
+vi.mock("wouter", () => ({ useLocation: () => ["/reports", () => {}] }));
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: 1, role: st.role }, loading: false }) }));
 vi.mock("@/contexts/BusinessContext", () => ({ useBusinessContext: () => ({ currentBusinessIds: [1] }) }));
 vi.mock("@/hooks/useOnlineStatus", () => ({ useOnlineStatus: () => true }));

@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, Clock, Phone, PhoneOff, MapPin, Package,
   LogOut, RefreshCw, ChevronDown, ChevronUp,
-  ShoppingBag, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle, Megaphone } from "lucide-react";
+  ShoppingBag, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle, Megaphone, History } from "lucide-react";
 import jsQR from "jsqr";
 import { BusinessAvatar } from "@/components/BusinessAvatar";
 import { useBusinessContext } from "@/contexts/BusinessContext";
@@ -196,6 +196,9 @@ export default function EmployeeDashboard() {
     refetchInterval: 60 * 1000,
   });
   const canViewShipping = (portalPermissions ?? []).includes("shipping_ops.view");
+  // «أدائي» يظهر فقط والسجل مفعّل وهوية البوابة معها view_self — العلم معطل = لا تغيير في الشاشة.
+  const { data: performanceStatus } = trpc.performance.status.useQuery(undefined, { retry: false, staleTime: 5 * 60 * 1000 });
+  const canViewMyPerformance = performanceStatus?.enabled === true && (portalPermissions ?? []).includes("employee_performance.view_self");
 
   const { data: meData, error: meError } = trpc.employeePortal.me.useQuery(undefined, {
     retry: false,
@@ -964,6 +967,18 @@ export default function EmployeeDashboard() {
 
             {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
                 فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
+            {canViewMyPerformance && (
+              <Button
+                variant="ghost"
+                onClick={() => setLocation("/my-performance")}
+                className="min-h-11 min-w-11 md:h-8 md:min-h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
+                title="أدائي"
+                aria-label="أدائي"
+                data-testid="my-performance-link"
+              >
+                <History className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            )}
             <span className="mx-1 hidden h-5 w-px bg-primary-foreground/25 sm:inline-block" aria-hidden="true" />
             <button
               onClick={() => { refetch(); utils.employeePortal.myPermissions.invalidate(); }}

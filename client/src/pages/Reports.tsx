@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { EstimatedPerformanceNotice, ESTIMATED_PERFORMANCE_TITLE, sortByEmployeeName } from "@/components/shared/EstimatedPerformanceNotice";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -73,6 +74,9 @@ export default function Reports() {
   const { data: chartData, isLoading: chartLoading } = trpc.reports.dailyChart.useQuery({ days: dateRange === 'today' ? 1 : dateRange === 'week' ? 7 : 30, businessIds: currentBusinessIds }, {
     enabled: isAdmin,
   });
+  // رابط التقرير التاريخي من سجل الأحداث — يظهر فقط بعد تفعيله (العلم معطل = لا تغيير في الصفحة).
+  const { data: eventLedger } = trpc.performance.status.useQuery(undefined, { enabled: isAdmin, retry: false });
+  const [, navigate] = useLocation();
 
   const dateRangeLabels: Record<DateRange, string> = {
     today: "اليوم",
@@ -240,6 +244,13 @@ export default function Reports() {
       {/* Employee Performance Table — النِّسَب من السيرفر كما هي */}
       <SectionCard title={<span className="inline-flex items-center gap-2"><Users className="h-4 w-4 text-primary" aria-hidden="true" /> {ESTIMATED_PERFORMANCE_TITLE}</span>} description="حسب الموظف المُسند حاليًا وحالة الأوردر الحالية — مرتّب أبجديًا بالاسم" flush testId="reports-performance">
         <EstimatedPerformanceNotice className="m-3" />
+        {eventLedger?.enabled && (
+          <div className="mx-3 mb-3">
+            <Button variant="outline" className={TOUCH} onClick={() => navigate("/performance")} data-testid="reports-open-performance">
+              عرض الأداء التاريخي من سجل الأحداث
+            </Button>
+          </div>
+        )}
         <ResponsiveDataTable<any>
           rows={perfRows}
           columns={perfColumns}

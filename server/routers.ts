@@ -108,6 +108,8 @@ import {
 } from "./tenantScope";
 import { eq, and, gte, lte, desc, sql, inArray, or, isNull } from "drizzle-orm";
 import { orderEventsEnabled, type OrderEventContext } from "./orderEvents.service";
+import { loadPerformance } from "./employeePerformance.service";
+import { performanceCsv } from "../shared/employeePerformance";
 import {
   broadcastScopeCondition,
   employeeInTeamScope,
@@ -4374,6 +4376,15 @@ export const appRouter = router({
       return tenantPermissionsForRole(requireTenantId(emp), emp.role);
     }),
 
+    // «أدائي» من سجل الأحداث — هوية البوابة فقط، نشاط الموظف فقط، بلا ترتيب.
+    myPerformance: requireEmployeeTenantPermission("employee_performance.view_self")
+      .input(z.object({ dateFrom: z.string(), dateTo: z.string() }).strict())
+      .query(async ({ ctx, input }) => {
+        const emp = (ctx as any).employee;
+        const businessIds = (await scopeBusinessIds(empScope(ctx), {})) ?? [NO_BUSINESS];
+        return loadPerformance({ tenantId: requireTenantId(emp), businessIds, fromDate: input.dateFrom, toDate: input.dateTo, onlyEmployeeId: emp.id });
+      }),
+
     myOrders: requireEmployeePermission("orders.view")
       .input(
         z.object({
@@ -6482,6 +6493,33 @@ export const appRouter = router({
         await conn.end();
       }
     }),
+  }),
+
+  // ==================== أداء الموظفين من سجل الأحداث (0041، خلف ORDER_EVENTS_ENABLED) ====================
+  // القراءة فقط. النطاق من الجلسة (tenant + أنشطتها)، والمدخلات strict (لا tenantId من العميل).
+  performance: router({
+    status: authenticatedProcedure.query(() => ({ enabled: orderEventsEnabled() })),
+    team: permissionProcedure("employee_performance.view_all")
+      .input(z.object({ dateFrom: z.string(), dateTo: z.string(), businessIds: z.array(z.number()).optional() }).strict())
+      .query(async ({ ctx, input }) => {
+        const businessIds = (await scopeBusinessIds(ctx, input)) ?? [NO_BUSINESS];
+        return loadPerformance({ tenantId: ctx.tenantId, businessIds, fromDate: input.dateFrom, toDate: input.dateTo });
+      }),
+    mine: permissionProcedure("employee_performance.view_self")
+      .input(z.object({ dateFrom: z.string(), dateTo: z.string() }).strict())
+      .query(async ({ ctx, input }) => {
+        const self = ctx.employee?.id;
+        if (!self) throw new TRPCError({ code: "FORBIDDEN", message: "تعذّر تحديد الموظف" });
+        const businessIds = (await scopeBusinessIds(ctx, {})) ?? [NO_BUSINESS];
+        return loadPerformance({ tenantId: ctx.tenantId, businessIds, fromDate: input.dateFrom, toDate: input.dateTo, onlyEmployeeId: self });
+      }),
+    exportCsv: permissionProcedure("employee_performance.export")
+      .input(z.object({ dateFrom: z.string(), dateTo: z.string(), businessIds: z.array(z.number()).optional() }).strict())
+      .query(async ({ ctx, input }) => {
+        const businessIds = (await scopeBusinessIds(ctx, input)) ?? [NO_BUSINESS];
+        const report = await loadPerformance({ tenantId: ctx.tenantId, businessIds, fromDate: input.dateFrom, toDate: input.dateTo });
+        return report.enabled ? { enabled: true as const, csv: performanceCsv(report.rows) } : { enabled: false as const, csv: "" };
+      }),
   }),
 
   // ==================== BROADCAST (Admin OAuth) ====================
