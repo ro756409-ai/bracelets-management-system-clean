@@ -365,10 +365,13 @@ async function confirmOrderOrReject(orderId: number, updatedBy: number, confirme
 }
 
 async function assertEmployeeOwnsOrder(
-  emp: { id: number; role: string },
+  emp: { id: number; role: string; tenantId: number | null; businessId?: number | null },
   orderId: number,
   message: string
 ) {
+  // P0: نطاق الأوردر **قبل** أي استثناء للدور — كان المدير/الأدمن معفيًا من كل فحص، فيقدر يأكّد
+  // أو يلغي أوردر tenant تاني بمعرّفه. نفس حارس updateStatus: tenant الموظف + نشاطه.
+  await requireOwned(empScope({ employee: emp }), "order", orderId);
   const order = await getOrderById(orderId);
   if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
   if (!isAdminTierRole(emp.role) && order.assignedEmployeeId !== emp.id) {
@@ -4984,6 +4987,8 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         await requireOwned(empScope(ctx), "order", input.orderId);
+        // P0: المستلم لازم يكون في نطاق الجلسة — كان أي employeeId من أي tenant مقبول.
+        await requireOwned(empScope(ctx), "employee", input.employeeId);
         await assignOrderToEmployee(input.orderId, input.employeeId, emp.id);
         return { success: true };
       }),
@@ -5066,6 +5071,10 @@ export const appRouter = router({
         const firstProductId = items[0].productId;
         if (effectiveBusinessId == null)
           throw new TRPCError({ code: "BAD_REQUEST", message: "النشاط مطلوب" });
+        // P0: المنتجات والـvariant لازم يكونوا في نطاق الجلسة قبل أي كتابة — كان أي productId مقبول.
+        await requireAllOwned(empScope(ctx), "product", items.map(p => p.productId));
+        if (input.variantId != null)
+          await requireOwned(empScope(ctx), "variant", input.variantId);
         const newOrderId = await createOrderWithItems(
           {
             customerName: input.customerName,
@@ -5102,14 +5111,15 @@ export const appRouter = router({
       const emp = (ctx as any).employee;
       if (emp.role !== "manager" && emp.role !== "warehouse")
         throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
-      return getAllProducts(emp.businessId ?? undefined);
+      // P0: نطاق الجلسة (tenant + نشاط الموظف) — كان `emp.businessId ?? undefined` = كل الـtenants لو null.
+      return getAllProducts(undefined, await scopeBusinessIds(empScope(ctx), {}));
     }),
     // Low stock products
     lowStockProducts: employeePortalProcedure.query(async ({ ctx }) => {
       const emp = (ctx as any).employee;
       if (emp.role !== "manager" && emp.role !== "warehouse")
         throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
-      return getLowStockProducts(emp.businessId ?? undefined);
+      return getLowStockProducts(undefined, await scopeBusinessIds(empScope(ctx), {}));
     }),
     // Add inventory movement
     addInventoryMovement: employeePortalProcedure
@@ -5157,7 +5167,8 @@ export const appRouter = router({
         return getInventoryMovements(
           input.productId,
           input.limit,
-          emp.businessId ?? undefined
+          undefined,
+          await scopeBusinessIds(empScope(ctx), {})
         );
       }),
 
@@ -5208,11 +5219,12 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const emp = (ctx as any).employee;
+        // P0: نطاق الجلسة fail-closed (بلا نشاط → صفر)، مش `emp.businessId ?? undefined`.
         return getCancellationReasons(
           input.dateFrom,
           input.dateTo,
-          emp.businessId ?? undefined
+          undefined,
+          await scopeBusinessIds(empScope(ctx), {})
         );
       }),
 
@@ -5220,12 +5232,13 @@ export const appRouter = router({
     dailyChart: managerPortalProcedure
       .input(
         z.object({
-          days: z.number().default(30),
+          days: z.number().int().min(1).max(366).default(30),
         })
       )
       .query(async ({ ctx, input }) => {
-        const emp = (ctx as any).employee;
-        return getDailyOrdersChart(input.days, emp.businessId ?? undefined);
+        // P0: الاستعلام نفسه مالوش شرط tenant — النطاق هو الحارس الوحيد. كان `emp.businessId ?? undefined`
+        // فمدير بلا نشاط بيشوف أعداد أوردرات **كل الـtenants**.
+        return getDailyOrdersChart(input.days, undefined, await scopeBusinessIds(empScope(ctx), {}));
       }),
 
     // Employees list
@@ -6861,8 +6874,9 @@ export const appRouter = router({
     }),
     groupsWithBusinesses: authenticatedProcedure.query(async ({ ctx }) => {
       const allowed = await sessionBusinessIds(ctx);
-      const groups = await getBusinessGroupsWithBusinesses();
-      if (allowed == null) return groups;
+      // P0: نطاق مجهول = لا شيء (كان بيرجّع مجموعات وأنشطة كل الـtenants)، والتصفية في الاستعلام نفسه.
+      if (allowed == null) return [];
+      const groups = await getBusinessGroupsWithBusinesses(denyWhenEmpty(allowed));
       const allowedSet = new Set(denyWhenEmpty(allowed));
       return groups
         .map(group => ({

@@ -207,19 +207,27 @@ export async function getActiveBusinessGroups() {
     .orderBy(asc(businessGroups.id));
 }
 
-export async function getBusinessGroupsWithBusinesses() {
+/**
+ * `scopeBusinessIds` (اختياري): الأنشطة المسموحة للجلسة — التصفية بتتم في الاستعلام نفسه، والمجموعة
+ * بتظهر بس لو فيها نشاط من النطاق. القائمة الفاضية = `[-1]` (لا شيء). من غيرها = السلوك القديم
+ * (للنداءات الداخلية والاختبارات فقط).
+ */
+export async function getBusinessGroupsWithBusinesses(scopeBusinessIds?: number[]) {
   const db = await getDb();
   if (!db) return [];
-  const groups = await db
-    .select()
-    .from(businessGroups)
-    .where(eq(businessGroups.isActive, true))
-    .orderBy(asc(businessGroups.id));
+  const scoped = scopedBusinessFilter(businesses.id, scopeBusinessIds);
   const allBusinesses = await db
     .select()
     .from(businesses)
-    .where(eq(businesses.isActive, true))
+    .where(scoped ? and(eq(businesses.isActive, true), scoped) : eq(businesses.isActive, true))
     .orderBy(asc(businesses.name));
+  const groupIds = [...new Set(allBusinesses.map(b => b.groupId).filter((id): id is number => id != null))];
+  if (scoped && groupIds.length === 0) return [];
+  const groups = await db
+    .select()
+    .from(businessGroups)
+    .where(scoped ? and(eq(businessGroups.isActive, true), inArray(businessGroups.id, groupIds)) : eq(businessGroups.isActive, true))
+    .orderBy(asc(businessGroups.id));
   return groups.map(g => ({
     ...g,
     businesses: allBusinesses.filter(b => b.groupId === g.id),
@@ -1043,11 +1051,10 @@ export async function getLowStockProducts(
         AND ${productVariants.isActive} = TRUE
     )`,
   ];
-  if (businessIds && businessIds.length > 0) {
-    conditions.push(inArray(products.businessId, businessIds));
-  } else if (businessId) {
-    conditions.push(eq(products.businessId, businessId));
-  }
+  // fail-closed: businessIds مُمرَّرة (حتى []) → قيد صارم؛ [] → [-1] → صفر صفوف.
+  const scoped = scopedBusinessFilter(products.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
+  else if (businessId) conditions.push(eq(products.businessId, businessId));
   return db
     .select()
     .from(products)
@@ -2618,8 +2625,9 @@ export async function getDashboardStats(
   const correctedTo = dateTo ? cairoEndOfDay(dateTo) : undefined;
 
   const addBusinessFilter = (conds: any[]) => {
-    if (businessIds && businessIds.length > 0) {
-      conds.push(inArray(orders.businessId, businessIds));
+    if (businessIds) {
+      // fail-closed: [] → [-1] (صفر صفوف) بدل تجاهل الفلتر.
+      conds.push(inArray(orders.businessId, businessIds.length > 0 ? businessIds : [-1]));
     } else if (businessId) {
       conds.push(eq(orders.businessId, businessId));
     }
@@ -2827,10 +2835,12 @@ export async function getDailyOrdersChart(
   dateFrom.setDate(dateFrom.getDate() - days);
 
   let businessFilter;
-  if (businessIds && businessIds.length > 0) {
+  if (businessIds) {
     // مُعامَلات مربوطة لكل id بدل `sql.raw(join)` — أأمن ومش هشّ لو دخل نوع غير رقم.
+    // fail-closed: قائمة فاضية = `[-1]` (صفر صفوف) — الاستعلام نفسه مالوش شرط tenant.
+    const ids = businessIds.length > 0 ? businessIds : [-1];
     businessFilter = sql`AND businessId IN (${sql.join(
-      businessIds.map(id => sql`${id}`),
+      ids.map(id => sql`${id}`),
       sql`, `
     )})`;
   } else if (businessId) {
@@ -3118,11 +3128,10 @@ export async function getInventoryMovements(
   const conditions: any[] = [];
   if (productId) conditions.push(eq(inventoryMovements.productId, productId));
   if (variantId) conditions.push(eq(inventoryMovements.variantId, variantId));
-  if (businessIds && businessIds.length > 0) {
-    conditions.push(inArray(inventoryMovements.businessId, businessIds));
-  } else if (businessId) {
-    conditions.push(eq(inventoryMovements.businessId, businessId));
-  }
+  // fail-closed: businessIds مُمرَّرة (حتى []) → قيد صارم؛ [] → [-1] → صفر صفوف.
+  const scoped = scopedBusinessFilter(inventoryMovements.businessId, businessIds);
+  if (scoped) conditions.push(scoped);
+  else if (businessId) conditions.push(eq(inventoryMovements.businessId, businessId));
   return db
     .select()
     .from(inventoryMovements)
