@@ -290,7 +290,7 @@ export function buildOrdersColumns(ctx: OrdersColumnsContext): Column<OrderRow>[
               </>
             )}
             <WhatsAppButton phone={order.customerPhone} iconOnly size="icon-sm" className="h-9 w-9" />
-            <Button size="icon" variant="ghost" className="h-9 w-9 text-[var(--info)] hover:bg-[var(--info)]/12 hover:text-[var(--info)]"
+            <Button data-readonly-safe size="icon" variant="ghost" className="h-9 w-9 text-[var(--info)] hover:bg-[var(--info)]/12 hover:text-[var(--info)]"
               onClick={() => actions.onDetails(order)} title="عرض تفاصيل الأوردر" aria-label="عرض تفاصيل الأوردر">
               <Eye className="h-4 w-4" aria-hidden="true" />
             </Button>

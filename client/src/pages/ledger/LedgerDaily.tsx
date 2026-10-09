@@ -64,7 +64,7 @@ export default function LedgerDaily() {
         title="الحسابات اليومية"
         description={`دفتر الحسابات · بداية العمل ${status.data.goLiveDate ?? "غير متاح"}`}
         icon={<BookOpen className="h-5 w-5" aria-hidden="true" />}
-        actions={<Button variant="outline" size="sm" onClick={refresh} className="min-h-11 md:min-h-9"><RefreshCw className="h-4 w-4 ml-1" aria-hidden="true" /> تحديث</Button>}
+        actions={<Button data-readonly-safe variant="outline" size="sm" onClick={refresh} className="min-h-11 md:min-h-9"><RefreshCw className="h-4 w-4 ml-1" aria-hidden="true" /> تحديث</Button>}
       />
 
       {!online && <OfflineState onRetry={refresh} className="py-6" />}
@@ -159,7 +159,7 @@ function StateCard({ title, text, onRetry }: { title: string; text: string; onRe
       <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-accent text-accent-foreground" aria-hidden="true"><Lock className="h-6 w-6" /></span>
       <h2 className="text-base font-bold">{title}</h2>
       <p className="mt-2 text-sm text-muted-foreground">{text}</p>
-      {onRetry && <Button variant="outline" className="mt-4 min-h-11 md:min-h-9" onClick={onRetry}><RefreshCw className="h-4 w-4 ml-1" aria-hidden="true" /> إعادة المحاولة</Button>}
+      {onRetry && <Button data-readonly-safe variant="outline" className="mt-4 min-h-11 md:min-h-9" onClick={onRetry}><RefreshCw className="h-4 w-4 ml-1" aria-hidden="true" /> إعادة المحاولة</Button>}
     </div>
   );
 }

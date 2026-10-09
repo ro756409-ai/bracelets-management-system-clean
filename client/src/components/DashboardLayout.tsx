@@ -244,7 +244,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
 
   return (
     <>
-      <div className="relative" ref={sidebarRef}>
+      <div className="relative" ref={sidebarRef} data-readonly-safe>
         <Sidebar side="right" collapsible="icon" disableTransition={isResizing}>
           <SidebarHeader className="h-16 justify-center border-b border-sidebar-border">
             <div className="flex items-center gap-2 px-2 w-full">
@@ -360,7 +360,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
       <SidebarInset>
         {/* الشريط العلوي (Theme Spec §3): يمين = «إنشاء» (ديسكتوب) / زر القائمة + هوية النشاط + اسم الصفحة
             (موبايل)؛ يسار = البحث، مدخلات معطّلة صراحةً، تنبيه المخزون، قائمة المستخدم (مرة واحدة في DOM). */}
-        <header className="sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-border bg-background/95 px-3 backdrop-blur md:h-16 md:px-4">
+        <header data-readonly-safe className="sticky top-0 z-40 flex h-14 items-center justify-between gap-3 border-b border-border bg-background/95 px-3 backdrop-blur md:h-16 md:px-4">
           {/* المجموعة اليمنى تتقلص (min-w-0 flex-1) والإجراءات ثابتة (shrink-0) — فلا يُدفع شيء خارج 360px */}
           <div className="flex min-w-0 flex-1 items-center gap-2 md:gap-3">
             {isMobile && <SidebarTrigger className="h-11 w-11 shrink-0 rounded-lg" aria-label="فتح القائمة" />}

@@ -71,7 +71,7 @@ export default function PrintLogs() {
         description="تاريخ كل عمليات الطباعة والتصدير"
         icon={<Clock className="h-5 w-5" aria-hidden="true" />}
         actions={
-          <Button variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-1.5`}>
+          <Button data-readonly-safe variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-1.5`}>
             <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
             تحديث
           </Button>

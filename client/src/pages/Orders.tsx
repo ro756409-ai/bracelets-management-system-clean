@@ -791,15 +791,15 @@ export default function Orders() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel className="type-caption">تصدير</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => { setExportType('confirmed'); setShowExportDialog(true); }}>
+              <DropdownMenuItem data-readonly-safe onClick={() => { setExportType('confirmed'); setShowExportDialog(true); }}>
                 <Download className="h-4 w-4 ml-2" /> تصدير المؤكدة
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => { setExportType('shipping'); setShowExportDialog(true); }}>
+              <DropdownMenuItem data-readonly-safe onClick={() => { setExportType('shipping'); setShowExportDialog(true); }}>
                 <Truck className="h-4 w-4 ml-2" /> شيت الشحن
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel className="type-caption">إجراءات جماعية</DropdownMenuLabel>
-              <DropdownMenuItem
+              <DropdownMenuItem data-readonly-safe
                 disabled={selectedOrderIds.length === 0}
                 onClick={() => {
                   const params = new URLSearchParams();
@@ -1073,14 +1073,14 @@ export default function Orders() {
         onHiddenColumnsChange={setHiddenColumns}
         toolbar={
           <div className="flex items-center gap-1">
-            <Button
+            <Button data-readonly-safe
               variant={density === 'comfortable' ? 'secondary' : 'ghost'}
               size="icon" className="h-11 w-11 md:h-9 md:w-9" title="تباعد مريح" aria-label="تباعد مريح"
               onClick={() => setDensity('comfortable')}
             >
               <Rows3 className="h-4 w-4" aria-hidden="true" />
             </Button>
-            <Button
+            <Button data-readonly-safe
               variant={density === 'compact' ? 'secondary' : 'ghost'}
               size="icon" className="h-11 w-11 md:h-9 md:w-9" title="تباعد مضغوط" aria-label="تباعد مضغوط"
               onClick={() => setDensity('compact')}
@@ -1134,7 +1134,7 @@ export default function Orders() {
               onClick={() => setShowAssignDialog(true)}>
               <UserPlus className="h-3.5 w-3.5 ml-1" /> توزيع
             </Button>
-            <Button size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-background hover:bg-background/20 text-xs font-medium"
+            <Button data-readonly-safe size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-background hover:bg-background/20 text-xs font-medium"
               onClick={() => {
                 const params = new URLSearchParams();
                 params.set('orderIds', selectedOrderIds.join(','));
@@ -1151,7 +1151,7 @@ export default function Orders() {
               disabled={bulkSendToBostaMutation.isPending} onClick={() => setShowBostaDialog(true)}>
               <Truck className="h-3.5 w-3.5 ml-1" /> {bulkSendToBostaMutation.isPending ? 'جاري الإرسال...' : 'Bosta'}
             </Button>
-            <Button size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-[var(--info)] hover:bg-background/20 text-xs font-medium"
+            <Button data-readonly-safe size="sm" variant="ghost" className="min-h-11 md:h-8 px-3 text-[var(--info)] hover:bg-background/20 text-xs font-medium"
               onClick={() => {
                 const params = new URLSearchParams();
                 params.set('ids', selectedOrderIds.join(','));
@@ -1439,7 +1439,7 @@ export default function Orders() {
 
       {/* Export Dialog */}
       <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" dir="rtl">
+        <DialogContent data-readonly-safe className="max-w-lg max-h-[85vh] overflow-y-auto" dir="rtl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {exportType === 'confirmed' ? (<><Download className="h-5 w-5 text-[var(--info)]" /> تصدير الأوردرات المؤكدة</>) : (<><Truck className="h-5 w-5 text-primary" /> تصدير شيت الشحن</>)}
@@ -1600,7 +1600,7 @@ export default function Orders() {
                 disabled={updateStatusMutation.isPending}
                 onValueChange={(v) => { if (updateStatusMutation.isPending) return; updateStatusMutation.mutate({ id: drawerOrder.id, status: v as any, operationId: operationIdFor(`status:${drawerOrder.id}:${v}`) }); }}
               >
-                <SelectTrigger className="h-9 w-44" aria-busy={updateStatusMutation.isPending || undefined} data-testid="drawer-status-select"><SelectValue /></SelectTrigger>
+                <SelectTrigger data-readonly-write className="h-9 w-44" aria-busy={updateStatusMutation.isPending || undefined} data-testid="drawer-status-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {/* «مؤكد» من زر التأكيد (يخصم المخزون)، و«تم التسليم» من بوسطة أو المسار اليدوي المعتمد — لا من هنا */}
                   {["new", "postponed", "no_answer", "preparing", "shipped", "cancelled"].map(v => (
@@ -1609,7 +1609,7 @@ export default function Orders() {
                 </SelectContent>
               </Select>
               <WhatsAppButton phone={drawerOrder.customerPhone} size="sm" className="h-9" />
-              <Button size="sm" variant="outline" className="min-h-11 md:h-9 gap-1 border-[var(--info)]/30 text-[var(--info)]"
+              <Button data-readonly-safe size="sm" variant="outline" className="min-h-11 md:h-9 gap-1 border-[var(--info)]/30 text-[var(--info)]"
                 onClick={() => { window.location.href = `tel:${drawerOrder.customerPhone}`; }}>
                 <PhoneCall className="h-4 w-4" /> اتصال
               </Button>
@@ -1670,7 +1670,7 @@ export default function Orders() {
                   <CardTitle className="type-subheading">بيانات العميل</CardTitle>
                   <CardAction className="flex items-center gap-1.5">
                     <WhatsAppButton phone={order.customerPhone} size="sm" />
-                    <Button size="sm" variant="outline" className="min-h-11 md:h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
+                    <Button data-readonly-safe size="sm" variant="outline" className="min-h-11 md:h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
                       onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}>
                       <PhoneCall className="h-3.5 w-3.5" /> اتصال
                     </Button>
@@ -1693,7 +1693,7 @@ export default function Orders() {
                   <CardTitle className="type-subheading">الشحن</CardTitle>
                   {order.bostaShipmentId && (
                     <CardAction>
-                      <Button size="sm" variant="outline" className="min-h-11 md:h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
+                      <Button data-readonly-safe size="sm" variant="outline" className="min-h-11 md:h-8 gap-1 text-[var(--info)] border-[var(--info)]/30"
                         onClick={() => window.open(`/api/orders/${order.id}/bosta-awb`, "_blank", "noopener,noreferrer")}>
                         <Printer className="h-3.5 w-3.5" /> طباعة AWB
                       </Button>

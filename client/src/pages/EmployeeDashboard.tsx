@@ -903,7 +903,7 @@ export default function EmployeeDashboard() {
           <div className="flex flex-wrap items-center justify-end gap-1.5">
             {canViewShipping && (
               <>
-                <button
+                <button data-readonly-safe
                   onClick={() => setLocation("/today-shipments")}
                   className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
                   title="شحنات اليوم"
@@ -911,7 +911,7 @@ export default function EmployeeDashboard() {
                 >
                   <Truck className="h-4 w-4" />
                 </button>
-                <button
+                <button data-readonly-safe
                   onClick={() => setLocation("/shipping-schedule")}
                   className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
                   title="جدول توزيع المحافظات"
@@ -971,7 +971,7 @@ export default function EmployeeDashboard() {
             {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
                 فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
             {canOpenMyAttendance && (
-              <Button
+              <Button data-readonly-safe
                 variant="ghost"
                 onClick={() => setLocation("/my-attendance")}
                 className="min-h-11 min-w-11 md:h-8 md:min-h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
@@ -983,7 +983,7 @@ export default function EmployeeDashboard() {
               </Button>
             )}
             {canViewMyPerformance && (
-              <Button
+              <Button data-readonly-safe
                 variant="ghost"
                 onClick={() => setLocation("/my-performance")}
                 className="min-h-11 min-w-11 md:h-8 md:min-h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
@@ -995,7 +995,7 @@ export default function EmployeeDashboard() {
               </Button>
             )}
             <span className="mx-1 hidden h-5 w-px bg-primary-foreground/25 sm:inline-block" aria-hidden="true" />
-            <button
+            <button data-readonly-safe
               onClick={() => { refetch(); utils.employeePortal.myPermissions.invalidate(); }}
               className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground transition-colors hover:bg-primary-foreground/20"
               title="تحديث القائمة"
@@ -1004,7 +1004,7 @@ export default function EmployeeDashboard() {
               <RefreshCw className="h-4 w-4" />
               <span className="hidden text-xs font-medium sm:inline">تحديث</span>
             </button>
-            <button
+            <button data-readonly-safe
               onClick={handleLogout}
               className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground transition-colors hover:bg-primary-foreground/25"
               title="تسجيل الخروج"
@@ -1734,7 +1734,7 @@ export default function EmployeeDashboard() {
                         onValueChange={(v) => handleStatusSelect(order, v)}
                         disabled={updateStatusMutation.isPending || !EMPLOYEE_EDITABLE_STATUSES.includes(order.status)}
                       >
-                        <SelectTrigger className="min-h-11 md:min-h-9 h-9 flex-1 bg-card"><SelectValue /></SelectTrigger>
+                        <SelectTrigger data-readonly-write className="min-h-11 md:min-h-9 h-9 flex-1 bg-card"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {!EMPLOYEE_EDITABLE_STATUSES.includes(order.status) && (
                             <SelectItem value="__locked" disabled>
@@ -1750,7 +1750,7 @@ export default function EmployeeDashboard() {
 
                     <div className="grid grid-cols-3 gap-1.5">
                       <WhatsAppButton phone={order.customerPhone} size="sm" className="h-11 w-full px-1 text-xs" />
-                      <Button
+                      <Button data-readonly-safe
                         size="sm" variant="outline"
                         className="h-11 gap-1 border-[var(--info)]/40 px-1 text-xs text-[var(--info)] hover:bg-[var(--info)]/10"
                         onClick={() => { window.location.href = `tel:${order.customerPhone}`; }}
@@ -2224,7 +2224,7 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
                     value={task.status}
                     onValueChange={(v: any) => updateStatusMutation.mutate({ taskId: task.id, status: v })}
                   >
-                    <SelectTrigger className="min-h-11 md:min-h-9 w-28 text-xs h-7 shrink-0" aria-label="حالة المهمة">
+                    <SelectTrigger data-readonly-write className="min-h-11 md:min-h-9 w-28 text-xs h-7 shrink-0" aria-label="حالة المهمة">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

@@ -149,7 +149,7 @@ export default function Attendance() {
       title="الحضور والانصراف"
       description="الأوقات بتوقيت الوردية؛ التخزين UTC. لا خصومات ولا رواتب — الاستثناءات للمراجعة فقط."
       icon={<CalendarClock className="h-5 w-5" aria-hidden="true" />}
-      actions={canExport && enabled && tab === "board" ? <Button variant="outline" className={TOUCH} onClick={exportCsv} disabled={exporting || !validRange}><Download className="h-4 w-4" aria-hidden="true" /> تصدير CSV</Button> : undefined}
+      actions={canExport && enabled && tab === "board" ? <Button data-readonly-safe variant="outline" className={TOUCH} onClick={exportCsv} disabled={exporting || !validRange}><Download className="h-4 w-4" aria-hidden="true" /> تصدير CSV</Button> : undefined}
     />
   );
 

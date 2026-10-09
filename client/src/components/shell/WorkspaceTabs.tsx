@@ -29,7 +29,7 @@ export function WorkspaceTabs({ tabs }: { tabs: NavLink[] }) {
   if (tabs.length < 2) return null;
 
   return (
-    <div className="border-b border-border bg-background" dir="rtl" data-testid="workspace-tabs">
+    <div className="border-b border-border bg-background" dir="rtl" data-readonly-safe data-testid="workspace-tabs">
       <nav
         className="flex items-stretch gap-1 overflow-x-auto overflow-y-hidden px-1 [scrollbar-width:none] sm:px-4 [&::-webkit-scrollbar]:hidden"
         aria-label="تبويبات القسم"
@@ -37,7 +37,7 @@ export function WorkspaceTabs({ tabs }: { tabs: NavLink[] }) {
         {tabs.map(tab => {
           const active = tab.path === activePath;
           return (
-            <button
+            <button data-readonly-safe
               key={tab.path}
               type="button"
               ref={active ? activeRef : undefined}

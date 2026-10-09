@@ -240,7 +240,7 @@ export default function Preparation() {
       description="الأوردرات المؤكدة الجاهزة للشحن — حدّد، اطبع البوالص، وصدّر شيت الشحن."
       icon={<Package className="h-5 w-5" />}
       actions={
-        <Button variant="outline" size="sm" onClick={() => { refetch(); refetchCounts(); }} className={`${TOUCH} gap-1.5`}>
+        <Button data-readonly-safe variant="outline" size="sm" onClick={() => { refetch(); refetchCounts(); }} className={`${TOUCH} gap-1.5`}>
           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
           تحديث
         </Button>

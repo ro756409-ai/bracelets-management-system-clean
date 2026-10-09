@@ -33,7 +33,7 @@ export default function ShippingScheduleWorkspace() {
       description={`مسارات شركات الشحن لكل يوم — اليوم: ${today}. البيانات من إعدادات كل نشاط، مش جدول ثابت في الكود.`}
       icon={<CalendarRange className="h-5 w-5" />}
       primaryAction={
-        <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 gap-1.5 print:hidden" onClick={() => window.print()}>
+        <Button data-readonly-safe size="sm" variant="outline" className="min-h-11 md:min-h-9 gap-1.5 print:hidden" onClick={() => window.print()}>
           <Printer className="h-3.5 w-3.5" />
           طباعة
         </Button>

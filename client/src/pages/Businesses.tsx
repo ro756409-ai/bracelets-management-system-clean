@@ -55,7 +55,7 @@ function OrderEntryModeSelect({ businessId }: { businessId: number }) {
       onValueChange={v => set.mutate({ businessId, mode: v as OrderEntryMode })}
       disabled={isLoading || set.isPending}
     >
-      <SelectTrigger className={`${TOUCH} w-full sm:w-56`} data-testid={`entry-mode-${businessId}`} aria-label="قالب إدخال الأوردر">
+      <SelectTrigger data-readonly-write className={`${TOUCH} w-full sm:w-56`} data-testid={`entry-mode-${businessId}`} aria-label="قالب إدخال الأوردر">
         <SelectValue placeholder="..." />
       </SelectTrigger>
       <SelectContent>
@@ -152,7 +152,7 @@ export default function Businesses() {
       <Button variant="ghost" size="sm" className={ICON_BTN} onClick={() => openEdit(b)} aria-label={`تعديل ${b.name}`} title="تعديل" data-testid={`biz-edit-${b.id}`}>
         <Edit className="h-4 w-4" aria-hidden="true" />
       </Button>
-      <Button variant="ghost" size="sm" className={ICON_BTN} onClick={() => handleToggle(b)} disabled={toggleMutation.isPending} aria-label={b.isActive ? `تعطيل ${b.name}` : `تفعيل ${b.name}`} aria-pressed={!!b.isActive} title={b.isActive ? "تعطيل" : "تفعيل"} data-testid={`biz-toggle-${b.id}`}>
+      <Button data-readonly-write variant="ghost" size="sm" className={ICON_BTN} onClick={() => handleToggle(b)} disabled={toggleMutation.isPending} aria-label={b.isActive ? `تعطيل ${b.name}` : `تفعيل ${b.name}`} aria-pressed={!!b.isActive} title={b.isActive ? "تعطيل" : "تفعيل"} data-testid={`biz-toggle-${b.id}`}>
         {b.isActive ? <ToggleRight className="h-4 w-4 text-[var(--success)]" aria-hidden="true" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" aria-hidden="true" />}
       </Button>
     </span>

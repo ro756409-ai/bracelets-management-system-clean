@@ -627,7 +627,7 @@ export default function FacebookEntry() {
             <Button size="sm" variant="outline" className={TOUCH} onClick={() => setShowOrders(s => !s)} aria-expanded={showOrders}>
               {showOrders ? "إخفاء أوردراتي" : "أوردراتي"}
             </Button>
-            <Button size="sm" variant="ghost" className={`${TOUCH} min-w-11`} onClick={handleLogout} aria-label="خروج" title="خروج">
+            <Button data-readonly-safe size="sm" variant="ghost" className={`${TOUCH} min-w-11`} onClick={handleLogout} aria-label="خروج" title="خروج">
               <LogOut className="h-4 w-4" aria-hidden="true" />
             </Button>
           </div>
@@ -895,7 +895,7 @@ export default function FacebookEntry() {
               <div className="flex items-center gap-2">
                 <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className={`text-xs ${TOUCH}`} aria-label="من تاريخ" />
                 <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className={`text-xs ${TOUCH}`} aria-label="إلى تاريخ" />
-                <Button size="sm" variant="outline" className={`${TOUCH} min-w-11`} onClick={() => refetchOrders()} aria-label="تحديث"><RefreshCw className="h-4 w-4" aria-hidden="true" /></Button>
+                <Button data-readonly-safe size="sm" variant="outline" className={`${TOUCH} min-w-11`} onClick={() => refetchOrders()} aria-label="تحديث"><RefreshCw className="h-4 w-4" aria-hidden="true" /></Button>
               </div>
               {myOrders.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">لا توجد أوردرات</p>

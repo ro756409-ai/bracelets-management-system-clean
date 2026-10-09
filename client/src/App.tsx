@@ -34,6 +34,7 @@ import Performance from "./pages/Performance";
 import MyPerformance from "./pages/MyPerformance";
 import Attendance from "./pages/Attendance";
 import { TenantAccessNotice } from "./components/TenantAccessNotice";
+import { TenantAccessProvider } from "./contexts/TenantAccessContext";
 import MyAttendance from "./pages/MyAttendance";
 import EmployeeLogin from "./pages/EmployeeLogin";
 import EmployeeDashboard from "./pages/EmployeeDashboard";
@@ -321,9 +322,12 @@ function App() {
                 ومسودات الحسابات التانية — مركّب هنا عشان مايعتمدش على إن كل موضع
                 تسجيل خروج يفتكر ينضّف. */}
             <EmployeeScopeGuard />
-            {/* حالة وصول الشركة — لا تظهر إلا والإنفاذ مفعّل على السيرفر (TENANT_ACCESS_ENFORCEMENT_ENABLED). */}
-            <TenantAccessNotice />
-            <Router />
+            {/* حالة وصول الشركة — مصدر واحد (tenantAccess.status)؛ لا أثر إطلاقًا والإنفاذ معطل على السيرفر.
+                read_only ⇒ شريط + تعطيل كل عناصر الكتابة؛ blocked ⇒ شاشة كاملة. */}
+            <TenantAccessProvider>
+              <TenantAccessNotice />
+              <Router />
+            </TenantAccessProvider>
           </TooltipProvider>
         </BusinessProvider>
       </ThemeProvider>

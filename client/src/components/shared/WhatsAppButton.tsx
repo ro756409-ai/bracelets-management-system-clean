@@ -45,7 +45,7 @@ export function WhatsAppButton({
   };
 
   return (
-    <Button
+    <Button data-readonly-safe
       type="button"
       variant={variant}
       size={size ?? (iconOnly ? "icon-sm" : "sm")}

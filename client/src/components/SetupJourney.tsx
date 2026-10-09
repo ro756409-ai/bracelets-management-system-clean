@@ -24,7 +24,7 @@ export function SetupJourney({ current }: { current: "business" | "channel" | "e
           const isActive = i === activeIdx || (current === "channel" && s.key === "platform");
           return (
             <div key={s.key} className="flex items-center gap-2">
-              <button
+              <button data-readonly-safe
                 type="button"
                 onClick={() => setLocation(s.path)}
                 title={s.hint}

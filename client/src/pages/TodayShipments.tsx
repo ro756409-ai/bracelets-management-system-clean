@@ -87,7 +87,7 @@ export default function TodayShipments() {
             الشاشة دي لموظفي الشحن والإدارة. بيانات شحن أوردراتك موجودة جوه كل أوردر في شاشتك.
           </p>
         </div>
-        <Button className="min-h-11" onClick={() => { permissionUtils.employeePortal.myPermissions.invalidate(); setLocation("/employee-dashboard"); }}>الرجوع لشاشتي</Button>
+        <Button data-readonly-safe className="min-h-11" onClick={() => { permissionUtils.employeePortal.myPermissions.invalidate(); setLocation("/employee-dashboard"); }}>الرجوع لشاشتي</Button>
       </main>
     );
   }
@@ -105,7 +105,7 @@ export default function TodayShipments() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
+            <Button data-readonly-safe
               variant="ghost"
               size="sm"
               onClick={() => refetch()}
@@ -114,7 +114,7 @@ export default function TodayShipments() {
             >
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
             </Button>
-            <Button
+            <Button data-readonly-safe
               variant="ghost"
               size="sm"
               onClick={handlePrint}
@@ -123,7 +123,7 @@ export default function TodayShipments() {
             >
               <Printer className="h-4 w-4" aria-hidden="true" />
             </Button>
-            <Button
+            <Button data-readonly-safe
               variant="ghost"
               size="sm"
               onClick={() => setLocation("/employee-dashboard")}
@@ -132,7 +132,7 @@ export default function TodayShipments() {
             >
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </Button>
-            <Button
+            <Button data-readonly-safe
               variant="ghost"
               size="sm"
               onClick={handleLogout}

@@ -204,7 +204,7 @@ export default function Dashboard() {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <DateRangePicker value={pickerRange} onChange={setPickerRange} placeholder="اختر نطاق زمني" />
-            <Button type="button" variant="outline" size="sm" className="min-h-11 md:min-h-9" onClick={refreshAll} data-testid="dashboard-refresh">
+            <Button data-readonly-safe type="button" variant="outline" size="sm" className="min-h-11 md:min-h-9" onClick={refreshAll} data-testid="dashboard-refresh">
               <RefreshCw className="ml-1 h-4 w-4" aria-hidden="true" />
               تحديث
             </Button>
@@ -267,7 +267,7 @@ export default function Dashboard() {
           }
           description={`أوردرات أُكّدت اليوم ولم تُطبع بعد · ${todayConfirmedCount > 0 ? `قيمة متوقعة ${fmt(todayTotalRevenue)} ج.م — ليست تحصيلًا` : "جاهزة للطباعة والتجهيز"}`}
           action={todayConfirmedCount > 0 ? (
-            <Button type="button" variant="outline" size="sm" onClick={exportTodayConfirmedToExcel} className="min-h-11 gap-1 border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10 md:min-h-8 md:text-xs">
+            <Button data-readonly-safe type="button" variant="outline" size="sm" onClick={exportTodayConfirmedToExcel} className="min-h-11 gap-1 border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10 md:min-h-8 md:text-xs">
               <Download className="h-3.5 w-3.5" aria-hidden="true" />
               تصدير Excel
             </Button>
@@ -394,7 +394,7 @@ export default function Dashboard() {
           title="المخزون والتنبيهات"
           description="منتجات وصل مخزونها إلى حد التنبيه أو أقل ضمن النطاق الحالي"
           icon={<SectionIcon section="inventory" fallback={Boxes} size="md" className="!h-7 !w-7 !rounded-md" />}
-          action={canOpen("/inventory") ? <Button type="button" variant="outline" size="sm" className="min-h-11 md:min-h-8" onClick={() => setLocation("/inventory")}>فتح المخزون</Button> : undefined}
+          action={canOpen("/inventory") ? <Button data-readonly-safe type="button" variant="outline" size="sm" className="min-h-11 md:min-h-8" onClick={() => setLocation("/inventory")}>فتح المخزون</Button> : undefined}
           testId="dashboard-inventory"
         >
           {lowStockLoading ? (
@@ -452,7 +452,7 @@ export default function Dashboard() {
           <h2 className="mb-3 text-sm font-semibold text-foreground">إجراءات سريعة</h2>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
             {quickActions.map(a => (
-              <Button key={a.key} type="button" variant="outline" className="h-16 flex-col gap-1" onClick={() => setLocation(a.path)} data-testid={`quick-${a.key}`}>
+              <Button data-readonly-safe key={a.key} type="button" variant="outline" className="h-16 flex-col gap-1" onClick={() => setLocation(a.path)} data-testid={`quick-${a.key}`}>
                 <a.icon className="h-5 w-5" aria-hidden="true" />
                 <span className="text-xs">{a.label}</span>
               </Button>

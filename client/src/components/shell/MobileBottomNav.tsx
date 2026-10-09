@@ -21,6 +21,7 @@ export function MobileBottomNav({ destinations }: { destinations: NavDestination
 
   return (
     <nav
+      data-readonly-safe
       className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
       dir="rtl"
       aria-label="التنقّل الأساسي"
@@ -29,7 +30,7 @@ export function MobileBottomNav({ destinations }: { destinations: NavDestination
       {primary.map(dest => {
         const active = dest.key === activeKey;
         return (
-          <button
+          <button data-readonly-safe
             key={dest.key}
             type="button"
             onClick={() => setLocation(dest.path)}

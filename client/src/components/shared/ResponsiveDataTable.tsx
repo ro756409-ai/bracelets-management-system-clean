@@ -244,7 +244,7 @@ export function ResponsiveDataTable<T>({
                   الأعمدة
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuContent align="end" className="w-48" data-readonly-safe>
                 <DropdownMenuLabel>إظهار الأعمدة</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {columns
@@ -330,6 +330,7 @@ export function ResponsiveDataTable<T>({
                   {col.sortable && onSortChange ? (
                     <button
                       type="button"
+                      data-readonly-safe
                       onClick={() => handleSort(col.id)}
                       className="inline-flex items-center gap-1 rounded hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label={`ترتيب حسب ${typeof col.header === "string" ? col.header : col.id}`}

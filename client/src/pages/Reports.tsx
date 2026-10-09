@@ -249,12 +249,12 @@ export default function Reports() {
         {(eventLedger?.enabled || attendanceStatus?.enabled) && (
           <div className="mx-3 mb-3 flex flex-wrap gap-2">
             {eventLedger?.enabled && (
-              <Button variant="outline" className={TOUCH} onClick={() => navigate("/performance")} data-testid="reports-open-performance">
+              <Button data-readonly-safe variant="outline" className={TOUCH} onClick={() => navigate("/performance")} data-testid="reports-open-performance">
                 عرض الأداء التاريخي من سجل الأحداث
               </Button>
             )}
             {attendanceStatus?.enabled && (
-              <Button variant="outline" className={TOUCH} onClick={() => navigate("/attendance")} data-testid="reports-open-attendance">
+              <Button data-readonly-safe variant="outline" className={TOUCH} onClick={() => navigate("/attendance")} data-testid="reports-open-attendance">
                 الحضور والانصراف
               </Button>
             )}

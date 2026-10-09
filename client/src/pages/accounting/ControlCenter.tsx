@@ -112,7 +112,7 @@ export default function ControlCenter() {
               ارجع للنهاردة
             </Button>
           )}
-          <Button
+          <Button data-readonly-safe
             variant="outline"
             className="ms-auto h-10 gap-1.5"
             onClick={() => q.refetch()}
@@ -252,7 +252,7 @@ function ActionItems() {
       <ul className="divide-y">
         {items.map(item => (
           <li key={item.key}>
-            <button
+            <button data-readonly-safe
               type="button"
               onClick={() => navigate(item.to)}
               className="flex w-full items-center justify-between gap-3 px-4 py-3 text-right hover:bg-muted/50"

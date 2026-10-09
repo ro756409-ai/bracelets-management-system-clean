@@ -1,9 +1,13 @@
 /**
  * قرار وصول الشركة حسب حالتها (قرارات المالك) — دالة نقية واحدة، يستخدمها السيرفر (كل الطبقات) والواجهة للعرض.
  *
- *   trialing قبل trialEndsAt ⇒ full؛ عند/بعد trialEndsAt (أو بلا تاريخ) ⇒ read_only
+ *   trialing قبل trialEndsAt ⇒ full؛ عند/بعد trialEndsAt ⇒ read_only
+ *   trialing بلا trialEndsAt ⇒ read_only كحالة آمنة (سبب مستقل trial_no_end_date — يظهر في قسم تحذير بالمعاينة)
  *   active ⇒ full
- *   past_due ⇒ full خلال 7 أيام من pastDueSince، ثم read_only (بلا pastDueSince ⇒ read_only، fail-closed)
+ *   past_due ⇒ full خلال 7 أيام من pastDueSince، ثم read_only
+ *   past_due بلا فترة اشتراك معروفة ⇒ read_only فورًا (سبب مستقل past_due_unknown_period — قسم تحذير بالمعاينة)
+ * لا يُفعَّل TENANT_ACCESS_ENFORCEMENT_ENABLED قبل مراجعة نتيجة scripts/preview-tenant-access يدويًا، ولا تعديل
+ * تلقائي لحالة أي شركة في أي مكان.
  *   expired ⇒ read_only
  *   suspended / canceled ⇒ blocked
  *   حالة غير معروفة أو شركة غير موجودة ⇒ blocked (fail-closed)
@@ -13,7 +17,8 @@
  */
 export type TenantAccessLevel = "full" | "read_only" | "blocked";
 export type TenantAccessReason =
-  | "trial" | "trial_ended" | "active" | "past_due_grace" | "past_due_ended" | "expired" | "suspended" | "canceled" | "unknown";
+  | "trial" | "trial_ended" | "trial_no_end_date" | "active" | "past_due_grace" | "past_due_ended" | "past_due_unknown_period"
+  | "expired" | "suspended" | "canceled" | "unknown";
 export type TenantAccess = { level: TenantAccessLevel; reason: TenantAccessReason; processWebhooks: boolean; runJobs: boolean; until: Date | null };
 
 export const PAST_DUE_GRACE_DAYS = 7;
@@ -31,11 +36,12 @@ export function computeTenantAccess(
   switch (tenant.status) {
     case "active": return make("full", "active");
     case "trialing":
-      return tenant.trialEndsAt && now.getTime() < tenant.trialEndsAt.getTime()
+      if (!tenant.trialEndsAt) return make("read_only", "trial_no_end_date");
+      return now.getTime() < tenant.trialEndsAt.getTime()
         ? make("full", "trial", tenant.trialEndsAt)
         : make("read_only", "trial_ended", tenant.trialEndsAt);
     case "past_due": {
-      if (!pastDueSince) return make("read_only", "past_due_ended");
+      if (!pastDueSince) return make("read_only", "past_due_unknown_period");
       const graceEnd = new Date(pastDueSince.getTime() + PAST_DUE_GRACE_DAYS * DAY);
       return now.getTime() < graceEnd.getTime() ? make("full", "past_due_grace", graceEnd) : make("read_only", "past_due_ended", graceEnd);
     }
@@ -53,6 +59,9 @@ export const SUBSCRIPTION_SETTINGS_PREFIX = "subscription.";
 export const BLOCKED_ALLOWED_PATHS: readonly string[] = ["auth.me", "auth.logout", "auth.myPermissions", "employeePortal.me", "tenantAccess.status", "system.health"];
 
 /** هل نداء tRPC مسموح لهذا المستوى؟ */
+/** الأسباب الآمنة الافتراضية التي تحتاج مراجعة يدوية قبل التفعيل (أقسام تحذير مستقلة في المعاينة). */
+export const REVIEW_BEFORE_ENABLE_REASONS: readonly TenantAccessReason[] = ["trial_no_end_date", "past_due_unknown_period"];
+
 export function trpcCallAllowed(access: TenantAccess, type: "query" | "mutation" | "subscription", path: string): boolean {
   if (access.level === "full") return true;
   if (access.level === "blocked") return BLOCKED_ALLOWED_PATHS.includes(path);
@@ -70,9 +79,11 @@ export function httpRequestAllowed(access: TenantAccess, method: string): boolea
 export const TENANT_ACCESS_MESSAGES: Record<TenantAccessReason, string> = {
   trial: "الفترة التجريبية سارية",
   trial_ended: "انتهت الفترة التجريبية — الحساب للقراءة فقط حتى الاشتراك",
+  trial_no_end_date: "الفترة التجريبية بلا تاريخ نهاية مسجّل — الحساب للقراءة فقط حتى المراجعة",
   active: "الاشتراك فعّال",
   past_due_grace: "يوجد دفع متأخر — مهلة 7 أيام قبل وضع القراءة فقط",
   past_due_ended: "انتهت مهلة الدفع المتأخر — الحساب للقراءة فقط",
+  past_due_unknown_period: "دفع متأخر بلا فترة اشتراك معروفة — الحساب للقراءة فقط حتى المراجعة",
   expired: "انتهى الاشتراك — الحساب للقراءة فقط",
   suspended: "الحساب موقوف — تواصل مع الدعم",
   canceled: "الاشتراك ملغي — تواصل مع الدعم",

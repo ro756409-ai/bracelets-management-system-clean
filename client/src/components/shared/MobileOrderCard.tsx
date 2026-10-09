@@ -68,6 +68,8 @@ export function MobileOrderCard({
         role={onClick ? "button" : undefined}
         tabIndex={onClick ? 0 : undefined}
         aria-label={onClick ? `فتح الأوردر ${orderNumber} — ${customerName}` : undefined}
+        // فتح الأوردر قراءة (تنقّل للتفاصيل) — منطقة الفتح فيها معلومات وزر طيّ فقط؛ التفاصيل (وأي إجراء كتابة) خارجها.
+        data-readonly-safe
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 space-y-1">

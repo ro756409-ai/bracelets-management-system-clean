@@ -47,13 +47,13 @@ export default function TodayShipmentsWorkspace() {
       description="الأوردرات المؤكدة موزّعة على شركات الشحن حسب جدول اليوم."
       icon={<Truck className="h-5 w-5" />}
       primaryAction={
-        <Button size="sm" className="min-h-11 md:min-h-9 gap-1.5 print:hidden" onClick={() => window.print()}>
+        <Button data-readonly-safe size="sm" className="min-h-11 md:min-h-9 gap-1.5 print:hidden" onClick={() => window.print()}>
           <Printer className="h-3.5 w-3.5" />
           طباعة
         </Button>
       }
       actions={
-        <Button variant="outline" size="sm" className="min-h-11 md:min-h-9 gap-1.5 print:hidden" onClick={() => shipments.refetch()}>
+        <Button data-readonly-safe variant="outline" size="sm" className="min-h-11 md:min-h-9 gap-1.5 print:hidden" onClick={() => shipments.refetch()}>
           <RefreshCw className="h-3.5 w-3.5" />
           تحديث
         </Button>

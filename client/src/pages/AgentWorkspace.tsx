@@ -191,12 +191,12 @@ export default function AgentWorkspace() {
         icon={<Briefcase className="h-5 w-5" aria-hidden="true" />}
         actions={
           <div className="flex items-center gap-1 rounded-[var(--radius-brand-md)] bg-muted/50 px-2 py-1" role="group" aria-label="يوم التوزيع" data-testid="agent-day-nav">
-            <Button type="button" variant="ghost" size="sm" className="min-h-11 min-w-11 md:min-h-9 md:min-w-9" onClick={() => changeDay(-1)} aria-label="اليوم السابق" title="اليوم السابق"><ChevronRight className="h-4 w-4" aria-hidden="true" /></Button>
+            <Button data-readonly-safe type="button" variant="ghost" size="sm" className="min-h-11 min-w-11 md:min-h-9 md:min-w-9" onClick={() => changeDay(-1)} aria-label="اليوم السابق" title="اليوم السابق"><ChevronRight className="h-4 w-4" aria-hidden="true" /></Button>
             <div className="min-w-[140px] text-center">
               <p className="text-xs font-semibold text-foreground">{displayDate}</p>
               {isToday && <span className="text-xs font-medium text-[var(--success)]">اليوم</span>}
             </div>
-            <Button type="button" variant="ghost" size="sm" className="min-h-11 min-w-11 md:min-h-9 md:min-w-9" onClick={() => changeDay(1)} disabled={isToday} aria-label="اليوم التالي" title="اليوم التالي"><ChevronLeft className="h-4 w-4" aria-hidden="true" /></Button>
+            <Button data-readonly-safe type="button" variant="ghost" size="sm" className="min-h-11 min-w-11 md:min-h-9 md:min-w-9" onClick={() => changeDay(1)} disabled={isToday} aria-label="اليوم التالي" title="اليوم التالي"><ChevronLeft className="h-4 w-4" aria-hidden="true" /></Button>
             {!isToday && (
               <Button type="button" variant="link" size="sm" className={`${TOUCH} text-xs`} onClick={() => { setAssignedDate(todayCairo); setStatusFilter('all'); }}>عودة لليوم</Button>
             )}

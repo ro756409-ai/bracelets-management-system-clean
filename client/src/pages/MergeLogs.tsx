@@ -75,7 +75,7 @@ export default function MergeLogs() {
         title="تقرير الدمج التلقائي"
         description="سجل كامل بكل أوردر تم دمجه تلقائياً بسبب التكرار"
         icon={<GitMerge className="h-5 w-5" aria-hidden="true" />}
-        actions={<Button variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-2`} data-testid="merge-refresh"><RefreshCw className="h-4 w-4" aria-hidden="true" /> تحديث</Button>}
+        actions={<Button data-readonly-safe variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-2`} data-testid="merge-refresh"><RefreshCw className="h-4 w-4" aria-hidden="true" /> تحديث</Button>}
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="إحصاءات الدمج" data-testid="merge-stats">
           <StatCard label="إجمالي عمليات الدمج" value={totalMerges.toLocaleString("ar-EG")} tone="warning" hint="آخر 200 عملية دمج" loading={isLoading} />

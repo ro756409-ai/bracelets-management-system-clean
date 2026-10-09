@@ -21,10 +21,10 @@ export function EmployeeShell({ title, icon: Icon, backTo = "/employee-dashboard
 
   return (
     <div className="min-h-screen bg-background" dir="rtl" data-testid="employee-shell" style={{ ["--bottom-nav-h" as string]: "0px" } as React.CSSProperties}>
-      <header className="sticky top-0 z-20 border-b border-border bg-card/95 backdrop-blur">
+      <header data-readonly-safe className="sticky top-0 z-20 border-b border-border bg-card/95 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
-            <Button variant="ghost" className="min-h-11 min-w-11 shrink-0 px-2" onClick={() => setLocation(backTo)} aria-label="رجوع" data-testid="employee-shell-back">
+            <Button data-readonly-safe variant="ghost" className="min-h-11 min-w-11 shrink-0 px-2" onClick={() => setLocation(backTo)} aria-label="رجوع" data-testid="employee-shell-back">
               <ArrowRight className="h-5 w-5" aria-hidden="true" />
             </Button>
             {Icon && (
@@ -35,7 +35,7 @@ export function EmployeeShell({ title, icon: Icon, backTo = "/employee-dashboard
               {me.data?.name && <p className="truncate text-xs text-muted-foreground" data-testid="employee-shell-user">{me.data.name}</p>}
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={logout} className="min-h-11 shrink-0" data-testid="employee-shell-logout">
+          <Button data-readonly-safe variant="ghost" size="sm" onClick={logout} className="min-h-11 shrink-0" data-testid="employee-shell-logout">
             <LogOut className="h-4 w-4 ml-1" aria-hidden="true" /> خروج
           </Button>
         </div>

@@ -491,7 +491,7 @@ export default function Employees() {
           <p className="text-sm font-medium">رابط تسجيل دخول الموظفين</p>
           <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground" dir="ltr">{window.location.origin}/employee-login</p>
         </div>
-        <Button
+        <Button data-readonly-safe
           variant="outline"
           size="sm"
           className={`${TOUCH} shrink-0`}

@@ -80,7 +80,7 @@ export function BusinessSwitcher({
           {!collapsed && <ChevronDown className={`h-4 w-4 shrink-0 ${subColor}`} />}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-[70vh] w-64 overflow-y-auto">
+      <DropdownMenuContent align="start" className="max-h-[70vh] w-64 overflow-y-auto" data-readonly-safe>
         {/* بنود القائمة ≥44px على الموبايل (36px مقصود على الديسكتوب) */}
         <DropdownMenuItem onClick={() => setCurrentBusinessId(undefined)} className="min-h-11 cursor-pointer justify-between font-medium md:min-h-9">
           <span>كل الأنشطة</span>

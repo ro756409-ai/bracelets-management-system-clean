@@ -175,7 +175,7 @@ export default function WarehouseDashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button
+          <Button data-readonly-safe
             variant="ghost"
             size="sm"
             className="min-h-11 min-w-11 text-primary-foreground hover:bg-primary-foreground/10 md:min-h-9 md:min-w-9"
@@ -188,7 +188,7 @@ export default function WarehouseDashboard() {
           >
             <RefreshCw className="h-4 w-4" />
           </Button>
-          <Button
+          <Button data-readonly-safe
             variant="ghost"
             size="sm"
             className="min-h-11 min-w-11 text-primary-foreground hover:bg-primary-foreground/10 md:min-h-9 md:min-w-9"
@@ -247,7 +247,7 @@ export default function WarehouseDashboard() {
               <Package className="h-5 w-5 text-[var(--warning)]" />
               المنتجات
             </h2>
-            <Button
+            <Button data-readonly-safe
               size="sm"
               variant="outline"
               className="min-h-11 md:min-h-9 gap-1 text-xs"

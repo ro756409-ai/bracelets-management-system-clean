@@ -24,7 +24,7 @@ export function ScopeBar({ options, value, onChange, allLabel = "كل الأنش
   const on = "border-primary/40 bg-primary-soft text-primary-text";
   const off = "border-border bg-card text-muted-foreground hover:text-foreground";
   return (
-    <div className={cn("rounded-[var(--radius-brand-md)] bg-surface-2 px-2 py-1.5", className)} data-testid="scope-bar">
+    <div className={cn("rounded-[var(--radius-brand-md)] bg-surface-2 px-2 py-1.5", className)} data-readonly-safe data-testid="scope-bar">
       <div role="group" aria-label="نطاق العرض" className="flex items-center gap-2 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button type="button" aria-pressed={value == null} onClick={() => onChange(null)} className={cn(chip, value == null ? on : off)} data-testid="scope-all">
           <LayoutGrid className="h-4 w-4 shrink-0" aria-hidden="true" />

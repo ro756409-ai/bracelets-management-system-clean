@@ -1,4 +1,5 @@
 import { useLocation } from "wouter";
+import { useTenantAccess } from "@/contexts/TenantAccessContext";
 import { ChevronDown, Plus, ShoppingCart, BookOpen, PackagePlus, ClipboardCheck, RotateCcw, Users, Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,8 +53,10 @@ export function createMenuItems(session: ShellSession): CreateMenuItem[] {
 
 export function CreateMenu({ isAdmin, permissions, hasUser = true, compact = false }: { isAdmin: boolean; permissions: string[]; hasUser?: boolean; compact?: boolean }) {
   const [, setLocation] = useLocation();
+  const { readOnly } = useTenantAccess();
   const items = createMenuItems({ hasUser, isAdmin, permissions });
-  if (items.length === 0) return null;
+  // وضع القراءة فقط للشركة: لا مدخل إنشاء إطلاقًا (مخفي، لا معطّل) — السيرفر يرفض الكتابة أيضًا.
+  if (items.length === 0 || readOnly) return null;
   const [primary, ...rest] = items;
 
   if (compact) {

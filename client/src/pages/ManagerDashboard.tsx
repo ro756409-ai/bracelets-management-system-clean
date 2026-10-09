@@ -158,7 +158,7 @@ export default function ManagerDashboard() {
           </div>
         </div>
 
-        <nav className="flex-1 p-3 space-y-1" aria-label="أقسام بوابة المدير">
+        <nav className="flex-1 p-3 space-y-1" aria-label="أقسام بوابة المدير" data-readonly-safe>
           {tabs.map(tab => {
             const isActive = currentTab === tab.key;
             return (
@@ -186,7 +186,7 @@ export default function ManagerDashboard() {
               <p className="text-sm font-medium text-sidebar-foreground truncate">{managerName}</p>
               <p className="text-xs text-sidebar-foreground/60">مدير</p>
             </div>
-            <Button
+            <Button data-readonly-safe
               type="button"
               variant="ghost"
               size="icon"
@@ -217,12 +217,13 @@ export default function ManagerDashboard() {
                 size="icon"
                 className="min-h-11 min-w-11 text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                 onClick={() => setSidebarOpen(false)}
+                data-readonly-safe
                 aria-label="إغلاق القائمة"
               >
                 <X className="h-5 w-5" aria-hidden="true" />
               </Button>
             </div>
-            <nav className="flex-1 p-3 space-y-1" aria-label="أقسام بوابة المدير">
+            <nav className="flex-1 p-3 space-y-1" aria-label="أقسام بوابة المدير" data-readonly-safe>
               {tabs.map(tab => {
                 const isActive = currentTab === tab.key;
                 return (
@@ -241,7 +242,7 @@ export default function ManagerDashboard() {
               })}
             </nav>
             <div className="p-3 border-t border-sidebar-border">
-              <Button
+              <Button data-readonly-safe
                 type="button"
                 variant="ghost"
                 className="min-h-11 w-full justify-start gap-2 px-3 text-sm text-destructive hover:bg-destructive/10 hover:text-destructive"
@@ -258,7 +259,7 @@ export default function ManagerDashboard() {
       {/* Main Content */}
       <div className="flex-1 min-w-0">
         {/* Mobile Header */}
-        <header className="md:hidden sticky top-0 z-40 shadow-[var(--shadow-card)]" style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}>
+        <header data-readonly-safe className="md:hidden sticky top-0 z-40 shadow-[var(--shadow-card)]" style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}>
           <div className="flex items-center justify-between gap-2 px-2 py-1.5">
             <div className="flex min-w-0 items-center gap-1">
               <Button
@@ -733,7 +734,7 @@ function ManagerOrdersTab() {
                         <Select onValueChange={(val) => {
                           assignMutation.mutate({ orderId: order.id, employeeId: parseInt(val), operationId: operationIdFor(`assign:${order.id}:${val}`) });
                         }}>
-                          <SelectTrigger className="min-h-11 md:min-h-9 w-full flex-1 bg-card" aria-label="توزيع على موظف"><SelectValue placeholder="توزيع على موظف..." /></SelectTrigger>
+                          <SelectTrigger data-readonly-write className="min-h-11 md:min-h-9 w-full flex-1 bg-card" aria-label="توزيع على موظف"><SelectValue placeholder="توزيع على موظف..." /></SelectTrigger>
                           <SelectContent>
                             {agents.map((emp: any) => (
                               <SelectItem key={emp.id} value={emp.id.toString()}>{emp.name}</SelectItem>
@@ -1491,7 +1492,7 @@ function ManagerTasksTab() {
                       disabled={!canManage}
                       onValueChange={(v: any) => updateStatusMutation.mutate({ taskId: task.id, status: v })}
                     >
-                      <SelectTrigger className="min-h-11 md:min-h-8 w-full sm:w-32 text-xs" aria-label="حالة المهمة">
+                      <SelectTrigger data-readonly-write className="min-h-11 md:min-h-8 w-full sm:w-32 text-xs" aria-label="حالة المهمة">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

@@ -1,8 +1,8 @@
 /**
  * Migration 0041 (order_activity_events) — بلا نسخ SQL يدوي وبلا drizzle-kit.
- *   corepack pnpm tsx scripts/migrate-0041-order-events.ts                       # check (قراءة فقط)
- *   DEPLOY_ENV=test corepack pnpm tsx scripts/migrate-0041-order-events.ts --apply --confirm "APPLY 0041 TO <db>"
- *   DEPLOY_ENV=test corepack pnpm tsx scripts/migrate-0041-order-events.ts --rollback --confirm "ROLLBACK 0041 TO <db>"
+ *   node dist/scripts/migrate-0041-order-events.mjs                       # check (قراءة فقط)
+ *   DEPLOY_ENV=test node dist/scripts/migrate-0041-order-events.mjs --apply --confirm "APPLY 0041 TO <db>"
+ *   DEPLOY_ENV=test node dist/scripts/migrate-0041-order-events.mjs --rollback --confirm "ROLLBACK 0041 TO <db>"
  * applied → replay؛ partial (أو فهرس مركّب واحد/بتعريف مختلف) → رفض بلا أي DDL؛ rollback فقط والجدول فارغ.
  */
 import "dotenv/config";

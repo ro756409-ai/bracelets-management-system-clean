@@ -1,6 +1,6 @@
 /**
  * معاينة Backfill لأحداث الأوردرات — قراءة فقط، بلا أي كتابة (التنفيذ الفعلي غير موجود ولا مسموح الآن).
- *   corepack pnpm tsx scripts/preview-order-events-backfill.ts --tenant <id> [--json] [--i-understand-production]
+ *   node dist/scripts/preview-order-events-backfill.mjs --tenant <id> [--json] [--i-understand-production]
  */
 import "dotenv/config";
 import { looksLikeProductionTarget } from "../shared/balanceReconciliation";

@@ -132,11 +132,11 @@ export default function ScanLogs() {
         icon={<QrCode className="h-5 w-5" aria-hidden="true" />}
         actions={
           <>
-            <Button type="button" variant="outline" size="sm" onClick={() => { setSearch(""); setResultFilter("all"); setDateFrom(""); setDateTo(""); }} className={`${TOUCH} gap-1`}>
+            <Button data-readonly-safe type="button" variant="outline" size="sm" onClick={() => { setSearch(""); setResultFilter("all"); setDateFrom(""); setDateTo(""); }} className={`${TOUCH} gap-1`}>
               <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
               إعادة تعيين
             </Button>
-            <Button type="button" size="sm" onClick={handleExportCSV} className={`${TOUCH} gap-1`} disabled={filteredLogs.length === 0}>
+            <Button data-readonly-safe type="button" size="sm" onClick={handleExportCSV} className={`${TOUCH} gap-1`} disabled={filteredLogs.length === 0}>
               <Download className="h-3.5 w-3.5" aria-hidden="true" />
               تصدير CSV
             </Button>

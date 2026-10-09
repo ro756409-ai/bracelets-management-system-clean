@@ -1,6 +1,6 @@
 /**
  * Reconcile الحضور — قراءة فقط: يعيد حساب كل يوم من أحداثه ويقارنه بالمجاميع المخزنة (Projection).
- *   corepack pnpm tsx scripts/reconcile-attendance.ts --tenant <id> [--from YYYY-MM-DD --to YYYY-MM-DD] [--json] [--i-understand-production]
+ *   node dist/scripts/reconcile-attendance.mjs --tenant <id> [--from YYYY-MM-DD --to YYYY-MM-DD] [--json] [--i-understand-production]
  * لا يصلح شيئًا: أي فرق يُعرض للمراجعة فقط.
  */
 import "dotenv/config";

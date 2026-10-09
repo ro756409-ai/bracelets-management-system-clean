@@ -182,11 +182,11 @@ export default function PrintedOrders() {
         }
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-1`}>
+            <Button data-readonly-safe variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-1`}>
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
               تحديث
             </Button>
-            <Button variant="outline" size="sm" className={`${TOUCH} gap-1`} onClick={handleExcelExport} disabled={orders.length === 0}>
+            <Button data-readonly-safe variant="outline" size="sm" className={`${TOUCH} gap-1`} onClick={handleExcelExport} disabled={orders.length === 0}>
               <Download className="h-4 w-4" aria-hidden="true" />
               تصدير Excel
             </Button>

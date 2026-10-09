@@ -6,6 +6,7 @@ import superjson from "superjson";
 import App from "./App";
 import { handleUnauthorizedRedirect } from "./_core/authRedirect";
 import { completeOperation } from "./lib/operationId";
+import { readOnlyLink } from "./lib/tenantReadOnly";
 import "./index.css";
 
 const queryClient = new QueryClient();
@@ -33,6 +34,8 @@ queryClient.getMutationCache().subscribe(event => {
 
 const trpcClient = trpc.createClient({
   links: [
+    // وضع القراءة فقط للشركة: أي mutation خارج المسموح تُرفض قبل الشبكة (السيرفر يرفضها أيضًا).
+    readOnlyLink,
     httpBatchLink({
       url: "/api/trpc",
       transformer: superjson,

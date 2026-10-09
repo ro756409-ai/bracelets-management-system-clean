@@ -255,7 +255,7 @@ export default function OrderDetails() {
         title="الأوردر غير موجود"
         description="ربما حُذف أو أن الرقم غير صحيح."
         action={
-          <Button variant="outline" className="min-h-11 md:min-h-9" onClick={() => setLocation("/orders")}>
+          <Button data-readonly-safe variant="outline" className="min-h-11 md:min-h-9" onClick={() => setLocation("/orders")}>
             <ArrowRight className="h-4 w-4 ml-1" /> العودة للأوردرات
           </Button>
         }
@@ -307,7 +307,7 @@ export default function OrderDetails() {
         description={`أُنشئ ${fmtDate(order.createdAt)}`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="ghost" className="min-h-11 md:min-h-9" onClick={() => setLocation("/orders")} aria-label="العودة للأوردرات">
+            <Button data-readonly-safe variant="ghost" className="min-h-11 md:min-h-9" onClick={() => setLocation("/orders")} aria-label="العودة للأوردرات">
               <ArrowRight className="h-4 w-4 ml-1" aria-hidden="true" /> الأوردرات
             </Button>
             {isEditing && (
@@ -518,7 +518,7 @@ export default function OrderDetails() {
                   <Button variant="outline" size="sm" className="min-h-11 md:min-h-9 text-[var(--success)] border-[var(--success)]/40" disabled>
                     <CheckCircle className="h-4 w-4 ml-1" aria-hidden="true" /> مرسل لـ Bosta
                   </Button>
-                  <Button
+                  <Button data-readonly-safe
                     variant="outline"
                     size="sm"
                     className="min-h-11 md:min-h-9 text-[var(--info)] border-[var(--info)]/40"

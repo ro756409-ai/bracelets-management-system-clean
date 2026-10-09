@@ -409,7 +409,7 @@ export default function WorkshopReturns() {
                 <h3 className="flex items-center gap-2 text-sm font-bold">
                   <RotateCcw className="h-4 w-4" /> القطع عند الورشة وسجل الحركة
                 </h3>
-                <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 gap-1.5"
+                <Button data-readonly-safe size="sm" variant="outline" className="min-h-11 md:min-h-9 gap-1.5"
                   onClick={() => batches.refetch()} disabled={batches.isFetching}>
                   <RefreshCw className={`h-4 w-4 ${batches.isFetching ? "animate-spin" : ""}`} /> تحديث
                 </Button>

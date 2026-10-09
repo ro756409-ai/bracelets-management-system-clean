@@ -9,7 +9,11 @@ vi.mock("@/lib/trpc", () => ({
     auth: { logout: { useMutation: () => ({ mutateAsync: vi.fn() }) } },
   },
 }));
-import { TenantAccessNotice } from "./TenantAccessNotice";
+import { TenantAccessNotice as Notice } from "./TenantAccessNotice";
+import { TenantAccessProvider } from "@/contexts/TenantAccessContext";
+vi.mock("@/components/shared/toast", () => ({ toast: { warning: vi.fn(), success: vi.fn(), error: vi.fn() } }));
+/** عبر المزوّد الموحّد (tenantAccess.status) — كما في App. */
+const TenantAccessNotice = () => <TenantAccessProvider><Notice /></TenantAccessProvider>;
 afterEach(() => cleanup());
 
 describe("🔒 شاشة حالة الشركة", () => {

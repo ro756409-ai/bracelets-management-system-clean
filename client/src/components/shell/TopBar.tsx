@@ -44,7 +44,7 @@ export function TopBarActions({
 }) {
   const [prefsOpen, setPrefsOpen] = useState(false);
   return (
-    <div className="flex shrink-0 items-center gap-1 sm:gap-2" data-testid="topbar-actions">
+    <div className="flex shrink-0 items-center gap-1 sm:gap-2" data-readonly-safe data-testid="topbar-actions">
       {isMobile ? <CreateMenu isAdmin={isAdmin} permissions={permissions} compact /> : null}
       {lowStockCount > 0 && (
         <Button type="button" variant="ghost" size="sm" onClick={onGoInventory} className="h-11 min-w-11 gap-1 text-destructive hover:text-destructive md:h-10 md:min-w-0" data-testid="low-stock-indicator">
@@ -90,7 +90,7 @@ export function TopBarActions({
             )}
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-52">
+        <DropdownMenuContent align="end" className="w-52" data-readonly-safe>
           <DropdownMenuLabel className="truncate">{userName || "—"} · {roleLabel}</DropdownMenuLabel>
           <DropdownMenuSeparator />
           {isMobile && (

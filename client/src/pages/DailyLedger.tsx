@@ -298,7 +298,7 @@ export default function DailyLedger() {
               ارجع للنهاردة
             </Button>
           )}
-          <Button
+          <Button data-readonly-safe
             variant="outline"
             className="h-10 gap-1.5 ms-auto"
             onClick={refresh}

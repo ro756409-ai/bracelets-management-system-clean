@@ -206,7 +206,7 @@ export default function WebhookSettings() {
         description="إعداد ومتابعة ربط Easy Order: كل الأوردرات الواردة عبر الـWebhook مسجّلة هنا بشكل دائم — حتى بعد إعادة تشغيل السيرفر. لإضافة/تعديل بيانات الربط، افتح قناة EasyOrder من صفحة قنوات البيع."
         icon={<PartnerLogo partner="easyorders" size="sm" decorative />}
         actions={
-          <Button variant="outline" size="sm" className={TOUCH} onClick={() => refetch()} disabled={isFetching} data-testid="webhook-refresh">
+          <Button data-readonly-safe variant="outline" size="sm" className={TOUCH} onClick={() => refetch()} disabled={isFetching} data-testid="webhook-refresh">
             <RefreshCw className={`h-4 w-4 ml-1 ${isFetching ? "animate-spin" : ""}`} aria-hidden="true" />
             تحديث
           </Button>

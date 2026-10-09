@@ -127,7 +127,7 @@ function MonthCalendar({
   for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
 
   return (
-    <div className="min-w-[240px]">
+    <div className="min-w-[240px]" data-readonly-safe>
       <div className="text-center font-bold text-sm mb-3 text-foreground">
         {MONTHS_AR[month]} {year}
       </div>
@@ -294,7 +294,7 @@ export default function DateRangePicker({ value, onChange, placeholder = "اخت
   }
 
   return (
-    <div dir="rtl">
+    <div dir="rtl" data-readonly-safe>
       <button
         ref={triggerRef}
         type="button"

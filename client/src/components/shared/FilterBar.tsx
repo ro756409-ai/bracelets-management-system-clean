@@ -55,7 +55,7 @@ export function SearchInput({
   }, [local, debounceMs]);
 
   return (
-    <div className={cn("relative", className)}>
+    <div className={cn("relative", className)} data-readonly-safe>
       <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         value={local}
@@ -109,7 +109,7 @@ export function FilterBar({
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
-    <div className={cn("space-y-3", className)}>
+    <div className={cn("space-y-3", className)} data-readonly-safe>
       <div className="flex items-center gap-2">
         {search && <div className="min-w-0 flex-1 lg:max-w-xs">{search}</div>}
 

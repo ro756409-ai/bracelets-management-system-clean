@@ -230,7 +230,7 @@ export default function BostaOrders() {
             size="icon-sm"
             className="min-h-11 min-w-11 md:min-h-8 md:min-w-8"
           />
-          <Button
+          <Button data-readonly-safe
             size="sm"
             variant="ghost"
             className="min-h-11 min-w-11 p-0 text-[var(--info)] hover:bg-[var(--info)]/10 md:min-h-8 md:min-w-8"
@@ -241,7 +241,7 @@ export default function BostaOrders() {
             <Eye className="h-4 w-4" />
           </Button>
           {order.bostaShipmentId && (
-            <Button
+            <Button data-readonly-safe
               size="sm"
               variant="ghost"
               className="min-h-11 min-w-11 p-0 text-primary hover:bg-primary/10 md:min-h-8 md:min-w-8"
@@ -404,7 +404,7 @@ export default function BostaOrders() {
             details={
               <div className="flex flex-wrap gap-1.5">
                 <WhatsAppButton phone={order.customerPhone} size="sm" />
-                <Button
+                <Button data-readonly-safe
                   size="sm"
                   variant="outline"
                   className="min-h-11 gap-1"
@@ -413,7 +413,7 @@ export default function BostaOrders() {
                   <Eye className="h-3.5 w-3.5" /> تفاصيل
                 </Button>
                 {order.bostaShipmentId && (
-                  <Button
+                  <Button data-readonly-safe
                     size="sm"
                     variant="outline"
                     className="min-h-11 gap-1"

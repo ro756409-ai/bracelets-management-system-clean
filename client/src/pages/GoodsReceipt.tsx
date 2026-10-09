@@ -383,7 +383,7 @@ export default function GoodsReceipt({
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden="true" />
                 <span>
                   مفيش أنشطة متاحة لحسابك.{" "}
-                  <button type="button" onClick={() => navigate("/businesses")}
+                  <button data-readonly-safe type="button" onClick={() => navigate("/businesses")}
                     className="min-h-11 text-primary underline underline-offset-2 md:min-h-0">افتح إدارة الأنشطة</button>
                 </span>
               </p>
@@ -640,7 +640,7 @@ export default function GoodsReceipt({
       <SectionCard
         title="استلامات الورشة"
         icon={<ClipboardList className="h-4 w-4" aria-hidden="true" />}
-        action={<Button type="button" size="sm" variant="outline" className="min-h-11 gap-1.5 md:min-h-9" onClick={refresh} disabled={control.isFetching}><RefreshCw className={`h-4 w-4 ${control.isFetching ? "animate-spin" : ""}`} aria-hidden="true" /> تحديث</Button>}
+        action={<Button data-readonly-safe type="button" size="sm" variant="outline" className="min-h-11 gap-1.5 md:min-h-9" onClick={refresh} disabled={control.isFetching}><RefreshCw className={`h-4 w-4 ${control.isFetching ? "animate-spin" : ""}`} aria-hidden="true" /> تحديث</Button>}
         flush
         testId="receipt-list"
       >

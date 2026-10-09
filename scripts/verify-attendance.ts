@@ -1,6 +1,6 @@
 /**
  * تحقق 0042 (الحضور) — قراءة فقط: الحالة + المطابقة الكاملة للمواصفة (الأعمدة/الفهارس/FK المركّبة/CHECK) أو --preflight.
- *   corepack pnpm tsx scripts/verify-attendance.ts [--preflight] [--json] [--i-understand-production]
+ *   node dist/scripts/verify-attendance.mjs [--preflight] [--json] [--i-understand-production]
  */
 import "dotenv/config";
 import { looksLikeProductionTarget } from "../shared/balanceReconciliation";

@@ -46,7 +46,7 @@ export function EmployeeLedgerShell({ children }: { children: React.ReactNode })
               {me.data?.name && <p className="truncate text-xs text-muted-foreground" data-testid="ledger-shell-user">{me.data.name}</p>}
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={logout} className="min-h-11 shrink-0" data-testid="ledger-shell-logout">
+          <Button data-readonly-safe variant="ghost" size="sm" onClick={logout} className="min-h-11 shrink-0" data-testid="ledger-shell-logout">
             <LogOut className="h-4 w-4 ml-1" aria-hidden="true" /> خروج
           </Button>
         </div>

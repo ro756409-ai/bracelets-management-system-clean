@@ -292,7 +292,7 @@ function ClosingDetail({
               <FileText className="ml-2 h-4 w-4" />
               PDF
             </Button>
-            <Button
+            <Button data-readonly-safe
               variant="outline"
               onClick={() => exportClosingWorkbook(detail)}
             >

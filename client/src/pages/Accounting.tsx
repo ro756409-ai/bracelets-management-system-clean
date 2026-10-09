@@ -114,7 +114,7 @@ export default function Accounting() {
           {TABS.map(tab => {
             const isActive = active === tab.key;
             return (
-              <button
+              <button data-readonly-safe
                 key={tab.key}
                 onClick={() => navigate(tab.path)}
                 aria-current={isActive ? "page" : undefined}
@@ -174,7 +174,7 @@ export default function Accounting() {
           */}
           <div className="mt-3 flex flex-wrap gap-2">
             {HIDDEN_TABS.filter(t => t.key === "settings").map(t => (
-              <button
+              <button data-readonly-safe
                 key={t.key}
                 type="button"
                 onClick={() => navigate(t.path)}
@@ -418,7 +418,7 @@ function OverviewSection() {
                   داخل {formatMoney(data?.cash?.inflow)} · خارج{" "}
                   {formatMoney(data?.cash?.outflow)}
                 </p>
-                <Button
+                <Button data-readonly-safe
                   variant="outline"
                   size="sm"
                   className="mt-2 h-8 w-full"

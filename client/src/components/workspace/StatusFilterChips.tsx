@@ -46,7 +46,7 @@ export function StatusFilterChips({
   const idle = "border-border bg-card text-muted-foreground hover:bg-muted";
 
   return (
-    <div className="flex flex-wrap gap-2" dir="rtl" role="tablist" aria-label="فلترة الحالة">
+    <div className="flex flex-wrap gap-2" dir="rtl" role="tablist" aria-label="فلترة الحالة" data-readonly-safe>
       <button
         type="button"
         role="tab"

@@ -95,7 +95,7 @@ export default function Performance() {
       title="أداء الموظفين"
       description="من سجل الأحداث — كل قرار منسوب لمن نفّذه وقت تنفيذه. الأيام بتوقيت القاهرة."
       icon={<History className="h-5 w-5" aria-hidden="true" />}
-      actions={canExport && enabled ? <Button variant="outline" className={TOUCH} onClick={exportCsv} disabled={exporting || !validRange}><Download className="h-4 w-4" aria-hidden="true" /> تصدير CSV</Button> : undefined}
+      actions={canExport && enabled ? <Button data-readonly-safe variant="outline" className={TOUCH} onClick={exportCsv} disabled={exporting || !validRange}><Download className="h-4 w-4" aria-hidden="true" /> تصدير CSV</Button> : undefined}
     />
   );
 

@@ -87,7 +87,7 @@ export default function TreasuryHistory() {
             <Input type="date" className="mt-1 h-10" value={dateTo}
               min={dateFrom} max={cairoToday()} onChange={e => setDateTo(e.target.value)} />
           </div>
-          <Button variant="outline" className="ms-auto h-10 gap-1.5"
+          <Button data-readonly-safe variant="outline" className="ms-auto h-10 gap-1.5"
             onClick={() => q.refetch()} disabled={q.isFetching}>
             <RefreshCw className={`h-4 w-4 ${q.isFetching ? "animate-spin" : ""}`} />
             تحديث

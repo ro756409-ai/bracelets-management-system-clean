@@ -59,7 +59,7 @@ export default function Home() {
         </ul>
 
         {/* Login Button */}
-        <Button
+        <Button data-readonly-safe
           onClick={() => { window.location.href = getLoginUrl(); }}
           size="lg"
           className="h-12 w-full text-base font-semibold"

@@ -89,7 +89,7 @@ export default function ActivityLogPage() {
         title="سجل الأنشطة"
         description="تتبع كل العمليات داخل النظام"
         icon={<Activity className="h-5 w-5" aria-hidden="true" />}
-        actions={<Button variant="outline" size="sm" className={TOUCH} onClick={() => refetch()} data-testid="activity-refresh"><RefreshCw className="h-4 w-4 ml-1" aria-hidden="true" /> تحديث</Button>}
+        actions={<Button data-readonly-safe variant="outline" size="sm" className={TOUCH} onClick={() => refetch()} data-testid="activity-refresh"><RefreshCw className="h-4 w-4 ml-1" aria-hidden="true" /> تحديث</Button>}
       />
 
       {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}

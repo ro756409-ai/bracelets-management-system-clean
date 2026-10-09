@@ -638,3 +638,9 @@
   .min-h-12 { min-height: max(3rem, 48px); }
   .h-12 { height: max(3rem, 48px); }
 }
+
+/* وضع القراءة فقط للشركة (TenantAccessProvider): عنصر كتابة معطّل — المظهر فقط؛ المنع في الحارس والسيرفر. */
+[data-tenant-readonly] [data-readonly-blocked] {
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+}

@@ -23,7 +23,7 @@ export default function NotFound() {
         </p>
 
         <div id="not-found-button-group" className="flex flex-col justify-center gap-3 sm:flex-row">
-          <Button onClick={() => setLocation("/")} className="min-h-11 md:min-h-9" data-testid="not-found-home">
+          <Button data-readonly-safe onClick={() => setLocation("/")} className="min-h-11 md:min-h-9" data-testid="not-found-home">
             <Home className="h-4 w-4 ml-2" aria-hidden="true" />
             الصفحة الرئيسية
           </Button>

@@ -7,11 +7,13 @@ const DAY = 86_400_000;
 const lvl = (status: string, trialEndsAt: Date | null = null, pastDueSince: Date | null = null, now = NOW) => computeTenantAccess({ status, trialEndsAt }, pastDueSince, now).level;
 
 describe("قرار وصول الشركة — كل حالة وحدودها", () => {
-  it("trialing: قبل النهاية full؛ عندها وبعدها read_only؛ بلا تاريخ read_only (fail-closed)", () => {
+  it("trialing: قبل النهاية full؛ عندها وبعدها read_only؛ بلا تاريخ read_only بسبب مستقل للمراجعة", () => {
     expect(lvl("trialing", ms(NOW, 1))).toBe("full");
     expect(lvl("trialing", NOW)).toBe("read_only");
     expect(lvl("trialing", ms(NOW, -1))).toBe("read_only");
     expect(lvl("trialing", null)).toBe("read_only");
+    expect(computeTenantAccess({ status: "trialing", trialEndsAt: null }, null, NOW).reason).toBe("trial_no_end_date");
+    expect(computeTenantAccess({ status: "trialing", trialEndsAt: ms(NOW, -1) }, null, NOW).reason).toBe("trial_ended");
     expect(computeTenantAccess({ status: "trialing", trialEndsAt: ms(NOW, DAY) }, null, NOW).reason).toBe("trial");
   });
   it("active: full", () => expect(lvl("active")).toBe("full"));
@@ -21,6 +23,8 @@ describe("قرار وصول الشركة — كل حالة وحدودها", () =
     expect(lvl("past_due", null, since)).toBe("read_only");
     expect(lvl("past_due", null, ms(NOW, -DAY))).toBe("full");
     expect(lvl("past_due", null, null)).toBe("read_only");
+    expect(computeTenantAccess({ status: "past_due", trialEndsAt: null }, null, NOW).reason).toBe("past_due_unknown_period");
+    expect(computeTenantAccess({ status: "past_due", trialEndsAt: null }, ms(NOW, -30 * DAY), NOW).reason).toBe("past_due_ended");
   });
   it("expired: read_only؛ suspended/canceled: blocked؛ غير معروف أو بلا شركة: blocked", () => {
     expect(lvl("expired")).toBe("read_only");
@@ -37,7 +41,7 @@ describe("قرار وصول الشركة — كل حالة وحدودها", () =
     }
   });
   it("كل سبب له رسالة عربية", () => {
-    for (const r of ["trial", "trial_ended", "active", "past_due_grace", "past_due_ended", "expired", "suspended", "canceled", "unknown"] as const) expect(TENANT_ACCESS_MESSAGES[r]).toBeTruthy();
+    for (const r of ["trial", "trial_ended", "trial_no_end_date", "active", "past_due_grace", "past_due_ended", "past_due_unknown_period", "expired", "suspended", "canceled", "unknown"] as const) expect(TENANT_ACCESS_MESSAGES[r]).toBeTruthy();
   });
 });
 

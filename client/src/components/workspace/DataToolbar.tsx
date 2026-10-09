@@ -57,7 +57,7 @@ export function DataToolbar({
         {filters}
 
         {advancedFilters && (
-          <Button variant="outline" size="sm" className="h-11 shrink-0 gap-1.5 md:h-9" onClick={() => setAdvancedOpen(true)}>
+          <Button data-readonly-safe variant="outline" size="sm" className="h-11 shrink-0 gap-1.5 md:h-9" onClick={() => setAdvancedOpen(true)}>
             <SlidersHorizontal className="h-4 w-4" />
             فلاتر متقدمة
             {advancedActiveCount > 0 && (
@@ -69,7 +69,7 @@ export function DataToolbar({
         )}
 
         {onReset && chips.length > 0 && (
-          <Button variant="ghost" className="h-11 shrink-0 gap-1 text-muted-foreground md:h-9" onClick={onReset}>
+          <Button data-readonly-safe variant="ghost" className="h-11 shrink-0 gap-1 text-muted-foreground md:h-9" onClick={onReset}>
             <X className="h-4 w-4" />
             <span className="hidden sm:inline">مسح الفلاتر</span>
           </Button>
@@ -90,7 +90,7 @@ export function DataToolbar({
               <span className="text-muted-foreground">{chip.label}:</span>
               <span className="font-medium">{chip.value}</span>
               {onClearChip && (
-                <button
+                <button data-readonly-safe
                   type="button"
                   onClick={() => onClearChip(chip.key)}
                   aria-label={`إزالة فلتر ${chip.label}`}

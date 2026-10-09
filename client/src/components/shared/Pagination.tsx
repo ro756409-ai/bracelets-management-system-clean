@@ -63,7 +63,7 @@ export function Pagination({
   const to = Math.min(page * pageSize, total);
 
   return (
-    <div className={className}>
+    <div className={className} data-readonly-safe>
       <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
         <p className="text-xs text-muted-foreground tabular-nums">
           {total === 0 ? "لا نتائج" : `${from}–${to} من ${total}`}

@@ -499,3 +499,51 @@ ALTER TABLE `attendance_correction_requests` ADD CONSTRAINT `fk_acr_tenant_emplo
 
 Commits مستقلة: (1) هذه الحزمة؛ (2) ملفات 0041 + السكربتات؛ (3) خدمة Event Ledger وربط المسارات؛ (4) تقرير الأداء؛ (5) ملفات 0042 + السكربتات؛ (6) خدمات الحضور؛ (7) Routers والصلاحيات؛ (8) الواجهات؛ (9) مهام الموظف وتوحيد البوابة؛ (10) صلاحيات لوحة المدير؛ (11) Tenant Access خلف العلم؛ (12) مراجعة واختبارات.
 مسموح: تشغيل 0041/0042 على Docker محلي مؤقت فقط. ممنوع: Push، Deploy، Staging، Production، تشغيل 0040، Backfill حقيقي، تفعيل أي علم، تغيير Tenant Status، كتابة Ledger V3 أو Payroll، drizzle-kit push/generate.
+
+---
+
+## 13) مرحلة الإغلاق — قرارات Tenant Access وواجهة القراءة فقط وسكربتات النشر
+
+### سياسة الوصول المعتمدة (كود + توثيق)
+
+| الحالة | المستوى | السبب (`reason`) |
+|---|---|---|
+| trialing قبل `trialEndsAt` | full | `trial` |
+| trialing عند/بعد `trialEndsAt` | read_only | `trial_ended` |
+| trialing **بلا** `trialEndsAt` | read_only (حالة آمنة) | `trial_no_end_date` — **قسم تحذير مستقل** في المعاينة |
+| active | full | `active` |
+| past_due خلال 7 أيام من نهاية آخر فترة متأخرة | full | `past_due_grace` |
+| past_due بعد المهلة | read_only | `past_due_ended` |
+| past_due **بلا** فترة اشتراك معروفة | read_only فورًا | `past_due_unknown_period` — **قسم تحذير مستقل** في المعاينة |
+| expired | read_only | `expired` |
+| suspended / canceled | blocked (شاشة كاملة) | `suspended` / `canceled` |
+
+- **لا يُفعَّل** `TENANT_ACCESS_ENFORCEMENT_ENABLED` قبل تشغيل `node dist/scripts/preview-tenant-access.mjs` ومراجعة قسمي التحذير يدويًا.
+- **لا تعديل تلقائي** لحالة أي Tenant في أي مسار (كود الإنفاذ والمعاينة قراءة فقط — مختبر نصيًا).
+
+### واجهة القراءة فقط (طبقة مركزية فوق حارس السيرفر الإلزامي)
+
+1. مصدر واحد: `TenantAccessProvider` (`tenantAccess.status`). العلم معطل/وصول كامل ⇒ لا أثر إطلاقًا.
+2. حارس تفاعل مركزي: كل عنصر كتابة (زر/بند قائمة/مفتاح/اختيار/إرسال نموذج) **ممنوع افتراضيًا** في read_only — معطّل
+   (`aria-disabled` + التلميح «الحساب في وضع القراءة فقط») ولا يصل الضغط/المفتاح/الإرسال إليه (التقاط قبل React).
+3. القراءة مسموحة صراحةً: مناطق مشتركة معلَّمة (التنقل، البحث `role=search`، الفلاتر، التواريخ، التبويبات، الترقيم،
+   أعمدة الجدول، مفاتيح العرض `aria-pressed`، فتح القوائم والاختيارات، الإغلاق) + أزرار التصدير/التحديث/الطباعة/AWB
+   (GET بلا كتابة — مدقَّق) + الخروج من كل شاشة. مدخل «إنشاء» مخفي. تفعيل/تعطيل النشاط معلَّم كتابة صراحةً.
+4. طبقة بيانات: `readOnlyLink` يرفض أي mutation خارج المسموح (نفس `trpcCallAllowed` في السيرفر) قبل الشبكة.
+5. blocked يبقى شاشة كاملة (الخروج فقط).
+
+### سكربتات النشر — node فقط (بلا npx/tsx/devDependencies)
+
+تُبنى ضمن `pnpm build` بـesbuild إلى `dist/scripts/*.mjs` (حارس اختبار يبنيها ويشغّلها بـnode بلا DATABASE_URL):
+
+- 0041: `migrate-0041-order-events.mjs`، `verify-order-events.mjs`، `preview-order-events-backfill.mjs`
+- 0042: `migrate-0042-attendance.mjs`، `verify-attendance.mjs`، `reconcile-attendance.mjs`
+- Tenant Access: `preview-tenant-access.mjs`
+
+ملفات SQL تُقرأ نسبةً لمكان السكربت (`dist/scripts/../../drizzle/…`) — يلزم وجود مجلد `drizzle/` بجانب `dist/` في بيئة التشغيل.
+
+### ملاحظة غير مانعة — حقول التاريخ
+
+placeholder حقل التاريخ الأصلي الفارغ يظهر معكوسًا (مثل «موى/رهش/ةنس») في واجهة RTL بلغة عربية. السبب في رسم
+المتصفح لحقل `type=date` المحلي، ويظهر في كل حقول التاريخ بالتطبيق. جُرّب `dir="ltr"` ولم يحلّها؛ لا حل تجميلي
+قد يكسر RTL. تُعاد عند وجود حل موثوق مُختبر على 360/390/430 فاتح/داكن.
