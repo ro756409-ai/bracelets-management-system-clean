@@ -314,6 +314,26 @@ function requireEmployeeTenantPermission(permission: Permission) {
 }
 
 /**
+ * لوحة المدير: دور إداري في البوابة (super_admin/admin/manager — بلا توسيع للمشرف) **و** صلاحية التبويب أو
+ * الفعل بتجاوزات الشركة. الافتراضي للمدير يشمل كل هذه الصلاحيات (نفس السلوك القديم)، والسحب لشركة يمنع فورًا.
+ */
+function requireManagerPortalPermission(permission: Permission) {
+  return managerPortalProcedure.use(async ({ ctx, next }) => {
+    const emp = (ctx as any).employee;
+    if (!(await hasTenantPermission(requireTenantId(emp), emp.role, permission)))
+      throw new TRPCError({ code: "FORBIDDEN", message: "ليس لديك صلاحية لتنفيذ هذا الإجراء" });
+    return next({ ctx });
+  });
+}
+
+/** التكلفة لا تظهر في البوابة إلا بصلاحية التكلفة — المخزون التشغيلي (view/adjust) لا يعني رؤيتها. */
+async function stripCostUnlessAllowed<T extends Record<string, any>>(ctx: any, rows: T[]): Promise<T[]> {
+  const emp = (ctx as any).employee;
+  if (await hasTenantPermission(requireTenantId(emp), emp.role, "inventory_costing.view")) return rows;
+  return rows.map(r => { if (!("costPrice" in r)) return r; const { costPrice: _cost, ...rest } = r; return rest as T; });
+}
+
+/**
  * "Is this order yours?" — the per-order half of employee-portal authorization, paired with
  * requireEmployeeTenantPermission's "can your role do this at all?".
  *
@@ -1031,6 +1051,10 @@ async function sessionHasPermission(ctx: any, permission: Permission): Promise<b
   if (ctx.employee?.role === "manager") return hasTenantPermission(ctx.tenantId, "manager", permission);
   if (ctx.user?.role === "admin") return true;
   return hasTenantPermission(ctx.tenantId, ctx.employee?.role, permission);
+}
+async function requireSessionPermission(ctx: any, permission: Permission): Promise<void> {
+  if (!(await sessionHasPermission(ctx, permission)))
+    throw new TRPCError({ code: "FORBIDDEN", message: "ليس لديك صلاحية لتنفيذ هذا الإجراء" });
 }
 
 /** الفاعل في الحضور من **الجلسة** فقط (ويب): tenant الجلسة + صف الموظف الحقيقي. */
@@ -4760,7 +4784,7 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
         const businessIds = await scopeBusinessIds(empScope(ctx), input);
-        return getAllProducts(undefined, businessIds);
+        return stripCostUnlessAllowed(ctx, await getAllProducts(undefined, businessIds));
       }),
 
     // عرض variants المنتجات للموظف (مع الأسعار والمخزون)
@@ -4776,7 +4800,8 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
         const businessIds = await scopeBusinessIds(empScope(ctx), input);
-        return getAllVariantsWithProduct(undefined, businessIds);
+        // التكلفة لا تظهر للموظف إلا بصلاحية التكلفة (كانت costPrice بترجع لأي موظف).
+        return stripCostUnlessAllowed(ctx, await getAllVariantsWithProduct(undefined, businessIds));
       }),
 
     stats: requireEmployeeTenantPermission("dashboard.view")
@@ -5061,7 +5086,7 @@ export const appRouter = router({
 
     // ==================== MANAGER PORTAL APIs ====================
     // Dashboard stats for manager
-    dashboardStats: managerPortalProcedure
+    dashboardStats: requireManagerPortalPermission("dashboard.view")
       .input(
         z.object({
           dateFrom: z.date().optional(),
@@ -5082,7 +5107,7 @@ export const appRouter = router({
       }),
 
     // All orders for manager (not just assigned)
-    allOrders: managerPortalProcedure
+    allOrders: requireManagerPortalPermission("orders.view")
       .input(
         z.object({
           status: z.string().optional(),
@@ -5111,7 +5136,7 @@ export const appRouter = router({
       }),
 
     // Assign order to employee
-    assignOrder: managerPortalProcedure
+    assignOrder: requireManagerPortalPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -5129,7 +5154,7 @@ export const appRouter = router({
       }),
 
     // Bulk assign orders
-    bulkAssignOrders: managerPortalProcedure
+    bulkAssignOrders: requireManagerPortalPermission("orders.update")
       .input(
         z.object({
           orderIds: z.array(z.number()),
@@ -5147,7 +5172,7 @@ export const appRouter = router({
       }),
 
     // Create order
-    createOrder: managerPortalProcedure
+    createOrder: requireManagerPortalPermission("orders.create")
       .input(
         z.object({
           customerName: z.string().min(2),
@@ -5243,22 +5268,17 @@ export const appRouter = router({
       }),
 
     // Products list
-    productsList: employeePortalProcedure.query(async ({ ctx }) => {
-      const emp = (ctx as any).employee;
-      if (emp.role !== "manager" && emp.role !== "warehouse")
-        throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
+    // المخزون بصلاحية inventory.view (الافتراضي: المالك/الأدمن/المدير/المخزن) بدل فحص الدور الحرفي.
+    productsList: requireEmployeeTenantPermission("inventory.view").query(async ({ ctx }) => {
       // P0: نطاق الجلسة (tenant + نشاط الموظف) — كان `emp.businessId ?? undefined` = كل الـtenants لو null.
-      return getAllProducts(undefined, await scopeBusinessIds(empScope(ctx), {}));
+      return stripCostUnlessAllowed(ctx, await getAllProducts(undefined, await scopeBusinessIds(empScope(ctx), {})));
     }),
     // Low stock products
-    lowStockProducts: employeePortalProcedure.query(async ({ ctx }) => {
-      const emp = (ctx as any).employee;
-      if (emp.role !== "manager" && emp.role !== "warehouse")
-        throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
-      return getLowStockProducts(undefined, await scopeBusinessIds(empScope(ctx), {}));
+    lowStockProducts: requireEmployeeTenantPermission("inventory.view").query(async ({ ctx }) => {
+      return stripCostUnlessAllowed(ctx, await getLowStockProducts(undefined, await scopeBusinessIds(empScope(ctx), {})));
     }),
     // Add inventory movement
-    addInventoryMovement: employeePortalProcedure
+    addInventoryMovement: requireEmployeeTenantPermission("inventory.adjust")
       .input(
         z.object({
           productId: z.number(),
@@ -5270,8 +5290,6 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
-        if (emp.role !== "manager" && emp.role !== "warehouse")
-          throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
         // المنتج لازم يكون داخل نطاق الموظف (tenant + نشاطه) — كان بيقبل أي productId.
         await requireOwned(empScope(ctx), "product", input.productId);
         const product = await getProductById(input.productId);
@@ -5287,7 +5305,7 @@ export const appRouter = router({
         return { success: true };
       }),
     // Inventory movements
-    inventoryMovements: employeePortalProcedure
+    inventoryMovements: requireEmployeeTenantPermission("inventory.view")
       .input(
         z.object({
           productId: z.number().optional(),
@@ -5295,9 +5313,6 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
-        const emp = (ctx as any).employee;
-        if (emp.role !== "manager" && emp.role !== "warehouse")
-          throw new TRPCError({ code: "FORBIDDEN", message: "غير مصرح" });
         if (input.productId != null)
           await requireOwned(empScope(ctx), "product", input.productId);
         return getInventoryMovements(
@@ -5309,7 +5324,7 @@ export const appRouter = router({
       }),
 
     // Employee performance report
-    employeePerformance: managerPortalProcedure
+    employeePerformance: requireManagerPortalPermission("dashboard.view")
       .input(
         z.object({
           dateFrom: z.date().optional(),
@@ -5347,7 +5362,7 @@ export const appRouter = router({
       }),
 
     // Cancellation reasons
-    cancellationReasons: managerPortalProcedure
+    cancellationReasons: requireManagerPortalPermission("dashboard.view")
       .input(
         z.object({
           dateFrom: z.date().optional(),
@@ -5365,7 +5380,7 @@ export const appRouter = router({
       }),
 
     // Daily chart
-    dailyChart: managerPortalProcedure
+    dailyChart: requireManagerPortalPermission("dashboard.view")
       .input(
         z.object({
           days: z.number().int().min(1).max(366).default(30),
@@ -5378,20 +5393,20 @@ export const appRouter = router({
       }),
 
     // Employees list
-    employeesList: managerPortalProcedure.query(async ({ ctx }) => {
+    employeesList: requireManagerPortalPermission("employees.view").query(async ({ ctx }) => {
       // fail-closed: نطاق الجلسة، مش `emp.businessId ?? undefined` (null → الكل).
       const businessIds = await scopeBusinessIds(empScope(ctx), {});
       return getAllEmployees(undefined, businessIds);
     }),
 
     // Active employees list
-    activeEmployeesList: managerPortalProcedure.query(async ({ ctx }) => {
+    activeEmployeesList: requireManagerPortalPermission("employees.view").query(async ({ ctx }) => {
       const businessIds = await scopeBusinessIds(empScope(ctx), {});
       return getActiveEmployees(undefined, businessIds);
     }),
 
     // Create employee
-    createEmployee: managerPortalProcedure
+    createEmployee: requireManagerPortalPermission("employees.manage")
       .input(
         z.object({
           name: z.string().min(2),
@@ -5425,7 +5440,7 @@ export const appRouter = router({
       }),
 
     // Update employee
-    updateEmployee: managerPortalProcedure
+    updateEmployee: requireManagerPortalPermission("employees.manage")
       .input(
         z.object({
           id: z.number(),
@@ -5452,7 +5467,7 @@ export const appRouter = router({
       }),
 
     // Delete employee
-    deleteEmployee: managerPortalProcedure
+    deleteEmployee: requireManagerPortalPermission("employees.manage")
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
@@ -5461,7 +5476,7 @@ export const appRouter = router({
       }),
 
     // Set employee credentials
-    setEmployeeCredentials: managerPortalProcedure
+    setEmployeeCredentials: requireManagerPortalPermission("employees.manage")
       .input(
         z.object({
           id: z.number(),
@@ -5493,7 +5508,7 @@ export const appRouter = router({
       }),
 
     // Change employee password
-    changeEmployeePassword: managerPortalProcedure
+    changeEmployeePassword: requireManagerPortalPermission("employees.manage")
       .input(
         z.object({
           id: z.number(),
@@ -5516,7 +5531,7 @@ export const appRouter = router({
     // إرسال رسالة لجميع الموظفين (من لوحة المدير - employee session)
     // P0 عزل: الرسالة بتتكتب بنشاط المدير، والإلغاء والقراءة على نطاق الجلسة بس — كان الإرسال
     // بيعطّل رسائل **كل** الشركات، والقراءة بترجّع آخر رسالة في النظام كله.
-    sendBroadcast: managerPortalProcedure
+    sendBroadcast: requireManagerPortalPermission("employees.manage")
       .input(
         z
           .object({
@@ -5531,7 +5546,7 @@ export const appRouter = router({
       }),
 
     // حذف الرسالة النشطة (من لوحة المدير - employee session) — نطاق الجلسة بس
-    clearBroadcast: managerPortalProcedure.mutation(async ({ ctx }) => {
+    clearBroadcast: requireManagerPortalPermission("employees.manage").mutation(async ({ ctx }) => {
       const scope = await portalTeamScope(ctx);
       return clearScopedBroadcast(scope);
     }),
@@ -6726,6 +6741,8 @@ export const appRouter = router({
     // P0 عزل: كل عمليات المهام على نطاق جلسة البوابة (tenant الموظف + نشاطه) — المستلم والمهمة
     // والنشاط والمنشئ لازم يكونوا في نفس الـtenant. قبل كده: المستلم بلا تحقق، businessId
     // مابيتكتبش، والقائمة بلا employeeId بترجّع مهام **كل الشركات**.
+    // الصلاحيات (لوحة المدير): القراءة employees.view؛ الإنشاء والحذف وتغيير الحالة (عمل على مهام الآخرين)
+    // employees.manage — بتجاوزات الشركة للمدير (sessionHasPermission)، بلا توسيع للمشرف.
     // إنشاء مهمة جديدة (إدارة فقط — protectedProcedure = جلسة admin-tier)
     create: protectedProcedure
       .input(
@@ -6738,6 +6755,7 @@ export const appRouter = router({
           .strict()
       )
       .mutation(async ({ input, ctx }) => {
+        await requireSessionPermission(ctx, "employees.manage");
         const scope = await portalTeamScope(ctx);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
@@ -6791,6 +6809,7 @@ export const appRouter = router({
           .strict()
       )
       .query(async ({ input, ctx }) => {
+        await requireSessionPermission(ctx, "employees.view");
         const scope = await portalTeamScope(ctx);
         const db = await getDb();
         if (!db) return [];
@@ -6832,6 +6851,7 @@ export const appRouter = router({
           .strict()
       )
       .mutation(async ({ ctx, input }) => {
+        await requireSessionPermission(ctx, "employees.manage");
         const scope = await portalTeamScope(ctx);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
@@ -6846,6 +6866,7 @@ export const appRouter = router({
     delete: protectedProcedure
       .input(z.object({ taskId: z.number().int().positive() }).strict())
       .mutation(async ({ ctx, input }) => {
+        await requireSessionPermission(ctx, "employees.manage");
         const scope = await portalTeamScope(ctx);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });

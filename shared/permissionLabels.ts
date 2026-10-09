@@ -14,6 +14,8 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "employees.view": "عرض الموظفين",
   "employees.manage": "إدارة الموظفين",
   "tasks.view_own": "مهامي — عرض مهامي والمهام العامة وتحديث حالتها",
+  "inventory.view": "المخزون — عرض الكميات والحركات (بلا تكلفة)",
+  "inventory.adjust": "المخزون — تسجيل حركة وارد/منصرف (بلا تكلفة)",
   "settings.view": "عرض الإعدادات",
   "settings.manage": "إدارة الإعدادات",
   "audit.view": "عرض سجل التدقيق",

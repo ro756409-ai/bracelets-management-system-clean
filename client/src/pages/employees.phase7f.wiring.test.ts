@@ -26,7 +26,8 @@ describe("🔌 Queries/Mutations قبل = بعد", () => {
     expect(p).toContain("await utils.accountingV2.permissionConfiguration.invalidate(); await utils.auth.myPermissions.invalidate();");
   });
   it("ManagerDashboard و EmployeeDashboard: لم تتغيّر hooks (لمسات 44px وtokens فقط)", () => {
-    expect(hooks(read("pages/ManagerDashboard.tsx")).length).toBe(31);
+    // + employeePortal.myPermissions (صلاحية لكل تبويب وفعل في لوحة المدير)
+    expect(hooks(read("pages/ManagerDashboard.tsx")).length).toBe(32);
     // 23 أصلية + employeePortal.myPermissions (روابط الشحن حسب صلاحية هوية البوابة — إضافة مقصودة)
     // + performance.status (رابط «أدائي» بعد تفعيل سجل الأحداث)
     // + attendance.status (رابط «حضوري» بعد تفعيل الحضور)

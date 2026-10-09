@@ -24,3 +24,22 @@ describe("مصفوفة الحضور والأداء — الافتراضي", () =
     for (const p of [...SELF, ...ADMIN_ONLY]) expect(hasPermission("viewer", p), p).toBe(false);
   });
 });
+
+describe("مصفوفة المخزون والمهام — الافتراضي", () => {
+  const ALL_ROLES = ["super_admin", "admin", "manager", "warehouse", "agent", "order_confirmation", "moderator", "shipping", "scanner", "data_entry", "facebook_entry", "accountant", "viewer"];
+  it("inventory.view/adjust: المالك والأدمن والمدير والمخزن فقط — والمخزن بلا تكلفة", () => {
+    for (const r of ALL_ROLES) {
+      const yes = ["super_admin", "admin", "manager", "warehouse"].includes(r);
+      expect(hasPermission(r, "inventory.view"), r).toBe(yes);
+      expect(hasPermission(r, "inventory.adjust"), r).toBe(yes);
+    }
+    expect(hasPermission("warehouse", "inventory_costing.view")).toBe(false);
+    expect(hasPermission("manager", "inventory_costing.view")).toBe(true);
+  });
+  it("tasks.view_own للأدوار التشغيلية؛ إدارة المهام employees.manage للإدارة فقط (بلا توسيع للمشرف)", () => {
+    for (const r of OPERATIONAL) expect(hasPermission(r, "tasks.view_own"), r).toBe(true);
+    expect(hasPermission("viewer", "tasks.view_own")).toBe(false);
+    expect(hasPermission("moderator", "employees.manage")).toBe(false);
+    for (const r of ["super_admin", "admin", "manager"]) expect(hasPermission(r, "employees.manage"), r).toBe(true);
+  });
+});

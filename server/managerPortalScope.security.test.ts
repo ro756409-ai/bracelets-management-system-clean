@@ -36,7 +36,7 @@ describe("🔒 P0 لوحة المدير — حراس نصّية", () => {
     const fn = routers.slice(routers.indexOf("async function assertEmployeeOwnsOrder("), routers.indexOf("function requireTenantId("));
     expect(fn.indexOf('requireOwned(empScope({ employee: emp }), "order", orderId)')).toBeGreaterThan(-1);
     expect(fn.indexOf("requireOwned(")).toBeLessThan(fn.indexOf("isAdminTierRole("));
-    const assign = portalSection.slice(portalSection.indexOf("assignOrder: managerPortalProcedure"), portalSection.indexOf("bulkAssignOrders:"));
+    const assign = portalSection.slice(portalSection.indexOf('assignOrder: requireManagerPortalPermission("orders.update")'), portalSection.indexOf("bulkAssignOrders:"));
     expect(assign).toContain('requireOwned(empScope(ctx), "employee", input.employeeId)');
   });
   it("groupsWithBusinesses: نطاق مجهول = لا شيء، والتصفية في الاستعلام", () => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, createContext, useContext } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { operationIdFor } from "@/lib/operationId";
@@ -57,6 +57,18 @@ const ROLE_LABELS: Record<string, string> = {
 
 type TabKey = "dashboard" | "orders" | "inventory" | "reports" | "employees" | "tasks";
 
+/**
+ * صلاحيات هوية البوابة (بتجاوزات الشركة، من employeePortal.myPermissions) — كل تبويب وكل فعل خلف صلاحيته،
+ * نفس حارس السيرفر (requireManagerPortalPermission / requireEmployeeTenantPermission). الواجهة تخفي فقط؛
+ * السيرفر هو الحكم.
+ */
+const ManagerPermsContext = createContext<(permission: string) => boolean>(() => false);
+const useCan = () => useContext(ManagerPermsContext);
+const TAB_PERMISSION: Record<TabKey, string> = {
+  dashboard: "dashboard.view", orders: "orders.view", inventory: "inventory.view",
+  reports: "dashboard.view", employees: "employees.view", tasks: "employees.view",
+};
+
 export default function ManagerDashboard() {
   const { values: GOVERNORATES } = useGovernorateOptions();
   const [, setLocation] = useLocation();
@@ -75,6 +87,8 @@ export default function ManagerDashboard() {
   }, [empSession]);
 
   const { data: meData, error: meError } = trpc.employeePortal.me.useQuery(undefined, { retry: false });
+  const { data: portalPermissions } = trpc.employeePortal.myPermissions.useQuery(undefined, { retry: false });
+  const can = useMemo(() => { const set = new Set<string>(portalPermissions ?? []); return (permission: string) => set.has(permission); }, [portalPermissions]);
 
   useEffect(() => {
     if (meError) {
@@ -98,7 +112,7 @@ export default function ManagerDashboard() {
 
   const managerName = meData?.name ?? empSession?.name ?? "المدير";
 
-  const tabs: { key: TabKey; label: string; icon: any }[] = [
+  const allTabs: { key: TabKey; label: string; icon: any }[] = [
     { key: "dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
     { key: "orders", label: "الأوردرات", icon: ShoppingCart },
     { key: "inventory", label: "المخزون", icon: Package },
@@ -106,13 +120,15 @@ export default function ManagerDashboard() {
     { key: "employees", label: "الموظفين", icon: Users },
     { key: "tasks", label: "توزيع المهام", icon: FileText },
   ];
+  const tabs = allTabs.filter(t => can(TAB_PERMISSION[t.key]));
+  const currentTab: TabKey | undefined = tabs.some(t => t.key === activeTab) ? activeTab : tabs[0]?.key;
 
   // بوابة الدور (عرض فقط): لا نرسم محتوى التبويبات — ولا تنطلق استعلاماتها — إلا بعد تأكيد أن الجلسة
   // لمدير من البيانات الموجودة أصلًا (الجلسة المحلية + me). التوجيهات أعلاه كما هي.
   const isManagerSession =
     empSession?.role === "manager" && !meError && (!meData || meData.role === "manager");
 
-  if (!isManagerSession) {
+  if (!isManagerSession || !portalPermissions) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-4" dir="rtl">
         <LoadingSkeleton variant="form" rows={2} className="w-full max-w-sm" />
@@ -144,7 +160,7 @@ export default function ManagerDashboard() {
 
         <nav className="flex-1 p-3 space-y-1" aria-label="أقسام بوابة المدير">
           {tabs.map(tab => {
-            const isActive = activeTab === tab.key;
+            const isActive = currentTab === tab.key;
             return (
               <Button
                 key={tab.key}
@@ -208,7 +224,7 @@ export default function ManagerDashboard() {
             </div>
             <nav className="flex-1 p-3 space-y-1" aria-label="أقسام بوابة المدير">
               {tabs.map(tab => {
-                const isActive = activeTab === tab.key;
+                const isActive = currentTab === tab.key;
                 return (
                   <Button
                     key={tab.key}
@@ -256,19 +272,22 @@ export default function ManagerDashboard() {
               >
                 <Menu className="h-5 w-5" aria-hidden="true" />
               </Button>
-              <p className="truncate text-primary-foreground font-bold text-sm">{tabs.find(t => t.key === activeTab)?.label}</p>
+              <p className="truncate text-primary-foreground font-bold text-sm">{tabs.find(t => t.key === currentTab)?.label}</p>
             </div>
             <p className="truncate px-2 text-primary-foreground/80 text-xs">أهلاً، {managerName}</p>
           </div>
         </header>
 
         <main className="mx-auto w-full max-w-7xl p-4 md:p-6">
-          {activeTab === "dashboard" && <ManagerDashboardTab />}
-          {activeTab === "orders" && <ManagerOrdersTab />}
-          {activeTab === "inventory" && <ManagerInventoryTab />}
-          {activeTab === "reports" && <ManagerReportsTab />}
-          {activeTab === "employees" && <ManagerEmployeesTab />}
-          {activeTab === "tasks" && <ManagerTasksTab />}
+          <ManagerPermsContext.Provider value={can}>
+            {!currentTab && <EmptyState title="لا توجد أقسام متاحة لصلاحياتك" description="اطلب من المالك منحك صلاحية القسم المطلوب." />}
+            {currentTab === "dashboard" && <ManagerDashboardTab />}
+            {currentTab === "orders" && <ManagerOrdersTab />}
+            {currentTab === "inventory" && <ManagerInventoryTab />}
+            {currentTab === "reports" && <ManagerReportsTab />}
+            {currentTab === "employees" && <ManagerEmployeesTab />}
+            {currentTab === "tasks" && <ManagerTasksTab />}
+          </ManagerPermsContext.Provider>
         </main>
       </div>
     </div>
@@ -278,6 +297,8 @@ export default function ManagerDashboard() {
 // ==================== DASHBOARD TAB ====================
 function ManagerDashboardTab() {
   const online = useOnlineStatus();
+  const can = useCan();
+  const canManageTeam = can("employees.manage");
   const [dateRange] = useState<"today" | "week" | "month">("month");
   const [broadcastMsg, setBroadcastMsg] = useState("");
   const utils = trpc.useUtils();
@@ -311,7 +332,7 @@ function ManagerDashboardTab() {
   }, [dateRange]);
 
   const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = trpc.employeePortal.dashboardStats.useQuery(dateParams);
-  const { data: lowStock } = trpc.employeePortal.lowStockProducts.useQuery();
+  const { data: lowStock } = trpc.employeePortal.lowStockProducts.useQuery(undefined, { enabled: can("inventory.view") });
   const { data: dailyChart } = trpc.employeePortal.dailyChart.useQuery({ days: 30 });
 
   const lowStockCount = lowStock?.length ?? 0;
@@ -359,6 +380,7 @@ function ManagerDashboardTab() {
                     <span>{new Date(activeBroadcast.createdAt).toLocaleString('ar-EG')}</span>
                   </div>
                 </div>
+                {canManageTeam && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -368,10 +390,11 @@ function ManagerDashboardTab() {
                 >
                   حذف
                 </Button>
+                )}
               </div>
             </div>
           )}
-          <div className="flex flex-col gap-2 sm:flex-row">
+          {canManageTeam && <div className="flex flex-col gap-2 sm:flex-row">
             <Input
               value={broadcastMsg}
               onChange={e => setBroadcastMsg(e.target.value)}
@@ -396,7 +419,7 @@ function ManagerDashboardTab() {
             >
               {sendBroadcastMutation.isPending ? 'جاري...' : 'إرسال'}
             </Button>
-          </div>
+          </div>}
         </div>
       </SectionCard>
 
@@ -448,6 +471,8 @@ function ManagerDashboardTab() {
 // ==================== ORDERS TAB ====================
 function ManagerOrdersTab() {
   const online = useOnlineStatus();
+  const can = useCan();
+  const canAssign = can("orders.update") && can("employees.view");
   const { values: GOVERNORATES } = useGovernorateOptions();
   const statusOptions = useOperationalOptions("order_status").options;
   const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
@@ -484,7 +509,7 @@ function ManagerOrdersTab() {
     limit: 200,
   });
 
-  const { data: employeesList } = trpc.employeePortal.activeEmployeesList.useQuery();
+  const { data: employeesList } = trpc.employeePortal.activeEmployeesList.useQuery(undefined, { enabled: can("employees.view") });
 
   const assignMutation = trpc.employeePortal.assignOrder.useMutation({
     onSuccess: () => {
@@ -560,7 +585,7 @@ function ManagerOrdersTab() {
       <PageHeader
         title="الأوردرات"
         description="كل أوردرات الفريق: فلترة، توزيع على الموظفين، وتأكيد أو تأجيل أو إلغاء."
-        primaryAction={selectedOrders.length > 0 ? (
+        primaryAction={selectedOrders.length > 0 && canAssign ? (
           <Button onClick={() => setAssignDialog(true)} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
             <Users className="h-4 w-4 ml-2" aria-hidden="true" />
             توزيع {selectedOrders.length} أوردر
@@ -605,7 +630,7 @@ function ManagerOrdersTab() {
       </div>
 
       {/* Select All for new orders */}
-      {orders.some((o: any) => o.status === 'new') && (
+      {canAssign && orders.some((o: any) => o.status === 'new') && (
         <label className="flex w-fit min-h-11 md:min-h-9 cursor-pointer items-center gap-2">
           <Checkbox
             checked={selectedOrders.length > 0 && selectedOrders.length === orders.filter((o: any) => o.status === 'new').length}
@@ -649,7 +674,7 @@ function ManagerOrdersTab() {
                   }}
                 >
                   <div className="flex items-start gap-3">
-                    {order.status === 'new' && (
+                    {canAssign && order.status === 'new' && (
                       <label
                         className="-m-2 flex min-h-11 min-w-11 shrink-0 cursor-pointer items-start justify-center pt-3 md:m-0 md:min-h-0 md:min-w-0 md:pt-1"
                         onClick={(e) => e.stopPropagation()}
@@ -703,7 +728,7 @@ function ManagerOrdersTab() {
                     )}
 
                     {/* Assign to employee */}
-                    {order.status === 'new' && !order.assignedEmployeeId && (
+                    {canAssign && order.status === 'new' && !order.assignedEmployeeId && (
                       <div className="flex items-center gap-2">
                         <Select onValueChange={(val) => {
                           assignMutation.mutate({ orderId: order.id, employeeId: parseInt(val), operationId: operationIdFor(`assign:${order.id}:${val}`) });
@@ -718,17 +743,17 @@ function ManagerOrdersTab() {
                       </div>
                     )}
 
-                    {canAct && (
+                    {canAct && (can("orders.confirm") || can("orders.update") || can("orders.cancel")) && (
                       <div className="flex flex-wrap gap-2 pt-1">
-                        <Button size="sm" className="min-h-11 md:min-h-9 flex-1 bg-[var(--success)] hover:bg-[var(--success)]/90 text-primary-foreground" onClick={() => confirmMutation.mutate({ orderId: order.id, operationId: operationIdFor(`confirm:${order.id}`) })} disabled={confirmMutation.isPending}>
+                        {can("orders.confirm") && <Button size="sm" className="min-h-11 md:min-h-9 flex-1 bg-[var(--success)] hover:bg-[var(--success)]/90 text-primary-foreground" onClick={() => confirmMutation.mutate({ orderId: order.id, operationId: operationIdFor(`confirm:${order.id}`) })} disabled={confirmMutation.isPending}>
                           <CheckCircle2 className="h-4 w-4 ml-1" aria-hidden="true" />تأكيد
-                        </Button>
-                        <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 hover:text-[var(--warning)]" onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}>
+                        </Button>}
+                        {can("orders.update") && <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 hover:text-[var(--warning)]" onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}>
                           <Clock className="h-4 w-4 ml-1" aria-hidden="true" />تأجيل
-                        </Button>
-                        <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); }}>
+                        </Button>}
+                        {can("orders.cancel") && <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => { setCancelDialog({ open: true, orderId: order.id }); setCancelReason(""); setCancelNotes(""); }}>
                           <XCircle className="h-4 w-4 ml-1" aria-hidden="true" />إلغاء
-                        </Button>
+                        </Button>}
                       </div>
                     )}
                   </div>
@@ -837,6 +862,7 @@ function ManagerOrdersTab() {
 // ==================== INVENTORY TAB ====================
 function ManagerInventoryTab() {
   const online = useOnlineStatus();
+  const canAdjust = useCan()("inventory.adjust");
   const [movementDialog, setMovementDialog] = useState<{ open: boolean; productId: number | null; type: "in" | "out" }>({ open: false, productId: null, type: "in" });
   const [movementQty, setMovementQty] = useState("");
   const [movementReason, setMovementReason] = useState("");
@@ -901,14 +927,14 @@ function ManagerInventoryTab() {
                   </div>
                   <p className="text-sm font-semibold tabular-nums text-primary">{Number(p.price).toLocaleString()} ج.م</p>
                 </div>
-                <div className="flex gap-2">
+                {canAdjust && <div className="flex gap-2">
                   <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 text-[var(--success)] border-[var(--success)]/40 hover:bg-[var(--success)]/10 hover:text-[var(--success)]" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "in" })}>
                     + وارد
                   </Button>
                   <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive" onClick={() => setMovementDialog({ open: true, productId: p.id, type: "out" })}>
                     - صادر
                   </Button>
-                </div>
+                </div>}
               </SectionCard>
             );
           })}
@@ -1107,6 +1133,7 @@ function ManagerReportsTab() {
 // ==================== EMPLOYEES TAB ====================
 function ManagerEmployeesTab() {
   const online = useOnlineStatus();
+  const canManage = useCan()("employees.manage");
   const [addDialog, setAddDialog] = useState(false);
   const [credDialog, setCredDialog] = useState<{ open: boolean; empId: number | null; empName: string }>({ open: false, empId: null, empName: "" });
   const [newEmp, setNewEmp] = useState({ name: "", phone: "", role: "agent" as "agent" | "warehouse" | "manager" });
@@ -1151,12 +1178,12 @@ function ManagerEmployeesTab() {
       <PageHeader
         title="الموظفين"
         description="فريق خدمة العملاء والمخزن: إضافة، بيانات دخول، وإيقاف أو تفعيل."
-        primaryAction={
+        primaryAction={canManage ? (
           <Button onClick={() => setAddDialog(true)} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
             <UserPlus className="h-4 w-4 ml-2" aria-hidden="true" />
             إضافة موظف
           </Button>
-        }
+        ) : undefined}
       />
 
       {!online && <OfflineState onRetry={() => refetchEmployees()} className="py-6" />}
@@ -1211,7 +1238,7 @@ function ManagerEmployeesTab() {
                     </div>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                {canManage && <div className="flex flex-wrap items-center gap-2">
                   {!emp.username && (
                     <Button className="min-h-11 md:min-h-9 flex-1 sm:flex-none" size="sm" variant="outline" onClick={() => {
                       setCredDialog({ open: true, empId: emp.id, empName: emp.name });
@@ -1238,7 +1265,7 @@ function ManagerEmployeesTab() {
                   >
                     {emp.isActive ? "إيقاف" : "تفعيل"}
                   </Button>
-                </div>
+                </div>}
               </div>
             </SectionCard>
           ))}
@@ -1341,6 +1368,8 @@ function ManagerEmployeesTab() {
 // ==================== TASKS TAB ====================
 function ManagerTasksTab() {
   const online = useOnlineStatus();
+  // القراءة employees.view (شرط التبويب)؛ الإنشاء والحذف وتغيير حالة مهام الآخرين employees.manage.
+  const canManage = useCan()("employees.manage");
   const utils = trpc.useUtils();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -1386,12 +1415,12 @@ function ManagerTasksTab() {
       <PageHeader
         title="توزيع المهام"
         description="مهام للفريق: لموظف بعينه أو لجميع الموظفين، مع متابعة حالتها."
-        primaryAction={
+        primaryAction={canManage ? (
           <Button onClick={() => setShowCreateDialog(true)} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
             <Plus className="h-4 w-4 ml-2" aria-hidden="true" />
             إنشاء مهمة جديدة
           </Button>
-        }
+        ) : undefined}
       />
 
       {!online && <OfflineState onRetry={() => refetchTasks()} className="py-6" />}
@@ -1459,6 +1488,7 @@ function ManagerTasksTab() {
                     {/* Status change dropdown */}
                     <Select
                       value={task.status}
+                      disabled={!canManage}
                       onValueChange={(v: any) => updateStatusMutation.mutate({ taskId: task.id, status: v })}
                     >
                       <SelectTrigger className="min-h-11 md:min-h-8 w-full sm:w-32 text-xs" aria-label="حالة المهمة">
@@ -1470,7 +1500,7 @@ function ManagerTasksTab() {
                         <SelectItem value="done">تمت</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Button
+                    {canManage && <Button
                       size="icon"
                       variant="outline"
                       className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 shrink-0 text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
@@ -1483,7 +1513,7 @@ function ManagerTasksTab() {
                       }}
                     >
                       <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
-                    </Button>
+                    </Button>}
                   </div>
                 </div>
               </SectionCard>

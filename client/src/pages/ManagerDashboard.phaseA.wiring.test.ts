@@ -13,9 +13,11 @@ const src = strip(readFileSync(path.join(root, "pages/ManagerDashboard.tsx"), "u
 const hooks = (s: string) => [...s.matchAll(/trpc\.[a-zA-Z0-9.]+\.use(Query|Mutation)/g)].map(m => m[0]);
 
 describe("ManagerDashboard — hooks before = after", () => {
-  it("same 31 hooks in the same order", () => {
+  it("same 31 hooks in the same order (+1 deliberate: portal permissions gate every tab/action)", () => {
     expect(hooks(src)).toEqual([
       "trpc.employeePortal.me.useQuery",
+      // أُضيف عن قصد (صلاحيات لكل تبويب وفعل): صلاحيات هوية البوابة بتجاوزات الشركة.
+      "trpc.employeePortal.myPermissions.useQuery",
       "trpc.employeePortal.activeBroadcast.useQuery",
       "trpc.employeePortal.sendBroadcast.useMutation",
       "trpc.employeePortal.clearBroadcast.useMutation",
@@ -130,7 +132,8 @@ describe("ManagerDashboard — display and safety guards", () => {
 describe("ManagerDashboard — role gate (UI only)", () => {
   it("tabs are not rendered unless the session role is manager; redirects kept", () => {
     expect(src).toContain('empSession?.role === "manager"');
-    const gate = src.indexOf("if (!isManagerSession)");
+    // + انتظار صلاحيات البوابة قبل رسم أي تبويب (كل تبويب خلف صلاحيته)
+    const gate = src.indexOf("if (!isManagerSession || !portalPermissions)");
     const main = src.indexOf("<main");
     const firstTab = src.indexOf("<ManagerDashboardTab />");
     expect(gate).toBeGreaterThan(-1);
@@ -138,6 +141,7 @@ describe("ManagerDashboard — role gate (UI only)", () => {
     expect(main).toBeLessThan(firstTab);
     // the early return comes after the last root hook (rules of hooks) — me query and redirects precede it
     expect(src.indexOf("trpc.employeePortal.me.useQuery")).toBeLessThan(gate);
+    expect(src.indexOf("trpc.employeePortal.myPermissions.useQuery")).toBeLessThan(gate);
     expect(src.indexOf('setLocation("/employee-dashboard")')).toBeLessThan(gate);
     expect(src).toContain("if (!empSession || empSession.role !== 'manager') {");
     expect(src).toContain('setLocation("/employee-login");');

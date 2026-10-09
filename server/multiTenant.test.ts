@@ -49,7 +49,7 @@ describe("Multi-tenant: employee creation inherits the creator's tenant", () => 
 
   it("employeePortal.createEmployee (manager) stamps the manager's own resolved tenantId onto the new employee", async () => {
     const content = fs.readFileSync("server/routers.ts", "utf-8");
-    const idx = content.indexOf("createEmployee: managerPortalProcedure");
+    const idx = content.indexOf('createEmployee: requireManagerPortalPermission("employees.manage")');
     expect(idx).toBeGreaterThan(-1);
     const section = content.substring(idx, idx + 1200);
     expect(section).toContain("requireTenantId(emp)");

@@ -36,6 +36,9 @@ export const ALL_PERMISSIONS = [
   "employees.manage",
   // مهامي في البوابة: مهامه + المهام العامة لنشاطه، عرض وتحديث الحالة فقط (لا إنشاء ولا حذف).
   "tasks.view_own",
+  // المخزون التشغيلي (الكميات والحركات) — منفصل عن التكلفة: adjust لا يعني رؤية التكلفة (inventory_costing.view).
+  "inventory.view",
+  "inventory.adjust",
   "settings.view",
   "settings.manage",
   "audit.view",
@@ -279,7 +282,7 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
   facebook_entry: ["orders.view", "orders.create", ...SELF_PERFORMANCE],
   shipping: ["orders.view", "orders.export", "shipping_ops.view", ...SELF_PERFORMANCE],
   scanner: ["orders.view", ...SELF_PERFORMANCE],
-  warehouse: ["dashboard.view", "orders.view", ...SELF_PERFORMANCE],
+  warehouse: ["dashboard.view", "orders.view", "inventory.view", "inventory.adjust", ...SELF_PERFORMANCE],
 };
 
 export function permissionsForRole(role: string | null | undefined): readonly Permission[] {
