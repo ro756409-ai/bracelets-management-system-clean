@@ -179,7 +179,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
     );
     // Find the confirm mutation section
     const confirmIdx = portalSection.indexOf(
-      "confirm: requireEmployeePermission"
+      "confirm: requireEmployeeTenantPermission"
     );
     const confirmSection = portalSection.substring(
       confirmIdx,
@@ -200,7 +200,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       )
     );
     const postponeIdx = portalSection.indexOf(
-      "postpone: requireEmployeePermission"
+      "postpone: requireEmployeeTenantPermission"
     );
     const postponeSection = portalSection.substring(
       postponeIdx,
@@ -220,7 +220,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       )
     );
     const cancelIdx = portalSection.indexOf(
-      "cancel: requireEmployeePermission"
+      "cancel: requireEmployeeTenantPermission"
     );
     const cancelSection = portalSection.substring(cancelIdx, cancelIdx + 500);
     expect(cancelSection).toContain("assertEmployeeOwnsOrder(emp, input.orderId");
@@ -237,7 +237,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       )
     );
     const notesIdx = portalSection.indexOf(
-      "updateNotes: requireEmployeePermission"
+      "updateNotes: requireEmployeeTenantPermission"
     );
     const notesSection = portalSection.substring(notesIdx, notesIdx + 500);
     expect(notesSection).toContain("assertEmployeeOwnsOrder(emp, input.orderId");
@@ -283,7 +283,7 @@ describe("Fix 3: Employee ownership enforcement in employeePortal", () => {
       ["editOrder", "orders.update"],
     ] as const) {
       expect(portalSection).toContain(
-        `${proc}: requireEmployeePermission('${perm}')`
+        `${proc}: requireEmployeeTenantPermission('${perm}')`
       );
     }
   });
@@ -477,7 +477,7 @@ describe("Auth middleware module", () => {
 
 // ============================================================
 // Fix 3: employeePortal role → permission enforcement
-// (requireEmployeePermission wired onto orders.confirm/update/cancel/etc.)
+// (requireEmployeeTenantPermission wired onto orders.confirm/update/cancel/etc.)
 // ============================================================
 describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
   it("admin-tier roles (super_admin, admin, manager) can do everything, unchanged — except Ledger V3: owner-only (reopen/activate) off admin, all ledger.* off manager", async () => {
@@ -599,15 +599,17 @@ describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
     expect(hasPermission("scanner", "dashboard.view")).toBe(false);
   });
 
-  it("routers.ts defines requireEmployeePermission and applies it (not a broad any-employee fallback) to every sensitive employeePortal mutation", async () => {
+  it("routers.ts defines requireEmployeeTenantPermission and applies it (not a broad any-employee fallback) to every sensitive employeePortal mutation", async () => {
     const fs = await import("fs");
     const content = fs
       .readFileSync("server/routers.ts", "utf-8")
       .replaceAll('"', "'");
     expect(content).toContain(
-      "function requireEmployeePermission(permission: Permission)"
+      "function requireEmployeeTenantPermission(permission: Permission)"
     );
-    expect(content).toContain("hasPermission(emp.role, permission)");
+    // موحّد: صلاحية الدور بتجاوزات الشركة، والحارس الثابت القديم اتشال.
+    expect(content).toContain("hasTenantPermission(tenantId, emp.role, permission)");
+    expect(content).not.toContain("function requireEmployeePermission(");
     for (const [proc, permission] of [
       ["confirm", "orders.confirm"],
       ["postpone", "orders.update"],
@@ -623,7 +625,7 @@ describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
       ["stats", "dashboard.view"],
     ] as const) {
       expect(content).toContain(
-        `${proc}: requireEmployeePermission('${permission}')`
+        `${proc}: requireEmployeeTenantPermission('${permission}')`
       );
     }
   });

@@ -307,7 +307,7 @@ describe("حالات الحافة في الواجهة", () => {
 describe("الإلغاء", () => {
   it("السبب إجباري على السيرفر", () => {
     expect(compactRouters).toContain(
-      'cancel: requireEmployeePermission("orders.cancel") .input( z.object({ orderId: z.number(), cancelReason: z.string().min(1).max(80)'
+      'cancel: requireEmployeeTenantPermission("orders.cancel") .input( z.object({ orderId: z.number(), cancelReason: z.string().min(1).max(80)'
     );
   });
 

@@ -13,6 +13,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   "orders.import": "استيراد الأوردرات",
   "employees.view": "عرض الموظفين",
   "employees.manage": "إدارة الموظفين",
+  "tasks.view_own": "مهامي — عرض مهامي والمهام العامة وتحديث حالتها",
   "settings.view": "عرض الإعدادات",
   "settings.manage": "إدارة الإعدادات",
   "audit.view": "عرض سجل التدقيق",

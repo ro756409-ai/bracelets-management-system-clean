@@ -1,5 +1,28 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "fs";
+import jwt from "jsonwebtoken";
+
+// البوابة تقرأ هوية الموظف من كوكيه فقط (لا ctx.employee ولا جلسة مالك) — السر لازم قبل تحميل الراوتر،
+// وقاعدة صغيرة تخدم صف الموظف (getEmployeeFromCookie) وتجاوزات الشركة (فاضية = الافتراضي) بس.
+const cookieEmp = vi.hoisted(() => {
+  process.env.JWT_SECRET ||= "test-secret";
+  return { row: null as any };
+});
+vi.mock("./db", async importOriginal => {
+  const actual = await importOriginal<typeof import("./db")>();
+  return {
+    ...actual,
+    getDb: async () => ({
+      select: () => ({
+        from: (table: any) => ({
+          where: () => ({
+            limit: async () => (String(table?.[Symbol.for("drizzle:Name")] ?? "") === "employees" && cookieEmp.row ? [cookieEmp.row] : []),
+          }),
+        }),
+      }),
+    }) as any,
+  };
+});
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 import {
@@ -76,12 +99,15 @@ function ownerContext(): TrpcContext {
   } as TrpcContext;
 }
 
-/** موظف بكوكي الموظف — من غير حساب مالك، فـ`user` بيبقى null. */
+/** موظف بكوكي الموظف الحقيقي (موقّع) — من غير حساب مالك، فـ`user` بيبقى null. */
 function employeeContext(role: string): TrpcContext {
+  cookieEmp.row = employeeRow(role);
+  const base = baseReqRes();
   return {
-    ...baseReqRes(),
+    ...base,
+    req: { ...base.req, cookies: { employee_token: jwt.sign({ employeeId: cookieEmp.row.id }, process.env.JWT_SECRET!) } } as any,
     user: null,
-    employee: employeeRow(role),
+    employee: cookieEmp.row,
     tenantId: 1,
   } as TrpcContext;
 }
@@ -217,12 +243,9 @@ describe("الواجهة والسجل", () => {
 
   const routers = codeOnly(fs.readFileSync("server/routers.ts", "utf-8"));
 
-  it("🔑 المسارين الاتنين على نفس الحارس — مفيش قاعدتين", () => {
+  it("🔑 المسارين الاتنين على نفس الصلاحية — مفيش قاعدتين (المالك بجلسته، البوابة بكوكي الموظف)", () => {
     const gates = routers.match(/editOrderItems: (\w+)\(?"?([\w.]*)"?\)?/g) ?? [];
-    expect(gates).toHaveLength(2);
-    for (const gate of gates) {
-      expect(gate).toContain('permissionProcedure("orders.edit_items")');
-    }
+    expect(gates).toEqual(['editOrderItems: permissionProcedure("orders.edit_items")', 'editOrderItems: requireEmployeeTenantPermission("orders.edit_items")']);
   });
 
   it("🔑 الشاشات بتقرا الصلاحية من السيرفر مش بتستنتجها من الدور", () => {

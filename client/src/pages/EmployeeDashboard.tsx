@@ -2164,15 +2164,16 @@ function EditHistoryPanel({ orderId }: { orderId: number }) {
 // ==================== TASKS PANEL ====================
 function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
   const utils = trpc.useUtils();
-  const { data: tasksList, isLoading, isError, refetch } = trpc.tasks.list.useQuery(
-    { employeeId: employeeId ?? undefined },
+  // هوية البوابة فقط (employeePortal.tasks) — كانت tasks.list بجلسة المالك فالموظف العادي ماكانش بيشوف مهامه.
+  const { data: tasksList, isLoading, isError, refetch } = trpc.employeePortal.tasks.listMine.useQuery(
+    undefined,
     { enabled: !!employeeId, refetchInterval: 30000 }
   );
 
-  const updateStatusMutation = trpc.tasks.updateStatus.useMutation({
+  const updateStatusMutation = trpc.employeePortal.tasks.updateMyStatus.useMutation({
     onSuccess: () => {
       toast.success("تم تحديث حالة المهمة");
-      utils.tasks.list.invalidate();
+      utils.employeePortal.tasks.listMine.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });

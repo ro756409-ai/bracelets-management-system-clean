@@ -17,7 +17,7 @@ const dbTest = fs.readFileSync("server/pasteRealCase.db.test.ts", "utf-8");
 const unitTest = fs.readFileSync("server/pasteParserRealCase.test.ts", "utf-8");
 
 function endpointBlock(): string {
-  const start = routers.indexOf("parsePaste: employeePortalProcedure");
+  const start = routers.indexOf('parsePaste: requireEmployeeTenantPermission("orders.create")');
   expect(start).toBeGreaterThan(-1);
   const end = routers.indexOf("}),", start);
   return routers.slice(start, end);

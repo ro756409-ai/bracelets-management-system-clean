@@ -3,7 +3,7 @@ import fs from "fs";
 
 // Most tenant-isolation behavior is already covered end-to-end in authContext.test.ts (rejection
 // of an unresolved tenantId, no fallback to a default/first/hardcoded tenant) and
-// security.test.ts (the requireEmployeePermission / scopeBusinessId sweep). This file covers the
+// security.test.ts (the requireEmployeeTenantPermission / scopeBusinessId sweep). This file covers the
 // remaining checks that need either the generated migration SQL or the router/db source itself,
 // following the same source-verification pattern already used in security.test.ts for things
 // that would otherwise require a live database connection this sandbox doesn't have.

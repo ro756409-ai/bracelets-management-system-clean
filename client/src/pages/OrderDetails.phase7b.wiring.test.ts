@@ -88,10 +88,10 @@ describe("🔐 الصلاحيات والتعطيل وحارس الضغط الم�
     expect(page).toContain('const canPostpone = isAdmin || has("orders.update");');
     expect(page).toContain('const canNoAnswer = isAdmin || has("orders.update");');
     // بوابات السيرفر للموظف كما هي
-    expect(routers).toContain('confirm: requireEmployeePermission("orders.confirm")');
-    expect(routers).toContain('cancel: requireEmployeePermission("orders.cancel")');
-    expect(routers).toContain('postpone: requireEmployeePermission("orders.update")');
-    expect(routers).toContain('markNoAnswer: requireEmployeePermission("orders.update")');
+    expect(routers).toContain('confirm: requireEmployeeTenantPermission("orders.confirm")');
+    expect(routers).toContain('cancel: requireEmployeeTenantPermission("orders.cancel")');
+    expect(routers).toContain('postpone: requireEmployeeTenantPermission("orders.update")');
+    expect(routers).toContain('markNoAnswer: requireEmployeeTenantPermission("orders.update")');
   });
   it("الحالة القابلة للإجراء = new/postponed فقط (نفس isActionable في الجدول)؛ التأكيد عبر createInFlightGuard", () => {
     expect(page).toContain('import { isActionable, money, paymentLabel, COLLECTION_STATUS } from "@/components/orders/OrdersTable"');

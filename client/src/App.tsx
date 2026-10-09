@@ -99,7 +99,7 @@ function BlockFinancialUser({ children }: { children: React.ReactNode }) {
  * حارس لوحة التأكيدات (/employee-dashboard): مقصورة على أدوار التأكيد/المتابعة. موظف الإدخال
  * (`orders.create` من غير أي `orders.confirm`/`orders.update`/`dashboard.view`) بيتحوّل
  * لشاشة الإدخال. باقي الأدوار (تأكيد/مشاهدة/مخزن...) بتعدّي زي ما هي — من غير انحدار.
- * ده توجيه واجهة فوق الحُرّاس الحقيقية على الـendpoints (`requireEmployeePermission`).
+ * ده توجيه واجهة فوق الحُرّاس الحقيقية على الـendpoints (`requireEmployeeTenantPermission`).
  */
 function EmployeeDashboardGuard({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();

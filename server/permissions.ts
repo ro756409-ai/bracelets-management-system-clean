@@ -34,6 +34,8 @@ export const ALL_PERMISSIONS = [
   "orders.import",
   "employees.view",
   "employees.manage",
+  // مهامي في البوابة: مهامه + المهام العامة لنشاطه، عرض وتحديث الحالة فقط (لا إنشاء ولا حذف).
+  "tasks.view_own",
   "settings.view",
   "settings.manage",
   "audit.view",
@@ -130,6 +132,7 @@ export const MANAGER_GRANT_ONLY_PERMISSIONS: readonly Permission[] = [
 const SELF_PERFORMANCE: readonly Permission[] = [
   "employee_performance.view_self",
   "attendance.clock_self", "attendance.view_self", "attendance.request_correction",
+  "tasks.view_own",
 ];
 
 /**

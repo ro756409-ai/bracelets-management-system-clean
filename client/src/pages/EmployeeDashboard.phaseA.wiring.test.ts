@@ -83,8 +83,9 @@ describe("EmployeeDashboard — Phase A view layer", () => {
       "trpc.employeePortal.unmarkDuplicate.useMutation",
       "trpc.employeePortal.scan.useMutation",
       "trpc.employeePortal.getOrderEditHistory.useQuery",
-      "trpc.tasks.list.useQuery",
-      "trpc.tasks.updateStatus.useMutation",
+      // مهامي بهوية البوابة (كانت tasks.list/updateStatus بجلسة المالك) — نفس الموضع والعدد.
+      "trpc.employeePortal.tasks.listMine.useQuery",
+      "trpc.employeePortal.tasks.updateMyStatus.useMutation",
     ]);
   });
 

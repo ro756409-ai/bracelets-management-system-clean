@@ -292,32 +292,12 @@ const managerPortalProcedure = employeePortalProcedure.use(
 );
 
 /**
- * Employee-portal procedure gated by the role→permission table in permissions.ts.
- * `employeePortalProcedure` alone only checks "is this an active employee" — it does not
- * check *what kind* of employee, so a viewer/accountant/scanner/etc. could otherwise call
- * confirm/cancel/edit exactly like an order_confirmation agent. This closes that gap using
- * the existing permission set (no new permissions, no new roles) — pairs with the
- * per-order ownership checks already inline in each mutation below (that check is "is this
- * order yours"; this one is "can your role do this kind of thing at all").
- */
-function requireEmployeePermission(permission: Permission) {
-  return employeePortalProcedure.use(({ ctx, next }) => {
-    const emp = (ctx as any).employee;
-    if (!hasPermission(emp.role, permission)) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "ليس لديك صلاحية لتنفيذ هذا الإجراء",
-      });
-    }
-    return next({ ctx });
-  });
-}
-
-/**
- * نفس `requireEmployeePermission` لكن **بتجاوزات الشركة** (`tenant_role_permissions` عبر
- * `hasTenantPermission`) — نفس مصدر `auth.myPermissions` اللي الواجهة بتخفي بيه الروابط ونفس حارس
- * شاشات الشحن في التطبيق الرئيسي (`permissionProcedure("shipping_ops.view")`). فمنح الصلاحية لدور
- * بيفتح الشاشة، وسحبها بيمنع السيرفر فورًا في الطلب التالي. مستخدمة حاليًا لشاشات الشحن في البوابة.
+ * الحارس **الوحيد** لإجراءات البوابة: هوية كوكي الموظف فقط (لا جلسة مالك) + صلاحية الدور **بتجاوزات
+ * الشركة** (`tenant_role_permissions` عبر `hasTenantPermission`) — نفس مصدر `auth.myPermissions` اللي
+ * الواجهة بتخفي بيه الروابط. بلا تجاوز = الافتراضي في permissions.ts (نفس السلوك القديم بالظبط)؛ منح
+ * الصلاحية لدور بيفتح الإجراء، وسحبها بيمنع السيرفر فورًا في الطلب التالي، ولشركة واحدة بس.
+ * (كان فيه `requireEmployeePermission` ثابت بلا تجاوزات — اتوحّد هنا.) المستثنى بهوية فقط: me،
+ * myPermissions، activeBroadcast؛ وإجراءات المدير خلف managerPortalProcedure.
  */
 function requireEmployeeTenantPermission(permission: Permission) {
   return employeePortalProcedure.use(async ({ ctx, next }) => {
@@ -335,7 +315,7 @@ function requireEmployeeTenantPermission(permission: Permission) {
 
 /**
  * "Is this order yours?" — the per-order half of employee-portal authorization, paired with
- * requireEmployeePermission's "can your role do this at all?".
+ * requireEmployeeTenantPermission's "can your role do this at all?".
  *
  * Admin-tier employees are exempt because they supervise the whole queue. Note this checks
  * the tier, not the literal role "manager": an `admin` or `super_admin` employee is senior
@@ -437,7 +417,7 @@ function requireTenantId(emp: { tenantId: number | null }): number {
  * `employees`) نطاقه أصلاً `[employee.businessId]` من غير جلسة الويب — فشيل `user`
  * مابيغيّرش سلوكه، بيقفل بس التوسعة العرضية الجاية من جلسة تانية خالص.
  *
- * صلاحيات الأدوار مالهاش دعوة بالنطاق: `requireEmployeePermission` لسه بتحكم «يعمل
+ * صلاحيات الأدوار مالهاش دعوة بالنطاق: `requireEmployeeTenantPermission` لسه بتحكم «يعمل
  * إيه»، ودي بتحكم «على أنهي نشاط» — والفصل ده مقصود.
  */
 function empScope(ctx: any): ScopeCtx {
@@ -4415,6 +4395,39 @@ export const appRouter = router({
       .input(z.object({ requestId: z.number().int().positive() }).strict())
       .mutation(async ({ ctx, input }) => attendanceSvc.cancelCorrection(portalAttendanceActor(ctx), input.requestId)),
 
+    // ==================== مهامي — هوية البوابة فقط ====================
+    // مهامه هو + المهام العامة (بلا مستلم) لنشاطه، داخل نطاقه (tenant + نشاطه، fail-closed). قراءة وتحديث حالة
+    // فقط — لا إنشاء ولا حذف ولا employeeId من العميل. الملكية في نفس شرط الـUPDATE؛ 0 صفوف = NOT_FOUND
+    // (لا نكشف وجود مهمة زميل أو شركة أخرى).
+    tasks: router({
+      listMine: requireEmployeeTenantPermission("tasks.view_own")
+        .input(z.object({ status: z.enum(["all", "new", "in_progress", "done"]).optional() }).strict().optional())
+        .query(async ({ ctx, input }) => {
+          const emp = (ctx as any).employee;
+          const scope = await portalTeamScope(ctx);
+          const db = await getDb();
+          if (!db) return [];
+          const { tasks } = await import("../drizzle/schema");
+          const conditions: any[] = [taskScopeCondition(scope), or(eq(tasks.assignedTo, emp.id), isNull(tasks.assignedTo))];
+          if (input?.status && input.status !== "all") conditions.push(eq(tasks.status, input.status));
+          return db.select().from(tasks).where(and(...conditions)).orderBy(desc(tasks.createdAt)).limit(100);
+        }),
+      updateMyStatus: requireEmployeeTenantPermission("tasks.view_own")
+        .input(z.object({ taskId: z.number().int().positive(), status: z.enum(["new", "in_progress", "done"]) }).strict())
+        .mutation(async ({ ctx, input }) => {
+          const emp = (ctx as any).employee;
+          const scope = await portalTeamScope(ctx);
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
+          const { tasks } = await import("../drizzle/schema");
+          const mine = and(eq(tasks.id, input.taskId), taskScopeCondition(scope), or(eq(tasks.assignedTo, emp.id), isNull(tasks.assignedTo)));
+          const [row] = await db.select({ id: tasks.id, status: tasks.status }).from(tasks).where(mine).limit(1);
+          if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "المهمة غير موجودة أو ليست لك" });
+          if (row.status !== input.status) await db.update(tasks).set({ status: input.status }).where(mine);
+          return { success: true };
+        }),
+    }),
+
     // «أدائي» من سجل الأحداث — هوية البوابة فقط، نشاط الموظف فقط، بلا ترتيب.
     myPerformance: requireEmployeeTenantPermission("employee_performance.view_self")
       .input(z.object({ dateFrom: z.string(), dateTo: z.string() }).strict())
@@ -4424,7 +4437,7 @@ export const appRouter = router({
         return loadPerformance({ tenantId: requireTenantId(emp), businessIds, fromDate: input.dateFrom, toDate: input.dateTo, onlyEmployeeId: emp.id });
       }),
 
-    myOrders: requireEmployeePermission("orders.view")
+    myOrders: requireEmployeeTenantPermission("orders.view")
       .input(
         z.object({
           status: z.string().optional(),
@@ -4467,7 +4480,7 @@ export const appRouter = router({
         });
       }),
 
-    confirm: requireEmployeePermission("orders.confirm")
+    confirm: requireEmployeeTenantPermission("orders.confirm")
       .input(
         z.object({
           orderId: z.number(),
@@ -4498,7 +4511,7 @@ export const appRouter = router({
         };
       }),
 
-    postpone: requireEmployeePermission("orders.update")
+    postpone: requireEmployeeTenantPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -4531,7 +4544,7 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    cancel: requireEmployeePermission("orders.cancel")
+    cancel: requireEmployeeTenantPermission("orders.cancel")
       .input(
         z.object({
           orderId: z.number(),
@@ -4564,7 +4577,7 @@ export const appRouter = router({
         return { success: true };
       }),
 
-    markNoAnswer: requireEmployeePermission("orders.update")
+    markNoAnswer: requireEmployeeTenantPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -4595,7 +4608,7 @@ export const appRouter = router({
      * منطق التأكيد (تحديث المخزون، confirmedByEmployeeId، الطوابع الزمنية) يفضل واحد
      * ومايتفرّعش نسخة تانية منه هنا.
      */
-    updateStatus: requireEmployeePermission("orders.update")
+    updateStatus: requireEmployeeTenantPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -4691,7 +4704,7 @@ export const appRouter = router({
       }),
 
     // إضافة/تعديل ملاحظات الموظف على الأوردر
-    updateNotes: requireEmployeePermission("orders.update")
+    updateNotes: requireEmployeeTenantPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -4710,7 +4723,7 @@ export const appRouter = router({
       }),
 
     // تعديل بيانات العميل (المحافظة والعنوان) — للموظف على أوردراته فقط
-    updateCustomerInfo: requireEmployeePermission("orders.update")
+    updateCustomerInfo: requireEmployeeTenantPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -4735,7 +4748,7 @@ export const appRouter = router({
       }),
 
     // عرض المخزون المتبقي للموظفين (قراءة فقط)
-    stockLevels: employeePortalProcedure
+    stockLevels: requireEmployeeTenantPermission("orders.view")
       .input(
         z
           .object({
@@ -4751,7 +4764,7 @@ export const appRouter = router({
       }),
 
     // عرض variants المنتجات للموظف (مع الأسعار والمخزون)
-    stockVariants: employeePortalProcedure
+    stockVariants: requireEmployeeTenantPermission("orders.view")
       .input(
         z
           .object({
@@ -4766,7 +4779,7 @@ export const appRouter = router({
         return getAllVariantsWithProduct(undefined, businessIds);
       }),
 
-    stats: requireEmployeePermission("dashboard.view")
+    stats: requireEmployeeTenantPermission("dashboard.view")
       .input(
         z
           .object({
@@ -4815,7 +4828,7 @@ export const appRouter = router({
       }),
 
     // تعديل بيانات الأوردر بالكامل (للموظف العادي - بدون OAuth)
-    editOrder: requireEmployeePermission("orders.update")
+    editOrder: requireEmployeeTenantPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -4856,7 +4869,7 @@ export const appRouter = router({
       }),
 
     // جلب سجل تعديلات أوردر
-    getOrderEditHistory: requireEmployeePermission("orders.view")
+    getOrderEditHistory: requireEmployeeTenantPermission("orders.view")
       .input(
         z.object({
           orderId: z.number(),
@@ -4876,7 +4889,7 @@ export const appRouter = router({
     // The real lines, from `order_items`. The order header carries only one product, so an
     // order of "two of these plus one of those" reads as a single row there — this is the
     // only place the employee sees what the customer actually ordered.
-    orderItems: requireEmployeePermission("orders.view")
+    orderItems: requireEmployeeTenantPermission("orders.view")
       .input(z.object({ orderId: z.number() }))
       .query(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
@@ -4929,8 +4942,8 @@ export const appRouter = router({
         };
       }),
 
-    /* نفس الصلاحية بالظبط اللي على مسار المالك — قاعدة واحدة مش اتنين. */
-    editOrderItems: permissionProcedure("orders.edit_items")
+    /* نفس الصلاحية بالظبط اللي على مسار المالك — لكن بهوية البوابة (كانت permissionProcedure = جلسة المالك). */
+    editOrderItems: requireEmployeeTenantPermission("orders.edit_items")
       .input(
         z.object({
           orderId: z.number(),
@@ -5026,7 +5039,7 @@ export const appRouter = router({
       }),
 
     // مسح QR للموظف - تجهيز الأوردر
-    scan: employeePortalProcedure
+    scan: requireEmployeeTenantPermission("orders.view")
       .input(
         z.object({
           serialNumber: z.string(),
@@ -5531,7 +5544,7 @@ export const appRouter = router({
 
     // ==================== الأوردرات المكررة ====================
     // تعليم أوردر كمكرر (من الموظف)
-    markDuplicate: requireEmployeePermission("orders.update")
+    markDuplicate: requireEmployeeTenantPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -5555,7 +5568,7 @@ export const appRouter = router({
       }),
 
     // إلغاء تعليم التكرار (من الموظف)
-    unmarkDuplicate: requireEmployeePermission("orders.update")
+    unmarkDuplicate: requireEmployeeTenantPermission("orders.update")
       .input(
         z.object({
           orderId: z.number(),
@@ -5657,7 +5670,7 @@ export const appRouter = router({
   // ==================== FACEBOOK ENTRY (موظف إدخال فيسبوك) ====================
   facebookEntry: router({
     // إضافة أوردر فيسبوك يدوياً
-    addOrder: requireEmployeePermission("orders.create")
+    addOrder: requireEmployeeTenantPermission("orders.create")
       .input(
         z.object({
           customerName: z.string().min(1),
@@ -5937,7 +5950,7 @@ export const appRouter = router({
       }),
 
     // جلب أوردرات الموظف الحالي (فيسبوك)
-    myOrders: requireEmployeePermission("orders.view")
+    myOrders: requireEmployeeTenantPermission("orders.view")
       .input(
         z.object({
           dateFrom: z.string().optional(),
@@ -5979,7 +5992,7 @@ export const appRouter = router({
       }),
 
     // حذف أوردر (الموظف يحذف أوردر دخله هو فقط)
-    deleteOrder: requireEmployeePermission("orders.create")
+    deleteOrder: requireEmployeeTenantPermission("orders.create")
       .input(
         z.object({
           orderId: z.number().int().min(1),
@@ -6021,7 +6034,7 @@ export const appRouter = router({
       }),
 
     // تعديل أوردر (الموظف يعدل أوردر دخله هو فقط)
-    updateOrder: requireEmployeePermission("orders.create")
+    updateOrder: requireEmployeeTenantPermission("orders.create")
       .input(
         z.object({
           orderId: z.number().int().min(1),
@@ -6148,7 +6161,7 @@ export const appRouter = router({
       }),
 
     // جلب قائمة المنتجات — مقصورة على نشاط الموظف (عزل).
-    products: employeePortalProcedure.query(async ({ ctx }) => {
+    products: requireEmployeeTenantPermission("orders.create").query(async ({ ctx }) => {
       // نطاق نشاط الموظف الواحد — منتجاته النشطة فقط، معزولة عن أي نشاط/tenant تاني (الأسورة).
       // fail-closed: بلا نشاط → صفر (مش كل المنتجات).
       const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
@@ -6167,7 +6180,7 @@ export const appRouter = router({
      * Active catalog (products + their variants) for the item picker — SCOPED to the
      * employee's own business (تركيبات المخزون بتاعت نشاطه بس، مش كل التينانتات).
      */
-    catalog: employeePortalProcedure.query(async ({ ctx }) => {
+    catalog: requireEmployeeTenantPermission("orders.create").query(async ({ ctx }) => {
       // نطاق نشاط الموظف الواحد فقط — معزول عن أي نشاط تاني (الأسورة) حتى داخل نفس الـtenant.
       const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
       if (businessIds.length === 0) return { products: [], variants: [] };
@@ -6184,7 +6197,7 @@ export const appRouter = router({
      * طريقة يبعت بيها قالبًا أو نشاطًا. قراءة الإعداد fail-safe (الافتراضي عند أي خطأ)،
      * فالشاشة مابتقعش أبدًا بسبب إعداد عرض.
      */
-    entryConfig: employeePortalProcedure.query(async ({ ctx }) => {
+    entryConfig: requireEmployeeTenantPermission("orders.create").query(async ({ ctx }) => {
       const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
       const mode =
         businessIds.length === 1
@@ -6193,7 +6206,7 @@ export const appRouter = router({
       return { mode };
     }),
 
-    parsePaste: employeePortalProcedure
+    parsePaste: requireEmployeeTenantPermission("orders.create")
       .input(z.object({ text: z.string().min(1) }))
       .query(async ({ ctx, input }) => {
         // نطاق نشاط الموظف الواحد فقط — نفس كتالوج شاشة الإدخال، معزول عن أي نشاط تاني.
@@ -6224,7 +6237,7 @@ export const appRouter = router({
       }),
 
     // جلب variants منتج معين (للكفر ووتر بروف)
-    productVariants: employeePortalProcedure
+    productVariants: requireEmployeeTenantPermission("orders.create")
       .input(
         z.object({
           productId: z.number().int().min(1),
@@ -6247,7 +6260,7 @@ export const appRouter = router({
       }),
 
     // جلب سجل المسحات للموظف الحالي
-    scanLogs: employeePortalProcedure
+    scanLogs: requireEmployeeTenantPermission("orders.view")
       .input(
         z.object({
           dateFrom: z.date().optional(),

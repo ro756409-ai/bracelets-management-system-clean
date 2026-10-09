@@ -33,7 +33,7 @@ describe("🔒 P0 الرسائل والمهام — حراس نصّية", () => 
     expect(web.match(/sessionTeamScope\(ctx\)/g)!.length).toBe(3);
   });
   it("كل إجراءات المهام تمر بنطاق البوابة، ولا WHERE بالمعرّف وحده", () => {
-    const t = section("  tasks: router({", "سجل الطباعات");
+    const t = section("\n  tasks: router({", "سجل الطباعات");
     expect(t.match(/portalTeamScope\(ctx\)/g)!.length).toBe(4);
     expect(t).toContain("taskScopeCondition(scope)");
     expect(t).not.toMatch(/\.where\(eq\(tasks\.id, input\.taskId\)\)/);
@@ -41,7 +41,7 @@ describe("🔒 P0 الرسائل والمهام — حراس نصّية", () => 
     expect(t).toContain("businessId,");
   });
   it("المدخلات strict — tenantId/businessId المزوّرة تترفض بدل ما تتجاهل بصمت", () => {
-    const t = section("  tasks: router({", "سجل الطباعات");
+    const t = section("\n  tasks: router({", "سجل الطباعات");
     expect(t.match(/\.strict\(\)/g)!.length).toBe(4);
   });
   it("Platform Admin منفصل: context مابيقراش كوكي المنصة", () => {

@@ -334,7 +334,7 @@ describe("🔒 حراس المصدر", () => {
     expect(block).toContain("pasteSaveBlockers(");
     expect(block).toContain("employeeCatalogBusinessIds(empScope(ctx))");
     // مفيش أي اتصال بالـAI وقت الحفظ
-    const addOrderBlock = routers.slice(routers.indexOf("addOrder: requireEmployeePermission"), routers.indexOf("myOrders: requireEmployeePermission"));
+    const addOrderBlock = routers.slice(routers.indexOf("addOrder: requireEmployeeTenantPermission"), routers.indexOf("myOrders: requireEmployeeTenantPermission"));
     expect(addOrderBlock).not.toMatch(/activeSegmentResolver|rateLimitedResolver|createSegmentResolver|resolver:/);
   });
   it("🔒 order_items بلا أعمدة جديدة، وسجل التحليل fail-safe", () => {

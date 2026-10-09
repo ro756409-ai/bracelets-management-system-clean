@@ -90,12 +90,10 @@ describe("الحماية على السيرفر فضلت منفصلة", () => {
   */
   it("🔑 القراءة مقسومة، والكتابة على صلاحية واحدة", () => {
     expect(compact).toContain("orderItems: adminProcedure");
-    expect(compact).toContain('orderItems: requireEmployeePermission("orders.view")');
+    expect(compact).toContain('orderItems: requireEmployeeTenantPermission("orders.view")');
     const writeGates = compact.match(/editOrderItems: \w+\("?[\w.]*"?\)/g) ?? [];
-    expect(writeGates).toHaveLength(2);
-    for (const gate of writeGates) {
-      expect(gate).toBe('editOrderItems: permissionProcedure("orders.edit_items")');
-    }
+    // نفس الصلاحية على المسارين: المالك بجلسته، والبوابة بكوكي الموظف وتجاوزات الشركة.
+    expect(writeGates).toEqual(['editOrderItems: permissionProcedure("orders.edit_items")', 'editOrderItems: requireEmployeeTenantPermission("orders.edit_items")']);
   });
 
   it("🔑 مسار الموظف لسه بيفحص ملكية الأوردر", () => {

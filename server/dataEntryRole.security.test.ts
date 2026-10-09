@@ -17,7 +17,7 @@ const routers = fs.readFileSync("server/routers.ts", "utf-8");
 const app = fs.readFileSync("client/src/App.tsx", "utf-8");
 const login = fs.readFileSync("client/src/pages/EmployeeLogin.tsx", "utf-8");
 
-// ── مصفوفة الصلاحيات (نقية — نفس اللي requireEmployeePermission بيحكم بيها) ──
+// ── مصفوفة الصلاحيات (نقية — نفس اللي requireEmployeeTenantPermission بيحكم بيها) ──
 describe("🔑 مصفوفة صلاحيات data_entry", () => {
   it("🔑 data_entry: مسموح orders.create/view فقط", () => {
     expect(hasPermission("data_entry", "orders.create")).toBe(true);
@@ -37,7 +37,7 @@ describe("🔑 مصفوفة صلاحيات data_entry", () => {
     expect(hasPermission("agent", "orders.confirm")).toBe(true);
     expect(hasPermission("order_confirmation", "orders.create")).toBe(false); // معناها ما اتوسّعش
     // orders.view + orders.create + «أدائي» + حضوري (قرار المالك لكل دور تشغيلي) — لا شيء غير ذلك
-    expect([...permissionsForRole("data_entry")].sort()).toEqual(["attendance.clock_self", "attendance.request_correction", "attendance.view_self", "employee_performance.view_self", "orders.create", "orders.view"]);
+    expect([...permissionsForRole("data_entry")].sort()).toEqual(["attendance.clock_self", "attendance.request_correction", "attendance.view_self", "employee_performance.view_self", "orders.create", "orders.view", "tasks.view_own"]);
   });
 });
 
@@ -54,12 +54,12 @@ describe("🔑 حراس المصدر — data_entry", () => {
     expect(app).toContain("<OrderCreateGuard>");
   });
   it("🔑 addOrder/updateOrder/deleteOrder بيتطلبوا orders.create", () => {
-    expect(routers).toContain('addOrder: requireEmployeePermission("orders.create")');
-    expect(routers).toContain('updateOrder: requireEmployeePermission("orders.create")');
-    expect(routers).toContain('deleteOrder: requireEmployeePermission("orders.create")');
+    expect(routers).toContain('addOrder: requireEmployeeTenantPermission("orders.create")');
+    expect(routers).toContain('updateOrder: requireEmployeeTenantPermission("orders.create")');
+    expect(routers).toContain('deleteOrder: requireEmployeeTenantPermission("orders.create")');
   });
   it("🔑 addOrder بياخد businessId من الجلسة (مش input ولا default=1)", () => {
-    const start = routers.indexOf('addOrder: requireEmployeePermission("orders.create")');
+    const start = routers.indexOf('addOrder: requireEmployeeTenantPermission("orders.create")');
     const block = routers.slice(start, routers.indexOf("myOrders:", start));
     expect(block).toContain("resolveEmployeeBusinessId(empScope(ctx))");
     expect(block).toContain("businessId,"); // متبعت في الـinsert

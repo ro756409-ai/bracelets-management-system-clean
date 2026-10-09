@@ -107,10 +107,10 @@ describe("🔑 شاشة الإدخال — variant-based", () => {
 
 describe("🔑 السيرفر — عزل الكتالوج + سقف المخزون", () => {
   it("🔑 catalog/products مقصورة على نشاط الموظف الواحد فقط — لا cross-business/tenant", () => {
-    const cat = routers.slice(routers.indexOf("catalog: employeePortalProcedure"), routers.indexOf("catalog: employeePortalProcedure") + 500);
+    const cat = routers.slice(routers.indexOf('catalog: requireEmployeeTenantPermission("orders.create")'), routers.indexOf('catalog: requireEmployeeTenantPermission("orders.create")') + 500);
     expect(cat).toContain("employeeCatalogBusinessIds(empScope(ctx))");
     expect(cat).toContain("getMatchCatalog(undefined, businessIds)");
-    const prod = routers.slice(routers.indexOf("products: employeePortalProcedure"), routers.indexOf("products: employeePortalProcedure") + 900);
+    const prod = routers.slice(routers.indexOf('products: requireEmployeeTenantPermission("orders.create")'), routers.indexOf('products: requireEmployeeTenantPermission("orders.create")') + 900);
     expect(prod).toContain("employeeCatalogBusinessIds(empScope(ctx))");
     expect(prod).toContain("inArray(products.businessId, businessIds)");
     // نطاق نشاط واحد بيمرّ من choke point العزل (scopeBusinessIds)، مش كل الـtenant.
@@ -118,7 +118,7 @@ describe("🔑 السيرفر — عزل الكتالوج + سقف المخزو�
     expect(helper).toContain("scopeBusinessIds(ctx, {})");
   });
   it("🔑 addOrder بيتحقق من ملكية التركيبة (والمخزون مش مانع)", () => {
-    const start = routers.indexOf('addOrder: requireEmployeePermission("orders.create")');
+    const start = routers.indexOf('addOrder: requireEmployeeTenantPermission("orders.create")');
     const block = routers.slice(start, routers.indexOf("myOrders:", start));
     expect(block).toContain("getVariantById(p.variantId)");
     // المخزون **مش** مانع للتسجيل (نفس سياسة confirmOrder: يتأكد ويتعلّم للمراجعة)
@@ -132,8 +132,8 @@ describe("🔑 السيرفر — عزل الكتالوج + سقف المخزو�
   });
   it("🔒 مرآة الهيدر بتتبني من كتالوج النشاط — مش من نص العميل", () => {
     for (const [anchor, end] of [
-      ['addOrder: requireEmployeePermission("orders.create")', "myOrders:"],
-      ['updateOrder: requireEmployeePermission("orders.create")', "products: employeePortalProcedure"],
+      ['addOrder: requireEmployeeTenantPermission("orders.create")', "myOrders:"],
+      ['updateOrder: requireEmployeeTenantPermission("orders.create")', 'products: requireEmployeeTenantPermission("orders.create")'],
     ] as const) {
       const start = routers.indexOf(anchor);
       const block = routers.slice(start, routers.indexOf(end, start));
@@ -144,7 +144,7 @@ describe("🔑 السيرفر — عزل الكتالوج + سقف المخزو�
     }
   });
   it("🔑 parsePaste معزول بنشاط الموظف الواحد", () => {
-    const b = routers.slice(routers.indexOf("parsePaste: employeePortalProcedure"), routers.indexOf("parsePaste: employeePortalProcedure") + 700);
+    const b = routers.slice(routers.indexOf('parsePaste: requireEmployeeTenantPermission("orders.create")'), routers.indexOf('parsePaste: requireEmployeeTenantPermission("orders.create")') + 700);
     expect(b).toContain("employeeCatalogBusinessIds(empScope(ctx))");
     expect(b).toContain("getMatchCatalog(undefined, businessIds)");
   });
