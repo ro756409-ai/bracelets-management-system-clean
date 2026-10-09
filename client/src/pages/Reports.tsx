@@ -1,16 +1,17 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell
 } from "recharts";
 import { TrendingUp, Users, XCircle, BarChart3 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
-import { PageHeader } from "@/components/shared";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import {
+  PageHeader, StatCard, SectionCard, StatusBadge, ResponsiveDataTable, EmptyState, LoadingSkeleton, OfflineState, PermissionDeniedState, type Column,
+} from "@/components/shared";
 
 type DateRange = "today" | "week" | "month";
 
@@ -39,11 +40,21 @@ const CANCEL_REASON_LABELS: Record<string, string> = {
   duplicate: "مكرر",
 };
 
-const CANCEL_COLORS = ["#ef4444", "#f97316", "#eab308", "#8b5cf6"];
+// ألوان الرسوم من tokens الهوية (تتبدّل مع الوضع الداكن واللون المميز) — لا أحمر افتراضيًا
+const CANCEL_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
+const TOOLTIP_STYLE = { background: "var(--card)", border: "1px solid var(--border)", borderRadius: "var(--radius-brand-md)", color: "var(--foreground)" } as const;
+const TOUCH = "min-h-11 md:min-h-9";
 
+/**
+ * التقارير والأداء — نفس الاستعلامات الثلاثة (reports.employeePerformance / cancellationReasons / dailyChart)
+ * بنفس الفترات (اليوم / 7 أيام / 30 يومًا) ونطاق الأنشطة. المرحلة 7G (عرض فقط): كل رقم يذكر مصدره، رسوم
+ * بألوان tokens مع جدول بديل لقارئ الشاشة، جدول الأداء عبر ResponsiveDataTable (بطاقات على الهاتف)،
+ * وحالات Loading/Empty/Offline/PermissionDenied. لا حساب جديد: النِّسَب كما يرجعها السيرفر.
+ */
 export default function Reports() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const online = useOnlineStatus();
   const { currentBusinessIds } = useBusinessContext();
   const [dateRange, setDateRange] = useState<DateRange>("month");
 
@@ -52,13 +63,13 @@ export default function Reports() {
     businessIds: currentBusinessIds,
   }), [dateRange, currentBusinessIds]);
 
-  const { data: perfData, isLoading: perfLoading } = trpc.reports.employeePerformance.useQuery(dateParams, {
+  const { data: perfData, isLoading: perfLoading, isError: perfError, error: perfErr, refetch: refetchPerf } = trpc.reports.employeePerformance.useQuery(dateParams, {
     enabled: isAdmin,
   });
-  const { data: cancelData } = trpc.reports.cancellationReasons.useQuery(dateParams, {
+  const { data: cancelData, isLoading: cancelLoading } = trpc.reports.cancellationReasons.useQuery(dateParams, {
     enabled: isAdmin,
   });
-  const { data: chartData } = trpc.reports.dailyChart.useQuery({ days: dateRange === 'today' ? 1 : dateRange === 'week' ? 7 : 30, businessIds: currentBusinessIds }, {
+  const { data: chartData, isLoading: chartLoading } = trpc.reports.dailyChart.useQuery({ days: dateRange === 'today' ? 1 : dateRange === 'week' ? 7 : 30, businessIds: currentBusinessIds }, {
     enabled: isAdmin,
   });
 
@@ -82,23 +93,67 @@ export default function Reports() {
     confirmed: Number(d.confirmed),
     cancelled: Number(d.cancelled),
   })) ?? [];
+  // مجاميع أيام الفترة من dailyChart نفسه (لا تقدير)
+  const sums = barData.reduce((a, d) => ({ total: a.total + d.total, confirmed: a.confirmed + d.confirmed, cancelled: a.cancelled + d.cancelled }), { total: 0, confirmed: 0, cancelled: 0 });
+
+  // الترتيب للعرض فقط على نسخة — لا تعديل في بيانات الاستعلام
+  const perfRows = useMemo(() => [...(perfData ?? [])].sort((a, b) => b.confirmRate - a.confirmRate), [perfData]);
+
+  if (!isAdmin) {
+    return (
+      <div className="space-y-6" dir="rtl" data-testid="reports-page">
+        <PageHeader title="التقارير والأداء" description="تحليل أداء الفريق وأسباب الإلغاء" icon={<BarChart3 className="h-5 w-5" aria-hidden="true" />} />
+        <PermissionDeniedState message="التقارير متاحة للمديرين فقط." />
+      </div>
+    );
+  }
+
+  const rateTone = (rate: number) => rate >= 70 ? "text-[var(--success)]" : rate >= 50 ? "text-[var(--warning)]" : "text-destructive";
+  const RateBar = ({ rate }: { rate: number }) => (
+    <span className="flex items-center justify-end gap-2">
+      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-muted" aria-hidden="true"><span className="block h-1.5 rounded-full bg-[var(--success)]" style={{ width: `${Math.max(0, Math.min(100, rate))}%` }} /></span>
+      <span className={`text-xs font-bold tabular-nums ${rateTone(rate)}`}>{rate}%</span>
+    </span>
+  );
+  const cancelBadge = (rate: number) => <StatusBadge status="cancel_rate" label={`${rate}%`} tone={rate <= 20 ? "success" : rate <= 40 ? "warning" : "danger"} size="sm" icon={null} />;
+
+  const perfColumns: Column<any>[] = [
+    { id: "employee", header: "الموظف", alwaysVisible: true, cell: e => <span className="flex items-center gap-2"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-bold text-accent-foreground" aria-hidden="true">{e.employeeName.charAt(0)}</span><span className="font-medium">{e.employeeName}</span></span> },
+    { id: "total", header: "الإجمالي", numeric: true, cell: e => <span className="font-bold tabular-nums">{e.total}</span> },
+    { id: "confirmed", header: "مؤكد", numeric: true, cell: e => <span className="font-semibold tabular-nums text-[var(--success)]">{e.confirmed}</span> },
+    { id: "cancelled", header: "ملغي", numeric: true, cell: e => <span className="font-semibold tabular-nums text-destructive">{e.cancelled}</span> },
+    { id: "postponed", header: "مؤجل", numeric: true, cell: e => <span className="font-semibold tabular-nums text-[var(--warning)]">{e.postponed}</span> },
+    { id: "confirmRate", header: "نسبة التأكيد", numeric: true, alwaysVisible: true, cell: e => <RateBar rate={e.confirmRate} /> },
+    { id: "cancelRate", header: "نسبة الإلغاء", numeric: true, cell: e => cancelBadge(e.cancelRate) },
+  ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl" data-testid="reports-page">
       <PageHeader
         title="التقارير والأداء"
         description="تحليل أداء الفريق وأسباب الإلغاء"
-        icon={<BarChart3 className="h-5 w-5" />}
-      />
+        icon={<BarChart3 className="h-5 w-5" aria-hidden="true" />}
+      >
+        <section className="grid grid-cols-3 gap-3" aria-label="ملخص الفترة" data-testid="reports-summary">
+          <StatCard label={`أوردرات ${dateRangeLabels[dateRange]}`} value={sums.total.toLocaleString("ar-EG")} hint="مجموع أيام الفترة من reports.dailyChart" loading={chartLoading} />
+          <StatCard label="مؤكد" value={sums.confirmed.toLocaleString("ar-EG")} tone="success" hint="من reports.dailyChart" loading={chartLoading} />
+          <StatCard label="ملغي" value={sums.cancelled.toLocaleString("ar-EG")} tone="danger" hint="من reports.dailyChart" loading={chartLoading} />
+        </section>
+      </PageHeader>
 
-      {/* Date Range Filter */}
-      <div className="flex gap-2">
+      {!online && <OfflineState onRetry={() => refetchPerf()} className="py-6" />}
+
+      {/* Date Range Filter — نفس الفترات الثلاث */}
+      <div className="flex flex-wrap gap-2" role="group" aria-label="الفترة" data-testid="reports-range">
         {(["today", "week", "month"] as DateRange[]).map(r => (
           <Button
             key={r}
             variant={dateRange === r ? "default" : "outline"}
             size="sm"
+            className={`${TOUCH} rounded-[var(--radius-brand-pill)]`}
+            aria-pressed={dateRange === r}
             onClick={() => setDateRange(r)}
+            data-testid={`reports-range-${r}`}
           >
             {dateRangeLabels[r]}
           </Button>
@@ -106,198 +161,126 @@ export default function Reports() {
       </div>
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Daily Orders Chart */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-primary" />
-              أوردرات {dateRangeLabels[dateRange]}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {barData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={barData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 10 }} />
-                  <Tooltip
-                    contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px' }}
-                  />
-                  <Bar dataKey="total" name="الإجمالي" fill="var(--chart-4)" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="confirmed" name="مؤكد" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="cancelled" name="ملغي" fill="var(--chart-3)" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-[220px] flex items-center justify-center text-muted-foreground text-sm">
-                لا توجد بيانات كافية
+        <SectionCard title={<span className="inline-flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" aria-hidden="true" /> أوردرات {dateRangeLabels[dateRange]}</span>} description="حسب تاريخ الإنشاء — المصدر reports.dailyChart" testId="reports-daily-chart">
+          {chartLoading ? <LoadingSkeleton variant="cards" rows={1} className="h-[220px]" /> : barData.length > 0 ? (
+            <>
+              <div aria-hidden="true">
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={barData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
+                    <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "var(--muted)" }} />
+                    <Bar dataKey="total" name="الإجمالي" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="confirmed" name="مؤكد" fill="var(--chart-3)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="cancelled" name="ملغي" fill="var(--chart-4)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-            )}
-          </CardContent>
-        </Card>
+              <table className="sr-only" data-testid="reports-daily-table">
+                <caption>أوردرات {dateRangeLabels[dateRange]} يومًا بيوم</caption>
+                <thead><tr><th scope="col">التاريخ</th><th scope="col">الإجمالي</th><th scope="col">مؤكد</th><th scope="col">ملغي</th></tr></thead>
+                <tbody>{barData.map(d => <tr key={d.date}><td>{d.date}</td><td>{d.total}</td><td>{d.confirmed}</td><td>{d.cancelled}</td></tr>)}</tbody>
+              </table>
+              <ul className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground" aria-hidden="true">
+                <li className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[var(--chart-2)]" /> الإجمالي</li>
+                <li className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[var(--chart-3)]" /> مؤكد</li>
+                <li className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[var(--chart-4)]" /> ملغي</li>
+              </ul>
+            </>
+          ) : (
+            <EmptyState title="لا توجد بيانات كافية" description="اختر فترة أطول أو انتظر أوردرات جديدة." className="py-8" />
+          )}
+        </SectionCard>
 
         {/* Cancellation Reasons Pie */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <XCircle className="h-4 w-4 text-destructive" />
-              أسباب الإلغاء ({totalCancelled} إلغاء)
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {cancelPieData.length > 0 ? (
-              <>
+        <SectionCard title={<span className="inline-flex items-center gap-2"><XCircle className="h-4 w-4 text-destructive" aria-hidden="true" /> أسباب الإلغاء <span className="text-sm font-normal text-muted-foreground tabular-nums">({totalCancelled.toLocaleString("ar-EG")} إلغاء)</span></span>} description="المصدر reports.cancellationReasons" testId="reports-cancel-chart">
+          {cancelLoading ? <LoadingSkeleton variant="cards" rows={1} className="h-[220px]" /> : cancelPieData.length > 0 ? (
+            <>
+              <div aria-hidden="true">
                 <ResponsiveContainer width="100%" height={180}>
                   <PieChart>
-                    <Pie
-                      data={cancelPieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
-                      paddingAngle={3}
-                      dataKey="value"
-                    >
+                    <Pie data={cancelPieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value" stroke="var(--card)">
                       {cancelPieData.map((entry, index) => (
                         <Cell key={index} fill={entry.color} />
                       ))}
                     </Pie>
-                    <Tooltip
-                      contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px' }}
-                    />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  {cancelPieData.map((c, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full shrink-0" style={{ background: c.color }} />
-                      <span className="text-xs text-foreground">{c.name}</span>
-                      <span className="text-xs font-bold text-foreground mr-auto">{c.value}</span>
-                      <span className="text-xs text-muted-foreground">
-                        ({totalCancelled > 0 ? Math.round((c.value / totalCancelled) * 100) : 0}%)
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="h-[220px] flex items-center justify-center text-muted-foreground text-sm">
-                لا توجد إلغاءات في هذه الفترة
               </div>
-            )}
-          </CardContent>
-        </Card>
+              <table className="sr-only" data-testid="reports-cancel-table">
+                <caption>أسباب الإلغاء</caption>
+                <thead><tr><th scope="col">السبب</th><th scope="col">العدد</th><th scope="col">النسبة</th></tr></thead>
+                <tbody>{cancelPieData.map((c, i) => <tr key={i}><td>{c.name}</td><td>{c.value}</td><td>{totalCancelled > 0 ? Math.round((c.value / totalCancelled) * 100) : 0}%</td></tr>)}</tbody>
+              </table>
+              <ul className="mt-2 grid grid-cols-2 gap-2" aria-hidden="true">
+                {cancelPieData.map((c, i) => (
+                  <li key={i} className="flex items-center gap-2">
+                    <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: c.color }} />
+                    <span className="text-xs">{c.name}</span>
+                    <span className="mr-auto text-xs font-bold tabular-nums">{c.value}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      ({totalCancelled > 0 ? Math.round((c.value / totalCancelled) * 100) : 0}%)
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <EmptyState title="لا توجد إلغاءات في هذه الفترة" className="py-8" />
+          )}
+        </SectionCard>
       </div>
 
-      {/* Employee Performance Table */}
-      {isAdmin && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Users className="h-4 w-4 text-primary" />
-              أداء الموظفين
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            {perfLoading ? (
-              <div className="p-8 text-center text-muted-foreground">جاري التحميل...</div>
-            ) : !perfData || perfData.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground">
-                لا توجد بيانات أداء في هذه الفترة
+      {/* Employee Performance Table — النِّسَب من السيرفر كما هي */}
+      <SectionCard title={<span className="inline-flex items-center gap-2"><Users className="h-4 w-4 text-primary" aria-hidden="true" /> أداء الموظفين</span>} description="المصدر reports.employeePerformance — مرتّب بنسبة التأكيد" flush testId="reports-performance">
+        <ResponsiveDataTable<any>
+          rows={perfRows}
+          columns={perfColumns}
+          rowKey={e => e.employeeId ?? e.employeeName}
+          loading={perfLoading}
+          error={perfError ? ((perfErr as any)?.message || "تعذّر تحميل الأداء") : null}
+          onRetry={() => refetchPerf()}
+          empty={{ title: "لا توجد بيانات أداء في هذه الفترة", description: "جرّب فترة أطول." }}
+          cardsBelow="md"
+          mobileRow={e => (
+            <article className="space-y-2 rounded-[var(--radius-brand-md)] border border-border bg-card p-3" data-testid={`reports-perf-card-${e.employeeId ?? e.employeeName}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold">{e.employeeName}</span>
+                <RateBar rate={e.confirmRate} />
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th className="p-3 text-right font-semibold text-muted-foreground">الموظف</th>
-                      <th className="p-3 text-center font-semibold text-muted-foreground">الإجمالي</th>
-                      <th className="p-3 text-center font-semibold text-muted-foreground">مؤكد</th>
-                      <th className="p-3 text-center font-semibold text-muted-foreground">ملغي</th>
-                      <th className="p-3 text-center font-semibold text-muted-foreground">مؤجل</th>
-                      <th className="p-3 text-center font-semibold text-muted-foreground">نسبة التأكيد</th>
-                      <th className="p-3 text-center font-semibold text-muted-foreground">نسبة الإلغاء</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {perfData
-                      .sort((a, b) => b.confirmRate - a.confirmRate)
-                      .map((emp, i) => (
-                        <tr key={i} className="border-b hover:bg-muted/30 transition-colors">
-                          <td className="p-3">
-                            <div className="flex items-center gap-2">
-                              <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                                <span className="text-xs font-bold text-primary">
-                                  {emp.employeeName.charAt(0)}
-                                </span>
-                              </div>
-                              <span className="font-medium text-foreground">{emp.employeeName}</span>
-                            </div>
-                          </td>
-                          <td className="p-3 text-center font-bold text-foreground">{emp.total}</td>
-                          <td className="p-3 text-center">
-                            <span className="text-[var(--success)] font-semibold">{emp.confirmed}</span>
-                          </td>
-                          <td className="p-3 text-center">
-                            <span className="text-destructive font-semibold">{emp.cancelled}</span>
-                          </td>
-                          <td className="p-3 text-center">
-                            <span className="text-[var(--warning)] font-semibold">{emp.postponed}</span>
-                          </td>
-                          <td className="p-3 text-center">
-                            <div className="flex items-center justify-center gap-2">
-                              <div className="w-16 bg-muted rounded-full h-1.5">
-                                <div
-                                  className="h-1.5 rounded-full bg-[var(--success)]"
-                                  style={{ width: `${emp.confirmRate}%` }}
-                                />
-                              </div>
-                              <span className={`text-xs font-bold ${emp.confirmRate >= 70 ? 'text-[var(--success)]' : emp.confirmRate >= 50 ? 'text-[var(--warning)]' : 'text-destructive'}`}>
-                                {emp.confirmRate}%
-                              </span>
-                            </div>
-                          </td>
-                          <td className="p-3 text-center">
-                            <Badge
-                              className={`text-xs border-0 ${emp.cancelRate <= 20 ? 'bg-[var(--success)]/10 text-[var(--success)]' : emp.cancelRate <= 40 ? 'bg-[var(--warning)]/10 text-[var(--warning)]' : 'bg-destructive/10 text-destructive'}`}
-                            >
-                              {emp.cancelRate}%
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+              <dl className="grid grid-cols-4 gap-1 text-center text-xs">
+                <div><dt className="text-muted-foreground">الإجمالي</dt><dd className="font-bold tabular-nums">{e.total}</dd></div>
+                <div><dt className="text-muted-foreground">مؤكد</dt><dd className="font-bold tabular-nums text-[var(--success)]">{e.confirmed}</dd></div>
+                <div><dt className="text-muted-foreground">ملغي</dt><dd className="font-bold tabular-nums text-destructive">{e.cancelled}</dd></div>
+                <div><dt className="text-muted-foreground">مؤجل</dt><dd className="font-bold tabular-nums text-[var(--warning)]">{e.postponed}</dd></div>
+              </dl>
+              <div className="flex items-center justify-between text-xs text-muted-foreground"><span>نسبة الإلغاء</span>{cancelBadge(e.cancelRate)}</div>
+            </article>
+          )}
+        />
+      </SectionCard>
 
-      {/* Performance Legend */}
-      {isAdmin && (
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-sm font-semibold text-foreground mb-3">مؤشرات الأداء</p>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="bg-[var(--success)]/10 rounded-lg p-3 text-center">
-                <p className="text-lg font-bold text-[var(--success)]">70%+</p>
-                <p className="text-xs text-[var(--success)]">أداء ممتاز</p>
-              </div>
-              <div className="bg-[var(--warning)]/10 rounded-lg p-3 text-center">
-                <p className="text-lg font-bold text-[var(--warning)]">50-70%</p>
-                <p className="text-xs text-[var(--warning)]">أداء متوسط</p>
-              </div>
-              <div className="bg-destructive/10 rounded-lg p-3 text-center">
-                <p className="text-lg font-bold text-destructive">أقل من 50%</p>
-                <p className="text-xs text-destructive">يحتاج تحسين</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Performance Legend — نفس العتبات */}
+      <SectionCard title="مؤشرات الأداء" description="عتبات نسبة التأكيد المستخدمة في التلوين أعلاه" testId="reports-legend">
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-[var(--radius-brand-md)] bg-[var(--success)]/10 p-3 text-center">
+            <p className="text-lg font-bold text-[var(--success)]">70%+</p>
+            <p className="text-xs text-[var(--success)]">أداء ممتاز</p>
+          </div>
+          <div className="rounded-[var(--radius-brand-md)] bg-[var(--warning)]/10 p-3 text-center">
+            <p className="text-lg font-bold text-[var(--warning)]">50-70%</p>
+            <p className="text-xs text-[var(--warning)]">أداء متوسط</p>
+          </div>
+          <div className="rounded-[var(--radius-brand-md)] bg-destructive/10 p-3 text-center">
+            <p className="text-lg font-bold text-destructive">أقل من 50%</p>
+            <p className="text-xs text-destructive">يحتاج تحسين</p>
+          </div>
+        </div>
+      </SectionCard>
     </div>
   );
 }
