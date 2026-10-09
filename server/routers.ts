@@ -129,6 +129,7 @@ import {
   permissionsForRole,
   type Permission,
   LEDGER_OWNER_ONLY_PERMISSIONS,
+  tenantPermissionsForRole,
 } from "./permissions";
 import { EMPLOYEE_SETTABLE_ORDER_STATUSES } from "@shared/const";
 import { toMinorUnits } from "../shared/accountingMoney";
@@ -4331,6 +4332,14 @@ export const appRouter = router({
         username: emp.username,
         businessId: emp.businessId ?? null,
       };
+    }),
+
+    // صلاحيات **هوية البوابة** (كوكي الموظف) بتجاوزات الشركة — نفس مصدر حارس requireEmployeeTenantPermission.
+    // auth.myPermissions مش مناسبة هنا: لو جلسة مالك على الويب في نفس المتصفح، createContext بيقدّم
+    // كوكي المالك، فالواجهة كانت هتعرض روابط السيرفر هيرفضها لهوية الموظف. قراءة بس، tenant من صف الموظف.
+    myPermissions: employeePortalProcedure.query(async ({ ctx }) => {
+      const emp = (ctx as any).employee;
+      return tenantPermissionsForRole(requireTenantId(emp), emp.role);
     }),
 
     myOrders: requireEmployeePermission("orders.view")

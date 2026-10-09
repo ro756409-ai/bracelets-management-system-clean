@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { usePermissions } from "@/hooks/usePermission";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { usePermission } from "@/hooks/usePermission";
@@ -187,10 +186,15 @@ export default function EmployeeDashboard() {
   }, [empSession]);
 
   const utils = trpc.useUtils();
-  // روابط الشحن بتظهر بس لما الجلسة معاها `shipping_ops.view` — نفس مصدر السيرفر (auth.myPermissions
-  // بتجاوزات الشركة). الإخفاء مش أمان: الحارس الحقيقي على employeePortal.todayShipments/shippingRoutes.
-  const { has: hasPermission } = usePermissions();
-  const canViewShipping = hasPermission("shipping_ops.view");
+  // روابط الشحن بتظهر بس لما **هوية البوابة** معاها `shipping_ops.view` (بتجاوزات الشركة) — نفس مصدر
+  // حارس السيرفر employeePortal.todayShipments/shippingRoutes. الإخفاء مش أمان: السيرفر هو الحارس.
+  // تتحدّث مع زر التحديث، والرجوع من صفحة المنع، وكل دقيقة.
+  const { data: portalPermissions } = trpc.employeePortal.myPermissions.useQuery(undefined, {
+    retry: false,
+    staleTime: 60 * 1000,
+    refetchInterval: 60 * 1000,
+  });
+  const canViewShipping = (portalPermissions ?? []).includes("shipping_ops.view");
 
   const { data: meData, error: meError } = trpc.employeePortal.me.useQuery(undefined, {
     retry: false,
@@ -957,9 +961,9 @@ export default function EmployeeDashboard() {
 
             {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
                 فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
-            <span className="mx-1 h-5 w-px bg-primary-foreground/25" aria-hidden="true" />
+            <span className="mx-1 hidden h-5 w-px bg-primary-foreground/25 sm:inline-block" aria-hidden="true" />
             <button
-              onClick={() => { refetch(); utils.auth.myPermissions.invalidate(); }}
+              onClick={() => { refetch(); utils.employeePortal.myPermissions.invalidate(); }}
               className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground transition-colors hover:bg-primary-foreground/20"
               title="تحديث القائمة"
               aria-label="تحديث القائمة"

@@ -270,3 +270,30 @@ export async function hasTenantPermission(
   )).limit(1);
   return override ? override.isAllowed : hasPermission(role, permission);
 }
+
+/**
+ * كل صلاحيات دور داخل tenant (الافتراضي + تجاوزات الشركة) **باستعلام واحد** — نفس نتيجة
+ * `hasTenantPermission` لكل صلاحية، بدون N استعلام. صلاحيات دفتر V3 الخاصة بالمالك وحده ما بترجعش
+ * إلا للمالك (نفس فلتر auth.myPermissions).
+ */
+export async function tenantPermissionsForRole(
+  tenantId: number,
+  role: string | null | undefined,
+): Promise<Permission[]> {
+  const [{ getDb }, { tenantRolePermissions }, { and, eq }] = await Promise.all([
+    import("./db"),
+    import("../drizzle/schema"),
+    import("drizzle-orm"),
+  ]);
+  const db = await getDb();
+  const overrides = new Map<string, boolean>();
+  if (db) {
+    const rows = await db.select().from(tenantRolePermissions).where(and(
+      eq(tenantRolePermissions.tenantId, tenantId),
+      eq(tenantRolePermissions.role, role ?? ""),
+    ));
+    for (const r of rows) overrides.set(r.permission, r.isAllowed);
+  }
+  return ALL_PERMISSIONS.filter(p => (overrides.has(p) ? overrides.get(p)! : hasPermission(role, p)))
+    .filter(p => !LEDGER_OWNER_ONLY_PERMISSIONS.includes(p) || isOwnerRole(role));
+}

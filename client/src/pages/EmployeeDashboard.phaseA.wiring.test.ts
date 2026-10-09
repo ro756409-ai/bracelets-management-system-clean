@@ -54,8 +54,10 @@ describe("EmployeeDashboard — Phase A view layer", () => {
     expect(src).toContain('<LoadingSkeleton variant="cards" rows={4} />');
   });
 
-  it("the 23 tRPC hooks are unchanged and in the same order", () => {
+  it("the 23 original tRPC hooks are unchanged and in the same order (+1 deliberate: portal permissions for the shipping links)", () => {
     expect(hooks(src)).toEqual([
+      // أُضيف عن قصد (روابط الشحن): صلاحيات هوية البوابة — قراءة بس، قبل باقي الـhooks.
+      "trpc.employeePortal.myPermissions.useQuery",
       "trpc.employeePortal.me.useQuery",
       "trpc.businesses.groupsWithBusinesses.useQuery",
       "trpc.employeePortal.stats.useQuery",

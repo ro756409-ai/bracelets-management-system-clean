@@ -7,11 +7,14 @@ import { createContext } from "./_core/context";
 import { getDb, createEmployee } from "./db";
 import { employees, tenantRolePermissions } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
+import { ALL_PERMISSIONS, hasTenantPermission, tenantPermissionsForRole } from "./permissions";
+import { COOKIE_NAME } from "@shared/const";
 
 /**
- * روابط الشحن في لوحة الموظف: الواجهة بتخفيها حسب `auth.myPermissions` (بتجاوزات الشركة)، والسيرفر
- * هو الحارس النهائي على employeePortal.todayShipments/shippingRoutes — والاتنين بقوا على نفس المصدر
- * (`hasTenantPermission`). منح الصلاحية بيفتح فورًا، وسحبها بيقفل السيرفر في الطلب التالي.
+ * روابط الشحن في لوحة الموظف: الواجهة بتخفيها حسب `employeePortal.myPermissions` (هوية البوابة +
+ * تجاوزات الشركة)، والسيرفر هو الحارس النهائي على employeePortal.todayShipments/shippingRoutes — والاتنين
+ * على نفس المصدر. منح الصلاحية بيفتح فورًا، وسحبها بيقفل السيرفر في الطلب التالي. ولو فيه جلسة مالك على
+ * الويب في نفس المتصفح، الصلاحيات بتفضل صلاحيات الموظف (مش المالك).
  */
 
 const routers = fs.readFileSync("server/routers.ts", "utf-8");
@@ -24,13 +27,17 @@ describe("🔒 روابط الشحن — حراس نصّية", () => {
     expect(fn).toContain("requireTenantId(emp)");
   });
   it("الواجهة بتخفي الرابطين لما الصلاحية مش موجودة، ومن غير ما تستنتج من الدور", () => {
-    expect(dash).toContain('const canViewShipping = hasPermission("shipping_ops.view");');
+    expect(dash).toContain("trpc.employeePortal.myPermissions.useQuery(");
+    expect(dash).toContain('const canViewShipping = (portalPermissions ?? []).includes("shipping_ops.view");');
+    expect(dash).not.toContain("usePermissions(");
     const gated = dash.slice(dash.indexOf("{canViewShipping && ("), dash.indexOf("{canViewShipping && (") + 2200);
     expect(gated).toContain('setLocation("/today-shipments")');
     expect(gated).toContain('setLocation("/shipping-schedule")');
     expect(dash.match(/setLocation\("\/today-shipments"\)/g)!.length).toBe(1);
     expect(dash).not.toMatch(/role\s*===\s*["']shipping["']/);
-    expect(dash).toContain("utils.auth.myPermissions.invalidate()");
+    expect(dash).toContain("utils.employeePortal.myPermissions.invalidate()");
+    const portal = routers.slice(routers.indexOf("myPermissions: employeePortalProcedure"), routers.indexOf("myPermissions: employeePortalProcedure") + 200);
+    expect(portal).toContain("tenantPermissionsForRole(requireTenantId(emp), emp.role)");
   });
 });
 
@@ -48,7 +55,7 @@ describe.runIf(CAN_E2E)("🔒 صلاحية الشحن — منح وسحب فور
   async function code(fn: () => Promise<any>): Promise<string> {
     try { await fn(); return "ok"; } catch (e: any) { return e?.code ?? "ERR"; }
   }
-  const can = async (id: number) => (await (await portal(id)).auth.myPermissions()).includes("shipping_ops.view");
+  const can = async (id: number) => (await (await portal(id)).employeePortal.myPermissions()).includes("shipping_ops.view");
   const setOverride = async (tenantId: number, role: string, isAllowed: boolean | null) => {
     const d = (await getDb())!;
     await d.delete(tenantRolePermissions).where(and(eq(tenantRolePermissions.tenantId, tenantId), eq(tenantRolePermissions.role, role), eq(tenantRolePermissions.permission, "shipping_ops.view")));
@@ -65,6 +72,7 @@ describe.runIf(CAN_E2E)("🔒 صلاحية الشحن — منح وسحب فور
     await mk("agentA", "agent", A);
     await mk("shipA", "shipping", A);
     await mk("agentB", "agent", B);
+    await mk("ownerA", "super_admin", A);
   });
 
   afterAll(async () => {
@@ -94,6 +102,23 @@ describe.runIf(CAN_E2E)("🔒 صلاحية الشحن — منح وسحب فور
     await setOverride(A.tenantId, "agent", false);
     expect(await can(emp.agentA)).toBe(false);
     expect(await code(async () => (await portal(emp.agentA)).employeePortal.todayShipments({}))).toBe("FORBIDDEN");
+  });
+
+  it("جلسة مالك على الويب في نفس المتصفح: صلاحيات البوابة تفضل صلاحيات الموظف", async () => {
+    const both = appRouter.createCaller(await createContext({ req: { protocol: "https", headers: {}, cookies: { [COOKIE_NAME]: sign(emp.ownerA), employee_token: sign(emp.agentA) } }, res } as any));
+    expect((await both.auth.myPermissions()).includes("shipping_ops.view")).toBe(true); // مصدر الويب = المالك
+    expect((await both.employeePortal.myPermissions()).includes("shipping_ops.view")).toBe(false); // البوابة = الموظف
+    expect(await code(() => both.employeePortal.todayShipments({}))).toBe("FORBIDDEN");
+  });
+
+  it("الاستعلام الواحد = نفس نتيجة hasTenantPermission لكل صلاحية (مع تجاوز ومن غيره)", async () => {
+    await setOverride(A.tenantId, "agent", true);
+    for (const role of ["agent", "shipping", "manager"]) {
+      const bulk = await tenantPermissionsForRole(A.tenantId, role);
+      const each = (await Promise.all(ALL_PERMISSIONS.map(async p => (await hasTenantPermission(A.tenantId, role, p)) ? p : null))).filter(Boolean);
+      expect(bulk, role).toEqual(each);
+    }
+    await setOverride(A.tenantId, "agent", null);
   });
 
   it("دور الشحن بالافتراضي مسموح، وسحبه من الشركة يقفل البوابة", async () => {

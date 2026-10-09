@@ -87,7 +87,7 @@ export default function TodayShipments() {
             الشاشة دي لموظفي الشحن والإدارة. بيانات شحن أوردراتك موجودة جوه كل أوردر في شاشتك.
           </p>
         </div>
-        <Button className="min-h-11" onClick={() => { permissionUtils.auth.myPermissions.invalidate(); setLocation("/employee-dashboard"); }}>الرجوع لشاشتي</Button>
+        <Button className="min-h-11" onClick={() => { permissionUtils.employeePortal.myPermissions.invalidate(); setLocation("/employee-dashboard"); }}>الرجوع لشاشتي</Button>
       </main>
     );
   }
