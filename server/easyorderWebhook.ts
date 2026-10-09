@@ -41,6 +41,7 @@ import {
   StockShortfallError, OrderConfirmBlockedError, OrderStockInconsistencyError, OrderStatusGuardError,
 } from "./db";
 import { webhookLogs } from "../drizzle/schema";
+import { orderEventsEnabled } from "./orderEvents.service";
 import { desc, inArray } from "drizzle-orm";
 import { upsertEasyOrder, fetchEasyOrderById, type EasyOrderPayload } from "./easyorder.service";
 import { recordIntegrationOrderEvent } from "./shippingV2.service";
@@ -95,16 +96,19 @@ function sourceLabelFor(channel: { id: number; platform: string }): string {
  *  - «تم التسليم» مرفوض لكل الأوردرات من هنا: شحنات بوسطة تُسلَّم من الحالة 45 عبر Webhook بوسطة،
  *    والتسليم اليدوي له مسار مستقل باعتماد المالك (قيد البناء).
  */
-async function applyExternalStatus(orderId: number, mapped: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+export async function applyExternalStatus(orderId: number, mapped: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // سجل الأحداث (العلم مفعّل فقط): سطر Audit بفاعل ويبهوك بلا نسبة لموظف. الـRetry بنفس الحالة لا يغيّر شيئًا
+  // فلا حدث ثانٍ. لا تغيير في منطق Easy Orders ولا أي كتابة مالية.
+  const eventCtx = orderEventsEnabled() ? { actor: { type: "webhook" as const, provider: "easyorders" as const }, source: "webhook_easyorders" as const } : undefined;
   try {
     if (mapped === "confirmed") {
-      await confirmOrder(orderId, 0, "EasyOrder");
+      await confirmOrder(orderId, 0, "EasyOrder", eventCtx);
       return { ok: true };
     }
     // «تم التسليم» لا تمر من أي Webhook عام — التسليم من بوسطة (45) أو من المسار اليدوي المعتمد.
     if (mapped === "delivered")
       return { ok: false, reason: "حالة «تم التسليم» لا تُطبَّق من EasyOrder — التسليم من شركة الشحن أو المسار اليدوي المعتمد" };
-    await updateOrder(orderId, { status: mapped as any });
+    await updateOrder(orderId, { status: mapped as any }, eventCtx);
     return { ok: true };
   } catch (err) {
     if (err instanceof StockShortfallError || err instanceof OrderConfirmBlockedError || err instanceof OrderStockInconsistencyError || err instanceof OrderStatusGuardError)

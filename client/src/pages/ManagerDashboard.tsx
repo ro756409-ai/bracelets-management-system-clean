@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { operationIdFor } from "@/lib/operationId";
 import { EstimatedPerformanceNotice, ESTIMATED_PERFORMANCE_TITLE, sortByEmployeeName } from "@/components/shared/EstimatedPerformanceNotice";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -550,6 +551,7 @@ function ManagerOrdersTab() {
     bulkAssignMutation.mutate({
       orderIds: selectedOrders,
       employeeId: parseInt(assignEmployeeId),
+      operationId: operationIdFor(`bulk_assign:${[...selectedOrders].sort((a, b) => a - b).join(",")}:${assignEmployeeId}`),
     });
   };
 
@@ -704,7 +706,7 @@ function ManagerOrdersTab() {
                     {order.status === 'new' && !order.assignedEmployeeId && (
                       <div className="flex items-center gap-2">
                         <Select onValueChange={(val) => {
-                          assignMutation.mutate({ orderId: order.id, employeeId: parseInt(val) });
+                          assignMutation.mutate({ orderId: order.id, employeeId: parseInt(val), operationId: operationIdFor(`assign:${order.id}:${val}`) });
                         }}>
                           <SelectTrigger className="min-h-11 md:min-h-9 w-full flex-1 bg-card" aria-label="توزيع على موظف"><SelectValue placeholder="توزيع على موظف..." /></SelectTrigger>
                           <SelectContent>
@@ -718,7 +720,7 @@ function ManagerOrdersTab() {
 
                     {canAct && (
                       <div className="flex flex-wrap gap-2 pt-1">
-                        <Button size="sm" className="min-h-11 md:min-h-9 flex-1 bg-[var(--success)] hover:bg-[var(--success)]/90 text-primary-foreground" onClick={() => confirmMutation.mutate({ orderId: order.id })} disabled={confirmMutation.isPending}>
+                        <Button size="sm" className="min-h-11 md:min-h-9 flex-1 bg-[var(--success)] hover:bg-[var(--success)]/90 text-primary-foreground" onClick={() => confirmMutation.mutate({ orderId: order.id, operationId: operationIdFor(`confirm:${order.id}`) })} disabled={confirmMutation.isPending}>
                           <CheckCircle2 className="h-4 w-4 ml-1" aria-hidden="true" />تأكيد
                         </Button>
                         <Button size="sm" variant="outline" className="min-h-11 md:min-h-9 flex-1 border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/10 hover:text-[var(--warning)]" onClick={() => { setPostponeDialog({ open: true, orderId: order.id }); setPostponeDate(""); setPostponeNotes(""); }}>
@@ -786,7 +788,7 @@ function ManagerOrdersTab() {
             <Button onClick={() => {
               if (!postponeDate) { toast.error("حدد التاريخ"); return; }
               if (!postponeDialog.orderId) return;
-              postponeMutation.mutate({ orderId: postponeDialog.orderId, postponedTo: new Date(postponeDate), notes: postponeNotes || undefined });
+              postponeMutation.mutate({ orderId: postponeDialog.orderId, postponedTo: new Date(postponeDate), notes: postponeNotes || undefined, operationId: operationIdFor(`postpone:${postponeDialog.orderId}`) });
             }} disabled={postponeMutation.isPending} className="min-h-11 md:min-h-9 bg-primary hover:bg-primary/90 text-primary-foreground">
               {postponeMutation.isPending ? "جاري..." : "تأجيل"}
             </Button>
@@ -821,7 +823,7 @@ function ManagerOrdersTab() {
             <Button className="min-h-11 md:min-h-9" onClick={() => {
               if (!cancelReason) { toast.error("اختر سبب الإلغاء"); return; }
               if (!cancelDialog.orderId) return;
-              cancelMutation.mutate({ orderId: cancelDialog.orderId, cancelReason: cancelReason as any, notes: cancelNotes || undefined });
+              cancelMutation.mutate({ orderId: cancelDialog.orderId, cancelReason: cancelReason as any, notes: cancelNotes || undefined, operationId: operationIdFor(`cancel:${cancelDialog.orderId}`) });
             }} disabled={cancelMutation.isPending} variant="destructive">
               {cancelMutation.isPending ? "جاري..." : "تأكيد الإلغاء"}
             </Button>

@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
+import { operationIdFor } from "@/lib/operationId";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { Button } from "@/components/ui/button";
@@ -161,7 +162,7 @@ export default function AgentWorkspace() {
   });
 
   const handleConfirm = (orderId: number) => {
-    guard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId }, { onSettled: done }));
+    guard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId, operationId: operationIdFor(`confirm:${orderId}`) }, { onSettled: done }));
   };
 
   // Stats for this agent
@@ -422,6 +423,7 @@ export default function AgentWorkspace() {
                   orderId: selectedOrderId,
                   cancelReason: cancelReason as any,
                   notes: cancelNotes || undefined,
+                  operationId: operationIdFor(`cancel:${selectedOrderId}`),
                 });
               }}
               data-testid="agent-cancel-confirm"
@@ -475,6 +477,7 @@ export default function AgentWorkspace() {
                   orderId: selectedOrderId,
                   postponedTo: new Date(postponeDate),
                   notes: postponeNotes || undefined,
+                  operationId: operationIdFor(`postpone:${selectedOrderId}`),
                 });
               }}
               data-testid="agent-postpone-confirm"

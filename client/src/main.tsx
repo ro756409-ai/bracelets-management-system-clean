@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
 import { handleUnauthorizedRedirect } from "./_core/authRedirect";
+import { completeOperation } from "./lib/operationId";
 import "./index.css";
 
 const queryClient = new QueryClient();
@@ -20,6 +21,9 @@ queryClient.getQueryCache().subscribe(event => {
 });
 
 queryClient.getMutationCache().subscribe(event => {
+  // نجاح العملية يستهلك معرّفها (Idempotency) — الفعل التالي يأخذ معرّفًا جديدًا.
+  if (event.type === "updated" && event.action.type === "success")
+    completeOperation((event.mutation.state.variables as { operationId?: unknown } | undefined)?.operationId);
   if (event.type === "updated" && event.action.type === "error") {
     const error = event.mutation.state.error;
     handleUnauthorizedRedirect(error);

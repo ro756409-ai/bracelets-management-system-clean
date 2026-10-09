@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { operationIdFor } from "@/lib/operationId";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { usePermission } from "@/hooks/usePermission";
@@ -407,7 +408,7 @@ export default function EmployeeDashboard() {
       }
     }
     setBusyOrderId(order.id);
-    updateStatusMutation.mutate({ orderId: order.id, status: next as any });
+    updateStatusMutation.mutate({ orderId: order.id, status: next as any, operationId: operationIdFor(`status:${order.id}:${next}`) });
   }
 
   const updateNotesMutation = trpc.employeePortal.updateNotes.useMutation({
@@ -695,6 +696,7 @@ export default function EmployeeDashboard() {
       orderId: postponeDialog.orderId,
       postponedTo: new Date(postponeDate),
       notes: postponeNotes || undefined,
+      operationId: operationIdFor(`postpone:${postponeDialog.orderId}`),
     });
   };
 
@@ -727,6 +729,7 @@ export default function EmployeeDashboard() {
       cancelReason: cancelReasonResolved.slice(0, 80),
       orderId: cancelDialog.orderId,
       notes: cancelNotes || undefined,
+      operationId: operationIdFor(`cancel:${cancelDialog.orderId}`),
     });
   };
 
@@ -780,7 +783,7 @@ export default function EmployeeDashboard() {
       return;
     }
     setBusyOrderId(order.id);
-    confirmMutation.mutate({ orderId: order.id });
+    confirmMutation.mutate({ orderId: order.id, operationId: operationIdFor(`confirm:${order.id}`) });
   }
 
   /**
@@ -2058,7 +2061,7 @@ export default function EmployeeDashboard() {
                 if (!noAnswerDialog.orderId) return;
                 const attempts = noAnswerAttempts ? Number(noAnswerAttempts) : undefined;
                 setBusyOrderId(noAnswerDialog.orderId);
-                noAnswerMutation.mutate({ orderId: noAnswerDialog.orderId, callAttempts: attempts });
+                noAnswerMutation.mutate({ orderId: noAnswerDialog.orderId, callAttempts: attempts, operationId: operationIdFor(`no_answer:${noAnswerDialog.orderId}`) });
               }}
             >
               {noAnswerMutation.isPending ? "جاري..." : 'تأكيد "لم يرد"'}

@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { operationIdFor } from "@/lib/operationId";
 import {
   OrderEditDialog, type OrderEditSavePayload,
 } from "@/components/orders/OrderEditDialog";
@@ -427,7 +428,7 @@ export default function Orders() {
   // لنفس الأوردر فورًا (الجدول/البطاقة/الدرج كلها تمر من هنا). السيرفر يبقى الحكم (confirmOrderOrReject).
   const confirmGuard = useRef(createInFlightGuard<number>()).current;
   const confirmOrder = (orderId: number) => {
-    confirmGuard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId }, { onSettled: done }));
+    confirmGuard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId, operationId: operationIdFor(`confirm:${orderId}`) }, { onSettled: done }));
   };
 
   const cancelMutation = trpc.orders.cancel.useMutation({
@@ -1358,7 +1359,7 @@ export default function Orders() {
               disabled={!cancelReason || cancelMutation.isPending}
               onClick={() => {
                 if (!selectedOrderId || !cancelReason) return;
-                cancelMutation.mutate({ orderId: selectedOrderId, cancelReason: cancelReason as any, notes: cancelNotes || undefined });
+                cancelMutation.mutate({ orderId: selectedOrderId, cancelReason: cancelReason as any, notes: cancelNotes || undefined, operationId: operationIdFor(`cancel:${selectedOrderId}`) });
               }}
             >
               تأكيد الإلغاء
@@ -1387,7 +1388,7 @@ export default function Orders() {
               disabled={!postponeDate || postponeMutation.isPending}
               onClick={() => {
                 if (!selectedOrderId || !postponeDate) return;
-                postponeMutation.mutate({ orderId: selectedOrderId, postponedTo: new Date(postponeDate), notes: postponeNotes || undefined });
+                postponeMutation.mutate({ orderId: selectedOrderId, postponedTo: new Date(postponeDate), notes: postponeNotes || undefined, operationId: operationIdFor(`postpone:${selectedOrderId}`) });
               }}
             >
               تأكيد التأجيل
@@ -1427,7 +1428,7 @@ export default function Orders() {
               onClick={() => {
                 if (!selectedOrderId) return;
                 const attempts = noAnswerCallAttempts ? Number(noAnswerCallAttempts) : undefined;
-                noAnswerMutation.mutate({ orderId: selectedOrderId, callAttempts: attempts });
+                noAnswerMutation.mutate({ orderId: selectedOrderId, callAttempts: attempts, operationId: operationIdFor(`no_answer:${selectedOrderId}`) });
               }}
             >
               تأكيد "لم يرد"
@@ -1597,7 +1598,7 @@ export default function Orders() {
               <Select
                 value={drawerOrder.status}
                 disabled={updateStatusMutation.isPending}
-                onValueChange={(v) => { if (updateStatusMutation.isPending) return; updateStatusMutation.mutate({ id: drawerOrder.id, status: v as any }); }}
+                onValueChange={(v) => { if (updateStatusMutation.isPending) return; updateStatusMutation.mutate({ id: drawerOrder.id, status: v as any, operationId: operationIdFor(`status:${drawerOrder.id}:${v}`) }); }}
               >
                 <SelectTrigger className="h-9 w-44" aria-busy={updateStatusMutation.isPending || undefined} data-testid="drawer-status-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -1900,7 +1901,7 @@ export default function Orders() {
         onClose={() => setShowAssignDialog(false)}
         selectedOrderIds={selectedOrderIds}
         employees={employees ?? []}
-        onAssign={(empId, filteredIds) => assignMutation.mutate({ orderIds: filteredIds, employeeId: empId })}
+        onAssign={(empId, filteredIds) => assignMutation.mutate({ orderIds: filteredIds, employeeId: empId, operationId: operationIdFor(`bulk_assign:${[...filteredIds].sort((a, b) => a - b).join(",")}:${empId}`) })}
         isPending={assignMutation.isPending}
       />
     </div>

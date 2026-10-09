@@ -160,7 +160,7 @@ describe("🎛️ شريط الإجراءات: الصلاحيات والحالة
     const confirm = within(bar).getByTestId("action-confirm");
     fireEvent.click(confirm); fireEvent.click(confirm);
     expect(st.mut.confirm).toHaveBeenCalledTimes(1);
-    expect(st.mut.confirm.mock.calls[0][0]).toEqual({ orderId: 42 });
+    expect(st.mut.confirm.mock.calls[0][0]).toEqual({ orderId: 42, operationId: expect.stringMatching(/^[A-Za-z0-9_-]{8,80}$/) });
   });
   it("أثناء pending: كل أزرار الشريط معطّلة", () => {
     setup(); st.pending.postpone = true;
@@ -226,7 +226,7 @@ describe("🗨️ حوارات الإجراءات بقواعد صفحة الأو
     expect(dlg.textContent).toContain("لا تُحسب محاولات توصيل");
     fireEvent.click(within(dlg).getByRole("button", { name: "2" }));
     fireEvent.click(within(dlg).getByTestId("no-answer-confirm"));
-    expect(st.mut.noAnswer).toHaveBeenCalledWith({ orderId: 42, callAttempts: 2 });
+    expect(st.mut.noAnswer).toHaveBeenCalledWith({ orderId: 42, callAttempts: 2, operationId: expect.stringMatching(/^[A-Za-z0-9_-]{8,80}$/) });
   });
 });
 

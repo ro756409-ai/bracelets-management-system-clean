@@ -107,6 +107,7 @@ import {
   type ScopedEntity,
 } from "./tenantScope";
 import { eq, and, gte, lte, desc, sql, inArray, or, isNull } from "drizzle-orm";
+import { orderEventsEnabled, type OrderEventContext } from "./orderEvents.service";
 import {
   broadcastScopeCondition,
   employeeInTeamScope,
@@ -371,9 +372,9 @@ async function canViewProfit(ctx: { user?: { role?: string | null } | null; empl
   return hasTenantPermission(ctx.tenantId, ctx.employee?.role, "reports.view_profit");
 }
 
-async function confirmOrderOrReject(orderId: number, updatedBy: number, confirmedByName?: string) {
+async function confirmOrderOrReject(orderId: number, updatedBy: number, confirmedByName?: string, eventCtx?: OrderEventContext) {
   try {
-    return await confirmOrder(orderId, updatedBy, confirmedByName);
+    return await confirmOrder(orderId, updatedBy, confirmedByName, eventCtx);
   } catch (err) {
     if (err instanceof StockShortfallError)
       throw new TRPCError({ code: "BAD_REQUEST", message: `المخزون غير كافٍ: ${err.message}` });
@@ -1038,6 +1039,23 @@ async function resolveActingEmployeeIdAndName(
     ? emps.find((e: any) => e.id === ctx.realEmployeeId)
     : emps.find((e: any) => e.userId === ctx.user?.id);
   return { id: emp?.id, name: emp?.name ?? ctx.user?.name ?? undefined };
+}
+
+/** معرّف العملية من الواجهة (ثابت طوال دورة العملية) — يُستخدم فقط والعلم مفعّل. */
+const operationIdInput = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/).optional();
+
+/** سياق حدث لجلسة الويب (الإدارة) — undefined والعلم معطل (المسار القديم حرفيًا). */
+async function webEventCtx(ctx: any, source: "admin_ui" | "bulk", operationId?: string): Promise<OrderEventContext | undefined> {
+  if (!orderEventsEnabled()) return undefined;
+  const { id, name } = await resolveActingEmployeeIdAndName(ctx);
+  return { actor: { type: "employee", employeeId: id ?? 0, role: ctx.employee?.role ?? null, name: name ?? null }, source, operationId: operationId ?? null };
+}
+
+/** سياق حدث لجلسة البوابة — الموظف من الجلسة فقط. */
+function portalEventCtx(ctx: any, source: "employee_portal" | "bulk", operationId?: string): OrderEventContext | undefined {
+  if (!orderEventsEnabled()) return undefined;
+  const emp = ctx.employee;
+  return { actor: { type: "employee", employeeId: emp?.id ?? 0, role: emp?.role ?? null, name: emp?.name ?? null }, source, operationId: operationId ?? null };
 }
 
 async function requireActor(ctx: any): Promise<{ id: number; name: string }> {
@@ -2949,13 +2967,15 @@ export const appRouter = router({
         z.object({
           employeeId: z.number(),
           statuses: z.array(z.string()).optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "employee", input.employeeId);
         const result = await reclaimEmployeeOrders(
           input.employeeId,
-          input.statuses
+          input.statuses,
+          await webEventCtx(ctx, "bulk", input.operationId)
         );
         return result;
       }),
@@ -3491,14 +3511,16 @@ export const appRouter = router({
               "no_answer",
             ])
             .optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
-        const { id, ...data } = input;
+        const { id, operationId, ...data } = input;
         await requireOwned(ctx, "order", id);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         // «مؤكد» و«تم التسليم» لشحنة بوسطة مرفوضان هنا بالسياسة (حارس updateOrder).
-        await withStatusGuard(() => updateOrder(id, { ...data, lastUpdatedBy: actingEmpId }));
+        const eventCtx = data.status ? await webEventCtx(ctx, "admin_ui", operationId) : undefined;
+        await withStatusGuard(() => updateOrder(id, { ...data, lastUpdatedBy: actingEmpId }, eventCtx));
         return { success: true };
       }),
 
@@ -3507,6 +3529,7 @@ export const appRouter = router({
         z.object({
           orderId: z.number(),
           employeeId: z.number(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -3515,7 +3538,8 @@ export const appRouter = router({
         await assignOrderToEmployee(
           input.orderId,
           input.employeeId,
-          actingEmpId ?? 0
+          actingEmpId ?? 0,
+          await webEventCtx(ctx, "admin_ui", input.operationId)
         );
         return { success: true };
       }),
@@ -3525,6 +3549,7 @@ export const appRouter = router({
         z.object({
           orderIds: z.array(z.number()),
           employeeId: z.number(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -3535,7 +3560,8 @@ export const appRouter = router({
         await bulkAssignOrders(
           input.orderIds,
           input.employeeId,
-          actingEmpId ?? 0
+          actingEmpId ?? 0,
+          await webEventCtx(ctx, "bulk", input.operationId)
         );
         await addActivityLog({
           action: "assign_orders",
@@ -3553,13 +3579,14 @@ export const appRouter = router({
       .input(
         z.object({
           orderId: z.number(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
         const { id: actingEmpId, name: actingEmpName } =
           await resolveActingEmployeeIdAndName(ctx);
-        await confirmOrderOrReject(input.orderId, actingEmpId ?? 0, actingEmpName);
+        await confirmOrderOrReject(input.orderId, actingEmpId ?? 0, actingEmpName, await webEventCtx(ctx, "admin_ui", input.operationId));
         await addActivityLog({
           action: "confirm_order",
           entityType: "order",
@@ -3708,6 +3735,7 @@ export const appRouter = router({
           orderId: z.number(),
           postponedTo: z.date(),
           notes: z.string().optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -3717,7 +3745,8 @@ export const appRouter = router({
           input.orderId,
           input.postponedTo,
           input.notes,
-          actingEmpId ?? 0
+          actingEmpId ?? 0,
+          await webEventCtx(ctx, "admin_ui", input.operationId)
         );
         return { success: true };
       }),
@@ -3728,6 +3757,7 @@ export const appRouter = router({
           orderId: z.number(),
           cancelReason: z.string().min(1).max(80),
           notes: z.string().optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -3737,7 +3767,8 @@ export const appRouter = router({
           input.orderId,
           input.cancelReason,
           input.notes,
-          actingEmpId ?? 0
+          actingEmpId ?? 0,
+          await webEventCtx(ctx, "admin_ui", input.operationId)
         );
         await addActivityLog({
           action: "cancel_order",
@@ -3759,6 +3790,7 @@ export const appRouter = router({
           // كام مرة اتصل موظف التأكيد بالعميل قبل ما يعلّم الأوردر "لم يرد" — استبيان مصغّر بيتسجل
           // وقت كل مرة الحالة دي بتتحدد، مش عدّاد تراكمي.
           callAttempts: z.number().int().min(1).max(20).optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -3768,7 +3800,7 @@ export const appRouter = router({
           status: "no_answer",
           lastUpdatedBy: actingEmpId,
           noAnswerCallAttempts: input.callAttempts,
-        });
+        }, await webEventCtx(ctx, "admin_ui", input.operationId));
         return { success: true };
       }),
 
@@ -4389,13 +4421,14 @@ export const appRouter = router({
       .input(
         z.object({
           orderId: z.number(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         // Ownership check: agents can only confirm their own assigned orders
         await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
-        const res = await confirmOrderOrReject(input.orderId, emp.id, emp.name);
+        const res = await confirmOrderOrReject(input.orderId, emp.id, emp.name, portalEventCtx(ctx, "employee_portal", input.operationId));
         await addActivityLog({
           action: "confirm_order",
           entityType: "order",
@@ -4421,6 +4454,7 @@ export const appRouter = router({
           orderId: z.number(),
           postponedTo: z.date(),
           notes: z.string().optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -4431,7 +4465,8 @@ export const appRouter = router({
           input.orderId,
           input.postponedTo,
           input.notes,
-          emp.id
+          emp.id,
+          portalEventCtx(ctx, "employee_portal", input.operationId)
         );
         await addActivityLog({
           action: "postpone_order",
@@ -4452,6 +4487,7 @@ export const appRouter = router({
           orderId: z.number(),
           cancelReason: z.string().min(1).max(80),
           notes: z.string().optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -4462,7 +4498,8 @@ export const appRouter = router({
           input.orderId,
           input.cancelReason,
           input.notes,
-          emp.id
+          emp.id,
+          portalEventCtx(ctx, "employee_portal", input.operationId)
         );
         await addActivityLog({
           action: "cancel_order",
@@ -4482,6 +4519,7 @@ export const appRouter = router({
         z.object({
           orderId: z.number(),
           callAttempts: z.number().int().min(1).max(20).optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -4491,7 +4529,7 @@ export const appRouter = router({
           status: "no_answer",
           lastUpdatedBy: emp.id,
           noAnswerCallAttempts: input.callAttempts,
-        });
+        }, portalEventCtx(ctx, "employee_portal", input.operationId));
         return { success: true };
       }),
 
@@ -4515,6 +4553,7 @@ export const appRouter = router({
           cancelReason: z.string().min(1).max(80).optional(),
           postponedTo: z.date().optional(),
           notes: z.string().optional(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -4538,9 +4577,10 @@ export const appRouter = router({
         if (previousStatus === input.status)
           return { success: true, unchanged: true };
 
+        const statusEventCtx = portalEventCtx(ctx, "employee_portal", input.operationId);
         switch (input.status) {
           case "confirmed":
-            await confirmOrderOrReject(input.orderId, emp.id, emp.name);
+            await confirmOrderOrReject(input.orderId, emp.id, emp.name, statusEventCtx);
             break;
           case "cancelled":
             if (!input.cancelReason) {
@@ -4553,7 +4593,8 @@ export const appRouter = router({
               input.orderId,
               input.cancelReason,
               input.notes,
-              emp.id
+              emp.id,
+              statusEventCtx
             );
             break;
           case "postponed":
@@ -4567,7 +4608,8 @@ export const appRouter = router({
               input.orderId,
               input.postponedTo,
               input.notes,
-              emp.id
+              emp.id,
+              statusEventCtx
             );
             break;
           case "new":
@@ -4579,7 +4621,7 @@ export const appRouter = router({
               cancelledAt: null,
               cancelReason: null,
               postponedTo: null,
-            });
+            }, statusEventCtx);
             break;
         }
 
@@ -5011,6 +5053,7 @@ export const appRouter = router({
         z.object({
           orderId: z.number(),
           employeeId: z.number(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -5018,7 +5061,7 @@ export const appRouter = router({
         await requireOwned(empScope(ctx), "order", input.orderId);
         // P0: المستلم لازم يكون في نطاق الجلسة — كان أي employeeId من أي tenant مقبول.
         await requireOwned(empScope(ctx), "employee", input.employeeId);
-        await assignOrderToEmployee(input.orderId, input.employeeId, emp.id);
+        await assignOrderToEmployee(input.orderId, input.employeeId, emp.id, portalEventCtx(ctx, "employee_portal", input.operationId));
         return { success: true };
       }),
 
@@ -5028,6 +5071,7 @@ export const appRouter = router({
         z.object({
           orderIds: z.array(z.number()),
           employeeId: z.number(),
+          operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -5035,7 +5079,7 @@ export const appRouter = router({
         const tenantId = requireTenantId(emp);
         await requireAllOwned(empScope(ctx), "order", input.orderIds);
         await requireOwned(empScope(ctx), "employee", input.employeeId);
-        await bulkAssignOrders(input.orderIds, input.employeeId, emp.id);
+        await bulkAssignOrders(input.orderIds, input.employeeId, emp.id, portalEventCtx(ctx, "bulk", input.operationId));
         return { success: true };
       }),
 

@@ -66,7 +66,7 @@ describe("🔌 صفحات 7I — hooks كما كانت", () => {
     const a = read("pages/ActivityLog.tsx");
     expect(a).toContain('action: actionFilter && actionFilter !== "all" ? actionFilter : undefined,');
     const w = read("pages/AgentWorkspace.tsx");
-    expect(w).toContain("createInFlightGuard"); expect(w).toContain("confirmMutation.mutate({ orderId }, { onSettled: done })");
+    expect(w).toContain("createInFlightGuard"); expect(w).toContain("confirmMutation.mutate({ orderId, operationId: operationIdFor(`confirm:${orderId}`) }, { onSettled: done })");
     expect(w).toContain("cancelReason: cancelReason as any,"); expect(w).toContain("postponedTo: new Date(postponeDate),");
     expect(w).toContain("<OrderEditDialog"); expect(w).toContain("allowItemsEdit={canEditItems}");
   });

@@ -141,6 +141,13 @@ import {
   orderContentChangedAfterShipment,
 } from "../shared/orderContent";
 import { captureExpectedShippingSnapshotInTransaction, findEffectiveShippingRate } from "./shippingSnapshotV2.service";
+import {
+  assertTransitioned,
+  eventTypeForStatus,
+  orderEventsEnabled,
+  prepareOrderEvent,
+  type OrderEventContext,
+} from "./orderEvents.service";
 
 // ==================== CAIRO TIMEZONE HELPERS ====================
 const CAIRO_TIMEZONE = "Africa/Cairo";
@@ -1928,7 +1935,9 @@ export class OrderStatusGuardError extends Error {
   }
 }
 
-export async function updateOrder(id: number, data: Partial<InsertOrder>) {
+export async function updateOrder(id: number, data: Partial<InsertOrder>, eventCtx?: OrderEventContext) {
+  // سجل الأحداث مفعّل وفيه تغيير حالة → مسار معاملي بحدث؛ غير ذلك الكود الحالي حرفيًا.
+  if (data.status && orderEventsEnabled()) return updateOrderStatusWithEvent(id, data, eventCtx);
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (data.status) {
@@ -1962,6 +1971,41 @@ export async function updateOrder(id: number, data: Partial<InsertOrder>) {
     .set(withNormalizedPhoneFields(data))
     .where(eq(orders.id, id));
   // تصحيح الهاتف/المحافظة بيشيل سبب المراجعة الخاص بالحقل المصحَّح بس.
+  if (data.customerPhone !== undefined || data.governorate !== undefined || data.reviewReason === undefined)
+    await recomputeImportReviewReasons(id);
+}
+
+/**
+ * نفس قواعد updateOrder (الانتقال المسموح، منع «مؤكد» و«تم التسليم» يدويًا) لكن داخل معاملة: قفل الأوردر ←
+ * Replay/Conflict ← UPDATE مشروط بالحالة المقروءة ← الحدث. نفس الحالة = لا حدث (تعديل الحقول الأخرى فقط).
+ */
+async function updateOrderStatusWithEvent(id: number, data: Partial<InsertOrder>, eventCtx?: OrderEventContext) {
+  const to = String(data.status);
+  await runOrderTransaction(async tx => {
+    const [current] = await tx.select().from(orders).where(eq(orders.id, id)).limit(1).for("update");
+    if (!current) return;
+    if (!isValidOrderStatusTransition(current.status, to as any))
+      throw new Error(`لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${to}" مباشرة`);
+    if (to === "confirmed" && current.status !== "confirmed")
+      throw new OrderStatusGuardError("تأكيد الأوردر يتم من زر التأكيد فقط (يخصم المخزون) — لا يُحوَّل لمؤكد بالتعديل المباشر");
+    if (to === "delivered" && current.status !== "delivered")
+      throw new OrderStatusGuardError("حالة «تم التسليم» لا تُسجَّل يدويًا: شحنات بوسطة تُسلَّم من بوسطة تلقائيًا، والتسليم اليدوي له مسار مستقل باعتماد المالك (قيد البناء)");
+    if (current.status === to) {
+      await tx.update(orders).set(withNormalizedPhoneFields(data)).where(eq(orders.id, id));
+      return;
+    }
+    const eventType = eventTypeForStatus(to);
+    const ev = await prepareOrderEvent(tx, current, eventCtx, {
+      eventType,
+      toStatus: to,
+      reason: eventType === "cancel" ? ((data as any).cancelReason ?? null) : null,
+      callAttempt: eventType === "no_answer" ? ((data as any).noAnswerCallAttempts ?? null) : null,
+    });
+    if (ev.replay) return;
+    const r = await tx.update(orders).set(withNormalizedPhoneFields(data)).where(and(eq(orders.id, id), eq(orders.status, current.status)));
+    assertTransitioned(r);
+    await ev.commit({ fromStatus: current.status });
+  });
   if (data.customerPhone !== undefined || data.governorate !== undefined || data.reviewReason === undefined)
     await recomputeImportReviewReasons(id);
 }
@@ -2285,8 +2329,10 @@ export async function markOrdersAsPrinted(
 export async function assignOrderToEmployee(
   orderId: number,
   employeeId: number,
-  updatedBy: number
+  updatedBy: number,
+  eventCtx?: OrderEventContext
 ) {
+  if (orderEventsEnabled()) return assignOrdersWithEvents([orderId], employeeId, updatedBy, eventCtx);
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db
@@ -2302,8 +2348,10 @@ export async function assignOrderToEmployee(
 export async function bulkAssignOrders(
   orderIds: number[],
   employeeId: number,
-  updatedBy: number
+  updatedBy: number,
+  eventCtx?: OrderEventContext
 ) {
+  if (orderEventsEnabled()) return assignOrdersWithEvents(orderIds, employeeId, updatedBy, eventCtx);
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db
@@ -2314,6 +2362,30 @@ export async function bulkAssignOrders(
       lastUpdatedBy: updatedBy,
     })
     .where(inArray(orders.id, orderIds));
+}
+
+/**
+ * الإسناد مع سجل الأحداث (العلم مفعّل): معاملة واحدة، قفل الأوردرات بترتيب ثابت، حدث assign/reassign لكل أوردر
+ * تغيّر مُسنَده فعلًا (نفس المُسنَد = لا تغيير ولا حدث)، UPDATE مشروط بالمُسنَد المقروء.
+ */
+async function assignOrdersWithEvents(orderIds: number[], employeeId: number, updatedBy: number, eventCtx?: OrderEventContext) {
+  const ids = Array.from(new Set(orderIds)).sort((a, b) => a - b);
+  await runOrderTransaction(async tx => {
+    for (const orderId of ids) {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
+      if (!order) continue;
+      const prev = order.assignedEmployeeId ?? null;
+      if (prev === employeeId) continue;
+      const ev = await prepareOrderEvent(tx, order, eventCtx, { eventType: prev == null ? "assign" : "reassign", assigneeEmployeeId: employeeId });
+      if (ev.replay) continue;
+      const r = await tx
+        .update(orders)
+        .set({ assignedEmployeeId: employeeId, assignedAt: new Date(), lastUpdatedBy: updatedBy })
+        .where(and(eq(orders.id, orderId), prev == null ? isNull(orders.assignedEmployeeId) : eq(orders.assignedEmployeeId, prev)));
+      assertTransitioned(r);
+      await ev.commit({ fromStatus: order.status, toStatus: order.status, previousAssigneeEmployeeId: prev });
+    }
+  });
 }
 
 /** عجز مخزون عند التأكيد — يُرفض التأكيد كله بلا أي خصم جزئي، برسالة عربية لكل صنف. */
@@ -2362,7 +2434,8 @@ export class OrderStockInconsistencyError extends Error {
 export async function confirmOrder(
   orderId: number,
   updatedBy: number,
-  confirmedByName?: string
+  confirmedByName?: string,
+  eventCtx?: OrderEventContext
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -2373,6 +2446,11 @@ export async function confirmOrder(
     if (!order) throw new Error("Order not found");
     if (order.businessId == null)
       throw new Error("Order has no Business and cannot enter accounting workflow");
+
+    // سجل الأحداث (العلم مفعّل فقط): Replay/Conflict بنفس معرّف العملية قبل أي شيء.
+    const ev = orderEventsEnabled() ? await prepareOrderEvent(tx, order, eventCtx, { eventType: "confirm", toStatus: "confirmed" }) : null;
+    if (ev?.replay)
+      return { needsReview: Boolean(order.needsReview), reviewReason: order.reviewReason ?? undefined, stockShortfall: false };
 
     // 2) idempotency — بعد القفل.
     if (order.status === "confirmed")
@@ -2491,7 +2569,7 @@ export async function confirmOrder(
       }
     }
 
-    await tx
+    const confirmed = await tx
       .update(orders)
       .set({
         status: "confirmed",
@@ -2501,7 +2579,11 @@ export async function confirmOrder(
           ? { confirmedByEmployeeId: updatedBy, confirmedByEmployeeName: confirmedByName ?? null }
           : {}),
       })
-      .where(eq(orders.id, orderId));
+      .where(ev ? and(eq(orders.id, orderId), eq(orders.status, order.status)) : eq(orders.id, orderId));
+    if (ev) {
+      assertTransitioned(confirmed);
+      await ev.commit({ fromStatus: order.status });
+    }
 
     return {
       needsReview: Boolean(order.needsReview),
@@ -2528,8 +2610,24 @@ export async function postponeOrder(
   orderId: number,
   postponedTo: Date,
   notes: string | undefined,
-  updatedBy: number
+  updatedBy: number,
+  eventCtx?: OrderEventContext
 ) {
+  if (orderEventsEnabled()) {
+    await runOrderTransaction(async tx => {
+      const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
+      if (!order) throw new Error("الأوردر غير موجود");
+      const ev = await prepareOrderEvent(tx, order, eventCtx, { eventType: "postpone", toStatus: "postponed", metadata: { postponedTo: postponedTo.toISOString() } });
+      if (ev.replay) return;
+      const r = await tx
+        .update(orders)
+        .set({ status: "postponed", postponedTo, notes, lastUpdatedBy: updatedBy })
+        .where(and(eq(orders.id, orderId), eq(orders.status, order.status)));
+      assertTransitioned(r);
+      await ev.commit({ fromStatus: order.status });
+    });
+    return;
+  }
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db
@@ -2551,7 +2649,8 @@ export async function cancelOrder(
   orderId: number,
   cancelReason: string,
   notes: string | undefined,
-  updatedBy: number
+  updatedBy: number,
+  eventCtx?: OrderEventContext
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -2562,6 +2661,9 @@ export async function cancelOrder(
   return runOrderTransaction(async tx => {
     const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
     if (!order) throw new Error("الأوردر غير موجود");
+    // سجل الأحداث (العلم مفعّل فقط): Replay بنفس العملية، والأوردر الملغي أصلًا = لا تغيير ولا حدث.
+    const ev = orderEventsEnabled() ? await prepareOrderEvent(tx, order, eventCtx, { eventType: "cancel", toStatus: "cancelled", reason: cancelReason }) : null;
+    if (ev?.replay || (ev && order.status === "cancelled")) return { restoredQuantity: 0 };
     const moves = await tx
       .select()
       .from(inventoryMovements)
@@ -2596,7 +2698,7 @@ export async function cancelOrder(
         await tx.update(products).set({ currentStock: sql`${products.currentStock} + ${row.qty}` }).where(eq(products.id, row.productId));
       restored += row.qty;
     }
-    await tx
+    const cancelled = await tx
       .update(orders)
       .set({
         status: "cancelled",
@@ -2605,7 +2707,11 @@ export async function cancelOrder(
         notes,
         lastUpdatedBy: updatedBy,
       })
-      .where(eq(orders.id, orderId));
+      .where(ev ? and(eq(orders.id, orderId), eq(orders.status, order.status)) : eq(orders.id, orderId));
+    if (ev) {
+      assertTransitioned(cancelled);
+      await ev.commit({ fromStatus: order.status });
+    }
     return { restoredQuantity: restored };
   });
 }
@@ -3433,7 +3539,8 @@ export async function getEmployeeInventory(employeeId: number) {
 // استرداد كل أوردرات موظف
 export async function reclaimEmployeeOrders(
   employeeId: number,
-  statuses?: string[]
+  statuses?: string[],
+  eventCtx?: OrderEventContext
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -3445,6 +3552,23 @@ export async function reclaimEmployeeOrders(
     conditions.push(
       inArray(orders.status, ["new", "no_answer", "postponed"] as any)
     );
+  }
+
+  if (orderEventsEnabled()) {
+    // سحب الإسناد مع حدث unassign لكل أوردر سُحب فعلًا — معاملة واحدة وأقفال بترتيب ثابت.
+    return runOrderTransaction(async tx => {
+      const rows = await tx.select().from(orders).where(and(...conditions)).orderBy(asc(orders.id)).for("update");
+      let count = 0;
+      for (const order of rows) {
+        const ev = await prepareOrderEvent(tx, order, eventCtx, { eventType: "unassign", assigneeEmployeeId: null });
+        if (ev.replay) continue;
+        const r = await tx.update(orders).set({ assignedEmployeeId: null, assignedAt: null }).where(and(eq(orders.id, order.id), eq(orders.assignedEmployeeId, employeeId)));
+        assertTransitioned(r);
+        await ev.commit({ fromStatus: order.status, toStatus: order.status, previousAssigneeEmployeeId: employeeId });
+        count++;
+      }
+      return { count };
+    });
   }
 
   const result = await db

@@ -17,7 +17,8 @@
  */
 import { Request, Response, Express } from "express";
 import { timingSafeEqual } from "crypto";
-import { getDb } from "./db";
+import { getDb, runOrderTransaction } from "./db";
+import { orderEventsEnabled, prepareOrderEvent } from "./orderEvents.service";
 import { businesses, orders } from "../drizzle/schema";
 import { eq, and } from "drizzle-orm";
 import { findAccountByWebhookSecret, getCarrierAccountRow, recordWebhookEvent, PROVIDER_BOSTA } from "./carrierAccounts.service";
@@ -80,11 +81,44 @@ export async function applyBostaEvent(businessId: number, event: NormalizedBosta
   const [order] = await db.select().from(orders).where(and(eq(orders.businessId, businessId), byShipment)).limit(1);
   if (!order) return { status: "unmatched", reason: "لا توجد شحنة مطابقة داخل هذا النشاط" };
 
+  // سجل الأحداث مفعّل → نفس القرار بالضبط لكن على صف مقفول داخل معاملة + سطر Audit (ship_update) بفاعل ويبهوك.
+  // مفتاح الحدث من هوية حدث بوسطة الثابتة (الشحنة + الحالة + الطابع) ⇒ إعادة الإرسال لا تكرر الحدث.
+  if (orderEventsEnabled()) {
+    return runOrderTransaction(async tx => {
+      const [locked] = await tx.select().from(orders).where(and(eq(orders.id, order.id), eq(orders.businessId, businessId))).limit(1).for("update");
+      if (!locked) return { status: "unmatched", reason: "لا توجد شحنة مطابقة داخل هذا النشاط" } as ApplyResult;
+      const decision = await decideBostaUpdate(locked, businessId, event, inboxId);
+      if ("result" in decision) return decision.result;
+      const shipmentKey = event.shipmentId ?? locked.bostaShipmentId ?? event.trackingNumber ?? "none";
+      const ev = await prepareOrderEvent(tx, locked, {
+        actor: { type: "webhook", provider: "bosta", externalEventId: event.eventKey || `${shipmentKey}:${event.state}:${event.timeStamp ?? "na"}` },
+        source: "webhook_bosta",
+      }, { eventType: "ship_update", toStatus: decision.advance ? (event.orderStatus as string) : locked.status, metadata: { bostaState: event.state ?? null, label: event.label ?? null } });
+      if (ev.replay) return { status: "processed", orderId: locked.id, orderStatus: locked.status } as ApplyResult;
+      await tx.update(orders).set(decision.set).where(and(eq(orders.id, locked.id), eq(orders.businessId, businessId)));
+      await ev.commit({ fromStatus: locked.status });
+      return { status: "processed", orderId: locked.id, orderStatus: decision.advance ? (event.orderStatus as string) : locked.status } as ApplyResult;
+    });
+  }
+
+  const decision = await decideBostaUpdate(order, businessId, event, inboxId);
+  if ("result" in decision) return decision.result;
+  await db
+    .update(orders)
+    .set(decision.set)
+    .where(and(eq(orders.id, order.id), eq(orders.businessId, businessId)));
+
+  return { status: "processed", orderId: order.id, orderStatus: decision.advance ? (event.orderStatus as string) : order.status };
+}
+
+/** قرار تطبيق حدث بوسطة على صف أوردر — نفس المنطق السابق حرفيًا (استُخرج فقط ليُستخدم على صف مقفول أيضًا). */
+async function decideBostaUpdate(order: typeof orders.$inferSelect, businessId: number, event: NormalizedBostaEvent, inboxId?: number):
+  Promise<{ result: ApplyResult } | { set: Record<string, unknown>; advance: boolean }> {
   if (event.storeOnly) {
-    return {
+    return { result: {
       status: "ignored", orderId: order.id,
       reason: event.kind === "unknown" ? `كود حالة غير معروف (${event.state}) — للمراجعة` : `${event.stateName} (${event.state}) — للمراجعة، بلا تعديل على الأوردر`,
-    };
+    } };
   }
 
   // حدث قديم وصل بعد حدث أحدث لنفس الشحنة → مايرجّعش الأوردر لورا.
@@ -92,31 +126,29 @@ export async function applyBostaEvent(businessId: number, event: NormalizedBosta
   if (event.timeStamp != null && shipmentKey) {
     const latest = await latestProcessedEventTimestamp(businessId, shipmentKey, inboxId);
     if (latest != null && event.timeStamp < latest)
-      return { status: "ignored", orderId: order.id, reason: "حدث أقدم من آخر حالة مسجّلة لهذه الشحنة" };
+      return { result: { status: "ignored", orderId: order.id, reason: "حدث أقدم من آخر حالة مسجّلة لهذه الشحنة" } };
   }
 
   const advance = event.orderStatus != null && canAdvanceOrderStatus(order.status, event.orderStatus);
   // حالة شحن أقدم (shipped) بعد delivered/returned مابتغيّرش حتى نص الحالة.
   const regress = event.orderStatus != null && !advance && order.status !== event.orderStatus;
   if (regress)
-    return { status: "ignored", orderId: order.id, reason: `الأوردر في حالة «${order.status}» — حدث «${event.label}» لا يرجّعه للخلف` };
+    return { result: { status: "ignored", orderId: order.id, reason: `الأوردر في حالة «${order.status}» — حدث «${event.label}» لا يرجّعه للخلف` } };
 
   const exceptionNote = event.kind === "exception"
     ? `استثناء بوسطة: ${event.exceptionReason ?? "بلا سبب مذكور"}${event.exceptionCode != null ? ` (كود ${event.exceptionCode})` : ""}`
     : null;
 
-  await db
-    .update(orders)
-    .set({
+  return {
+    advance,
+    set: {
       bostaStatus: event.label,
       ...(event.trackingNumber ? { bostaTrackingNumber: event.trackingNumber } : {}),
       ...(advance ? { status: event.orderStatus as any } : {}),
       ...(exceptionNote ? { bostaLastError: exceptionNote } : {}),
       ...(event.flagsReview ? { needsReview: true, reviewReason: appendReview(order.reviewReason, `بوسطة: ${event.label}`) } : {}),
-    })
-    .where(and(eq(orders.id, order.id), eq(orders.businessId, businessId)));
-
-  return { status: "processed", orderId: order.id, orderStatus: advance ? (event.orderStatus as string) : order.status };
+    },
+  };
 }
 
 /** يطبّق الحدث ويسجّل النتيجة في صندوق الوارد؛ الفشل بيتسجّل failed بسببه. */

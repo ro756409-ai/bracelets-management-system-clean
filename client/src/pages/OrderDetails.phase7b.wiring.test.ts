@@ -51,9 +51,9 @@ describe("🔌 Queries/Mutations قبل ⊆ بعد، والإضافات معلن
     expect(dialogs).toContain('useOperationalOptions("cancellation_reason")');
     expect(dialogs).toContain("callAttempts: attempts ? Number(attempts) : undefined");
     expect(dialogs).toContain("min={1} max={20}");
-    expect(page).toContain("cancelMutation.mutate({ orderId, cancelReason: v.cancelReason, notes: v.notes }");
-    expect(page).toContain("postponeMutation.mutate({ orderId, postponedTo: v.postponedTo, notes: v.notes }");
-    expect(page).toContain("noAnswerMutation.mutate({ orderId, callAttempts: v.callAttempts }");
+    expect(page).toContain("cancelMutation.mutate({ orderId, cancelReason: v.cancelReason, notes: v.notes, operationId: operationIdFor(`cancel:${orderId}`) }");
+    expect(page).toContain("postponeMutation.mutate({ orderId, postponedTo: v.postponedTo, notes: v.notes, operationId: operationIdFor(`postpone:${orderId}`) }");
+    expect(page).toContain("noAnswerMutation.mutate({ orderId, callAttempts: v.callAttempts, operationId: operationIdFor(`no_answer:${orderId}`) }");
   });
 });
 
@@ -97,7 +97,7 @@ describe("🔐 الصلاحيات والتعطيل وحارس الضغط الم�
     expect(page).toContain('import { isActionable, money, paymentLabel, COLLECTION_STATUS } from "@/components/orders/OrdersTable"');
     expect(page).toContain("actionable={isActionable(order as any)}");
     expect(page).toContain("createInFlightGuard<number>()");
-    expect(page).toContain("confirmGuard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId }, { onSettled: done }))");
+    expect(page).toContain("confirmGuard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId, operationId: operationIdFor(`confirm:${orderId}`) }, { onSettled: done }))");
   });
   it("كل أزرار الشريط disabled={pending.any} وما ليس مسموحًا لا يُرسم (شرط && قبل الزر)", () => {
     const buttons = bar.match(/<Button\b(?:=>|[^>])*>/gs) ?? [];

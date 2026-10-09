@@ -51,11 +51,11 @@ describe("ManagerDashboard — hooks before = after", () => {
   it("payloads unchanged on the write paths", () => {
     for (const s of [
       "sendBroadcastMutation.mutate({ message: broadcastMsg.trim() });",
-      "assignMutation.mutate({ orderId: order.id, employeeId: parseInt(val) });",
+      "assignMutation.mutate({ orderId: order.id, employeeId: parseInt(val), operationId: operationIdFor(`assign:${order.id}:${val}`) });",
       "orderIds: selectedOrders,",
-      "confirmMutation.mutate({ orderId: order.id })",
-      "postponeMutation.mutate({ orderId: postponeDialog.orderId, postponedTo: new Date(postponeDate), notes: postponeNotes || undefined });",
-      "cancelMutation.mutate({ orderId: cancelDialog.orderId, cancelReason: cancelReason as any, notes: cancelNotes || undefined });",
+      "confirmMutation.mutate({ orderId: order.id, operationId: operationIdFor(`confirm:${order.id}`) })",
+      "postponeMutation.mutate({ orderId: postponeDialog.orderId, postponedTo: new Date(postponeDate), notes: postponeNotes || undefined, operationId: operationIdFor(`postpone:${postponeDialog.orderId}`) });",
+      "cancelMutation.mutate({ orderId: cancelDialog.orderId, cancelReason: cancelReason as any, notes: cancelNotes || undefined, operationId: operationIdFor(`cancel:${cancelDialog.orderId}`) });",
       "createMutation.mutate({ name: newEmp.name, phone: newEmp.phone || undefined, role: newEmp.role });",
       "setCredMutation.mutate({ id: credDialog.empId, username: credUsername.trim(), password: credPassword });",
       "updateMutation.mutate({ id: emp.id, isActive: !emp.isActive })",

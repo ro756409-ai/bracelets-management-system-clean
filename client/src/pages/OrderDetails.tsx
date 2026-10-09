@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
+import { operationIdFor } from "@/lib/operationId";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -167,7 +168,7 @@ export default function OrderDetails() {
   // حارس الضغط المكرر: `isPending` يتأخر render واحدًا، فالضغطة الثانية ترفض فورًا حتى onSettled.
   const confirmGuard = useRef(createInFlightGuard<number>()).current;
   const confirmOrder = () => {
-    confirmGuard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId }, { onSettled: done }));
+    confirmGuard.run(orderId, confirmMutation.isPending, done => confirmMutation.mutate({ orderId, operationId: operationIdFor(`confirm:${orderId}`) }, { onSettled: done }));
   };
   const anyPending = confirmMutation.isPending || cancelMutation.isPending || postponeMutation.isPending || noAnswerMutation.isPending || sendToBostaMutation.isPending || editMutation.isPending || editItemsMutation.isPending;
 
@@ -701,15 +702,15 @@ export default function OrderDetails() {
       {/* حوارات الإجراءات — نفس قواعد صفحة الأوردرات (سبب إلغاء إلزامي، تاريخ تأجيل إلزامي) */}
       {canAct && canCancel && (
         <CancelOrderDialog open={showCancel} onOpenChange={setShowCancel} pending={cancelMutation.isPending}
-          onConfirm={v => { if (!cancelMutation.isPending) cancelMutation.mutate({ orderId, cancelReason: v.cancelReason, notes: v.notes }); }} />
+          onConfirm={v => { if (!cancelMutation.isPending) cancelMutation.mutate({ orderId, cancelReason: v.cancelReason, notes: v.notes, operationId: operationIdFor(`cancel:${orderId}`) }); }} />
       )}
       {canAct && canPostpone && (
         <PostponeOrderDialog open={showPostpone} onOpenChange={setShowPostpone} pending={postponeMutation.isPending}
-          onConfirm={v => { if (!postponeMutation.isPending) postponeMutation.mutate({ orderId, postponedTo: v.postponedTo, notes: v.notes }); }} />
+          onConfirm={v => { if (!postponeMutation.isPending) postponeMutation.mutate({ orderId, postponedTo: v.postponedTo, notes: v.notes, operationId: operationIdFor(`postpone:${orderId}`) }); }} />
       )}
       {canAct && canNoAnswer && (
         <NoAnswerDialog open={showNoAnswer} onOpenChange={setShowNoAnswer} pending={noAnswerMutation.isPending}
-          onConfirm={v => { if (!noAnswerMutation.isPending) noAnswerMutation.mutate({ orderId, callAttempts: v.callAttempts }); }} />
+          onConfirm={v => { if (!noAnswerMutation.isPending) noAnswerMutation.mutate({ orderId, callAttempts: v.callAttempts, operationId: operationIdFor(`no_answer:${orderId}`) }); }} />
       )}
     </div>
   );

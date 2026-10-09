@@ -83,12 +83,12 @@ describe("💼 مساحة العمل", () => {
     const c = screen.getByTestId("agent-confirm-7");
     fireEvent.click(c); fireEvent.click(c);
     expect(st.mut.confirm).toHaveBeenCalledTimes(1);
-    expect(st.mut.confirm.mock.calls[0][0]).toEqual({ orderId: 7 });
+    expect(st.mut.confirm.mock.calls[0][0]).toEqual({ orderId: 7, operationId: expect.stringMatching(/^[A-Za-z0-9_-]{8,80}$/) });
     fireEvent.click(screen.getByTestId("agent-cancel-7"));
     expect((screen.getByTestId("agent-cancel-confirm") as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText(/سبب الإلغاء/), { target: { value: "price" } });
     fireEvent.click(screen.getByTestId("agent-cancel-confirm"));
-    expect(st.mut.cancel.mock.calls[0][0]).toEqual({ orderId: 7, cancelReason: "price", notes: undefined });
+    expect(st.mut.cancel.mock.calls[0][0]).toEqual({ orderId: 7, cancelReason: "price", notes: undefined, operationId: expect.stringMatching(/^[A-Za-z0-9_-]{8,80}$/) });
     fireEvent.click(screen.getByText("ملغية").closest('[role="button"]')!);
     expect(st.inputs.filter(i => i.key === "my").pop()!.input.status).toBe("cancelled");
   });
