@@ -466,7 +466,7 @@ export default function DailyLedger() {
           className="grid max-h-[92dvh] w-[calc(100%-1rem)] max-w-md grid-rows-[auto_1fr_auto] gap-0 overflow-hidden p-0 sm:w-full"
           dir="rtl"
         >
-          <DialogHeader className="border-b px-4 py-3 text-start sm:px-6">
+          <DialogHeader className="border-b py-3 pl-4 pr-16 text-start sm:pl-6 md:pr-14">
             <DialogTitle className="flex items-center gap-2 text-base">
               {action && (() => {
                 const Icon = ACTION_META[action].icon;

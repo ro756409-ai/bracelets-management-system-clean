@@ -43,9 +43,11 @@ describe("🔑 واجهة دفتر V3 — الربط", () => {
     expect(daily).toContain("idempotencyKey: operationId");
     expect(daily).toContain("if (submitting || post.isPending) return;");
   });
-  it("الموبايل: بطاقات (md:hidden) وجدول للشاشات الواسعة، حقول/أزرار ≥ 44px، زر حفظ ثابت لا يغطي الحقول", () => {
-    expect(txs).toContain('className="space-y-3 md:hidden"');
-    expect(txs).toContain('className="hidden overflow-x-auto rounded-xl border md:block"');
+  it("الموبايل: بطاقات وجدول للشاشات الواسعة عبر ResponsiveDataTable (نسخة واحدة في DOM)، حقول/أزرار ≥ 44px، زر حفظ ثابت لا يغطي الحقول", () => {
+    // المرحلة 7E: بدل md:hidden/md:block (نسختان في DOM) — ResponsiveDataTable تعرض البطاقات أو الجدول فقط
+    expect(txs).toContain("<ResponsiveDataTable<Row>");
+    expect(txs).toContain('cardsBelow="md"');
+    expect(txs).not.toMatch(/md:hidden|md:block|<table/);
     expect(daily).toContain('className="sticky bottom-0 flex items-center gap-2 border-t bg-card px-4 py-3"');
     expect(daily).toContain('const field = "min-h-11"');
     for (const src of [daily, txs]) expect((src.match(/min-h-1[12]/g) ?? []).length).toBeGreaterThanOrEqual(5);

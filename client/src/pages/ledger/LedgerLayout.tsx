@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
  *   • جلسة موظف غير إداري (المحاسب: `user` = null لكن صلاحياته من `auth.myPermissions`) → قشرة خفيفة
  *     Mobile-first: عنوان + تبويبان + خروج. بدون هذا كان `DashboardLayout` يعرض له «يرجى تسجيل الدخول»
  *     رغم أن الـendpoints تصرّح له. الحارس الحقيقي يبقى على السيرفر (`ledgerProcedure`).
+ * المرحلة 7E (عرض فقط): القشرة على tokens الهوية، تبويبات 44px مع aria-current، و`--bottom-nav-h: 0`
+ * لأن لا شريط سفلي هنا — نفس الاستعلام (employeePortal.me) ونفس الخروج.
  */
 export default function LedgerLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -34,32 +36,38 @@ export function EmployeeLedgerShell({ children }: { children: React.ReactNode })
   };
 
   return (
-    <div className="min-h-screen bg-background" dir="rtl" data-testid="ledger-employee-shell">
-      <header className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
+    <div className="min-h-screen bg-background" dir="rtl" data-testid="ledger-employee-shell" style={{ ["--bottom-nav-h" as string]: "0px" } as React.CSSProperties}>
+      <header className="sticky top-0 z-20 border-b border-border bg-card/95 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><BookOpen className="h-5 w-5" /></span>
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-brand-md)] bg-accent text-accent-foreground" aria-hidden="true"><BookOpen className="h-5 w-5" /></span>
             <div className="min-w-0">
               <p className="truncate text-sm font-bold">دفتر الحسابات</p>
               {me.data?.name && <p className="truncate text-xs text-muted-foreground" data-testid="ledger-shell-user">{me.data.name}</p>}
             </div>
           </div>
           <Button variant="ghost" size="sm" onClick={logout} className="min-h-11 shrink-0" data-testid="ledger-shell-logout">
-            <LogOut className="h-4 w-4 ml-1" /> خروج
+            <LogOut className="h-4 w-4 ml-1" aria-hidden="true" /> خروج
           </Button>
         </div>
         <nav className="mx-auto grid max-w-5xl grid-cols-2" aria-label="تبويبات الدفتر">
           {TABS.map(t => {
             const active = location === t.path;
             return (
-              <Link key={t.path} href={t.path} className={`flex min-h-11 items-center justify-center gap-1.5 border-b-2 text-sm ${active ? "border-primary font-semibold text-primary" : "border-transparent text-muted-foreground"}`} data-testid={`ledger-tab-${t.path === "/ledger" ? "daily" : "transactions"}`}>
-                <t.icon className="h-4 w-4" />{t.label}
+              <Link
+                key={t.path}
+                href={t.path}
+                aria-current={active ? "page" : undefined}
+                className={`flex min-h-11 items-center justify-center gap-1.5 border-b-2 text-sm transition-colors duration-[var(--duration-fast)] ${active ? "border-primary font-semibold text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                data-testid={`ledger-tab-${t.path === "/ledger" ? "daily" : "transactions"}`}
+              >
+                <t.icon className="h-4 w-4" aria-hidden="true" />{t.label}
               </Link>
             );
           })}
         </nav>
       </header>
-      <main className="mx-auto max-w-5xl px-3 py-4">{children}</main>
+      <main className="mx-auto max-w-5xl px-3 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">{children}</main>
     </div>
   );
 }
