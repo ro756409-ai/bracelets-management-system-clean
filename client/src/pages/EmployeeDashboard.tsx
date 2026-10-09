@@ -1167,7 +1167,7 @@ export default function EmployeeDashboard() {
                     className="flex-1 text-sm text-right"
                     dir="ltr"
                   />
-                  <Button type="submit" size="sm" className="bg-[var(--success)] hover:bg-[var(--success)] text-white" disabled={scanMutation.isPending}>
+                  <Button type="submit" size="sm" className="min-h-11 md:min-h-9 bg-[var(--success)] hover:bg-[var(--success)] text-white" disabled={scanMutation.isPending}>
                     <Hash className="h-4 w-4" />
                   </Button>
                 </form>
@@ -1762,8 +1762,8 @@ export default function EmployeeDashboard() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="flex flex-wrap gap-1.5">
-              <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => applyPostponePreset("today")}>مساء اليوم</Button>
-              <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => applyPostponePreset("tomorrow")}>غدًا</Button>
+              <Button type="button" size="sm" variant="outline" className="min-h-11 text-xs md:min-h-7" onClick={() => applyPostponePreset("today")}>مساء اليوم</Button>
+              <Button type="button" size="sm" variant="outline" className="min-h-11 text-xs md:min-h-7" onClick={() => applyPostponePreset("tomorrow")}>غدًا</Button>
             </div>
             <div>
               <Label>تاريخ الاتصال مرة أخرى <span className="text-destructive">*</span></Label>
@@ -1912,8 +1912,8 @@ export default function EmployeeDashboard() {
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setNoAnswerDialog({ open: false, orderId: null })}>رجوع</Button>
-            <Button
+            <Button className="min-h-11 md:min-h-9" variant="outline" onClick={() => setNoAnswerDialog({ open: false, orderId: null })}>رجوع</Button>
+            <Button className="min-h-11 md:min-h-9"
               disabled={noAnswerMutation.isPending}
               onClick={() => {
                 if (!noAnswerDialog.orderId) return;

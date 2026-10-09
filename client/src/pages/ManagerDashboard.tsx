@@ -1059,7 +1059,7 @@ function ManagerEmployeesTab() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm ${
-                      emp.role === 'manager' ? 'bg-purple-500' : emp.role === 'warehouse' ? 'bg-blue-500' : 'bg-amber-600'
+                      emp.role === 'manager' ? 'bg-[var(--chart-3)]' : emp.role === 'warehouse' ? 'bg-[var(--info)]' : 'bg-primary'
                     }`}>
                       {emp.name.charAt(0)}
                     </div>

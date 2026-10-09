@@ -1,23 +1,25 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Plus, Edit, Trash2, Users, UserCheck, UserX, KeyRound, Eye, EyeOff, Copy, CheckCircle2, CalendarDays, RotateCcw, Package, AlertTriangle } from "lucide-react";
-import { PageHeader } from "@/components/shared";
+import { Plus, Edit, Trash2, Users, UserCheck, UserX, KeyRound, Eye, EyeOff, Copy, CheckCircle2, CalendarDays, RotateCcw, Package, AlertTriangle, Activity } from "lucide-react";
+import {
+  PageHeader, StatCard, SectionCard, StatusBadge, SearchInput, ResponsiveDataTable, EmptyState, LoadingSkeleton, OfflineState, PermissionDeniedState, type Column, type StatusTone,
+} from "@/components/shared";
 import DateRangePicker, { type DateRange } from "@/components/DateRangePicker";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { createInFlightGuard } from "@/components/orders/confirmGuard";
 
 // يجب أن تطابق EMPLOYEE_ROLE_VALUES في server/permissions.ts
 const EMPLOYEE_ROLES = [
@@ -47,20 +49,11 @@ const ROLE_LABELS: Record<EmployeeRoleValue, string> = {
   moderator: "مودريتور",
 };
 
-const ROLE_COLORS: Record<EmployeeRoleValue, string> = {
-  agent: "bg-blue-100 text-blue-700",
-  warehouse: "bg-purple-100 text-purple-700",
-  manager: "bg-amber-100 text-amber-700",
-  facebook_entry: "bg-indigo-100 text-indigo-700",
-  scanner: "bg-green-100 text-green-700",
-  super_admin: "bg-red-100 text-red-700",
-  admin: "bg-amber-100 text-amber-700",
-  data_entry: "bg-cyan-100 text-cyan-700",
-  order_confirmation: "bg-teal-100 text-teal-700",
-  shipping: "bg-sky-100 text-sky-700",
-  accountant: "bg-emerald-100 text-emerald-700",
-  viewer: "bg-gray-100 text-gray-700",
-  moderator: "bg-violet-100 text-violet-700",
+// نغمات الهوية بدل الألوان الخام (المرحلة 7F) — الدور نفسه لا يتغيّر
+const ROLE_TONES: Record<EmployeeRoleValue, StatusTone> = {
+  agent: "info", warehouse: "purple", manager: "amber", facebook_entry: "cyan", scanner: "success",
+  super_admin: "danger", admin: "amber", data_entry: "cyan", order_confirmation: "primary", shipping: "orange",
+  accountant: "success", viewer: "neutral", moderator: "purple",
 };
 
 /**
@@ -87,6 +80,9 @@ const defaultForm: EmployeeForm = {
   name: "", phone: "", email: "", role: "agent", businessId: null,
 };
 
+const TOUCH = "min-h-11 md:min-h-9";
+const ICON_BTN = "min-h-11 min-w-11 p-0 md:min-h-9 md:min-w-9 md:h-9 md:w-9";
+
 function formatLastLogin(value: unknown): string {
   if (!value) return "لم يسجل الدخول بعد";
   const date = new Date(value as string);
@@ -94,15 +90,40 @@ function formatLastLogin(value: unknown): string {
   return date.toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+const fmtDay = (v: unknown) => v ? new Date(v as string).toLocaleDateString("ar-EG", { day: "numeric", month: "short" }) : "—";
+const n = (v: unknown) => Number(v ?? 0);
+
+function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
+  return (
+    <span className={`flex shrink-0 items-center justify-center rounded-full bg-accent font-bold text-accent-foreground ${size === "sm" ? "h-8 w-8 text-xs" : "h-10 w-10 text-sm"}`} aria-hidden="true">
+      {name.charAt(0)}
+    </span>
+  );
+}
+
+function RoleBadge({ role }: { role: EmployeeRoleValue | string }) {
+  return <StatusBadge status={role} label={ROLE_LABELS[role as EmployeeRoleValue] ?? role} tone={ROLE_TONES[role as EmployeeRoleValue] ?? "neutral"} size="sm" icon={null} />;
+}
+
+/**
+ * إدارة الموظفين — نفس الاستعلامات والـmutations والتحقق (employees.list/allInventory/create/update/
+ * setCredentials/delete + reports.employeePerformance + orders.unassignEmployeeOrders).
+ * المرحلة 7F (عرض فقط): PageHeader + StatCards، جرد الموظفين والأداء عبر ResponsiveDataTable (بطاقات على
+ * الهاتف)، قائمة الموظفين ببطاقات وأهداف لمس 44px، شارات الأدوار بنغمات الهوية، حوارات بمساحة زر الإغلاق،
+ * حارس ضغط مكرر على كل إجراء كتابة، وحالات Loading/Empty/Offline/PermissionDenied. لا دور جديد ولا تغيير
+ * في حساب الأداء — الأرقام كما يرجعها السيرفر.
+ */
 export default function Employees() {
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const isAdmin = user?.role === 'admin';
+  const online = useOnlineStatus();
   const { currentBusinessId } = useBusinessContext();
   // مصدر البراند الواحد (useBrandOptions): بيختار النشاط لوحده لو واحد، وبيدّي قائمة لو
   // أكتر — مفيش اشتقاق يدوي هنا. `singleActiveBrandId` = النشاط النشط الوحيد (أو undefined).
   const { brands, selectedId: singleActiveBrandId } = useBrandOptions();
   const multiBusiness = brands.length > 1;
+  const guard = useRef(createInFlightGuard<string>()).current;
 
   const [showDialog, setShowDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -127,7 +148,7 @@ export default function Employees() {
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
 
-  const { data: employees, isLoading } = trpc.employees.list.useQuery({
+  const { data: employees, isLoading, isError, error, refetch } = trpc.employees.list.useQuery({
     businessId: currentBusinessId ?? undefined,
     search: search.trim() ? search.trim() : undefined,
     role: roleFilter !== "all" ? (roleFilter as EmployeeRoleValue) : undefined,
@@ -145,7 +166,7 @@ export default function Employees() {
     const to = new Date(); to.setHours(23, 59, 59, 999);
     return { from, to };
   });
-  const { data: todayPerf } = trpc.reports.employeePerformance.useQuery({
+  const { data: todayPerf, isLoading: perfLoading } = trpc.reports.employeePerformance.useQuery({
     dateFrom: perfDateRange.from ?? undefined,
     dateTo: perfDateRange.to ?? undefined,
     businessId: currentBusinessId,
@@ -263,9 +284,9 @@ export default function Employees() {
       businessId: resolvedBusinessId ?? undefined,
     };
     if (editingId) {
-      updateMutation.mutate({ id: editingId, ...payload });
+      guard.run("save", updateMutation.isPending, done => updateMutation.mutate({ id: editingId, ...payload }, { onSettled: done }));
     } else {
-      createMutation.mutate(payload);
+      guard.run("save", createMutation.isPending, done => createMutation.mutate(payload, { onSettled: done }));
     }
   };
 
@@ -273,11 +294,11 @@ export default function Employees() {
     if (!credUsername.trim()) { toast.error("اسم المستخدم مطلوب"); return; }
     if (credPassword.length < 6) { toast.error("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }
     if (!passwordEmpId) return;
-    setCredentialsMutation.mutate({
+    guard.run("cred", setCredentialsMutation.isPending, done => setCredentialsMutation.mutate({
       id: passwordEmpId,
       username: credUsername.trim(),
       password: credPassword,
-    });
+    }, { onSettled: done }));
   };
 
   const handleCopyCredentials = () => {
@@ -296,450 +317,334 @@ export default function Employees() {
 
   const handleReclaim = () => {
     if (!reclaimEmpId) return;
-    reclaimMutation.mutate({ employeeId: reclaimEmpId });
+    guard.run("reclaim", reclaimMutation.isPending, done => reclaimMutation.mutate({ employeeId: reclaimEmpId }, { onSettled: done }));
+  };
+
+  const handleDelete = () => {
+    if (!deleteEmpId) return;
+    guard.run("delete", deleteMutation.isPending, done => deleteMutation.mutate({ id: deleteEmpId }, { onSettled: done }));
+  };
+
+  const handleToggleActive = (emp: any) => {
+    guard.run(`toggle:${emp.id}`, toggleActiveMutation.isPending, done => toggleActiveMutation.mutate({ id: emp.id, isActive: !emp.isActive }, { onSettled: done }));
   };
 
   const activeCount = employees?.filter(e => e.isActive).length ?? 0;
   const agentCount = employees?.filter(e => e.role === 'agent' && e.isActive).length ?? 0;
   const warehouseCount = employees?.filter(e => e.role === 'warehouse' && e.isActive).length ?? 0;
+  const hasFilters = !!search || roleFilter !== "all" || statusFilter !== "all";
 
   if (!isAdmin) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <p className="text-muted-foreground">هذه الصفحة للمديرين فقط</p>
-        </div>
-      </div>
-    );
+    return <div className="p-4" dir="rtl"><PermissionDeniedState message="هذه الصفحة للمديرين فقط" /></div>;
   }
 
+  const inventoryColumns: Column<any>[] = [
+    { id: "employee", header: "الموظف", alwaysVisible: true, cell: e => <span className="flex items-center gap-2"><Avatar name={e.employeeName} size="sm" /><span className="font-medium">{e.employeeName}</span></span> },
+    { id: "total", header: "إجمالي", numeric: true, alwaysVisible: true, cell: e => <span className="font-bold tabular-nums">{n(e.total)}</span> },
+    { id: "new", header: "جديد", numeric: true, cell: e => <span className="font-bold tabular-nums text-primary">{n(e.newOrders)}</span> },
+    { id: "confirmed", header: "مؤكد", numeric: true, cell: e => <span className="font-bold tabular-nums text-[var(--success)]">{n(e.confirmed)}</span> },
+    { id: "postponed", header: "مؤجل", numeric: true, cell: e => <span className="font-bold tabular-nums text-[var(--warning)]">{n(e.postponed)}</span> },
+    { id: "noAnswer", header: "لم يرد", numeric: true, cell: e => <span className="font-bold tabular-nums text-[var(--warning)]">{n(e.noAnswer)}</span> },
+    { id: "cancelled", header: "ملغي", numeric: true, cell: e => <span className="font-bold tabular-nums text-destructive">{n(e.cancelled)}</span> },
+    { id: "first", header: "تاريخ أول توزيع", cell: e => <span className="text-xs text-muted-foreground">{fmtDay(e.firstAssigned)}</span> },
+    { id: "last", header: "آخر توزيع", cell: e => <span className="text-xs text-muted-foreground">{fmtDay(e.lastAssigned)}</span> },
+    { id: "actions", header: <span className="sr-only">إجراء</span>, alwaysVisible: true, sticky: "end", cell: e => n(e.total) > 0 ? (
+      <Button variant="outline" size="sm" className={`${TOUCH} gap-1 border-destructive/30 text-xs text-destructive hover:bg-destructive/10`} onClick={() => handleOpenReclaimDialog(e)} data-testid={`emp-reclaim-${e.employeeId}`}>
+        <RotateCcw className="h-3 w-3" aria-hidden="true" /> سحب الكل ({n(e.total)})
+      </Button>
+    ) : null },
+  ];
+  const invTotals = (allInventory ?? []).reduce((acc, e) => ({ total: acc.total + n(e.total), newOrders: acc.newOrders + n(e.newOrders), confirmed: acc.confirmed + n(e.confirmed), postponed: acc.postponed + n(e.postponed), noAnswer: acc.noAnswer + n(e.noAnswer), cancelled: acc.cancelled + n(e.cancelled) }), { total: 0, newOrders: 0, confirmed: 0, postponed: 0, noAnswer: 0, cancelled: 0 });
+
+  const rateTone = (rate: number) => rate >= 60 ? "text-[var(--success)]" : rate >= 40 ? "text-[var(--warning)]" : "text-destructive";
+  const RateBar = ({ rate }: { rate: number }) => (
+    <span className="flex items-center justify-end gap-2">
+      <span className="h-2 w-16 overflow-hidden rounded-full bg-muted" aria-hidden="true"><span className="block h-2 rounded-full bg-[var(--success)] transition-all duration-[var(--duration-base,200ms)]" style={{ width: `${Math.max(0, Math.min(100, rate))}%` }} /></span>
+      <span className={`text-xs font-bold tabular-nums ${rateTone(rate)}`}>{rate}%</span>
+    </span>
+  );
+  const perfColumns: Column<any>[] = [
+    { id: "employee", header: "الموظف", alwaysVisible: true, cell: e => <span className="flex items-center gap-2"><Avatar name={e.employeeName} size="sm" /><span className="font-medium">{e.employeeName}</span></span> },
+    { id: "total", header: "وُزِع عليه", numeric: true, cell: e => <span className="font-bold tabular-nums">{e.total}</span> },
+    { id: "confirmed", header: "مؤكد", numeric: true, cell: e => <span className="font-bold tabular-nums text-[var(--success)]">{e.confirmed}</span> },
+    { id: "cancelled", header: "ملغي", numeric: true, cell: e => <span className="font-bold tabular-nums text-destructive">{e.cancelled}</span> },
+    { id: "postponed", header: "مؤجل", numeric: true, cell: e => <span className="font-bold tabular-nums text-[var(--warning)]">{e.postponed}</span> },
+    { id: "rate", header: "نسبة التأكيد", numeric: true, alwaysVisible: true, cell: e => <RateBar rate={e.confirmRate} /> },
+  ];
+  const perfTotal = (todayPerf ?? []).reduce((s, e) => s + e.total, 0);
+  const perfConfirmed = (todayPerf ?? []).reduce((s, e) => s + e.confirmed, 0);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir="rtl" data-testid="employees-page">
       <PageHeader
         title="إدارة الموظفين"
         description="إدارة فريق العمل وبيانات الدخول"
-        icon={<Users className="h-5 w-5" />}
+        icon={<Users className="h-5 w-5" aria-hidden="true" />}
         primaryAction={
-          <Button onClick={() => { setEditingId(null); setForm(defaultForm); setShowDialog(true); }}>
-            <Plus className="h-4 w-4 ml-1" />
+          <Button className={TOUCH} onClick={() => { setEditingId(null); setForm(defaultForm); setShowDialog(true); }} data-testid="emp-add">
+            <Plus className="h-4 w-4 ml-1" aria-hidden="true" />
             إضافة موظف
           </Button>
         }
-      />
+      >
+        <section className="grid grid-cols-3 gap-3" aria-label="ملخص الفريق" data-testid="emp-summary">
+          <StatCard label="موظف نشط" value={activeCount.toLocaleString("ar-EG")} loading={isLoading} hint="من قائمة الموظفين الحالية" />
+          <StatCard label="موظف تأكيدات" value={agentCount.toLocaleString("ar-EG")} tone="primary" loading={isLoading} />
+          <StatCard label="موظف مخزن" value={warehouseCount.toLocaleString("ar-EG")} tone="info" loading={isLoading} />
+        </section>
+      </PageHeader>
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-4 text-center">
-            <p className="text-3xl font-bold text-foreground">{activeCount}</p>
-            <p className="text-xs text-muted-foreground mt-1">موظف نشط</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 text-center">
-            <p className="text-3xl font-bold text-primary">{agentCount}</p>
-            <p className="text-xs text-muted-foreground mt-1">موظف تأكيدات</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4 text-center">
-            <p className="text-3xl font-bold text-purple-600">{warehouseCount}</p>
-            <p className="text-xs text-muted-foreground mt-1">موظف مخزن</p>
-          </CardContent>
-        </Card>
-      </div>
+      {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}
 
       {/* جرد الموظفين الفعلي */}
-      {allInventory && allInventory.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Package className="h-4 w-4 text-primary" />
-              جرد الموظفين (الأوردرات الموزعة حالياً)
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="p-3 text-right font-semibold text-muted-foreground">الموظف</th>
-                    <th className="p-3 text-center font-semibold text-foreground">إجمالي</th>
-                    <th className="p-3 text-center font-semibold text-primary">جديد</th>
-                    <th className="p-3 text-center font-semibold text-[var(--success)]">مؤكد</th>
-                    <th className="p-3 text-center font-semibold text-[var(--warning)]">مؤجل</th>
-                    <th className="p-3 text-center font-semibold text-[var(--warning)]">لم يرد</th>
-                    <th className="p-3 text-center font-semibold text-destructive">ملغي</th>
-                    <th className="p-3 text-center font-semibold text-muted-foreground">تاريخ أول توزيع</th>
-                    <th className="p-3 text-center font-semibold text-muted-foreground">آخر توزيع</th>
-                    <th className="p-3 text-center font-semibold text-muted-foreground">إجراء</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {allInventory.map(emp => {
-                    const pendingOrders = Number(emp.newOrders ?? 0) + Number(emp.postponed ?? 0) + Number(emp.noAnswer ?? 0);
-                    return (
-                      <tr key={emp.employeeId} className="border-b hover:bg-muted/30 transition-colors">
-                        <td className="p-3">
-                          <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                              <span className="text-xs font-bold text-primary">{emp.employeeName.charAt(0)}</span>
-                            </div>
-                            <span className="font-medium text-foreground">{emp.employeeName}</span>
-                          </div>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="font-bold text-foreground">{Number(emp.total ?? 0)}</span>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="font-bold text-primary">{Number(emp.newOrders ?? 0)}</span>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="font-bold text-[var(--success)]">{Number(emp.confirmed ?? 0)}</span>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="font-bold text-[var(--warning)]">{Number(emp.postponed ?? 0)}</span>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="font-bold text-[var(--warning)]">{Number(emp.noAnswer ?? 0)}</span>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="font-bold text-destructive">{Number(emp.cancelled ?? 0)}</span>
-                        </td>
-                        <td className="p-3 text-center text-xs text-muted-foreground">
-                          {emp.firstAssigned ? new Date(emp.firstAssigned).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }) : '—'}
-                        </td>
-                        <td className="p-3 text-center text-xs text-muted-foreground">
-                          {emp.lastAssigned ? new Date(emp.lastAssigned).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }) : '—'}
-                        </td>
-                        <td className="p-3 text-center">
-                          {Number(emp.total ?? 0) > 0 && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs border-destructive/30 text-destructive hover:bg-destructive/10 gap-1"
-                              onClick={() => handleOpenReclaimDialog(emp)}
-                            >
-                              <RotateCcw className="h-3 w-3" />
-                              سحب الكل ({Number(emp.total ?? 0)})
-                            </Button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t bg-muted/30">
-                    <td className="p-3 font-semibold text-foreground">الإجمالي</td>
-                    <td className="p-3 text-center font-bold text-foreground">{allInventory.reduce((s, e) => s + Number(e.total ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-primary">{allInventory.reduce((s, e) => s + Number(e.newOrders ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-[var(--success)]">{allInventory.reduce((s, e) => s + Number(e.confirmed ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-[var(--warning)]">{allInventory.reduce((s, e) => s + Number(e.postponed ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-[var(--warning)]">{allInventory.reduce((s, e) => s + Number(e.noAnswer ?? 0), 0)}</td>
-                    <td className="p-3 text-center font-bold text-destructive">{allInventory.reduce((s, e) => s + Number(e.cancelled ?? 0), 0)}</td>
-                    <td className="p-3" colSpan={3}></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+      {(invLoading || (allInventory && allInventory.length > 0)) && (
+        <SectionCard title={<span className="inline-flex items-center gap-2"><Package className="h-4 w-4 text-primary" aria-hidden="true" /> جرد الموظفين (الأوردرات الموزعة حالياً)</span>} flush testId="emp-inventory">
+          <ResponsiveDataTable<any>
+            rows={allInventory ?? []}
+            columns={inventoryColumns}
+            rowKey={e => e.employeeId}
+            loading={invLoading}
+            cardsBelow="md"
+            mobileRow={e => (
+              <article className="space-y-2 rounded-[var(--radius-brand-md)] border border-border bg-card p-3" data-testid={`emp-inventory-card-${e.employeeId}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2"><Avatar name={e.employeeName} size="sm" /><span className="font-semibold">{e.employeeName}</span></span>
+                  <span className="text-sm font-bold tabular-nums">إجمالي {n(e.total)}</span>
+                </div>
+                <dl className="grid grid-cols-5 gap-1 text-center text-xs">
+                  <div><dt className="text-muted-foreground">جديد</dt><dd className="font-bold text-primary">{n(e.newOrders)}</dd></div>
+                  <div><dt className="text-muted-foreground">مؤكد</dt><dd className="font-bold text-[var(--success)]">{n(e.confirmed)}</dd></div>
+                  <div><dt className="text-muted-foreground">مؤجل</dt><dd className="font-bold text-[var(--warning)]">{n(e.postponed)}</dd></div>
+                  <div><dt className="text-muted-foreground">لم يرد</dt><dd className="font-bold text-[var(--warning)]">{n(e.noAnswer)}</dd></div>
+                  <div><dt className="text-muted-foreground">ملغي</dt><dd className="font-bold text-destructive">{n(e.cancelled)}</dd></div>
+                </dl>
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>أول توزيع {fmtDay(e.firstAssigned)} · آخر {fmtDay(e.lastAssigned)}</span>
+                  {n(e.total) > 0 && <Button variant="outline" size="sm" className={`${TOUCH} gap-1 border-destructive/30 text-xs text-destructive`} onClick={() => handleOpenReclaimDialog(e)} data-testid={`emp-reclaim-${e.employeeId}`}><RotateCcw className="h-3 w-3" aria-hidden="true" /> سحب الكل</Button>}
+                </div>
+              </article>
+            )}
+          />
+          {allInventory && allInventory.length > 0 && (
+            <p className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-muted/30 px-4 py-2.5 text-xs" data-testid="emp-inventory-totals">
+              <span className="font-semibold">الإجمالي</span>
+              <span className="tabular-nums">الكل <b>{invTotals.total}</b></span>
+              <span className="tabular-nums text-primary">جديد <b>{invTotals.newOrders}</b></span>
+              <span className="tabular-nums text-[var(--success)]">مؤكد <b>{invTotals.confirmed}</b></span>
+              <span className="tabular-nums text-[var(--warning)]">مؤجل <b>{invTotals.postponed}</b></span>
+              <span className="tabular-nums text-[var(--warning)]">لم يرد <b>{invTotals.noAnswer}</b></span>
+              <span className="tabular-nums text-destructive">ملغي <b>{invTotals.cancelled}</b></span>
+            </p>
+          )}
+        </SectionCard>
       )}
 
-      {/* جدول أداء الموظفين */}
-      {todayPerf && todayPerf.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[var(--success)]/100 animate-pulse"></span>
-                أداء الموظفين (حسب تاريخ الإنشاء)
-              </CardTitle>
-              <div className="flex items-center gap-2">
-                <CalendarDays className="h-4 w-4 text-muted-foreground" />
-                <DateRangePicker
-                  value={perfDateRange}
-                  onChange={(range) => setPerfDateRange(range)}
-                />
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="p-3 text-right font-semibold text-muted-foreground">الموظف</th>
-                    <th className="p-3 text-center font-semibold text-muted-foreground">وُزِع عليه</th>
-                    <th className="p-3 text-center font-semibold text-[var(--success)]">مؤكد</th>
-                    <th className="p-3 text-center font-semibold text-destructive">ملغي</th>
-                    <th className="p-3 text-center font-semibold text-[var(--warning)]">مؤجل</th>
-                    <th className="p-3 text-center font-semibold text-muted-foreground">نسبة التأكيد</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {todayPerf.map(emp => (
-                    <tr key={emp.employeeId} className="border-b hover:bg-muted/30 transition-colors">
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                            <span className="text-xs font-bold text-primary">{emp.employeeName.charAt(0)}</span>
-                          </div>
-                          <span className="font-medium text-foreground">{emp.employeeName}</span>
-                        </div>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className="font-bold text-foreground">{emp.total}</span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className="font-bold text-[var(--success)]">{emp.confirmed}</span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className="font-bold text-destructive">{emp.cancelled}</span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <span className="font-bold text-[var(--warning)]">{emp.postponed}</span>
-                      </td>
-                      <td className="p-3 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <div className="w-16 bg-muted rounded-full h-2">
-                            <div
-                              className="bg-[var(--success)]/100 h-2 rounded-full transition-all"
-                              style={{ width: `${emp.confirmRate}%` }}
-                            />
-                          </div>
-                          <span className={`text-xs font-bold ${
-                            emp.confirmRate >= 60 ? 'text-[var(--success)]' :
-                            emp.confirmRate >= 40 ? 'text-[var(--warning)]' : 'text-destructive'
-                          }`}>{emp.confirmRate}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t bg-muted/30">
-                    <td className="p-3 font-semibold text-foreground">الإجمالي</td>
-                    <td className="p-3 text-center font-bold text-foreground">{todayPerf.reduce((s, e) => s + e.total, 0)}</td>
-                    <td className="p-3 text-center font-bold text-[var(--success)]">{todayPerf.reduce((s, e) => s + e.confirmed, 0)}</td>
-                    <td className="p-3 text-center font-bold text-destructive">{todayPerf.reduce((s, e) => s + e.cancelled, 0)}</td>
-                    <td className="p-3 text-center font-bold text-[var(--warning)]">{todayPerf.reduce((s, e) => s + e.postponed, 0)}</td>
-                    <td className="p-3 text-center">
-                      <span className="text-xs font-bold text-muted-foreground">
-                        {todayPerf.reduce((s, e) => s + e.total, 0) > 0
-                          ? Math.round((todayPerf.reduce((s, e) => s + e.confirmed, 0) / todayPerf.reduce((s, e) => s + e.total, 0)) * 100)
-                          : 0}%
-                      </span>
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+      {/* جدول أداء الموظفين — الأرقام من reports.employeePerformance كما هي */}
+      {(perfLoading || (todayPerf && todayPerf.length > 0)) && (
+        <SectionCard
+          title={<span className="inline-flex items-center gap-2"><Activity className="h-4 w-4 text-primary" aria-hidden="true" /> أداء الموظفين (حسب تاريخ الإنشاء)</span>}
+          action={<span className="flex items-center gap-2 [&_button]:min-h-11 md:[&_button]:min-h-9"><CalendarDays className="h-4 w-4 text-muted-foreground" aria-hidden="true" /><DateRangePicker value={perfDateRange} onChange={(range) => setPerfDateRange(range)} /></span>}
+          flush
+          testId="emp-performance"
+        >
+          <ResponsiveDataTable<any>
+            rows={todayPerf ?? []}
+            columns={perfColumns}
+            rowKey={e => e.employeeId}
+            loading={perfLoading}
+            cardsBelow="md"
+            mobileRow={e => (
+              <article className="space-y-2 rounded-[var(--radius-brand-md)] border border-border bg-card p-3" data-testid={`emp-perf-card-${e.employeeId}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2"><Avatar name={e.employeeName} size="sm" /><span className="font-semibold">{e.employeeName}</span></span>
+                  <RateBar rate={e.confirmRate} />
+                </div>
+                <dl className="grid grid-cols-4 gap-1 text-center text-xs">
+                  <div><dt className="text-muted-foreground">وُزِع</dt><dd className="font-bold">{e.total}</dd></div>
+                  <div><dt className="text-muted-foreground">مؤكد</dt><dd className="font-bold text-[var(--success)]">{e.confirmed}</dd></div>
+                  <div><dt className="text-muted-foreground">ملغي</dt><dd className="font-bold text-destructive">{e.cancelled}</dd></div>
+                  <div><dt className="text-muted-foreground">مؤجل</dt><dd className="font-bold text-[var(--warning)]">{e.postponed}</dd></div>
+                </dl>
+              </article>
+            )}
+          />
+          {todayPerf && todayPerf.length > 0 && (
+            <p className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-muted/30 px-4 py-2.5 text-xs" data-testid="emp-performance-totals">
+              <span className="font-semibold">الإجمالي</span>
+              <span className="tabular-nums">وُزِع <b>{perfTotal}</b></span>
+              <span className="tabular-nums text-[var(--success)]">مؤكد <b>{perfConfirmed}</b></span>
+              <span className="tabular-nums text-destructive">ملغي <b>{(todayPerf ?? []).reduce((s, e) => s + e.cancelled, 0)}</b></span>
+              <span className="tabular-nums text-[var(--warning)]">مؤجل <b>{(todayPerf ?? []).reduce((s, e) => s + e.postponed, 0)}</b></span>
+              <span className="tabular-nums text-muted-foreground">نسبة التأكيد <b>{perfTotal > 0 ? Math.round((perfConfirmed / perfTotal) * 100) : 0}%</b></span>
+            </p>
+          )}
+        </SectionCard>
       )}
 
       {/* Login link info */}
-      <Card className="border-[var(--warning)]/30 bg-[var(--warning)]/10/50">
-        <CardContent className="p-4 flex items-center gap-3">
-          <KeyRound className="h-5 w-5 text-[var(--warning)] shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-[var(--warning)]">رابط تسجيل دخول الموظفين</p>
-            <p className="text-xs text-[var(--warning)] mt-0.5 font-mono" dir="ltr">{window.location.origin}/employee-login</p>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-[var(--warning)]/40 text-[var(--warning)] hover:bg-[var(--warning)]/15 shrink-0"
-            onClick={() => {
-              navigator.clipboard.writeText(`${window.location.origin}/employee-login`);
-              toast.success("تم نسخ الرابط");
-            }}
-          >
-            <Copy className="h-3.5 w-3.5 ml-1" />
-            نسخ
-          </Button>
-        </CardContent>
-      </Card>
+      <div className="flex items-center gap-3 rounded-[var(--radius-brand-md)] border border-[var(--info)]/30 bg-[var(--info)]/5 p-4" data-testid="emp-login-link">
+        <KeyRound className="h-5 w-5 shrink-0 text-[var(--info)]" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">رابط تسجيل دخول الموظفين</p>
+          <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground" dir="ltr">{window.location.origin}/employee-login</p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className={`${TOUCH} shrink-0`}
+          onClick={() => {
+            navigator.clipboard.writeText(`${window.location.origin}/employee-login`);
+            toast.success("تم نسخ الرابط");
+          }}
+        >
+          <Copy className="h-3.5 w-3.5 ml-1" aria-hidden="true" />
+          نسخ
+        </Button>
+      </div>
 
       {/* Employees List */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <CardTitle className="text-base">قائمة الموظفين</CardTitle>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="بحث بالاسم أو اسم المستخدم أو البريد"
-                className="h-8 w-56 text-sm"
-              />
-              <Select value={roleFilter} onValueChange={setRoleFilter}>
-                <SelectTrigger className="h-8 w-40 text-sm">
-                  <SelectValue placeholder="كل الأدوار" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل الأدوار</SelectItem>
-                  {ALL_ROLES.map(role => (
-                    <SelectItem key={role} value={role}>{ROLE_LABELS[role]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={statusFilter} onValueChange={v => setStatusFilter(v as typeof statusFilter)}>
-                <SelectTrigger className="h-8 w-32 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">كل الحالات</SelectItem>
-                  <SelectItem value="active">نشط فقط</SelectItem>
-                  <SelectItem value="inactive">غير نشط فقط</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+      <SectionCard
+        title="قائمة الموظفين"
+        action={
+          <div className="flex flex-wrap items-center gap-2 [&_[role=combobox]]:min-h-11 md:[&_[role=combobox]]:min-h-9" data-testid="emp-filters">
+            <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو اسم المستخدم أو البريد" className="w-full sm:w-56" />
+            <Select value={roleFilter} onValueChange={setRoleFilter}>
+              <SelectTrigger className="w-40 text-sm" aria-label="فلتر الدور">
+                <SelectValue placeholder="كل الأدوار" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل الأدوار</SelectItem>
+                {ALL_ROLES.map(role => (
+                  <SelectItem key={role} value={role}>{ROLE_LABELS[role]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={v => setStatusFilter(v as typeof statusFilter)}>
+              <SelectTrigger className="w-32 text-sm" aria-label="فلتر الحالة">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل الحالات</SelectItem>
+                <SelectItem value="active">نشط فقط</SelectItem>
+                <SelectItem value="inactive">غير نشط فقط</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <div className="p-8 text-center text-muted-foreground">جاري التحميل...</div>
-          ) : (
-            <div className="divide-y">
-              {employees?.map(emp => (
-                <div key={emp.id} className="flex items-center gap-4 p-4 hover:bg-muted/30 transition-colors">
-                  {/* Avatar */}
-                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                    <span className="text-sm font-bold text-primary">
-                      {emp.name.charAt(0)}
-                    </span>
+        }
+        flush
+        testId="emp-list"
+      >
+        {isLoading ? (
+          <LoadingSkeleton variant="table" rows={4} className="p-4" />
+        ) : isError ? (
+          <div className="p-4 text-sm text-destructive" role="alert">{(error as any)?.message ?? "تعذّر تحميل الموظفين"}</div>
+        ) : !employees || employees.length === 0 ? (
+          <EmptyState
+            title={hasFilters ? "لا يوجد موظفون مطابقون لهذا البحث/الفلتر." : "لا يوجد موظفون"}
+            description={hasFilters ? "عدّل البحث أو الفلاتر." : "أضف موظفاً جديداً للبدء."}
+            icon={<Users className="h-6 w-6" aria-hidden="true" />}
+          />
+        ) : (
+          <ul className="divide-y divide-border">
+            {employees.map(emp => (
+              <li key={emp.id} className="flex flex-wrap items-center gap-3 p-3 transition-colors duration-[var(--duration-fast)] hover:bg-muted/30 sm:flex-nowrap sm:p-4" data-testid={`emp-row-${emp.id}`}>
+                <Avatar name={emp.name} />
+
+                {/* Info */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold">{emp.name}</p>
+                    <RoleBadge role={emp.role} />
+                    {!emp.isActive && <StatusBadge status="inactive" label="غير نشط" tone="neutral" size="sm" icon={null} />}
+                    {(emp as any).username ? (
+                      <StatusBadge status="has_login" label={(emp as any).username} tone="success" size="sm" icon={<CheckCircle2 className="h-3 w-3" aria-hidden="true" />} />
+                    ) : (
+                      <StatusBadge status="no_login" label="بدون بيانات دخول" tone="warning" size="sm" icon={null} />
+                    )}
                   </div>
-
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-semibold text-foreground">{emp.name}</p>
-                      {!emp.isActive && (
-                        <Badge variant="outline" className="text-xs text-muted-foreground">غير نشط</Badge>
-                      )}
-                      {(emp as any).username ? (
-                        <Badge variant="outline" className="text-xs text-[var(--success)] border-[var(--success)]/40 bg-[var(--success)]/10">
-                          <CheckCircle2 className="h-3 w-3 ml-1" />
-                          {(emp as any).username}
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs text-[var(--warning)] border-[var(--warning)]/40 bg-[var(--warning)]/10">
-                          بدون بيانات دخول
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 mt-0.5">
-                      {emp.phone && (
-                        <p className="text-xs text-muted-foreground" dir="ltr">{emp.phone}</p>
-                      )}
-                      <p className="text-xs text-muted-foreground">
-                        آخر دخول: {formatLastLogin((emp as any).lastLoginAt)}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Role Badge */}
-                  <Badge className={`${ROLE_COLORS[emp.role] ?? "bg-gray-100 text-gray-700"} border-0 text-xs shrink-0`}>
-                    {ROLE_LABELS[emp.role] ?? emp.role}
-                  </Badge>
-
-                  {/* Actions */}
-                  <div className="flex gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 text-[var(--warning)] hover:text-[var(--warning)] hover:bg-[var(--warning)]/10"
-                      onClick={() => handleOpenPasswordDialog(emp)}
-                      title="تعيين بيانات الدخول"
-                    >
-                      <KeyRound className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0"
-                      onClick={() => handleEdit(emp)}
-                      title="تعديل"
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className={`h-8 w-8 p-0 ${emp.isActive ? 'text-destructive hover:text-destructive hover:bg-destructive/10' : 'text-[var(--success)] hover:text-[var(--success)] hover:bg-[var(--success)]/10'}`}
-                      onClick={() => toggleActiveMutation.mutate({ id: emp.id, isActive: !emp.isActive })}
-                      title={emp.isActive ? "تعطيل" : "تفعيل"}
-                    >
-                      {emp.isActive ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => handleOpenDeleteDialog(emp)}
-                      title="حذف نهائي"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                    {emp.phone && <span dir="ltr">{emp.phone}</span>}
+                    <span>آخر دخول: {formatLastLogin((emp as any).lastLoginAt)}</span>
                   </div>
                 </div>
-              ))}
-              {(!employees || employees.length === 0) && (
-                <div className="p-8 text-center text-muted-foreground">
-                  {search || roleFilter !== "all" || statusFilter !== "all"
-                    ? "لا يوجد موظفون مطابقون لهذا البحث/الفلتر."
-                    : "لا يوجد موظفون. أضف موظفاً جديداً للبدء."}
+
+                {/* Actions */}
+                <div className="flex w-full shrink-0 justify-end gap-1 sm:w-auto" role="group" aria-label={`إجراءات ${emp.name}`}>
+                  <Button variant="ghost" size="sm" className={`${ICON_BTN} text-[var(--info)] hover:bg-[var(--info)]/10 hover:text-[var(--info)]`} onClick={() => handleOpenPasswordDialog(emp)} aria-label="تعيين بيانات الدخول" title="تعيين بيانات الدخول" data-testid={`emp-cred-${emp.id}`}>
+                    <KeyRound className="h-4 w-4" aria-hidden="true" />
+                  </Button>
+                  <Button variant="ghost" size="sm" className={ICON_BTN} onClick={() => handleEdit(emp)} aria-label="تعديل" title="تعديل" data-testid={`emp-edit-${emp.id}`}>
+                    <Edit className="h-4 w-4" aria-hidden="true" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={`${ICON_BTN} ${emp.isActive ? 'text-destructive hover:bg-destructive/10 hover:text-destructive' : 'text-[var(--success)] hover:bg-[var(--success)]/10 hover:text-[var(--success)]'}`}
+                    onClick={() => handleToggleActive(emp)}
+                    disabled={toggleActiveMutation.isPending}
+                    aria-label={emp.isActive ? "تعطيل" : "تفعيل"}
+                    title={emp.isActive ? "تعطيل" : "تفعيل"}
+                    data-testid={`emp-toggle-${emp.id}`}
+                  >
+                    {emp.isActive ? <UserX className="h-4 w-4" aria-hidden="true" /> : <UserCheck className="h-4 w-4" aria-hidden="true" />}
+                  </Button>
+                  <Button variant="ghost" size="sm" className={`${ICON_BTN} text-destructive hover:bg-destructive/10 hover:text-destructive`} onClick={() => handleOpenDeleteDialog(emp)} aria-label="حذف نهائي" title="حذف نهائي" data-testid={`emp-delete-${emp.id}`}>
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                  </Button>
                 </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
 
       {/* Add/Edit Dialog */}
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" dir="rtl" data-testid="emp-form-dialog">
           <DialogHeader>
             <DialogTitle>{editingId ? "تعديل بيانات الموظف" : "إضافة موظف جديد"}</DialogTitle>
+            <DialogDescription>{editingId ? "تعديل الاسم والتواصل والدور — بيانات الدخول من زر المفتاح." : "موظف جديد في الفريق؛ بيانات الدخول تُعيَّن بعد الإضافة."}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>الاسم <span className="text-destructive">*</span></Label>
+              <Label htmlFor="emp-name">الاسم <span className="text-destructive">*</span></Label>
               <Input
+                id="emp-name"
                 value={form.name}
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="الاسم الكامل"
-                className="mt-1"
+                className={`mt-1 ${TOUCH}`}
+                data-testid="emp-field-name"
               />
             </div>
             <div>
-              <Label>رقم الهاتف</Label>
+              <Label htmlFor="emp-phone">رقم الهاتف</Label>
               <Input
+                id="emp-phone"
                 value={form.phone}
                 onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
                 placeholder="01xxxxxxxxx"
-                className="mt-1"
+                className={`mt-1 ${TOUCH}`}
                 dir="ltr"
+                inputMode="tel"
               />
             </div>
             <div>
-              <Label>البريد الإلكتروني</Label>
+              <Label htmlFor="emp-email">البريد الإلكتروني</Label>
               <Input
+                id="emp-email"
                 value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
                 placeholder="example@email.com"
-                className="mt-1"
+                className={`mt-1 ${TOUCH}`}
                 dir="ltr"
+                inputMode="email"
               />
             </div>
             <div>
-              <Label>الدور الوظيفي</Label>
+              <Label htmlFor="emp-role">الدور الوظيفي</Label>
               <Select value={form.role} onValueChange={v => setForm(f => ({ ...f, role: v as any }))}>
-                <SelectTrigger className="mt-1">
+                <SelectTrigger id="emp-role" className={`mt-1 ${TOUCH}`} data-testid="emp-field-role">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -755,12 +660,12 @@ export default function Employees() {
                 إجباري ساعتها عشان الموظف يتقيّد بنشاط واحد (P0 business isolation). */}
             {multiBusiness && (
               <div>
-                <Label>النشاط <span className="text-destructive">*</span></Label>
+                <Label htmlFor="emp-business">النشاط <span className="text-destructive">*</span></Label>
                 <Select
                   value={form.businessId != null ? String(form.businessId) : ""}
                   onValueChange={v => setForm(f => ({ ...f, businessId: Number(v) }))}
                 >
-                  <SelectTrigger className="mt-1">
+                  <SelectTrigger id="emp-business" className={`mt-1 ${TOUCH}`} data-testid="emp-field-business">
                     <SelectValue placeholder="اختر النشاط اللي هيتبعله الموظف" />
                   </SelectTrigger>
                   <SelectContent>
@@ -772,13 +677,15 @@ export default function Employees() {
               </div>
             )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setShowDialog(false); setEditingId(null); setForm(defaultForm); }}>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" className={TOUCH} onClick={() => { setShowDialog(false); setEditingId(null); setForm(defaultForm); }}>
               إلغاء
             </Button>
             <Button
+              className={TOUCH}
               onClick={handleSubmit}
               disabled={createMutation.isPending || updateMutation.isPending}
+              data-testid="emp-save"
             >
               {editingId ? "حفظ التعديلات" : "إضافة الموظف"}
             </Button>
@@ -788,66 +695,66 @@ export default function Employees() {
 
       {/* Password / Credentials Dialog */}
       <Dialog open={showPasswordDialog} onOpenChange={open => { setShowPasswordDialog(open); if (!open) setCredSaved(false); }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" dir="rtl" data-testid="emp-cred-dialog">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <KeyRound className="h-5 w-5 text-[var(--warning)]" />
+              <KeyRound className="h-5 w-5 text-[var(--info)]" aria-hidden="true" />
               بيانات دخول: {passwordEmpName}
             </DialogTitle>
+            <DialogDescription>عيّن اسم مستخدم وكلمة مرور للموظف لتمكينه من الدخول لمساحة العمل.</DialogDescription>
           </DialogHeader>
 
           {credSaved ? (
             <div className="space-y-4">
-              <div className="bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-lg p-4 text-center">
-                <CheckCircle2 className="h-8 w-8 text-[var(--success)] mx-auto mb-2" />
+              <div className="rounded-[var(--radius-brand-md)] border border-[var(--success)]/30 bg-[var(--success)]/10 p-4 text-center" role="status">
+                <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-[var(--success)]" aria-hidden="true" />
                 <p className="font-semibold text-[var(--success)]">تم حفظ بيانات الدخول بنجاح!</p>
-                <p className="text-sm text-[var(--success)] mt-1">يمكن للموظف الآن تسجيل الدخول</p>
+                <p className="mt-1 text-sm text-muted-foreground">يمكن للموظف الآن تسجيل الدخول — تظهر البيانات مرة واحدة هنا فقط.</p>
               </div>
-              <div className="bg-muted rounded-lg p-3 space-y-2 text-sm font-mono">
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">الرابط:</span>
-                  <span className="text-xs" dir="ltr">{window.location.origin}/employee-login</span>
+              <dl className="space-y-2 rounded-[var(--radius-brand-md)] bg-muted p-3 font-mono text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <dt className="text-muted-foreground">الرابط:</dt>
+                  <dd className="truncate text-xs" dir="ltr">{window.location.origin}/employee-login</dd>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">اسم المستخدم:</span>
-                  <span dir="ltr">{credUsername}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <dt className="text-muted-foreground">اسم المستخدم:</dt>
+                  <dd dir="ltr">{credUsername}</dd>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">كلمة المرور:</span>
-                  <span dir="ltr">{credPassword}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <dt className="text-muted-foreground">كلمة المرور:</dt>
+                  <dd dir="ltr">{credPassword}</dd>
                 </div>
-              </div>
-              <Button className="w-full" variant="outline" onClick={handleCopyCredentials}>
-                <Copy className="h-4 w-4 ml-2" />
+              </dl>
+              <Button className={`w-full ${TOUCH}`} variant="outline" onClick={handleCopyCredentials}>
+                <Copy className="h-4 w-4 ml-2" aria-hidden="true" />
                 نسخ بيانات الدخول
               </Button>
             </div>
           ) : (
             <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                عيّن اسم مستخدم وكلمة مرور للموظف لتمكينه من الدخول لمساحة العمل.
-              </p>
-
               {/* Username */}
               <div>
-                <Label>اسم المستخدم <span className="text-destructive">*</span></Label>
+                <Label htmlFor="emp-cred-username">اسم المستخدم <span className="text-destructive">*</span></Label>
                 <Input
+                  id="emp-cred-username"
                   value={credUsername}
                   onChange={e => setCredUsername(e.target.value)}
                   placeholder="مثال: ahmed.agent"
-                  className="mt-1"
+                  className={`mt-1 ${TOUCH}`}
                   dir="ltr"
+                  autoComplete="off"
+                  data-testid="emp-cred-username"
                 />
-                <p className="text-xs text-muted-foreground mt-1">لاتين وأرقام ونقطة فقط، بدون مسافات</p>
+                <p className="mt-1 text-xs text-muted-foreground">لاتين وأرقام ونقطة فقط، بدون مسافات</p>
               </div>
 
               {/* Password */}
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <Label>كلمة المرور <span className="text-destructive">*</span></Label>
+                <div className="mb-1 flex items-center justify-between">
+                  <Label htmlFor="emp-cred-password">كلمة المرور <span className="text-destructive">*</span></Label>
                   <button
                     type="button"
-                    className="text-xs text-primary hover:underline"
+                    className="min-h-11 px-2 text-xs text-primary hover:underline md:min-h-0"
                     onClick={generatePassword}
                   >
                     توليد تلقائي
@@ -855,34 +762,40 @@ export default function Employees() {
                 </div>
                 <div className="relative">
                   <Input
+                    id="emp-cred-password"
                     type={showCredPassword ? "text" : "password"}
                     value={credPassword}
                     onChange={e => setCredPassword(e.target.value)}
                     placeholder="6 أحرف على الأقل"
-                    className="pl-10"
+                    className={`pl-12 ${TOUCH}`}
                     dir="ltr"
+                    autoComplete="new-password"
+                    data-testid="emp-cred-password"
                   />
                   <button
                     type="button"
                     onClick={() => setShowCredPassword(!showCredPassword)}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute left-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground hover:text-foreground"
+                    aria-label={showCredPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+                    aria-pressed={showCredPassword}
                   >
-                    {showCredPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {showCredPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
                   </button>
                 </div>
               </div>
             </div>
           )}
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setShowPasswordDialog(false); setCredSaved(false); }}>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" className={TOUCH} onClick={() => { setShowPasswordDialog(false); setCredSaved(false); }}>
               {credSaved ? "إغلاق" : "إلغاء"}
             </Button>
             {!credSaved && (
               <Button
+                className={TOUCH}
                 onClick={handleSaveCredentials}
                 disabled={setCredentialsMutation.isPending}
-                className="bg-[var(--warning)] hover:bg-[var(--warning)] text-white"
+                data-testid="emp-cred-save"
               >
                 {setCredentialsMutation.isPending ? "جاري الحفظ..." : "حفظ بيانات الدخول"}
               </Button>
@@ -893,31 +806,34 @@ export default function Employees() {
 
       {/* Delete Employee Dialog */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" dir="rtl" data-testid="emp-delete-dialog">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Trash2 className="h-5 w-5 text-destructive" />
+              <Trash2 className="h-5 w-5 text-destructive" aria-hidden="true" />
               حذف الموظف: {deleteEmpName}
             </DialogTitle>
+            <DialogDescription>حذف نهائي لا يمكن التراجع عنه.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4">
-              <p className="text-sm text-destructive font-medium">
+            <div className="rounded-[var(--radius-brand-md)] border border-destructive/30 bg-destructive/10 p-4" role="alert">
+              <p className="text-sm font-medium text-destructive">
                 سيتم حذف بيانات <strong>{deleteEmpName}</strong> نهائياً من النظام.
               </p>
-              <p className="text-xs text-destructive mt-2">
+              <p className="mt-2 text-xs text-destructive">
                 تأكد أنك سحبت جميع أوردراته أولاً قبل الحذف. هذا الإجراء لا يمكن التراجع عنه.
               </p>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" className={TOUCH} onClick={() => setShowDeleteDialog(false)}>
               إلغاء
             </Button>
             <Button
-              onClick={() => deleteEmpId && deleteMutation.mutate({ id: deleteEmpId })}
+              variant="destructive"
+              className={TOUCH}
+              onClick={handleDelete}
               disabled={deleteMutation.isPending}
-              className="bg-destructive hover:bg-destructive text-white"
+              data-testid="emp-delete-confirm"
             >
               {deleteMutation.isPending ? "جاري الحذف..." : "حذف نهائي"}
             </Button>
@@ -927,31 +843,34 @@ export default function Employees() {
 
       {/* Reclaim Orders Dialog */}
       <Dialog open={showReclaimDialog} onOpenChange={setShowReclaimDialog}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" dir="rtl" data-testid="emp-reclaim-dialog">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-[var(--warning)]" />
+              <AlertTriangle className="h-5 w-5 text-[var(--warning)]" aria-hidden="true" />
               استرداد أوردرات: {reclaimEmpName}
             </DialogTitle>
+            <DialogDescription>سحب كل الأوردرات الموزّعة على هذا الموظف.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-4">
-              <p className="text-sm text-destructive font-medium">
+            <div className="rounded-[var(--radius-brand-md)] border border-destructive/30 bg-destructive/10 p-4" role="alert">
+              <p className="text-sm font-medium text-destructive">
                 سيتم سحب كل الأوردرات من هذا الموظف (بما فيها المؤكدة والمطبوعة) وإرجاعها للوحة التحكم بدون توزيع.
               </p>
-              <p className="text-xs text-destructive mt-2">
+              <p className="mt-2 text-xs text-destructive">
                 هذا الإجراء لا يمكن التراجع عنه.
               </p>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowReclaimDialog(false)}>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" className={TOUCH} onClick={() => setShowReclaimDialog(false)}>
               إلغاء
             </Button>
             <Button
+              variant="destructive"
+              className={TOUCH}
               onClick={handleReclaim}
               disabled={reclaimMutation.isPending}
-              className="bg-destructive hover:bg-destructive text-white"
+              data-testid="emp-reclaim-confirm"
             >
               {reclaimMutation.isPending ? "جاري السحب..." : "تأكيد سحب الكل"}
             </Button>
