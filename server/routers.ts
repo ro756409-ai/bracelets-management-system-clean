@@ -46,7 +46,7 @@ import { parseFacebookOrder } from "../shared/facebookOrderParser";
 import { matchImportItem } from "./productMatching";
 import { analyzePaste } from "./pasteLines";
 import { ORDER_ENTRY_MODES, DEFAULT_ORDER_ENTRY_MODE } from "../shared/orderEntryMode";
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, UNAUTHED_ERR_MSG } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import {
@@ -106,7 +106,14 @@ import {
   ScopeUnavailableError,
   type ScopedEntity,
 } from "./tenantScope";
-import { eq, and, gte, lte, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql, inArray, or, isNull } from "drizzle-orm";
+import {
+  broadcastScopeCondition,
+  employeeInTeamScope,
+  realScopeIds,
+  taskScopeCondition,
+  type TeamScope,
+} from "./teamScope";
 import { orders as ordersTable } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
 import {
@@ -407,6 +414,85 @@ function requireTenantId(emp: { tenantId: number | null }): number {
 function empScope(ctx: any): ScopeCtx {
   const emp = ctx.employee;
   return { tenantId: requireTenantId(emp), user: null, employee: emp };
+}
+
+/**
+ * نطاق الرسائل والمهام لجلسة **البوابة** (لوحة المدير/الموظف): tenant من صف الموظف، والأنشطة
+ * = نشاط الموظف بس (`empScope`) — نفس نطاق باقي لوحة المدير. موظف/مدير بلا نشاط → `[-1]`.
+ */
+async function portalTeamScope(ctx: any): Promise<TeamScope> {
+  if (!ctx?.employee)
+    throw new TRPCError({ code: "UNAUTHORIZED", message: "يرجى تسجيل الدخول أولاً" });
+  const scope = empScope(ctx);
+  const businessIds = (await scopeBusinessIds(scope, {})) ?? [NO_BUSINESS];
+  return { tenantId: scope.tenantId!, businessIds };
+}
+
+/** نفس الشيء لجلسة **الويب** (المالك/الأدمن): كل أنشطة tenant الجلسة — ولا نشاط من tenant تاني. */
+async function sessionTeamScope(ctx: any): Promise<TeamScope> {
+  if (ctx?.tenantId == null)
+    throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
+  const businessIds = (await scopeBusinessIds(ctx, {})) ?? [NO_BUSINESS];
+  return { tenantId: ctx.tenantId, businessIds };
+}
+
+const NO_TEAM_BUSINESS_MESSAGE = "لا يوجد نشاط مرتبط بحسابك";
+
+/** آخر رسالة نشطة داخل النطاق — صفر صفوف لو النطاق فاضي. */
+async function getScopedActiveBroadcast(scope: TeamScope) {
+  const db = await getDb();
+  if (!db) return null;
+  const { broadcastMessages } = await import("../drizzle/schema");
+  const [msg] = await db
+    .select()
+    .from(broadcastMessages)
+    .where(and(eq(broadcastMessages.isActive, true), broadcastScopeCondition(scope)))
+    .orderBy(desc(broadcastMessages.createdAt))
+    .limit(1);
+  return msg ?? null;
+}
+
+/** إرسال: إلغاء رسائل النطاق ثم صف لكل نشاط في النطاق — في معاملة واحدة (لا كتابة جزئية). */
+async function sendScopedBroadcast(scope: TeamScope, message: string, sentBy: number, sentByName: string) {
+  const targets = realScopeIds(scope);
+  if (targets.length === 0)
+    throw new TRPCError({ code: "FORBIDDEN", message: NO_TEAM_BUSINESS_MESSAGE });
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const { broadcastMessages } = await import("../drizzle/schema");
+  await db.transaction(async tx => {
+    await tx
+      .update(broadcastMessages)
+      .set({ isActive: false })
+      .where(and(eq(broadcastMessages.isActive, true), broadcastScopeCondition(scope)));
+    await tx.insert(broadcastMessages).values(
+      targets.map(businessId => ({ businessId, message, sentBy, sentByName, isActive: true }))
+    );
+  });
+  return { success: true };
+}
+
+/** إلغاء الرسائل النشطة داخل النطاق بس. */
+async function clearScopedBroadcast(scope: TeamScope) {
+  if (realScopeIds(scope).length === 0)
+    throw new TRPCError({ code: "FORBIDDEN", message: NO_TEAM_BUSINESS_MESSAGE });
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const { broadcastMessages } = await import("../drizzle/schema");
+  await db
+    .update(broadcastMessages)
+    .set({ isActive: false })
+    .where(and(eq(broadcastMessages.isActive, true), broadcastScopeCondition(scope)));
+  return { success: true };
+}
+
+/** المهمة موجودة وداخل النطاق؟ NOT_FOUND لو مش موجودة، FORBIDDEN لو تابعة لنطاق تاني. */
+async function assertTaskInScope(db: any, tasks: any, taskId: number, owned: any): Promise<void> {
+  const [mine] = await db.select({ id: tasks.id }).from(tasks).where(owned).limit(1);
+  if (mine) return;
+  const [exists] = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, taskId)).limit(1);
+  if (!exists) throw new TRPCError({ code: "NOT_FOUND", message: "المهمة غير موجودة" });
+  throw new TRPCError({ code: "FORBIDDEN", message: "لا يمكنك الوصول لهذه المهمة" });
 }
 
 /**
@@ -5279,48 +5365,32 @@ export const appRouter = router({
 
     // ==================== BROADCAST MESSAGES ====================
     // إرسال رسالة لجميع الموظفين (من لوحة المدير - employee session)
+    // P0 عزل: الرسالة بتتكتب بنشاط المدير، والإلغاء والقراءة على نطاق الجلسة بس — كان الإرسال
+    // بيعطّل رسائل **كل** الشركات، والقراءة بترجّع آخر رسالة في النظام كله.
     sendBroadcast: managerPortalProcedure
       .input(
-        z.object({
-          message: z.string().min(1).max(500),
-        })
+        z
+          .object({
+            message: z.string().min(1).max(500),
+          })
+          .strict()
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { broadcastMessages } = await import("../drizzle/schema");
-        await db.update(broadcastMessages).set({ isActive: false });
-        await db.insert(broadcastMessages).values({
-          message: input.message,
-          sentBy: emp.id,
-          sentByName: emp.name,
-          isActive: true,
-        });
-        return { success: true };
+        const scope = await portalTeamScope(ctx);
+        return sendScopedBroadcast(scope, input.message, emp.id, emp.name);
       }),
 
-    // حذف الرسالة النشطة (من لوحة المدير - employee session)
-    clearBroadcast: managerPortalProcedure.mutation(async () => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { broadcastMessages } = await import("../drizzle/schema");
-      await db.update(broadcastMessages).set({ isActive: false });
-      return { success: true };
+    // حذف الرسالة النشطة (من لوحة المدير - employee session) — نطاق الجلسة بس
+    clearBroadcast: managerPortalProcedure.mutation(async ({ ctx }) => {
+      const scope = await portalTeamScope(ctx);
+      return clearScopedBroadcast(scope);
     }),
 
-    // جلب الرسالة النشطة (للموظفين - employee session)
-    activeBroadcast: employeePortalProcedure.query(async () => {
-      const db = await getDb();
-      if (!db) return null;
-      const { broadcastMessages } = await import("../drizzle/schema");
-      const [msg] = await db
-        .select()
-        .from(broadcastMessages)
-        .where(eq(broadcastMessages.isActive, true))
-        .orderBy(desc(broadcastMessages.createdAt))
-        .limit(1);
-      return msg ?? null;
+    // جلب الرسالة النشطة (للموظفين - employee session) — من نشاط الموظف بس
+    activeBroadcast: employeePortalProcedure.query(async ({ ctx }) => {
+      const scope = await portalTeamScope(ctx);
+      return getScopedActiveBroadcast(scope);
     }),
 
     // ==================== الأوردرات المكررة ====================
@@ -6331,47 +6401,30 @@ export const appRouter = router({
   // ==================== BROADCAST (Admin OAuth) ====================
   broadcast: router({
     // جلب الرسالة النشطة (للأدمن عبر Manus OAuth)
-    getActive: protectedProcedure.query(async () => {
-      const db = await getDb();
-      if (!db) return null;
-      const { broadcastMessages } = await import("../drizzle/schema");
-      const [msg] = await db
-        .select()
-        .from(broadcastMessages)
-        .where(eq(broadcastMessages.isActive, true))
-        .orderBy(desc(broadcastMessages.createdAt))
-        .limit(1);
-      return msg ?? null;
+    // P0 عزل: كل الثلاثة على أنشطة tenant الجلسة بس (المالك/الأدمن = كل أنشطة شركته، مش المنصة).
+    getActive: protectedProcedure.query(async ({ ctx }) => {
+      const scope = await sessionTeamScope(ctx);
+      return getScopedActiveBroadcast(scope);
     }),
 
-    // إرسال رسالة (للأدمن عبر Manus OAuth)
+    // إرسال رسالة (للأدمن) — صف لكل نشاط في نطاق الجلسة، فكل موظف يشوفها في نشاطه
     send: adminProcedure
       .input(
-        z.object({
-          message: z.string().min(1).max(500),
-        })
+        z
+          .object({
+            message: z.string().min(1).max(500),
+          })
+          .strict()
       )
       .mutation(async ({ ctx, input }) => {
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const { broadcastMessages } = await import("../drizzle/schema");
-        await db.update(broadcastMessages).set({ isActive: false });
-        await db.insert(broadcastMessages).values({
-          message: input.message,
-          sentBy: ctx.user.id,
-          sentByName: ctx.user.name ?? "مدير",
-          isActive: true,
-        });
-        return { success: true };
+        const scope = await sessionTeamScope(ctx);
+        return sendScopedBroadcast(scope, input.message, ctx.user.id, ctx.user.name ?? "مدير");
       }),
 
-    // حذف الرسالة (للأدمن عبر Manus OAuth)
-    clear: adminProcedure.mutation(async () => {
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      const { broadcastMessages } = await import("../drizzle/schema");
-      await db.update(broadcastMessages).set({ isActive: false });
-      return { success: true };
+    // حذف الرسالة (للأدمن) — نطاق الجلسة بس
+    clear: adminProcedure.mutation(async ({ ctx }) => {
+      const scope = await sessionTeamScope(ctx);
+      return clearScopedBroadcast(scope);
     }),
   }),
 
@@ -6435,115 +6488,136 @@ export const appRouter = router({
 
   // نظام توزيع المهام
   tasks: router({
-    // إنشاء مهمة جديدة (مدير فقط)
+    // P0 عزل: كل عمليات المهام على نطاق جلسة البوابة (tenant الموظف + نشاطه) — المستلم والمهمة
+    // والنشاط والمنشئ لازم يكونوا في نفس الـtenant. قبل كده: المستلم بلا تحقق، businessId
+    // مابيتكتبش، والقائمة بلا employeeId بترجّع مهام **كل الشركات**.
+    // إنشاء مهمة جديدة (إدارة فقط — protectedProcedure = جلسة admin-tier)
     create: protectedProcedure
       .input(
-        z.object({
-          title: z.string().min(2),
-          description: z.string().optional(),
-          assignedTo: z.number().optional(), // null = لجميع الموظفين
-        })
+        z
+          .object({
+            title: z.string().min(2),
+            description: z.string().optional(),
+            assignedTo: z.number().int().positive().optional(), // غياب = مهمة عامة لنشاط المدير
+          })
+          .strict()
       )
       .mutation(async ({ input, ctx }) => {
+        const scope = await portalTeamScope(ctx);
         const db = await getDb();
-        if (!db) throw new Error("قاعدة البيانات غير متاحة");
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
         const { tasks } = await import("../drizzle/schema");
 
-        // جلب اسم الموظف المحدد
+        let businessId: number;
         let assignedToName: string | null = null;
-        if (input.assignedTo) {
-          const emp = await db
+        if (input.assignedTo != null) {
+          const [assignee] = await db
             .select()
             .from(employees)
             .where(eq(employees.id, input.assignedTo))
             .limit(1);
-          assignedToName = emp[0]?.name ?? null;
+          if (!assignee) throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
+          if (!employeeInTeamScope(assignee, scope))
+            throw new TRPCError({ code: "FORBIDDEN", message: "الموظف ده خارج نطاقك" });
+          businessId = assignee.businessId!;
+          assignedToName = assignee.name;
+        } else {
+          const own = realScopeIds(scope);
+          if (own.length === 0)
+            throw new TRPCError({ code: "FORBIDDEN", message: NO_TEAM_BUSINESS_MESSAGE });
+          if (own.length > 1)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "حدد الموظف — نطاقك فيه أكتر من نشاط" });
+          businessId = own[0];
         }
 
-        // جلب اسم المدير المنشئ
-        const creatorEmp = await db
-          .select()
-          .from(employees)
-          .where(eq(employees.id, ctx.user?.id ?? 0))
-          .limit(1);
-        const createdByName = creatorEmp[0]?.name ?? ctx.user?.name ?? "المدير";
+        // اسم المنشئ من صف الموظف الحقيقي للجلسة (مش من العميل)
+        const creatorName = (ctx as any).employee?.name ?? ctx.user?.name ?? "المدير";
 
         await db.insert(tasks).values({
+          businessId,
           title: input.title,
           description: input.description ?? null,
           assignedTo: input.assignedTo ?? null,
           assignedToName,
           createdBy: ctx.user?.id ?? 0,
-          createdByName,
+          createdByName: creatorName,
         });
         return { success: true };
       }),
 
-    // قائمة المهام (المدير يرى الكل، الموظف يرى مهامه فقط)
+    // قائمة المهام — نطاق الجلسة دايمًا؛ employeeId (لو اتبعت) لازم يكون موظف في النطاق
     list: protectedProcedure
       .input(
-        z.object({
-          employeeId: z.number().optional(),
-          status: z.string().optional(),
-        })
+        z
+          .object({
+            employeeId: z.number().int().positive().optional(),
+            status: z.string().optional(),
+          })
+          .strict()
       )
       .query(async ({ input, ctx }) => {
-        if (input.employeeId != null)
-          await requireOwned(ctx, "employee", input.employeeId);
+        const scope = await portalTeamScope(ctx);
         const db = await getDb();
         if (!db) return [];
         const { tasks } = await import("../drizzle/schema");
 
-        const conditions: any[] = [];
+        const conditions: any[] = [taskScopeCondition(scope)];
+        if (input.employeeId != null) {
+          const [target] = await db
+            .select()
+            .from(employees)
+            .where(eq(employees.id, input.employeeId))
+            .limit(1);
+          if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
+          if (!employeeInTeamScope(target, scope))
+            throw new TRPCError({ code: "FORBIDDEN", message: "الموظف ده خارج نطاقك" });
+          // الموظف يرى مهامه + المهام العامة (داخل النطاق)
+          conditions.push(or(eq(tasks.assignedTo, input.employeeId), isNull(tasks.assignedTo)));
+        }
         if (input.status && input.status !== "all") {
           conditions.push(eq(tasks.status, input.status as any));
         }
-        if (input.employeeId) {
-          // الموظف يرى مهامه + المهام العامة
-          conditions.push(
-            sql`(${tasks.assignedTo} = ${input.employeeId} OR ${tasks.assignedTo} IS NULL)`
-          );
-        }
 
-        const where = conditions.length > 0 ? and(...conditions) : undefined;
-        const rows = await db
+        return db
           .select()
           .from(tasks)
-          .where(where)
+          .where(and(...conditions))
           .orderBy(desc(tasks.createdAt))
           .limit(100);
-        return rows;
       }),
 
-    // تحديث حالة المهمة
+    // تحديث حالة المهمة — الملكية في نفس شرط الـUPDATE (لا تعديل خارج النطاق)
     updateStatus: protectedProcedure
       .input(
-        z.object({
-          taskId: z.number(),
-          status: z.enum(["new", "in_progress", "done"]),
-        })
+        z
+          .object({
+            taskId: z.number().int().positive(),
+            status: z.enum(["new", "in_progress", "done"]),
+          })
+          .strict()
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx, "task", input.taskId);
+        const scope = await portalTeamScope(ctx);
         const db = await getDb();
-        if (!db) throw new Error("قاعدة البيانات غير متاحة");
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
         const { tasks } = await import("../drizzle/schema");
-        await db
-          .update(tasks)
-          .set({ status: input.status })
-          .where(eq(tasks.id, input.taskId));
+        const owned = and(eq(tasks.id, input.taskId), taskScopeCondition(scope));
+        await assertTaskInScope(db, tasks, input.taskId, owned!);
+        await db.update(tasks).set({ status: input.status }).where(owned);
         return { success: true };
       }),
 
-    // حذف مهمة (مدير فقط)
+    // حذف مهمة (إدارة فقط) — نفس الحارس
     delete: protectedProcedure
-      .input(z.object({ taskId: z.number() }))
+      .input(z.object({ taskId: z.number().int().positive() }).strict())
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(ctx, "task", input.taskId);
+        const scope = await portalTeamScope(ctx);
         const db = await getDb();
-        if (!db) throw new Error("قاعدة البيانات غير متاحة");
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
         const { tasks } = await import("../drizzle/schema");
-        await db.delete(tasks).where(eq(tasks.id, input.taskId));
+        const owned = and(eq(tasks.id, input.taskId), taskScopeCondition(scope));
+        await assertTaskInScope(db, tasks, input.taskId, owned!);
+        await db.delete(tasks).where(owned);
         return { success: true };
       }),
   }),
