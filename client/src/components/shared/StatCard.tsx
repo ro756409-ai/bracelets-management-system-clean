@@ -45,6 +45,9 @@ export type StatCardProps = {
   className?: string;
 };
 
+/** صفر عددي حقيقي (٠ أو 0) — قيمة مثل «٠ ج.م» أو «٠%» لا تُعامل كذلك. */
+const isZeroValue = (value: ReactNode) => typeof value === "string" ? /^[0٠]$/.test(value.trim()) : value === 0;
+
 /**
  * One number with a label. Six different stat-card styles existed across the app; this
  * is the single one. Numbers use tabular figures so columns of cards line up in RTL.
@@ -66,14 +69,18 @@ export function StatCard({
   // Design System V2: label on top, large number below, trend last; the tinted icon tile sits
   // opposite the text (visually left in RTL) rather than leading it.
   const body = (
-    <CardContent className="flex items-start justify-between gap-3 p-4">
-      <div className="min-w-0 space-y-1 text-right">
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+    <CardContent className="flex h-full items-start justify-between gap-3 p-4" data-slot="stat-card-body">
+      <div className="flex min-w-0 flex-1 flex-col gap-1 text-right">
+        {/* على الهاتف: حجز سطرين للعنوان فتتطابق محاذاة القيمة وارتفاع البطاقات بين الصفوف */}
+        <p className="line-clamp-2 min-h-[2lh] text-xs font-medium text-muted-foreground md:min-h-0">{label}</p>
         {loading ? (
           <Skeleton className="h-8 w-16" />
         ) : (
-          <p className={cn("text-[26px] font-bold leading-none tabular-nums", TONE_TEXT[tone])}>
+          // ارتفاع ثابت للسطر: الصفر الحقيقي «٠» (حرف صغير بصريًا) والأرقام الكبيرة يأخذان نفس المساحة
+          <p className={cn("flex min-h-8 items-center gap-2 text-[26px] font-bold leading-none tabular-nums", TONE_TEXT[tone])} data-testid="stat-card-value">
             {value}
+            {/* «٠» العربي يُرسم نقطة صغيرة فيبدو فراغًا: نُبقي الصفر كما هو ونضيف وصفًا مكتوبًا بجانبه (لا إخفاء ولا شرطة) */}
+            {isZeroValue(value) && <span className="text-xs font-medium text-muted-foreground" data-testid="stat-card-zero-note">لا يوجد</span>}
           </p>
         )}
         {trend && !loading && (
@@ -91,7 +98,7 @@ export function StatCard({
           </p>
         )}
         {hint && !loading && (
-          <p className="text-[11px] text-muted-foreground/80">{hint}</p>
+          <p className="line-clamp-2 min-h-[2lh] text-[11px] text-muted-foreground/80 md:min-h-0" title={hint}>{hint}</p>
         )}
       </div>
       {icon && (
@@ -109,7 +116,9 @@ export function StatCard({
 
   if (!interactive) {
     return (
-      <Card className={cn("shadow-[var(--shadow-card)]", className)}>{body}</Card>
+      // gap-0 py-0: Card الأساسي يضيف py-6 gap-6 فوق p-4 → فراغ ≈40px أعلى وأسفل (أوضح ما يكون مع القيمة صفر)؛
+      // h-full: البطاقات في صف الشبكة الواحد بنفس الارتفاع دون فراغ داخلي مزعج.
+      <Card className={cn("h-full gap-0 py-0 shadow-[var(--shadow-card)]", className)}>{body}</Card>
     );
   }
 
@@ -126,7 +135,7 @@ export function StatCard({
         }
       }}
       className={cn(
-        "cursor-pointer shadow-[var(--shadow-card)] transition-colors",
+        "h-full cursor-pointer gap-0 py-0 shadow-[var(--shadow-card)] transition-colors",
         "hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         active && "border-primary ring-1 ring-primary",
         className

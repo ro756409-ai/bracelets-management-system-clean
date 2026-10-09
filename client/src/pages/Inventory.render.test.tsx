@@ -69,7 +69,8 @@ describe("📊 الملخص الحقيقي ومصادره", () => {
     expect(card("آخر جرد")).toContain("غير متاح"); expect(card("آخر جرد")).toContain("اختر نشاطًا واحدًا");
     expect(st.enabled.stocktakes).toBe(false);
     expect(s.textContent).not.toMatch(/قيمة المخزون|تكلفة/);
-    expect(screen.getByTestId("workspace-tabs")).toBeTruthy();
+    // تبويبات الـWorkspace يرسمها DashboardLayout مرة واحدة — الصفحة لا ترسم نسخة ثانية
+    expect(screen.queryAllByTestId("workspace-tabs")).toHaveLength(0);
   });
   it("نطاق نشاط واحد: الاستعلامات تحمل businessIds [1] وآخر جرد من stocktakeList؛ ScopeBar تغيّر النطاق", () => {
     setup(); st.scope = [1]; st.currentBusinessId = 1;

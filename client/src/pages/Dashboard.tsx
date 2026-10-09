@@ -429,8 +429,8 @@ export default function Dashboard() {
             <LoadingSkeleton variant="cards" rows={3} />
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <StatCard label="شُحنت في الفترة" value={fmt(shippedCount)} hint="حسب تاريخ الشحن (shippedAt)" icon={<Truck className="h-5 w-5" aria-hidden="true" />} tone="primary" />
-              <StatCard label="قيمة الموصَّل في الفترة" value={<>{fmt(deliveredValue)} <span className="text-sm font-normal text-muted-foreground">ج.م</span></>} hint="مجموع قيمة الأوردرات الموصَّلة (deliveredAt) — ليست نقدًا محصّلًا" icon={<PackageCheck className="h-5 w-5" aria-hidden="true" />} tone="success" />
+              <StatCard label="شُحنت في الفترة" value={fmt(shippedCount)} hint="حسب تاريخ الشحن" icon={<Truck className="h-5 w-5" aria-hidden="true" />} tone="primary" />
+              <StatCard label="قيمة الموصَّل في الفترة" value={<>{fmt(deliveredValue)} <span className="text-sm font-normal text-muted-foreground">ج.م</span></>} hint="مجموع قيمة الأوردرات الموصَّلة حسب تاريخ التسليم — ليست نقدًا محصّلًا" icon={<PackageCheck className="h-5 w-5" aria-hidden="true" />} tone="success" />
               <Card className="shadow-[var(--shadow-card)]" data-testid="dashboard-collection-unavailable">
                 <CardContent className="flex items-start justify-between gap-3 p-4">
                   <div className="min-w-0 space-y-1 text-right">

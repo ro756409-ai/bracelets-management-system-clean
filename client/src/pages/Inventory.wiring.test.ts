@@ -9,12 +9,14 @@ import fs from "fs";
 const src = fs.readFileSync("client/src/pages/Inventory.tsx", "utf-8");
 
 describe("🔑 Inventory Workspace — toolkit المرحلة A (مفيش أنماط مكرّرة)", () => {
-  it("🔑 رأس موحّد PageHeader + WorkspaceTabs (تبويبات المخزون من NavConfig)", () => {
+  it("🔑 رأس موحّد PageHeader؛ تبويبات المخزون من الـShell فقط (لا نسخة ثانية في الصفحة)", () => {
     expect(src).toContain('from "@/components/shared"');
     expect(src).toContain("<PageHeader");
-    expect(src).toContain("<WorkspaceTabs tabs={inventoryTabs} />");
-    expect(src).toContain('PRIMARY_DESTINATIONS.find(d => d.key === "inventory")');
-    expect(src).toContain("visibleChildren(dest, isAdmin, permissions)");
+    // DashboardLayout يرسم WorkspaceTabs للوجهة النشطة من NavConfig — الصفحة لا تكررها
+    expect(src).not.toMatch(/<WorkspaceTabs\b/);
+    const layout = fs.readFileSync("client/src/components/DashboardLayout.tsx", "utf-8");
+    expect(layout).toContain("<WorkspaceTabs tabs={workspaceTabs} />");
+    expect(layout).toContain("visibleChildren(activeDest, isAdmin, permissions)");
     // مفيش h1 يدوي مكرّر للرأس بعد التوحيد.
     expect(src).not.toContain('<h1 className="text-2xl font-bold text-foreground">المخزن والجرد</h1>');
   });

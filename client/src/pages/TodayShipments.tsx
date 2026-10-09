@@ -77,8 +77,8 @@ export default function TodayShipments() {
   // that reads like "there are no shipments today".
   if (shipmentsError) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center" dir="rtl">
-        <Truck className="h-10 w-10 text-muted-foreground" />
+      <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center" dir="rtl">
+        <Truck className="h-10 w-10 text-muted-foreground" aria-hidden="true" />
         <div>
           <p className="text-lg font-bold">شحنات اليوم مش من مهامك</p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -86,7 +86,7 @@ export default function TodayShipments() {
           </p>
         </div>
         <Button className="min-h-11" onClick={() => setLocation("/employee-dashboard")}>الرجوع لشاشتي</Button>
-      </div>
+      </main>
     );
   }
 

@@ -194,7 +194,7 @@ export default function PrintedOrders() {
         }
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="ملخص المطبوعات" data-testid="printed-summary">
-          <StatCard label="أوردرات مطبوعة" value={orders.length.toLocaleString('ar-EG')} hint="في التاريخ المختار (orders.list)" loading={isLoading} />
+          <StatCard label="أوردرات مطبوعة" value={orders.length.toLocaleString('ar-EG')} hint="في التاريخ المختار" loading={isLoading} />
           <StatCard label="القطع" value={totalQty.toLocaleString('ar-EG')} hint="مجموع الكميات" loading={isLoading} />
           <StatCard label="المبالغ" value={`${totalAmount.toLocaleString('ar-EG')} ج.م`} hint="قيمة الأوردرات، ليست نقدًا محصّلًا" loading={isLoading} />
           <StatCard label="بوسطة / أخرى" value={`${bostaCount.toLocaleString('ar-EG')} / ${nonBostaCount.toLocaleString('ar-EG')}`} hint="سجّلتها بوسطة فعلًا / شركة أخرى" loading={isLoading} />

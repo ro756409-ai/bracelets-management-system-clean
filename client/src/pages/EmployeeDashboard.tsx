@@ -4,8 +4,8 @@ import { trpc } from "@/lib/trpc";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { usePermission } from "@/hooks/usePermission";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -18,13 +18,15 @@ import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, Clock, Phone, PhoneOff, MapPin, Package,
-  LogOut, RefreshCw, Search, ChevronDown, ChevronUp, User,
-  ShoppingBag, TrendingUp, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle, Megaphone } from "lucide-react";
-import QRCodeLib from "qrcode";
+  LogOut, RefreshCw, ChevronDown, ChevronUp,
+  ShoppingBag, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle, Megaphone } from "lucide-react";
 import jsQR from "jsqr";
 import { BusinessAvatar } from "@/components/BusinessAvatar";
 import { useBusinessContext } from "@/contexts/BusinessContext";
-import { StatCard, ConfirmDialog, WhatsAppButton } from "@/components/shared";
+import {
+  StatCard, ConfirmDialog, WhatsAppButton, SectionCard, StatusBadge, ResponsiveDataTable,
+  SearchInput, EmptyState, ErrorState, LoadingSkeleton, OfflineState, type Column,
+} from "@/components/shared";
 import { ChevronRight, ChevronLeft } from "lucide-react";
 import { getMissingConfirmationFields } from "@/lib/orderConfirmationValidation";
 import { EMPLOYEE_SETTABLE_ORDER_STATUSES } from "@shared/const";
@@ -95,6 +97,16 @@ const DEFAULT_CANCEL_REASONS = [
 /** Sentinel for the free-text option. Not a stored value — the typed text is what's saved. */
 const OTHER_CANCEL_REASON = "__other__";
 
+/**
+ * «أمس» بتوقيت القاهرة (UTC+2) كـYYYY-MM-DD — نفس الحساب اللي كان مكتوب مرتين جوه زرار
+ * «أمس» (مرة للضغط ومرة لتمييزه نشط)، اتجمع في مكان واحد بدون أي تغيير في النتيجة.
+ */
+function cairoYesterdayISO(): string {
+  const yesterday = new Date(Date.now() + 2*60*60*1000);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  return yesterday.toISOString().slice(0, 10);
+}
+
 export default function EmployeeDashboard() {
   // Governorates the business curated, if any. When the list is empty — which it was for
   // every business, nobody having filled the table in — GovernorateCitySelect falls back to
@@ -105,6 +117,8 @@ export default function EmployeeDashboard() {
   const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
   const sourceOptions = useOperationalOptions("order_source").options;
   const [, setLocation] = useLocation();
+  // حالة الاتصال من المتصفح — لعرض OfflineState بدل خطأ غامض (ليست استعلام tRPC).
+  const online = useOnlineStatus();
   const [activeTab, setActiveTab] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
@@ -194,25 +208,44 @@ export default function EmployeeDashboard() {
     return group ? group.businesses.map((b: any) => b.id) : undefined;
   }, [selectedGroupId, groupsData]);
 
-  const { data: statsData } = trpc.employeePortal.stats.useQuery(
+  const {
+    data: statsData,
+    isLoading: statsLoading,
+    isError: statsIsError,
+    refetch: refetchStats,
+  } = trpc.employeePortal.stats.useQuery(
     selectedBusinessIds ? { businessIds: selectedBusinessIds } : undefined
   );
 
   // Broadcast message from manager
-  const { data: broadcastData } = trpc.employeePortal.activeBroadcast.useQuery(
+  const {
+    data: broadcastData,
+    isError: broadcastIsError,
+    refetch: refetchBroadcast,
+  } = trpc.employeePortal.activeBroadcast.useQuery(
     undefined,
     { refetchInterval: 30000 } // تحديث كل 30 ثانية
   );
 
   // عرض المخزون وقائمة المنتجات (مفلتر حسب المجموعة المختارة)
-  const { data: stockData } = trpc.employeePortal.stockLevels.useQuery(
+  const {
+    data: stockData,
+    isLoading: stockLoading,
+    isError: stockIsError,
+    refetch: refetchStock,
+  } = trpc.employeePortal.stockLevels.useQuery(
     selectedBusinessIds ? { businessIds: selectedBusinessIds } : undefined
   );
   const { data: productsList } = trpc.employeePortal.stockLevels.useQuery(
     selectedBusinessIds ? { businessIds: selectedBusinessIds } : undefined
   );
   // variants للمنتجات (كفر مرتبة بمقاساتها وأسعارها)
-  const { data: stockVariants } = trpc.employeePortal.stockVariants.useQuery(
+  const {
+    data: stockVariants,
+    isLoading: stockVariantsLoading,
+    isError: stockVariantsIsError,
+    refetch: refetchStockVariants,
+  } = trpc.employeePortal.stockVariants.useQuery(
     selectedBusinessIds ? { businessIds: selectedBusinessIds } : undefined
   );
 
@@ -239,7 +272,13 @@ export default function EmployeeDashboard() {
     return params;
   }, [activeTab, dateFrom, dateTo, selectedBusinessIds]);
 
-  const { data: ordersData, isLoading, refetch } = trpc.employeePortal.myOrders.useQuery(
+  const {
+    data: ordersData,
+    isLoading,
+    refetch,
+    isError: ordersIsError,
+    isFetching: ordersFetching,
+  } = trpc.employeePortal.myOrders.useQuery(
     dateFilterParams,
     { refetchInterval: 60000 }
   );
@@ -805,11 +844,22 @@ export default function EmployeeDashboard() {
     setPostponeDate(d.toISOString().split("T")[0]);
   }
 
+  // ==================== View-only derived state (no new data) ====================
+  // The tiles read server stats unless a date filter is on (or server stats failed), in which
+  // case they are counted from the loaded orders — so "loading" follows whichever source is shown.
+  const statsTilesLoading = (dateFrom || dateTo)
+    ? isLoading
+    : (statsLoading || (!statsData && isLoading));
+  const statsFallbackActive = !(dateFrom || dateTo) && statsIsError && !statsData;
+  const stockPanelLoading = stockLoading || stockVariantsLoading;
+  const stockPanelError = stockIsError || stockVariantsIsError;
+  const retryStock = () => { refetchStock(); refetchStockVariants(); };
+
   return (
     <div className="min-h-screen bg-background" dir="rtl">
       {/* Header */}
       <header
-        className="sticky top-0 z-40 shadow-md"
+        className="sticky top-0 z-40 shadow-[var(--shadow-card)]"
         style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 100%)" }}
       >
         {/* صفّين على الموبايل، صف واحد من sm فوق: ٦ أيقونات أدوات + تحديث + خروج
@@ -819,15 +869,15 @@ export default function EmployeeDashboard() {
             {/* هوية نشاط الموظف (من نطاق الجلسة على السيرفر — نشاطه بس) */}
             <BusinessAvatar name={activeBusiness?.name} logoUrl={activeBusiness?.logoUrl} className="w-9 h-9" />
             <div className="min-w-0">
-              <p className="truncate text-sm font-bold leading-tight text-white">
+              <p className="truncate text-sm font-bold leading-tight text-primary-foreground">
                 {employeeName}
-                {activeBusiness && <span className="mr-1.5 text-xs font-normal text-white/75" data-testid="employee-business-name">· {activeBusiness.name}</span>}
+                {activeBusiness && <span className="mr-1.5 text-xs font-normal text-primary-foreground/75" data-testid="employee-business-name">· {activeBusiness.name}</span>}
               </p>
               {/* "فاضلك كام" — أهم رقم في شاشة التأكيدات، وكان مش معروض في أي مكان.
                   مكانه جنب الاسم عشان يتشاف من غير ما الموظف ينزل بصره. */}
-              <p className="text-xs text-white/75">
+              <p className="text-xs text-primary-foreground/75">
                 {remainingCount > 0
-                  ? <>متبقّي <span className="font-bold tabular-nums text-white">{remainingCount.toLocaleString('ar-EG')}</span> طلب</>
+                  ? <>متبقّي <span className="font-bold tabular-nums text-primary-foreground">{remainingCount.toLocaleString('ar-EG')}</span> طلب</>
                   : 'خلصت كل الطلبات'}
               </p>
             </div>
@@ -835,7 +885,7 @@ export default function EmployeeDashboard() {
           <div className="flex flex-wrap items-center justify-end gap-1.5">
             <button
               onClick={() => setLocation("/today-shipments")}
-              className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
+              className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
               title="شحنات اليوم"
               aria-label="شحنات اليوم"
             >
@@ -843,7 +893,7 @@ export default function EmployeeDashboard() {
             </button>
             <button
               onClick={() => setLocation("/shipping-schedule")}
-              className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
+              className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
               title="جدول توزيع المحافظات"
               aria-label="جدول توزيع المحافظات"
             >
@@ -854,8 +904,8 @@ export default function EmployeeDashboard() {
             <button
               onClick={() => setShowDateFilter(!showDateFilter)}
               aria-pressed={Boolean(dateFrom || dateTo)}
-              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-lg text-white transition-colors ${
-                (dateFrom || dateTo) ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
+              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-[var(--radius-brand-md)] text-primary-foreground transition-colors ${
+                (dateFrom || dateTo) ? 'bg-primary-foreground/35 hover:bg-primary-foreground/45' : 'bg-primary-foreground/10 hover:bg-primary-foreground/20'
               }`}
               title="فلتر التاريخ"
               aria-label="فلتر التاريخ"
@@ -865,8 +915,8 @@ export default function EmployeeDashboard() {
             <button
               onClick={() => { setShowScanPanel(!showScanPanel); if (showScanPanel) stopScanCamera(); setScanResult(null); }}
               aria-pressed={showScanPanel}
-              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-lg text-white transition-colors ${
-                showScanPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
+              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-[var(--radius-brand-md)] text-primary-foreground transition-colors ${
+                showScanPanel ? 'bg-primary-foreground/35 hover:bg-primary-foreground/45' : 'bg-primary-foreground/10 hover:bg-primary-foreground/20'
               }`}
               title="مسح QR"
               aria-label="مسح QR"
@@ -876,8 +926,8 @@ export default function EmployeeDashboard() {
             <button
               onClick={() => setShowTasksPanel(!showTasksPanel)}
               aria-pressed={showTasksPanel}
-              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-lg text-white transition-colors ${
-                showTasksPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
+              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-[var(--radius-brand-md)] text-primary-foreground transition-colors ${
+                showTasksPanel ? 'bg-primary-foreground/35 hover:bg-primary-foreground/45' : 'bg-primary-foreground/10 hover:bg-primary-foreground/20'
               }`}
               title="المهام"
               aria-label="المهام"
@@ -887,8 +937,8 @@ export default function EmployeeDashboard() {
             <button
               onClick={() => setShowStockPanel(!showStockPanel)}
               aria-pressed={showStockPanel}
-              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-lg text-white transition-colors ${
-                showStockPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
+              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-[var(--radius-brand-md)] text-primary-foreground transition-colors ${
+                showStockPanel ? 'bg-primary-foreground/35 hover:bg-primary-foreground/45' : 'bg-primary-foreground/10 hover:bg-primary-foreground/20'
               }`}
               title="المخزون"
               aria-label="المخزون"
@@ -898,10 +948,10 @@ export default function EmployeeDashboard() {
 
             {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
                 فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
-            <span className="mx-1 h-5 w-px bg-white/25" aria-hidden="true" />
+            <span className="mx-1 h-5 w-px bg-primary-foreground/25" aria-hidden="true" />
             <button
               onClick={() => refetch()}
-              className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-lg bg-white/10 px-2 text-white transition-colors hover:bg-white/20"
+              className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground transition-colors hover:bg-primary-foreground/20"
               title="تحديث القائمة"
               aria-label="تحديث القائمة"
             >
@@ -910,7 +960,7 @@ export default function EmployeeDashboard() {
             </button>
             <button
               onClick={handleLogout}
-              className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-lg bg-white/10 px-2 text-white transition-colors hover:bg-white/25"
+              className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground transition-colors hover:bg-primary-foreground/25"
               title="تسجيل الخروج"
               aria-label="تسجيل الخروج"
             >
@@ -924,187 +974,177 @@ export default function EmployeeDashboard() {
       {/* الصفحة كانت محبوسة في max-w-2xl على كل المقاسات — على الديسكتوب كانت عمود
           ضيّق وسط شاشة فاضية. mobile-first زي ما هي، بس بتتوسّع بدل ما تتجمّد. */}
       <main className="mx-auto max-w-2xl space-y-4 px-4 py-4 lg:max-w-6xl">
+        {/* انقطاع الاتصال: حالة واضحة فوق القائمة. الأوردرات المحمّلة تفضل ظاهرة تحتها
+            عشان الموظف اللي في نص مكالمة مايخسرش بيانات العميل اللي قدامه. */}
+        {!online && (
+          <OfflineState onRetry={() => refetch()} retrying={ordersFetching} className="py-6" />
+        )}
+
         {/* Business Group Filter - نحاس / مفروشات */}
         {groupsData.length > 0 && (
-          <div className="flex gap-2">
-            <button
+          <div className="flex gap-2" role="group" aria-label="القسم">
+            <Button
+              className="min-h-11 md:min-h-9 flex-1 font-bold"
+              variant={!selectedGroupId ? "default" : "outline"}
+              aria-pressed={!selectedGroupId}
               onClick={() => setSelectedGroupId(undefined)}
-              className={`min-h-11 md:min-h-0 flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
-                !selectedGroupId
-                  ? 'bg-[var(--warning)] text-white shadow-md'
-                  : 'bg-card text-muted-foreground border border-border hover:border-[var(--warning)]/30'
-              }`}
             >
               كل الأقسام
-            </button>
+            </Button>
             {groupsData.map((group: any) => (
-              <button
+              <Button
+                className="min-h-11 md:min-h-9 flex-1 font-bold"
                 key={group.id}
+                variant={selectedGroupId === group.id ? "default" : "outline"}
+                aria-pressed={selectedGroupId === group.id}
                 onClick={() => setSelectedGroupId(group.id)}
-                className={`min-h-11 md:min-h-0 flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
-                  selectedGroupId === group.id
-                    ? 'bg-[var(--warning)] text-white shadow-md'
-                    : 'bg-card text-muted-foreground border border-border hover:border-[var(--warning)]/30'
-                }`}
               >
                 {group.name}
-              </button>
+              </Button>
             ))}
           </div>
         )}
 
         {/* Stock Panel - مخزون شامل بالمنتجات والمقاسات والأسعار */}
         {showStockPanel && (
-          <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
-            {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 bg-[var(--warning)]/10 border-b border-[var(--warning)]/30">
-              <h3 className="font-bold text-foreground flex items-center gap-2">
-                <Box className="h-4 w-4 text-[var(--warning)]" />
+          <SectionCard
+            testId="employee-stock-panel"
+            icon={<Box className="h-4 w-4 text-primary" aria-hidden="true" />}
+            title={
+              <>
                 جرد المخزون
                 {selectedGroupId && (
-                  <span className="text-xs font-normal text-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 rounded-full">
+                  <span className="rounded-[var(--radius-brand-pill)] bg-accent px-2 py-0.5 text-xs font-normal text-accent-foreground">
                     {groupsData.find((g: any) => g.id === selectedGroupId)?.name || ''}
                   </span>
                 )}
-              </h3>
-              <button onClick={() => setShowStockPanel(false)} className="min-h-11 md:min-h-0 text-muted-foreground hover:text-muted-foreground">
+              </>
+            }
+            action={
+              <Button
+                className="min-h-11 min-w-11 md:min-h-9 md:min-w-9"
+                variant="ghost"
+                size="icon"
+                aria-label="إغلاق المخزون"
+                onClick={() => setShowStockPanel(false)}
+              >
                 <XCircle className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="p-4 space-y-4">
-              {/* منتجات بدون variants (أساور نحاس) */}
-              {stockData && stockData.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">الأصناف</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {stockData.map((p: any) => {
-                      const isLow = p.currentStock <= p.minStockLevel;
-                      return (
-                        <div
-                          key={p.id}
-                          className={`rounded-lg p-3 border ${
-                            isLow ? 'bg-destructive/10 border-destructive/30' : 'bg-muted/50 border-border'
-                          }`}
-                        >
-                          <p className="text-xs text-muted-foreground truncate" title={p.name}>{p.name}</p>
-                          <p className={`text-lg font-bold mt-0.5 ${
-                            isLow ? 'text-destructive' : 'text-foreground'
-                          }`}>
-                            {p.currentStock} <span className="text-xs font-normal text-muted-foreground">قطعة</span>
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-0.5">سعر: {Number(p.price).toLocaleString('ar-EG')} ج.م</p>
-                          {isLow && (
-                            <p className="text-xs text-destructive flex items-center gap-1 mt-0.5">
-                              <AlertCircle className="h-3 w-3" /> مخزون منخفض
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* variants المنتجات (كفر مرتبة بمقاساتها وأسعارها) */}
-              {stockVariants && stockVariants.length > 0 && (() => {
-                // تجميع variants حسب المنتج
-                const grouped: Record<string, { productName: string; variants: any[] }> = {};
-                for (const v of stockVariants as any[]) {
-                  const key = String(v.productId);
-                  if (!grouped[key]) grouped[key] = { productName: v.productName || `منتج #${v.productId}`, variants: [] };
-                  grouped[key].variants.push(v);
-                }
-                return (
-                  <div>
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">المقاسات والألوان</p>
-                    {Object.entries(grouped).map(([productId, group]) => (
-                      <div key={productId} className="mb-3">
-                        <p className="text-sm font-bold text-foreground mb-2 flex items-center gap-2">
-                          <Package className="h-3.5 w-3.5 text-[var(--warning)]" />
-                          {group.productName}
-                          <span className="text-xs font-normal text-muted-foreground">
-                            (إجمالي: {group.variants.reduce((s: number, v: any) => s + v.currentStock, 0)} قطعة)
-                          </span>
-                        </p>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-xs border-collapse">
-                            <thead>
-                              <tr className="bg-muted/50">
-                                <th className="text-right py-1.5 px-2 font-semibold text-muted-foreground border border-border">اللون</th>
-                                <th className="text-right py-1.5 px-2 font-semibold text-muted-foreground border border-border">المقاس</th>
-                                <th className="text-center py-1.5 px-2 font-semibold text-muted-foreground border border-border">السعر</th>
-                                <th className="text-center py-1.5 px-2 font-semibold text-muted-foreground border border-border">المخزون</th>
-                                <th className="text-center py-1.5 px-2 font-semibold text-muted-foreground border border-border">الحالة</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {group.variants.map((v: any) => {
-                                const isLow = v.currentStock <= v.minStockLevel;
-                                return (
-                                  <tr key={v.id} className={isLow ? 'bg-destructive/10' : 'bg-card'}>
-                                    <td className="py-1.5 px-2 border border-border font-medium text-foreground">{v.color || '-'}</td>
-                                    <td className="py-1.5 px-2 border border-border text-muted-foreground">{v.size || '-'}</td>
-                                    <td className="py-1.5 px-2 border border-border text-center font-bold text-[var(--warning)]">
-                                      {v.price ? `${Number(v.price).toLocaleString('ar-EG')} ج.م` : '-'}
-                                    </td>
-                                    <td className={`py-1.5 px-2 border border-border text-center font-bold ${
-                                      isLow ? 'text-destructive' : 'text-foreground'
-                                    }`}>
-                                      {v.currentStock}
-                                    </td>
-                                    <td className="py-1.5 px-2 border border-border text-center">
-                                      {isLow ? (
-                                        <span className="text-destructive font-semibold">ينفد</span>
-                                      ) : (
-                                        <span className="text-[var(--success)] font-semibold">متوفر</span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
+              </Button>
+            }
+          >
+            <div className="space-y-4">
+              {stockPanelError ? (
+                <ErrorState title="تعذّر تحميل المخزون" message="تحقّق من الاتصال ثم أعد المحاولة." onRetry={retryStock} />
+              ) : stockPanelLoading ? (
+                <LoadingSkeleton variant="cards" rows={4} />
+              ) : (
+                <>
+                  {/* منتجات بدون variants (أساور نحاس) */}
+                  {stockData && stockData.length > 0 && (
+                    <div>
+                      <p className="mb-2 text-xs font-semibold text-muted-foreground">الأصناف</p>
+                      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
+                        {stockData.map((p: any) => {
+                          const isLow = p.currentStock <= p.minStockLevel;
+                          return (
+                            <div
+                              key={p.id}
+                              className={`rounded-[var(--radius-brand-md)] border p-3 ${
+                                isLow ? 'border-destructive/30 bg-destructive/10' : 'border-border bg-muted/50'
+                              }`}
+                            >
+                              <p className="truncate text-xs text-muted-foreground" title={p.name}>{p.name}</p>
+                              <p className={`mt-0.5 text-lg font-bold tabular-nums ${
+                                isLow ? 'text-destructive' : 'text-foreground'
+                              }`}>
+                                {p.currentStock} <span className="text-xs font-normal text-muted-foreground">قطعة</span>
+                              </p>
+                              <p className="mt-0.5 text-xs text-muted-foreground">سعر: {Number(p.price).toLocaleString('ar-EG')} ج.م</p>
+                              {isLow && (
+                                <StatusBadge className="mt-1" status="low" kind="stock" tone="danger" label="مخزون منخفض" size="sm" />
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
-                    ))}
-                  </div>
-                );
-              })()}
+                    </div>
+                  )}
 
-              {(!stockData || stockData.length === 0) && (!stockVariants || stockVariants.length === 0) && (
-                <p className="text-center text-muted-foreground text-sm py-4">لا توجد بيانات مخزون</p>
+                  {/* variants المنتجات (كفر مرتبة بمقاساتها وأسعارها) */}
+                  {stockVariants && stockVariants.length > 0 && (() => {
+                    // تجميع variants حسب المنتج
+                    const grouped: Record<string, { productName: string; variants: any[] }> = {};
+                    for (const v of stockVariants as any[]) {
+                      const key = String(v.productId);
+                      if (!grouped[key]) grouped[key] = { productName: v.productName || `منتج #${v.productId}`, variants: [] };
+                      grouped[key].variants.push(v);
+                    }
+                    return (
+                      <div>
+                        <p className="mb-2 text-xs font-semibold text-muted-foreground">المقاسات والألوان</p>
+                        {Object.entries(grouped).map(([productId, group]) => (
+                          <div key={productId} className="mb-3">
+                            <p className="mb-2 flex items-center gap-2 text-sm font-bold text-foreground">
+                              <Package className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                              {group.productName}
+                              <span className="text-xs font-normal text-muted-foreground">
+                                (إجمالي: {group.variants.reduce((s: number, v: any) => s + v.currentStock, 0)} قطعة)
+                              </span>
+                            </p>
+                            <ResponsiveDataTable
+                              rows={group.variants}
+                              columns={STOCK_VARIANT_COLUMNS}
+                              rowKey={(v: any) => v.id}
+                              density="compact"
+                              cardsBelow="md"
+                              empty={{ title: "لا توجد مقاسات" }}
+                              mobileRow={(v: any) => <StockVariantCard v={v} />}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {(!stockData || stockData.length === 0) && (!stockVariants || stockVariants.length === 0) && (
+                    <EmptyState
+                      icon={<Box className="h-7 w-7" />}
+                      title="لا توجد بيانات مخزون"
+                      description="لما يتسجّل مخزون للأصناف هيظهر هنا."
+                      className="py-8"
+                    />
+                  )}
+                </>
               )}
             </div>
-          </div>
+          </SectionCard>
         )}
 
         {/* QR Scan Panel */}
         {showScanPanel && (
-          <div className="bg-card rounded-2xl border border-border shadow-sm overflow-hidden" dir="rtl">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-gradient-to-l from-[var(--success)]/10 to-[var(--success)]/5">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-[var(--success)]/10 flex items-center justify-center">
-                  <QrCode className="h-4 w-4 text-[var(--success)]" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-foreground">مسح QR - تجهيز الأوردرات</p>
-                  <p className="text-xs text-muted-foreground">افتح الكاميرا أو أدخل السيريال يدوياً</p>
-                </div>
-              </div>
-              <button
+          <SectionCard
+            testId="employee-scan-panel"
+            icon={<QrCode className="h-4 w-4 text-[var(--success)]" aria-hidden="true" />}
+            title="مسح QR - تجهيز الأوردرات"
+            description="افتح الكاميرا أو أدخل السيريال يدوياً"
+            action={
+              <Button
+                className="min-h-11 min-w-11 md:min-h-9 md:min-w-9"
+                variant="ghost"
+                size="icon"
+                aria-label="إغلاق مسح QR"
                 onClick={() => { setShowScanPanel(false); stopScanCamera(); setScanResult(null); }}
-                className="min-h-11 md:min-h-0 w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground hover:bg-muted"
               >
                 <XCircle className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="p-4 space-y-4">
+              </Button>
+            }
+          >
+            <div className="space-y-4" dir="rtl">
               {/* Camera scanner */}
               <div className="flex flex-col items-center gap-3">
                 {/* Video element for native camera */}
                 <div
-                  className={`relative w-full rounded-xl overflow-hidden bg-black ${
+                  className={`relative w-full overflow-hidden rounded-[var(--radius-brand-md)] bg-foreground ${
                     scanIsScanning ? "min-h-[260px]" : "hidden"
                   }`}
                 >
@@ -1118,7 +1158,7 @@ export default function EmployeeDashboard() {
                   />
                   {/* Scan overlay */}
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <div className="w-48 h-48 border-2 border-white/70 rounded-xl relative">
+                    <div className="relative h-48 w-48 rounded-[var(--radius-brand-md)] border-2 border-primary-foreground/70">
                       <div className="absolute top-0 left-0 w-5 h-5 border-t-4 border-l-4 border-[var(--success)]/30 rounded-tl-lg" />
                       <div className="absolute top-0 right-0 w-5 h-5 border-t-4 border-r-4 border-[var(--success)]/30 rounded-tr-lg" />
                       <div className="absolute bottom-0 left-0 w-5 h-5 border-b-4 border-l-4 border-[var(--success)]/30 rounded-bl-lg" />
@@ -1130,7 +1170,7 @@ export default function EmployeeDashboard() {
                 </div>
 
                 {!scanIsScanning && !scanCameraError && (
-                  <div className="w-full bg-muted rounded-xl h-40 flex items-center justify-center border-2 border-dashed border-[var(--success)]/30">
+                  <div className="flex h-40 w-full items-center justify-center rounded-[var(--radius-brand-md)] border-2 border-dashed border-[var(--success)]/30 bg-muted">
                     <div className="text-center text-muted-foreground">
                       <CameraOff className="h-10 w-10 mx-auto mb-2 opacity-50" />
                       <p className="text-xs">اضغط لتشغيل الكاميرا</p>
@@ -1139,27 +1179,28 @@ export default function EmployeeDashboard() {
                 )}
 
                 {scanCameraError && (
-                  <div className="w-full bg-destructive/10 border border-destructive/30 rounded-xl p-4 text-center">
+                  <div className="w-full rounded-[var(--radius-brand-md)] border border-destructive/30 bg-destructive/10 p-4 text-center" role="alert">
                     <XCircle className="h-8 w-8 text-destructive mx-auto mb-2" />
                     <p className="text-sm text-destructive">{scanCameraError}</p>
                   </div>
                 )}
                 {!scanIsScanning ? (
-                  <button
+                  <Button
+                    className="min-h-11 md:min-h-9 w-full gap-2 bg-[var(--success)] font-bold text-[var(--success-foreground)] hover:opacity-90"
                     onClick={startScanCamera}
-                    className="min-h-11 md:min-h-0 flex items-center gap-2 px-5 py-2.5 bg-[var(--success)] hover:bg-[var(--success)] text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
                   >
                     <Camera className="h-4 w-4" />
                     تشغيل الكاميرا
-                  </button>
+                  </Button>
                 ) : (
-                  <button
+                  <Button
+                    className="min-h-11 md:min-h-9 w-full gap-2 font-bold"
+                    variant="destructive"
                     onClick={stopScanCamera}
-                    className="min-h-11 md:min-h-0 flex items-center gap-2 px-5 py-2.5 bg-destructive hover:bg-destructive text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
                   >
                     <CameraOff className="h-4 w-4" />
                     إيقاف الكاميرا
-                  </button>
+                  </Button>
                 )}
               </div>
 
@@ -1171,10 +1212,17 @@ export default function EmployeeDashboard() {
                     value={manualSerial}
                     onChange={e => setManualSerial(e.target.value)}
                     placeholder="ORD-2026-000001"
+                    aria-label="السيريال"
                     className="min-h-11 md:min-h-9 flex-1 text-sm text-right"
                     dir="ltr"
                   />
-                  <Button type="submit" size="sm" className="min-h-11 md:min-h-9 bg-[var(--success)] hover:bg-[var(--success)] text-white" disabled={scanMutation.isPending}>
+                  <Button
+                    className="min-h-11 min-w-11 md:min-h-9 md:min-w-9 bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90"
+                    type="submit"
+                    size="sm"
+                    aria-label="تحقق من السيريال"
+                    disabled={scanMutation.isPending}
+                  >
                     <Hash className="h-4 w-4" />
                   </Button>
                 </form>
@@ -1182,13 +1230,13 @@ export default function EmployeeDashboard() {
 
               {/* Scan result */}
               {scanMutation.isPending && (
-                <div className="flex items-center justify-center gap-2 py-3 text-muted-foreground text-sm">
+                <div className="flex items-center justify-center gap-2 py-3 text-muted-foreground text-sm" role="status">
                   <RefreshCw className="h-4 w-4 animate-spin" />
                   جاري التحقق...
                 </div>
               )}
               {scanResult && !scanMutation.isPending && (
-                <div className={`rounded-xl p-4 border ${
+                <div className={`rounded-[var(--radius-brand-md)] border p-4 ${
                   scanResult.success ? 'bg-[var(--success)]/10 border-[var(--success)]/30' :
                   scanResult.result === 'duplicate' ? 'bg-[var(--warning)]/10 border-[var(--warning)]/30' :
                   'bg-destructive/10 border-destructive/30'
@@ -1225,16 +1273,17 @@ export default function EmployeeDashboard() {
                       )}
                     </div>
                   )}
-                  <button
+                  <Button
+                    className="min-h-11 md:min-h-8 mt-3 h-auto px-0 text-xs text-muted-foreground underline"
+                    variant="link"
                     onClick={() => { setScanResult(null); }}
-                    className="min-h-11 md:min-h-0 mt-3 text-xs text-muted-foreground underline"
                   >
                     مسح ومسح جديد
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
-          </div>
+          </SectionCard>
         )}
 
         {/* Tasks Panel */}
@@ -1242,95 +1291,116 @@ export default function EmployeeDashboard() {
 
         {/* Broadcast Message - Notification احترافي */}
         {broadcastData && (
-          <div className="relative overflow-hidden bg-gradient-to-l from-[var(--warning)]/10 to-[var(--warning)]/5 border border-[var(--warning)]/30 rounded-xl p-4 shadow-sm">
+          <div
+            className="relative overflow-hidden rounded-[var(--radius-brand-md)] border border-[var(--warning)]/30 bg-[var(--warning)]/10 p-4 shadow-[var(--shadow-card)]"
+            role="status"
+            data-testid="employee-broadcast"
+          >
             <div className="absolute top-0 left-0 w-1 h-full bg-[var(--warning)]"></div>
             <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-full bg-[var(--warning)]/10 border border-[var(--warning)]/30 flex items-center justify-center shrink-0">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--warning)]/30 bg-[var(--warning)]/10 text-[var(--warning)]">
                 <Megaphone className="h-5 w-5" aria-hidden="true" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-1">
                   <h4 className="text-sm font-bold text-[var(--warning)]">رسالة من الإدارة</h4>
-                  <span className="text-xs text-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 rounded-full">إشعار</span>
+                  <StatusBadge status="broadcast" label="إشعار" tone="warning" size="sm" icon={null} />
                 </div>
                 <p className="text-sm text-foreground leading-relaxed">{broadcastData.message}</p>
                 <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
                   <span className="font-medium text-[var(--warning)]">{broadcastData.sentByName}</span>
-                  <span>•</span>
+                  <span aria-hidden="true">•</span>
                   <span>{new Date(broadcastData.createdAt).toLocaleString('ar-EG')}</span>
                 </div>
               </div>
             </div>
           </div>
         )}
+        {/* فشل تحميل رسالة الإدارة: لا نعرض مكانها شيئًا مضللًا — تنبيه صغير بإعادة المحاولة.
+            لا حالة تحميل هنا عمدًا: غالبًا مافيش رسالة أصلًا، فهيكل فارغ كان هيوحي بإن فيه. */}
+        {!broadcastData && broadcastIsError && online && (
+          <ErrorState
+            title="تعذّر تحميل رسالة الإدارة"
+            onRetry={() => refetchBroadcast()}
+            className="py-4"
+          />
+        )}
 
         {/* Date Filter Panel */}
         {showDateFilter && (
-          <div className="bg-card rounded-xl border border-[var(--warning)]/30 shadow-sm p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-bold text-foreground flex items-center gap-2">
-                <CalendarDays className="h-4 w-4 text-[var(--warning)]" />
-                فلتر التاريخ
-              </h3>
-              <button onClick={() => setShowDateFilter(false)} className="min-h-11 md:min-h-0 text-muted-foreground hover:text-muted-foreground">
+          <SectionCard
+            testId="employee-date-filter"
+            icon={<CalendarDays className="h-4 w-4 text-primary" aria-hidden="true" />}
+            title="فلتر التاريخ"
+            action={
+              <Button
+                className="min-h-11 min-w-11 md:min-h-9 md:min-w-9"
+                variant="ghost"
+                size="icon"
+                aria-label="إغلاق فلتر التاريخ"
+                onClick={() => setShowDateFilter(false)}
+              >
                 <XCircle className="h-4 w-4" />
-              </button>
-            </div>
+              </Button>
+            }
+          >
             {/* أزرار سريعة */}
-            <div className="flex gap-2 mb-3">
-              <button
+            <div className="mb-3 flex gap-2" role="group" aria-label="فترات سريعة">
+              <Button
+                className="min-h-11 md:min-h-8 flex-1 text-xs font-bold"
+                size="sm"
+                variant={!dateFrom && !dateTo ? "default" : "outline"}
+                aria-pressed={!dateFrom && !dateTo}
                 onClick={() => { setDateFrom(""); setDateTo(""); }}
-                className={`min-h-11 md:min-h-0 flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                  !dateFrom && !dateTo ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
-                }`}
-              >اليوم</button>
-              <button
+              >اليوم</Button>
+              <Button
+                className="min-h-11 md:min-h-8 flex-1 text-xs font-bold"
+                size="sm"
+                variant={dateFrom && dateTo && dateFrom === dateTo && dateFrom === cairoYesterdayISO() ? "default" : "outline"}
+                aria-pressed={Boolean(dateFrom && dateTo && dateFrom === dateTo && dateFrom === cairoYesterdayISO())}
                 onClick={() => {
-                  const yesterday = new Date(Date.now() + 2*60*60*1000);
-                  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-                  const yStr = yesterday.toISOString().slice(0, 10);
+                  const yStr = cairoYesterdayISO();
                   setDateFrom(yStr); setDateTo(yStr);
                 }}
-                className={`min-h-11 md:min-h-0 flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                  dateFrom && dateTo && dateFrom === dateTo && dateFrom === (() => { const y = new Date(Date.now() + 2*60*60*1000); y.setUTCDate(y.getUTCDate() - 1); return y.toISOString().slice(0, 10); })()
-                    ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
-                }`}
-              >أمس</button>
-              <button
+              >أمس</Button>
+              <Button
+                className="min-h-11 md:min-h-8 flex-1 text-xs font-bold"
+                size="sm"
+                variant={dateFrom === '2024-01-01' && !dateTo ? "default" : "outline"}
+                aria-pressed={dateFrom === '2024-01-01' && !dateTo}
                 onClick={() => { setDateFrom("2024-01-01"); setDateTo(""); }}
-                className={`min-h-11 md:min-h-0 flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
-                  dateFrom === '2024-01-01' && !dateTo ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
-                }`}
-              >كل الأوردرات</button>
+              >كل الأوردرات</Button>
             </div>
             {/* تاريخ مخصص */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">من تاريخ</label>
-                <input
+                <Label htmlFor="emp-date-from" className="mb-1 block text-xs text-muted-foreground">من تاريخ</Label>
+                <Input
+                  id="emp-date-from"
                   type="date"
                   value={dateFrom}
                   onChange={e => setDateFrom(e.target.value)}
-                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--warning)]/30"
+                  className="min-h-11 md:min-h-9 w-full text-sm"
                 />
               </div>
               <div>
-                <label className="text-xs text-muted-foreground mb-1 block">إلى تاريخ</label>
-                <input
+                <Label htmlFor="emp-date-to" className="mb-1 block text-xs text-muted-foreground">إلى تاريخ</Label>
+                <Input
+                  id="emp-date-to"
                   type="date"
                   value={dateTo}
                   onChange={e => setDateTo(e.target.value)}
-                  className="w-full border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[var(--warning)]/30"
+                  className="min-h-11 md:min-h-9 w-full text-sm"
                 />
               </div>
             </div>
             {(dateFrom || dateTo) && (
-              <p className="text-xs text-[var(--warning)] bg-[var(--warning)]/10 rounded-lg px-3 py-2 mt-2 flex items-center gap-1">
-                <Filter className="h-3 w-3" />
+              <p className="mt-2 flex items-center gap-1 rounded-[var(--radius-brand-md)] bg-accent px-3 py-2 text-xs text-accent-foreground">
+                <Filter className="h-3 w-3" aria-hidden="true" />
                 يتم عرض الأوردرات المسندة في الفترة المحددة
               </p>
             )}
-          </div>
+          </SectionCard>
         )}
 
         {/* Stats Row — each tile doubles as a quick filter into the tab it names.
@@ -1338,68 +1408,87 @@ export default function EmployeeDashboard() {
             بس، فالموظف مكانش شايف أرقامهم. على الموبايل شريط بيتمرّر جوه نفسه (نفس نمط
             صفحة الأوردرات)، وعلى الشاشات الأوسع جريد كامل. */}
         <div className="-mx-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 lg:grid lg:grid-cols-7 lg:overflow-visible [&>*]:min-w-[128px] [&>*]:snap-start lg:[&>*]:min-w-0">
-          <StatCard label="الكل" value={displayStats?.total ?? 0} active={activeTab === "all"} onClick={() => setActiveTab("all")} />
-          <StatCard label="جديد" value={displayStats?.new ?? 0} tone="primary" active={activeTab === "new"} onClick={() => setActiveTab("new")} />
-          <StatCard label="مؤكد" value={displayStats?.confirmed ?? 0} tone="success" active={activeTab === "confirmed"} onClick={() => setActiveTab("confirmed")} />
-          <StatCard label="مؤجل" value={displayStats?.postponed ?? 0} tone="warning" active={activeTab === "postponed"} onClick={() => setActiveTab("postponed")} />
-          <StatCard label="ملغي" value={displayStats?.cancelled ?? 0} tone="danger" active={activeTab === "cancelled"} onClick={() => setActiveTab("cancelled")} />
-          <StatCard label="لم يرد" value={displayStats?.no_answer ?? 0} tone="warning" active={activeTab === "no_answer"} onClick={() => setActiveTab("no_answer")} />
-          <StatCard label="يحتاج مراجعة" value={reviewCount} tone="info" active={activeTab === "needs_review"} onClick={() => setActiveTab("needs_review")} />
+          <StatCard label="الكل" value={displayStats?.total ?? 0} loading={statsTilesLoading} active={activeTab === "all"} onClick={() => setActiveTab("all")} />
+          <StatCard label="جديد" value={displayStats?.new ?? 0} loading={statsTilesLoading} tone="primary" active={activeTab === "new"} onClick={() => setActiveTab("new")} />
+          <StatCard label="مؤكد" value={displayStats?.confirmed ?? 0} loading={statsTilesLoading} tone="success" active={activeTab === "confirmed"} onClick={() => setActiveTab("confirmed")} />
+          <StatCard label="مؤجل" value={displayStats?.postponed ?? 0} loading={statsTilesLoading} tone="warning" active={activeTab === "postponed"} onClick={() => setActiveTab("postponed")} />
+          <StatCard label="ملغي" value={displayStats?.cancelled ?? 0} loading={statsTilesLoading} tone="danger" active={activeTab === "cancelled"} onClick={() => setActiveTab("cancelled")} />
+          <StatCard label="لم يرد" value={displayStats?.no_answer ?? 0} loading={statsTilesLoading} tone="warning" active={activeTab === "no_answer"} onClick={() => setActiveTab("no_answer")} />
+          <StatCard label="يحتاج مراجعة" value={reviewCount} loading={isLoading} tone="info" active={activeTab === "needs_review"} onClick={() => setActiveTab("needs_review")} />
         </div>
+        {/* إحصائيات السيرفر فشلت: البطاقات بترجع (زي ما كانت) للعدّ من القائمة المحمّلة —
+            بنقول ده صراحة بدل ما الرقم يتقرا كإجمالي السيرفر. */}
+        {statsFallbackActive && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-brand-md)] border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-3 py-2 text-xs text-foreground" role="status">
+            <span className="flex items-center gap-1.5">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[var(--warning)]" aria-hidden="true" />
+              تعذّر تحميل الإحصائيات — الأرقام محسوبة من الأوردرات المعروضة.
+            </span>
+            <Button className="min-h-11 md:min-h-8 gap-1 text-xs" size="sm" variant="outline" onClick={() => refetchStats()}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              إعادة المحاولة
+            </Button>
+          </div>
+        )}
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="بحث بالاسم أو الهاتف أو رقم الأوردر..."
-            className="min-h-11 md:min-h-9 pr-10 bg-card"
-          />
-        </div>
+        {/* Search — البحث نفسه محلي على القائمة المحمّلة كما كان؛ SearchInput بس بيأخّر
+            تطبيقه لحد ما الكتابة تقف. */}
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="بحث بالاسم أو الهاتف أو رقم الأوردر..."
+          className="[&_input]:bg-card"
+        />
 
         {/* Tabs */}
-        <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+        <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none" role="group" aria-label="تصفية حسب الحالة">
           {tabs.map(tab => (
-            <button
+            <Button
+              className="min-h-11 md:min-h-8 shrink-0 gap-1.5 rounded-[var(--radius-brand-pill)] px-3 text-sm font-medium"
               key={tab.key}
+              size="sm"
+              variant={activeTab === tab.key ? "default" : "outline"}
+              aria-pressed={activeTab === tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`min-h-11 md:min-h-0 flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-1.5 ${
-                activeTab === tab.key
-                  ? "bg-primary text-primary-foreground shadow-[var(--shadow-card)]"
-                  : "bg-card text-muted-foreground border border-border hover:border-primary/40"
-              }`}
             >
               {tab.label}
               {tab.count > 0 && (
-                <span className={`text-xs rounded-full px-1.5 py-0.5 ${
-                  activeTab === tab.key ? "bg-white/20" : "bg-muted"
+                <span className={`rounded-[var(--radius-brand-pill)] px-1.5 py-0.5 text-xs tabular-nums ${
+                  activeTab === tab.key ? "bg-primary-foreground/20" : "bg-muted"
                 }`}>
                   {tab.count}
                 </span>
               )}
-            </button>
+            </Button>
           ))}
         </div>
 
         {/* Orders List */}
-        {isLoading ? (
-          <div className="space-y-3">
-            {[1,2,3].map(i => (
-              <div key={i} className="animate-pulse rounded-[var(--radius-brand-md)] border border-border bg-card p-4">
-                <div className="mb-2 h-4 w-3/4 rounded bg-muted" />
-                <div className="h-3 w-1/2 rounded bg-muted/60" />
-              </div>
-            ))}
-          </div>
+        {/* تحديث دوري فشل والقائمة القديمة لسه محمّلة: بنقول كده من غير ما نخفي اللي قدام الموظف. */}
+        {ordersIsError && ordersData && online && (
+          <ErrorState
+            title="تعذّر تحديث الأوردرات"
+            message="المعروض هو آخر نسخة اتحمّلت."
+            onRetry={() => refetch()}
+            retrying={ordersFetching}
+            className="py-4"
+          />
+        )}
+        {!ordersData && !online ? null : ordersIsError && !ordersData ? (
+          <ErrorState
+            title="تعذّر تحميل أوردراتك"
+            message="تحقّق من الاتصال ثم أعد المحاولة."
+            onRetry={() => refetch()}
+            retrying={ordersFetching}
+          />
+        ) : isLoading ? (
+          <LoadingSkeleton variant="cards" rows={3} className="sm:grid-cols-1 lg:grid-cols-1 xl:grid-cols-2" />
         ) : filteredOrders.length === 0 ? (
-          <div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-10 text-center shadow-[var(--shadow-card)]">
-            <ShoppingBag className="mx-auto mb-3 h-10 w-10 text-muted-foreground/40" />
-            <p className="font-medium text-muted-foreground">لا توجد أوردرات</p>
-            <p className="mt-1 text-sm text-muted-foreground/70">
-              {search ? "جرب بحثاً مختلفاً" : "لم يتم تعيين أوردرات لك بعد"}
-            </p>
-          </div>
+          <EmptyState
+            icon={<ShoppingBag className="h-7 w-7" />}
+            title="لا توجد أوردرات"
+            description={search ? "جرب بحثاً مختلفاً" : "لم يتم تعيين أوردرات لك بعد"}
+          />
         ) : (
           // عمودين على الشاشات الواسعة: كارت التأكيد ارتفاعه ثابت تقريبًا، فعمود واحد
           // على شاشة ١٤٤٠ معناه تمرير ضعف اللازم مقابل نص الشاشة فاضي.
@@ -1420,28 +1509,43 @@ export default function EmployeeDashboard() {
                 >
                   {/* Order Header */}
                   <div
-                    className="p-4 cursor-pointer"
+                    className="p-4 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
                     onClick={() => setExpandedOrder(isExpanded ? null : order.id)}
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setExpandedOrder(isExpanded ? null : order.id);
+                      }
+                    }}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-bold">{order.customerName}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusConf.bg} ${statusConf.color}`}>
-                            {statusConf.label}
-                          </span>
+                          {/* النص من STATUS_CONFIG كما كان؛ اللون والأيقونة من الشارة الموحّدة */}
+                          <StatusBadge status={order.status} label={statusConf.label} size="sm" />
                           {order.source && (
-                            <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                              {sourceOptions.find(option => option.value === order.source)?.label ?? order.source}
-                            </span>
+                            <StatusBadge
+                              kind="source"
+                              status={order.source}
+                              label={sourceOptions.find(option => option.value === order.source)?.label ?? order.source}
+                              size="sm"
+                            />
                           )}
                           {/* Orders whose items could not be mapped to the catalog need a
                               human before they are confirmed — say so up front. */}
                           {order.needsReview && (
-                            <span className="flex items-center gap-1 rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/15 px-2 py-0.5 text-xs font-medium text-[var(--warning)]">
-                              <AlertCircle className="h-3 w-3" />
-                              تحتاج مراجعة
-                            </span>
+                            <StatusBadge
+                              status="needs_review"
+                              label="تحتاج مراجعة"
+                              tone="warning"
+                              size="sm"
+                              icon={<AlertCircle />}
+                            />
                           )}
                         </div>
                         {/* flex-wrap: على ٣٧٥px كان الصف بيتقطع في نص "القاهرة · مدينة نصر"
@@ -1619,21 +1723,25 @@ export default function EmployeeDashboard() {
                       {/* Move through the current filtered list without collapsing back to it */}
                       {filteredOrders.length > 1 && (
                         <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <button
+                          <Button
+                            className="min-h-11 md:min-h-8 gap-1 px-2 text-xs text-muted-foreground"
                             type="button"
+                            size="sm"
+                            variant="ghost"
                             onClick={(e) => { e.stopPropagation(); goToAdjacentOrder(-1); }}
-                            className="min-h-11 md:min-h-0 flex items-center gap-1 rounded-[var(--radius-brand-sm)] px-2 py-1 hover:bg-muted"
                           >
                             <ChevronRight className="h-3.5 w-3.5" /> السابق
-                          </button>
+                          </Button>
                           <span className="tabular-nums">{expandedIndex + 1} / {filteredOrders.length}</span>
-                          <button
+                          <Button
+                            className="min-h-11 md:min-h-8 gap-1 px-2 text-xs text-muted-foreground"
                             type="button"
+                            size="sm"
+                            variant="ghost"
                             onClick={(e) => { e.stopPropagation(); goToAdjacentOrder(1); }}
-                            className="min-h-11 md:min-h-0 flex items-center gap-1 rounded-[var(--radius-brand-sm)] px-2 py-1 hover:bg-muted"
                           >
                             التالي <ChevronLeft className="h-3.5 w-3.5" />
-                          </button>
+                          </Button>
                         </div>
                       )}
                       {/* Why this order was flagged, verbatim from the import/parse step */}
@@ -1664,14 +1772,16 @@ export default function EmployeeDashboard() {
                             ملاحظات الموظف
                           </p>
                           {editingNotes[order.id] !== undefined && (
-                            <button
+                            <Button
+                              className="min-h-11 md:min-h-8 gap-1 px-2 text-xs font-medium text-[var(--success)]"
+                              size="sm"
+                              variant="ghost"
                               onClick={() => handleSaveNotes(order.id)}
                               disabled={updateNotesMutation.isPending}
-                              className="min-h-11 md:min-h-0 flex items-center gap-1 text-xs font-medium text-[var(--success)] hover:opacity-80"
                             >
                               <Save className="h-3 w-3" />
                               {updateNotesMutation.isPending ? 'جاري...' : 'حفظ'}
-                            </button>
+                            </Button>
                           )}
                         </div>
                         <Textarea
@@ -1694,23 +1804,29 @@ export default function EmployeeDashboard() {
                       {/* Duplicate marker — زرار "تعديل بيانات" اتنقل لشريط الإجراءات الثابت */}
                       <div className="flex items-center justify-end gap-2">
                         {order.isDuplicate ? (
-                          <button
-                            className="min-h-11 md:min-h-0 flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-1 text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20"
+                          <Button
+                            className="min-h-11 md:min-h-8 gap-1 border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20"
+                            size="sm"
+                            variant="outline"
                             onClick={() => setDuplicateConfirm({ orderId: order.id, action: "unmark" })}
                             disabled={unmarkDuplicateMutation.isPending}
                             title="إلغاء تعليم التكرار"
+                            aria-label="مكرر — إلغاء تعليم التكرار"
                           >
                             <span>مكرر</span>
-                          </button>
+                          </Button>
                         ) : (
-                          <button
-                            className="min-h-11 md:min-h-0 flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-border px-2 py-1 text-xs text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                          <Button
+                            className="min-h-11 md:min-h-8 gap-1 px-2 text-xs text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                            size="sm"
+                            variant="outline"
                             onClick={() => setDuplicateConfirm({ orderId: order.id, action: "mark" })}
                             disabled={markDuplicateMutation.isPending}
                             title="تعليم كمكرر"
+                            aria-label="تعليم كمكرر"
                           >
                             <span>مكرر</span>
-                          </button>
+                          </Button>
                         )}
                       </div>
 
@@ -1744,13 +1860,15 @@ export default function EmployeeDashboard() {
         allowItemsEdit={canEditItems}
         footerSlot={
           <>
-            <button
+            <Button
+              className="min-h-11 md:min-h-8 h-auto px-0 text-xs text-[var(--info)] underline"
               type="button"
-              className="min-h-11 md:min-h-0 text-xs text-[var(--info)] underline"
+              variant="link"
+              aria-expanded={showEditHistory}
               onClick={() => setShowEditHistory(!showEditHistory)}
             >
               {showEditHistory ? "إخفاء سجل التعديلات" : "عرض سجل التعديلات"}
-            </button>
+            </Button>
             {showEditHistory && editDialog.orderId && (
               <EditHistoryPanel orderId={editDialog.orderId} />
             )}
@@ -1805,7 +1923,7 @@ export default function EmployeeDashboard() {
             <Button
               onClick={handlePostpone}
               disabled={postponeMutation.isPending || !postponeDate}
-              className="h-11 gap-1.5 bg-[var(--warning)] text-white hover:bg-[var(--warning)]"
+              className="h-11 gap-1.5 bg-[var(--warning)] text-[var(--warning-foreground)] hover:opacity-90"
             >
               {postponeMutation.isPending
                 ? <><RefreshCw className="h-4 w-4 animate-spin" />جاري التأجيل...</>
@@ -1851,7 +1969,7 @@ export default function EmployeeDashboard() {
                   placeholder="السبب بالتفصيل..."
                   maxLength={80}
                   autoFocus
-                  className={`mt-1 h-10 ${!cancelOtherReason.trim() ? "border-destructive/30 bg-destructive/10" : ""}`}
+                  className={`mt-1 min-h-11 md:min-h-9 ${!cancelOtherReason.trim() ? "border-destructive/30 bg-destructive/10" : ""}`}
                 />
               </div>
             )}
@@ -1861,7 +1979,7 @@ export default function EmployeeDashboard() {
                 value={cancelNotes}
                 onChange={e => setCancelNotes(e.target.value)}
                 placeholder="تفاصيل إضافية..."
-                className="mt-1 h-10"
+                className="mt-1 min-h-11 md:min-h-9"
               />
             </div>
           </div>
@@ -1906,7 +2024,8 @@ export default function EmployeeDashboard() {
                   key={n}
                   type="button"
                   variant={noAnswerAttempts === String(n) ? "default" : "outline"}
-                  className="h-10"
+                  className="h-11 md:h-10"
+                  aria-pressed={noAnswerAttempts === String(n)}
                   onClick={() => setNoAnswerAttempts(String(n))}
                 >
                   {n}
@@ -1960,13 +2079,22 @@ export default function EmployeeDashboard() {
 
 // ==================== EDIT HISTORY PANEL ====================
 function EditHistoryPanel({ orderId }: { orderId: number }) {
-  const { data: logs, isLoading } = trpc.employeePortal.getOrderEditHistory.useQuery({ orderId });
+  const { data: logs, isLoading, isError, refetch } = trpc.employeePortal.getOrderEditHistory.useQuery({ orderId });
 
-  if (isLoading) return <div className="text-xs text-muted-foreground py-2">جاري تحميل السجل...</div>;
+  if (isLoading) return <LoadingSkeleton variant="table" rows={2} className="py-2" />;
+  if (isError) {
+    return (
+      <ErrorState
+        title="تعذّر تحميل سجل التعديلات"
+        onRetry={() => refetch()}
+        className="py-4"
+      />
+    );
+  }
   if (!logs || logs.length === 0) return <div className="text-xs text-muted-foreground py-2">لا توجد تعديلات سابقة</div>;
 
   return (
-    <div className="border border-border rounded-lg p-2 max-h-40 overflow-y-auto bg-muted/50">
+    <div className="max-h-40 overflow-y-auto rounded-[var(--radius-brand-md)] border border-border bg-muted/50 p-2">
       <p className="text-xs font-semibold text-foreground mb-2">سجل التعديلات:</p>
       <div className="space-y-2">
         {logs.map((log: any, i: number) => (
@@ -1990,7 +2118,7 @@ function EditHistoryPanel({ orderId }: { orderId: number }) {
 // ==================== TASKS PANEL ====================
 function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
   const utils = trpc.useUtils();
-  const { data: tasksList, isLoading } = trpc.tasks.list.useQuery(
+  const { data: tasksList, isLoading, isError, refetch } = trpc.tasks.list.useQuery(
     { employeeId: employeeId ?? undefined },
     { enabled: !!employeeId, refetchInterval: 30000 }
   );
@@ -2003,58 +2131,45 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
     onError: (e) => toast.error(e.message),
   });
 
-  const TASK_STATUS: Record<string, { label: string; color: string; bg: string }> = {
-    new: { label: "جديدة", color: "text-[var(--info)]", bg: "bg-[var(--info)]/10 border-[var(--info)]/30" },
-    in_progress: { label: "قيد التنفيذ", color: "text-[var(--warning)]", bg: "bg-[var(--warning)]/10 border-[var(--warning)]/30" },
-    done: { label: "تمت", color: "text-[var(--success)]", bg: "bg-[var(--success)]/10 border-[var(--success)]/30" },
+  const TASK_STATUS: Record<string, { label: string; tone: "info" | "warning" | "success" }> = {
+    new: { label: "جديدة", tone: "info" },
+    in_progress: { label: "قيد التنفيذ", tone: "warning" },
+    done: { label: "تمت", tone: "success" },
   };
-
-  if (isLoading) {
-    return (
-      <div className="bg-card rounded-xl border border-border shadow-sm p-4">
-        <div className="animate-pulse space-y-3">
-          <div className="h-4 bg-muted rounded w-1/3" />
-          <div className="h-16 bg-muted rounded" />
-          <div className="h-16 bg-muted rounded" />
-        </div>
-      </div>
-    );
-  }
 
   const pendingTasks = (tasksList ?? []).filter((t: any) => t.status !== 'done');
   const doneTasks = (tasksList ?? []).filter((t: any) => t.status === 'done');
 
   return (
-    <div className="bg-card rounded-xl border border-border shadow-sm p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-bold text-foreground flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-[var(--warning)]" />
-          المهام ({pendingTasks.length} مهمة نشطة)
-        </h3>
-      </div>
-
-      {pendingTasks.length === 0 && doneTasks.length === 0 ? (
+    <SectionCard
+      testId="employee-tasks-panel"
+      icon={<MessageSquare className="h-4 w-4 text-primary" aria-hidden="true" />}
+      title={isLoading || isError ? "المهام" : `المهام (${pendingTasks.length} مهمة نشطة)`}
+    >
+      {isLoading ? (
+        <LoadingSkeleton variant="table" rows={2} />
+      ) : isError ? (
+        <ErrorState title="تعذّر تحميل المهام" onRetry={() => refetch()} className="py-6" />
+      ) : pendingTasks.length === 0 && doneTasks.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-4">لا توجد مهام حالياً</p>
       ) : (
         <div className="space-y-2">
           {pendingTasks.map((task: any) => {
             const statusConf = TASK_STATUS[task.status] ?? TASK_STATUS.new;
             return (
-              <div key={task.id} className="border border-border rounded-lg p-3 hover:bg-muted/50 transition-colors">
+              <div key={task.id} className="rounded-[var(--radius-brand-md)] border border-border p-3 transition-colors hover:bg-muted/50">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
                       <h4 className="font-semibold text-foreground text-sm">{task.title}</h4>
-                      <Badge className={`${statusConf.bg} ${statusConf.color} border text-xs px-1.5 py-0`}>
-                        {statusConf.label}
-                      </Badge>
+                      <StatusBadge status={task.status} label={statusConf.label} tone={statusConf.tone} size="sm" icon={null} />
                     </div>
                     {task.description && (
                       <p className="text-xs text-muted-foreground leading-relaxed mb-1">{task.description}</p>
                     )}
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>{new Date(task.createdAt).toLocaleDateString('ar-EG')}</span>
-                      <span>•</span>
+                      <span aria-hidden="true">•</span>
                       <span>{task.createdByName}</span>
                     </div>
                   </div>
@@ -2062,7 +2177,7 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
                     value={task.status}
                     onValueChange={(v: any) => updateStatusMutation.mutate({ taskId: task.id, status: v })}
                   >
-                    <SelectTrigger className="min-h-11 md:min-h-9 w-28 text-xs h-7 shrink-0">
+                    <SelectTrigger className="min-h-11 md:min-h-9 w-28 text-xs h-7 shrink-0" aria-label="حالة المهمة">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -2078,12 +2193,12 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
 
           {doneTasks.length > 0 && (
             <details className="mt-2">
-              <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">
+              <summary className="flex min-h-11 cursor-pointer items-center text-xs text-muted-foreground hover:text-foreground md:min-h-0">
                 مهام مكتملة ({doneTasks.length})
               </summary>
               <div className="space-y-1 mt-2">
                 {doneTasks.slice(0, 5).map((task: any) => (
-                  <div key={task.id} className="border border-[var(--success)]/30 rounded-lg p-2 bg-[var(--success)]/10">
+                  <div key={task.id} className="rounded-[var(--radius-brand-md)] border border-[var(--success)]/30 bg-[var(--success)]/10 p-2">
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="h-3.5 w-3.5 text-[var(--success)] shrink-0" />
                       <span className="text-sm text-foreground line-through">{task.title}</span>
@@ -2095,6 +2210,49 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
           )}
         </div>
       )}
+    </SectionCard>
+  );
+}
+
+// ==================== STOCK VARIANTS (view only) ====================
+// Same cells the old hand-rolled table rendered; ResponsiveDataTable swaps them for cards below md.
+const variantIsLow = (v: any) => v.currentStock <= v.minStockLevel;
+const variantPrice = (v: any) => (v.price ? `${Number(v.price).toLocaleString('ar-EG')} ج.م` : '-');
+const VariantStockBadge = ({ v }: { v: any }) => (
+  variantIsLow(v)
+    ? <StatusBadge kind="stock" status="low" label="ينفد" tone="danger" size="sm" />
+    : <StatusBadge kind="stock" status="available" label="متوفر" tone="success" size="sm" />
+);
+
+const STOCK_VARIANT_COLUMNS: Column<any>[] = [
+  { id: "color", header: "اللون", cell: v => <span className="font-medium text-foreground">{v.color || '-'}</span> },
+  { id: "size", header: "المقاس", cell: v => <span className="text-muted-foreground">{v.size || '-'}</span> },
+  { id: "price", header: "السعر", numeric: true, cell: v => <span className="font-bold text-primary">{variantPrice(v)}</span> },
+  {
+    id: "stock", header: "المخزون", numeric: true,
+    cell: v => <span className={`font-bold ${variantIsLow(v) ? 'text-destructive' : 'text-foreground'}`}>{v.currentStock}</span>,
+  },
+  { id: "status", header: "الحالة", cell: v => <VariantStockBadge v={v} /> },
+];
+
+function StockVariantCard({ v }: { v: any }) {
+  const isLow = variantIsLow(v);
+  return (
+    <div
+      className={`flex items-center justify-between gap-3 rounded-[var(--radius-brand-md)] border p-3 ${
+        isLow ? 'border-destructive/30 bg-destructive/10' : 'border-border bg-card'
+      }`}
+    >
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-foreground">
+          {v.color || '-'} <span className="text-muted-foreground">· {v.size || '-'}</span>
+        </p>
+        <p className="text-xs font-bold text-primary tabular-nums">{variantPrice(v)}</p>
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <span className={`text-base font-bold tabular-nums ${isLow ? 'text-destructive' : 'text-foreground'}`}>{v.currentStock}</span>
+        <VariantStockBadge v={v} />
+      </div>
     </div>
   );
 }

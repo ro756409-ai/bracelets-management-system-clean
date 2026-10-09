@@ -293,8 +293,8 @@ function StocktakeSession({ businessId, stocktakeId, onBack }: { businessId: num
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5" data-testid="stocktake-summary">
           <StatCard label="الأسطر" value={lines.length.toLocaleString("ar-EG")} hint="من لقطة الجلسة" />
           <StatCard label="مطابق" value={totals.matched.toLocaleString("ar-EG")} tone="success" hint="الفرق = 0" />
-          <StatCard label="زيادة" value={totals.surplusCount.toLocaleString("ar-EG")} tone="info" hint={`${money(totals.surplus)} ج.م (differenceValue)`} />
-          <StatCard label="عجز" value={totals.shortageCount.toLocaleString("ar-EG")} tone={totals.shortageCount > 0 ? "danger" : "default"} hint={`${money(totals.shortage)} ج.م (differenceValue)`} />
+          <StatCard label="زيادة" value={totals.surplusCount.toLocaleString("ar-EG")} tone="info" hint={`${money(totals.surplus)} ج.م`} />
+          <StatCard label="عجز" value={totals.shortageCount.toLocaleString("ar-EG")} tone={totals.shortageCount > 0 ? "danger" : "default"} hint={`${money(totals.shortage)} ج.م`} />
           <StatCard label="غير محفوظ" value={unsavedCount.toLocaleString("ar-EG")} tone={unsavedCount > 0 ? "warning" : "default"} hint={unsavedCount > 0 ? "احفظ العدّ (Enter أو زر الحفظ)" : "كل العدّ محفوظ"} />
         </div>
       </SectionCard>

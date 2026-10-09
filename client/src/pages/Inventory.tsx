@@ -53,8 +53,7 @@ import {
 import { SectionIcon } from "@/components/brand";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { WorkspaceTabs, StatusFilterChips, DataToolbar } from "@/components/workspace";
-import { PRIMARY_DESTINATIONS, visibleChildren } from "@/config/navigation";
+import { StatusFilterChips, DataToolbar } from "@/components/workspace";
 import {
   getStockStatus,
   computeVariantTotals,
@@ -86,12 +85,8 @@ export default function Inventory() {
   const { user } = useAuth();
   const { permissions } = usePermissions();
   const isAdmin = user?.role === "admin";
-  // تبويبات Workspace المخزون — من نفس مصدر التنقّل (NavConfig)، مفلترة بصلاحيات الجلسة.
-  // بتفتح الصفحات الموجودة (استلام/جرد/مرتجعات الورشة) — الـroutes القديمة كما هي.
-  const inventoryTabs = useMemo(() => {
-    const dest = PRIMARY_DESTINATIONS.find(d => d.key === "inventory");
-    return dest ? visibleChildren(dest, isAdmin, permissions) : [];
-  }, [isAdmin, permissions]);
+  // تبويبات Workspace المخزون (المخزون/الاستلام/الجرد/مرتجعات الورشة) يرسمها DashboardLayout مرة واحدة
+  // من نفس NavConfig للوجهة النشطة — الصفحة لا ترسم نسخة ثانية (كانت تظهر مكررة على الهاتف).
   const inventoryInReasons = useOperationalOptions(
     "inventory_in_reason"
   ).options;
@@ -1102,7 +1097,7 @@ export default function Inventory() {
   return (
     <div className="space-y-5">
       {/* المرحلة 7C: رأس + نطاق النشاط + ملخص حقيقي + فلاتر + جدول Desktop/بطاقات Mobile. التبويبات الداخلية
-          (أصناف/حركات/تكلفة) والـWorkspaceTabs كما هي؛ كل الحوارات والـmutations بلا تغيير. */}
+          (أصناف/حركات/تكلفة) كما هي (تبويبات الـWorkspace من الـShell)؛ كل الحوارات والـmutations بلا تغيير. */}
       <PageHeader
         title="المخزون"
         description="الأرصدة الحالية لكل منتج وتركيبة في نطاق الجلسة — الرصيد يتغيّر من حركات الوارد/الصادر والاستلام والجرد فقط."
@@ -1133,17 +1128,16 @@ export default function Inventory() {
           <ScopeBar options={businesses.map(b => ({ id: b.id, label: b.name }))} value={currentBusinessId ?? null} onChange={id => setCurrentBusinessId(id == null ? undefined : Number(id))} />
         )}
       </PageHeader>
-      <WorkspaceTabs tabs={inventoryTabs} />
 
       {!online && <OfflineState onRetry={refreshAll} />}
 
       {/* ملخص حقيقي — مصدر كل رقم مكتوب تحته؛ لا قيمة مخزون ولا تكلفة محسوبة هنا */}
       {activeTab !== "accounting" && (
         <section aria-label="ملخص المخزون" className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5" data-testid="inventory-summary">
-          <StatCard label="المنتجات" value={isLoading ? "…" : fmtN(activeProducts.length)} icon={<Package className="h-5 w-5" aria-hidden="true" />} tone="primary" hint="منتج نشط في النطاق (products.list)" loading={isLoading} />
-          <StatCard label="التركيبات" value={variantsLoading ? "…" : fmtN(activeVariants.length)} icon={<Tag className="h-5 w-5" aria-hidden="true" />} hint="تركيبة نشطة (variants.all)" loading={variantsLoading} />
-          <StatCard label="منخفض المخزون" value={fmtN(summaryLow)} icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />} tone={summaryLow > 0 ? "warning" : "default"} hint="الكمية ≤ حد التنبيه (getStockStatus)" onClick={() => { setActiveTab("products"); setStockStatusFilter("low"); }} active={stockStatusFilter === "low"} loading={isLoading || variantsLoading} />
-          <StatCard label="نافد" value={fmtN(summaryOut)} icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />} tone={summaryOut > 0 ? "danger" : "default"} hint="الكمية = صفر (getStockStatus)" onClick={() => { setActiveTab("products"); setStockStatusFilter("out"); }} active={stockStatusFilter === "out"} loading={isLoading || variantsLoading} />
+          <StatCard label="المنتجات" value={isLoading ? "…" : fmtN(activeProducts.length)} icon={<Package className="h-5 w-5" aria-hidden="true" />} tone="primary" hint="منتج نشط في النطاق" loading={isLoading} />
+          <StatCard label="التركيبات" value={variantsLoading ? "…" : fmtN(activeVariants.length)} icon={<Tag className="h-5 w-5" aria-hidden="true" />} hint="تركيبة نشطة" loading={variantsLoading} />
+          <StatCard label="منخفض المخزون" value={fmtN(summaryLow)} icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />} tone={summaryLow > 0 ? "warning" : "default"} hint="الكمية ≤ حد التنبيه" onClick={() => { setActiveTab("products"); setStockStatusFilter("low"); }} active={stockStatusFilter === "low"} loading={isLoading || variantsLoading} />
+          <StatCard label="نافد" value={fmtN(summaryOut)} icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />} tone={summaryOut > 0 ? "danger" : "default"} hint="الكمية = صفر" onClick={() => { setActiveTab("products"); setStockStatusFilter("out"); }} active={stockStatusFilter === "out"} loading={isLoading || variantsLoading} />
           <StatCard
             label="آخر جرد"
             value={lastStocktake ? fmtDate(lastStocktake.createdAt) : UNAVAILABLE_LABEL}
