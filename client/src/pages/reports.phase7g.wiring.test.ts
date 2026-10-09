@@ -29,7 +29,9 @@ describe("🔌 التقارير — الاستعلامات والفترات كم
     expect(src).toContain("cancelBadge(e.cancelRate)");
     expect(src).toContain("rate >= 70 ?");
     expect(src).toContain("rate <= 20 ?");
-    expect(src).toContain("[...(perfData ?? [])].sort((a, b) => b.confirmRate - a.confirmRate)");
+    // الملخص تقديري (حسب الإسناد والحالة الحالية) — ترتيب محايد بالاسم على نسخة، مش ترتيب للموظفين
+    expect(src).toContain("const perfRows = useMemo(() => sortByEmployeeName(perfData), [perfData]);");
+    expect(src).not.toMatch(/\.sort\(\(a, b\) => b\.confirmRate - a\.confirmRate\)/);
     expect(src).not.toMatch(/perfData\s*\.sort\(/);
   });
 });
@@ -47,11 +49,12 @@ describe("🎨 الرسوم والهوية", () => {
     expect((src.match(/<table className="sr-only"/g) ?? []).length).toBe(2);
     expect((src.match(/<div aria-hidden="true">\s*<ResponsiveContainer/g) ?? []).length).toBe(2);
   });
-  it("كل رقم يذكر مصدره (hint/description بالاستعلام)", () => {
-    expect(src).toContain('hint="مجموع أيام الفترة من reports.dailyChart"');
-    expect(src).toContain('description="حسب تاريخ الإنشاء — المصدر reports.dailyChart"');
-    expect(src).toContain('description="المصدر reports.cancellationReasons"');
-    expect(src).toContain('description="المصدر reports.employeePerformance — مرتّب بنسبة التأكيد"');
+  it("كل رقم يوضّح أساسه بكلام المستخدم — بلا أسماء استعلامات أو دوال ظاهرة", () => {
+    expect(src).toContain('hint="مجموع أيام الفترة"');
+    expect(src).toContain('description="حسب تاريخ إنشاء الأوردر"');
+    expect(src).toContain('description="حسب السبب المسجّل عند الإلغاء"');
+    expect(src).toContain('description="حسب الموظف المُسند حاليًا وحالة الأوردر الحالية — مرتّب أبجديًا بالاسم"');
+    expect(src).not.toMatch(/(hint|description)="[^"]*reports\.[a-zA-Z]+/);
   });
   it("جدول الأداء عبر ResponsiveDataTable (بطاقات على الهاتف) بلا <table> يدوي؛ أزرار الفترة 44px؛ غير المدير PermissionDenied", () => {
     expect(src).toContain("<ResponsiveDataTable<any>");

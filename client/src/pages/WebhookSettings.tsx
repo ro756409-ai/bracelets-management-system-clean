@@ -213,7 +213,7 @@ export default function WebhookSettings() {
         }
       >
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="إحصاءات الأحداث" data-testid="webhook-stats">
-          <StatCard label="إجمالي الأحداث" value={stats.total.toLocaleString("ar-EG")} hint="من webhook.log" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} loading={isLoading} />
+          <StatCard label="إجمالي الأحداث" value={stats.total.toLocaleString("ar-EG")} hint="من سجل الاستقبال" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} loading={isLoading} />
           <StatCard label="أوردر استُقبل" value={stats.success.toLocaleString("ar-EG")} tone="success" active={statusFilter === "success"} onClick={() => toggleFilter("success")} loading={isLoading} />
           <StatCard label="مكرر (تم تخطيه)" value={stats.duplicate.toLocaleString("ar-EG")} tone="warning" active={statusFilter === "duplicate"} onClick={() => toggleFilter("duplicate")} loading={isLoading} />
           <StatCard label="خطأ" value={stats.error.toLocaleString("ar-EG")} tone="danger" active={statusFilter === "error"} onClick={() => toggleFilter("error")} loading={isLoading} />

@@ -221,13 +221,13 @@ export default function Dashboard() {
       {/* ==================== 1. ملخص التشغيل اليومي ==================== */}
       <SectionCard
         title="ملخص التشغيل"
-        description={`الفترة المختارة · المصدر: استعلام لوحة التقارير (reports.dashboard) ضمن ${activeBusiness ? "النشاط الحالي" : "النطاق الحالي"}`}
+        description={`الفترة المختارة ضمن ${activeBusiness ? "النشاط الحالي" : "النطاق الحالي"}`}
         icon={<BarChart3 className="h-4 w-4" aria-hidden="true" />}
         className="border-0 bg-transparent shadow-none"
         contentClassName="p-0"
       >
         {!isAdmin || !canViewStats ? (
-          <PermissionDeniedState message="مؤشرات التشغيل تتطلب صلاحية «عرض المحاسبة» (accounting.view) — لم يُطلب أي رقم من السيرفر." />
+          <PermissionDeniedState message="مؤشرات التشغيل تتطلب صلاحية «عرض المحاسبة». تواصل مع مالك الحساب لو محتاجها." />
         ) : statsForbidden ? (
           <PermissionDeniedState message="رفض السيرفر طلب المؤشرات لهذه الجلسة." />
         ) : statsFailed ? (
@@ -265,7 +265,7 @@ export default function Dashboard() {
               <span className="rounded-[var(--radius-brand-pill)] bg-[var(--success)]/15 px-2 py-0.5 text-xs font-bold tabular-nums text-[var(--success)]">{fmt(todayConfirmedCount)}</span>
             </span>
           }
-          description={`أوردرات أُكّدت اليوم ولم تُطبع بعد (orders.todayConfirmed) · ${todayConfirmedCount > 0 ? `قيمة متوقعة ${fmt(todayTotalRevenue)} ج.م — ليست تحصيلًا` : "جاهزة للطباعة والتجهيز"}`}
+          description={`أوردرات أُكّدت اليوم ولم تُطبع بعد · ${todayConfirmedCount > 0 ? `قيمة متوقعة ${fmt(todayTotalRevenue)} ج.م — ليست تحصيلًا` : "جاهزة للطباعة والتجهيز"}`}
           action={todayConfirmedCount > 0 ? (
             <Button type="button" variant="outline" size="sm" onClick={exportTodayConfirmedToExcel} className="min-h-11 gap-1 border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10 md:min-h-8 md:text-xs">
               <Download className="h-3.5 w-3.5" aria-hidden="true" />
@@ -313,7 +313,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <SectionCard
             title="أوردرات آخر 14 يومًا"
-            description="عدد الأوردرات يوميًا حسب تاريخ الإنشاء (reports.dailyChart) — الإجمالي والمؤكد (شاملًا المطبوع/المجهّز/المشحون/الموصَّل) والملغي"
+            description="عدد الأوردرات يوميًا حسب تاريخ الإنشاء — الإجمالي والمؤكد (شاملًا المطبوع/المجهّز/المشحون/الموصَّل) والملغي"
             icon={<BarChart3 className="h-4 w-4" aria-hidden="true" />}
             className="lg:col-span-2"
             testId="dashboard-chart"
@@ -359,7 +359,7 @@ export default function Dashboard() {
             )}
           </SectionCard>
 
-          <SectionCard title="أكثر المحافظات طلبًا" description="من أوردرات الفترة المختارة (reports.dashboard)" icon={<MapPin className="h-4 w-4" aria-hidden="true" />} testId="dashboard-governorates">
+          <SectionCard title="أكثر المحافظات طلبًا" description="من أوردرات الفترة المختارة" icon={<MapPin className="h-4 w-4" aria-hidden="true" />} testId="dashboard-governorates">
             {!canViewStats ? (
               <PermissionDeniedState message="يتطلب صلاحية «عرض المحاسبة»." />
             ) : isLoading ? (
@@ -392,7 +392,7 @@ export default function Dashboard() {
       {isAdmin && (
         <SectionCard
           title="المخزون والتنبيهات"
-          description="منتجات وصل مخزونها إلى حد التنبيه أو أقل (products.lowStock) ضمن النطاق الحالي"
+          description="منتجات وصل مخزونها إلى حد التنبيه أو أقل ضمن النطاق الحالي"
           icon={<SectionIcon section="inventory" fallback={Boxes} size="md" className="!h-7 !w-7 !rounded-md" />}
           action={canOpen("/inventory") ? <Button type="button" variant="outline" size="sm" className="min-h-11 md:min-h-8" onClick={() => setLocation("/inventory")}>فتح المخزون</Button> : undefined}
           testId="dashboard-inventory"

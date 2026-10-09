@@ -1145,8 +1145,8 @@ export default function Inventory() {
             hint={
               scopedBusinessId == null ? "اختر نشاطًا واحدًا لعرض آخر جرد"
               : !canViewStocktake ? "يتطلب صلاحية عرض تكلفة المخزون"
-              : lastStocktake ? `${STOCKTAKE_STATUS[lastStocktake.status] ?? lastStocktake.status} · ${lastStocktake.createdByName ?? ""} (stocktakeList)`
-              : stocktakes.isLoading ? "جارٍ التحميل" : "لا جلسات جرد بعد (stocktakeList)"
+              : lastStocktake ? `${STOCKTAKE_STATUS[lastStocktake.status] ?? lastStocktake.status} · ${lastStocktake.createdByName ?? ""}`
+              : stocktakes.isLoading ? "جارٍ التحميل" : "لا جلسات جرد بعد"
             }
             loading={stocktakes.isLoading}
           />

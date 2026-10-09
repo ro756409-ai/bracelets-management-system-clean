@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import { EstimatedPerformanceNotice, ESTIMATED_PERFORMANCE_TITLE, sortByEmployeeName } from "@/components/shared/EstimatedPerformanceNotice";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -442,13 +443,15 @@ export default function Employees() {
       {/* جدول أداء الموظفين — الأرقام من reports.employeePerformance كما هي */}
       {(perfLoading || (todayPerf && todayPerf.length > 0)) && (
         <SectionCard
-          title={<span className="inline-flex items-center gap-2"><Activity className="h-4 w-4 text-primary" aria-hidden="true" /> أداء الموظفين (حسب تاريخ الإنشاء)</span>}
+          title={<span className="inline-flex items-center gap-2"><Activity className="h-4 w-4 text-primary" aria-hidden="true" /> {ESTIMATED_PERFORMANCE_TITLE}</span>}
+          description="أوردرات أُنشئت في الفترة — مرتّبة أبجديًا بالاسم"
           action={<span className="flex items-center gap-2 [&_button]:min-h-[max(2.75rem,44px)] md:[&_button]:min-h-9"><CalendarDays className="h-4 w-4 text-muted-foreground" aria-hidden="true" /><DateRangePicker value={perfDateRange} onChange={(range) => setPerfDateRange(range)} /></span>}
           flush
           testId="emp-performance"
         >
+          <EstimatedPerformanceNotice className="m-3" />
           <ResponsiveDataTable<any>
-            rows={todayPerf ?? []}
+            rows={sortByEmployeeName(todayPerf)}
             columns={perfColumns}
             rowKey={e => e.employeeId}
             loading={perfLoading}

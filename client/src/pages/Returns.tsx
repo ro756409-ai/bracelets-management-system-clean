@@ -89,7 +89,7 @@ export default function Returns() {
         icon={<RotateCcw className="h-5 w-5" aria-hidden="true" />}
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="ملخص المرتجعات" data-testid="returns-summary">
-          <StatCard label="إجمالي المرتجعات" value={Number(stats?.total ?? 0).toLocaleString("ar-EG")} hint="returns.stats" loading={statsLoading} />
+          <StatCard label="إجمالي المرتجعات" value={Number(stats?.total ?? 0).toLocaleString("ar-EG")} hint="حسب الفترة المختارة" loading={statsLoading} />
           <StatCard
             label="إجمالي قيمة المرتجعات"
             value={`${stats?.totalAmount ? Number(stats.totalAmount).toLocaleString("ar-EG") : "٠"} ج.م`}

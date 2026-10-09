@@ -21,6 +21,15 @@ describe("📊 StatCard — القيمة صفر", () => {
     for (const v of values) expect(v.className).toContain("min-h-8");
     expect(values[0].className).toBe(values[1].className);
   });
+  it("القيمة النصية («غير متاح») سطر واحد بحجم أصغر وبنفس الحد الأدنى للارتفاع — مش رقم مكسور على سطرين", () => {
+    render(<div><StatCard label="آخر جرد" value="غير متاح" /><StatCard label="المنتجات" value="١٢" /></div>);
+    const [text, num] = screen.getAllByTestId("stat-card-value");
+    expect(text.className).toContain("whitespace-nowrap");
+    expect(text.className).toContain("text-lg");
+    expect(text.className).not.toContain("text-[26px]");
+    expect(num.className).toContain("text-[26px]");
+    for (const v of [text, num]) expect(v.className).toContain("min-h-8");
+  });
   it("«٠ ج.م» و«٠%» ليست صفرًا عدديًا خامًا فلا وصف إضافي؛ الرقم 0 الحقيقي يأخذ الوصف", () => {
     render(<div><StatCard label="أ" value="٠ ج.م" /><StatCard label="ب" value="٠%" /><StatCard label="ج" value={0} /></div>);
     expect(screen.getAllByTestId("stat-card-zero-note")).toHaveLength(1);

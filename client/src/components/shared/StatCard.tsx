@@ -47,6 +47,8 @@ export type StatCardProps = {
 
 /** صفر عددي حقيقي (٠ أو 0) — قيمة مثل «٠ ج.م» أو «٠%» لا تُعامل كذلك. */
 const isZeroValue = (value: ReactNode) => typeof value === "string" ? /^[0٠]$/.test(value.trim()) : value === 0;
+/** قيمة نصية مش رقم («غير متاح»، «—»…) — بتتعرض بحجم أصغر في سطر واحد بدل ما تتكسر على سطرين بحجم الأرقام. */
+const isTextValue = (value: ReactNode) => typeof value === "string" && /[\u0600-\u06FF]/.test(value) && !/[0-9٠-٩]/.test(value);
 
 /**
  * One number with a label. Six different stat-card styles existed across the app; this
@@ -77,10 +79,10 @@ export function StatCard({
           <Skeleton className="h-8 w-16" />
         ) : (
           // ارتفاع ثابت للسطر: الصفر الحقيقي «٠» (حرف صغير بصريًا) والأرقام الكبيرة يأخذان نفس المساحة
-          <p className={cn("flex min-h-8 items-center gap-2 text-[26px] font-bold leading-none tabular-nums", TONE_TEXT[tone])} data-testid="stat-card-value">
+          <p className={cn("flex min-h-8 items-center gap-2 font-bold leading-none tabular-nums", isTextValue(value) ? "whitespace-nowrap text-lg text-muted-foreground" : "text-[26px]", !isTextValue(value) && TONE_TEXT[tone])} data-testid="stat-card-value">
             {value}
             {/* «٠» العربي يُرسم نقطة صغيرة فيبدو فراغًا: نُبقي الصفر كما هو ونضيف وصفًا مكتوبًا بجانبه (لا إخفاء ولا شرطة) */}
-            {isZeroValue(value) && <span className="text-xs font-medium text-muted-foreground" data-testid="stat-card-zero-note">لا يوجد</span>}
+            {isZeroValue(value) && <span className="whitespace-nowrap text-xs font-medium text-muted-foreground" data-testid="stat-card-zero-note">لا يوجد</span>}
           </p>
         )}
         {trend && !loading && (

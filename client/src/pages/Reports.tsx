@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
+import { EstimatedPerformanceNotice, ESTIMATED_PERFORMANCE_TITLE, sortByEmployeeName } from "@/components/shared/EstimatedPerformanceNotice";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import {
@@ -97,7 +98,8 @@ export default function Reports() {
   const sums = barData.reduce((a, d) => ({ total: a.total + d.total, confirmed: a.confirmed + d.confirmed, cancelled: a.cancelled + d.cancelled }), { total: 0, confirmed: 0, cancelled: 0 });
 
   // الترتيب للعرض فقط على نسخة — لا تعديل في بيانات الاستعلام
-  const perfRows = useMemo(() => [...(perfData ?? [])].sort((a, b) => b.confirmRate - a.confirmRate), [perfData]);
+  // ترتيب محايد بالاسم — الملخص تقديري ومايُستخدمش لترتيب الموظفين (كان مرتّب بنسبة التأكيد).
+  const perfRows = useMemo(() => sortByEmployeeName(perfData), [perfData]);
 
   if (!isAdmin) {
     return (
@@ -135,9 +137,9 @@ export default function Reports() {
         icon={<BarChart3 className="h-5 w-5" aria-hidden="true" />}
       >
         <section className="grid grid-cols-3 gap-3" aria-label="ملخص الفترة" data-testid="reports-summary">
-          <StatCard label={`أوردرات ${dateRangeLabels[dateRange]}`} value={sums.total.toLocaleString("ar-EG")} hint="مجموع أيام الفترة من reports.dailyChart" loading={chartLoading} />
-          <StatCard label="مؤكد" value={sums.confirmed.toLocaleString("ar-EG")} tone="success" hint="من reports.dailyChart" loading={chartLoading} />
-          <StatCard label="ملغي" value={sums.cancelled.toLocaleString("ar-EG")} tone="danger" hint="من reports.dailyChart" loading={chartLoading} />
+          <StatCard label={`أوردرات ${dateRangeLabels[dateRange]}`} value={sums.total.toLocaleString("ar-EG")} hint="مجموع أيام الفترة" loading={chartLoading} />
+          <StatCard label="مؤكد" value={sums.confirmed.toLocaleString("ar-EG")} tone="success" hint="حسب تاريخ الإنشاء" loading={chartLoading} />
+          <StatCard label="ملغي" value={sums.cancelled.toLocaleString("ar-EG")} tone="danger" hint="حسب تاريخ الإنشاء" loading={chartLoading} />
         </section>
       </PageHeader>
 
@@ -163,7 +165,7 @@ export default function Reports() {
       {/* Charts Row */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Daily Orders Chart */}
-        <SectionCard title={<span className="inline-flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" aria-hidden="true" /> أوردرات {dateRangeLabels[dateRange]}</span>} description="حسب تاريخ الإنشاء — المصدر reports.dailyChart" testId="reports-daily-chart">
+        <SectionCard title={<span className="inline-flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" aria-hidden="true" /> أوردرات {dateRangeLabels[dateRange]}</span>} description="حسب تاريخ إنشاء الأوردر" testId="reports-daily-chart">
           {chartLoading ? <LoadingSkeleton variant="cards" rows={1} className="h-[220px]" /> : barData.length > 0 ? (
             <>
               <div aria-hidden="true">
@@ -196,7 +198,7 @@ export default function Reports() {
         </SectionCard>
 
         {/* Cancellation Reasons Pie */}
-        <SectionCard title={<span className="inline-flex items-center gap-2"><XCircle className="h-4 w-4 text-destructive" aria-hidden="true" /> أسباب الإلغاء <span className="text-sm font-normal text-muted-foreground tabular-nums">({totalCancelled.toLocaleString("ar-EG")} إلغاء)</span></span>} description="المصدر reports.cancellationReasons" testId="reports-cancel-chart">
+        <SectionCard title={<span className="inline-flex items-center gap-2"><XCircle className="h-4 w-4 text-destructive" aria-hidden="true" /> أسباب الإلغاء <span className="text-sm font-normal text-muted-foreground tabular-nums">({totalCancelled.toLocaleString("ar-EG")} إلغاء)</span></span>} description="حسب السبب المسجّل عند الإلغاء" testId="reports-cancel-chart">
           {cancelLoading ? <LoadingSkeleton variant="cards" rows={1} className="h-[220px]" /> : cancelPieData.length > 0 ? (
             <>
               <div aria-hidden="true">
@@ -236,7 +238,8 @@ export default function Reports() {
       </div>
 
       {/* Employee Performance Table — النِّسَب من السيرفر كما هي */}
-      <SectionCard title={<span className="inline-flex items-center gap-2"><Users className="h-4 w-4 text-primary" aria-hidden="true" /> أداء الموظفين</span>} description="المصدر reports.employeePerformance — مرتّب بنسبة التأكيد" flush testId="reports-performance">
+      <SectionCard title={<span className="inline-flex items-center gap-2"><Users className="h-4 w-4 text-primary" aria-hidden="true" /> {ESTIMATED_PERFORMANCE_TITLE}</span>} description="حسب الموظف المُسند حاليًا وحالة الأوردر الحالية — مرتّب أبجديًا بالاسم" flush testId="reports-performance">
+        <EstimatedPerformanceNotice className="m-3" />
         <ResponsiveDataTable<any>
           rows={perfRows}
           columns={perfColumns}
@@ -265,19 +268,19 @@ export default function Reports() {
       </SectionCard>
 
       {/* Performance Legend — نفس العتبات */}
-      <SectionCard title="مؤشرات الأداء" description="عتبات نسبة التأكيد المستخدمة في التلوين أعلاه" testId="reports-legend">
+      <SectionCard title="دلالة ألوان نسبة التأكيد" description="عتبات التلوين أعلاه فقط — ليست تقييمًا للموظف" testId="reports-legend">
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-[var(--radius-brand-md)] bg-[var(--success)]/10 p-3 text-center">
             <p className="text-lg font-bold text-[var(--success)]">70%+</p>
-            <p className="text-xs text-[var(--success)]">أداء ممتاز</p>
+            <p className="text-xs text-[var(--success)]">نسبة مرتفعة</p>
           </div>
           <div className="rounded-[var(--radius-brand-md)] bg-[var(--warning)]/10 p-3 text-center">
             <p className="text-lg font-bold text-[var(--warning)]">50-70%</p>
-            <p className="text-xs text-[var(--warning)]">أداء متوسط</p>
+            <p className="text-xs text-[var(--warning)]">نسبة متوسطة</p>
           </div>
           <div className="rounded-[var(--radius-brand-md)] bg-destructive/10 p-3 text-center">
             <p className="text-lg font-bold text-destructive">أقل من 50%</p>
-            <p className="text-xs text-destructive">يحتاج تحسين</p>
+            <p className="text-xs text-destructive">نسبة منخفضة</p>
           </div>
         </div>
       </SectionCard>

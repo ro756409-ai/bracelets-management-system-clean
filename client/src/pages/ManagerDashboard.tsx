@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { EstimatedPerformanceNotice, ESTIMATED_PERFORMANCE_TITLE, sortByEmployeeName } from "@/components/shared/EstimatedPerformanceNotice";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1015,7 +1016,7 @@ function ManagerReportsTab() {
     <div className="space-y-6">
       <PageHeader
         title="التقارير"
-        description="أداء الموظفين وأسباب الإلغاء خلال الفترة المختارة."
+        description="ملخص تشغيلي تقديري وأسباب الإلغاء خلال الفترة المختارة."
         actions={
           <div className="flex gap-2" role="group" aria-label="الفترة">
             {[
@@ -1042,9 +1043,10 @@ function ManagerReportsTab() {
       {!online && <OfflineState onRetry={() => refetchPerf()} className="py-6" />}
 
       {/* Employee Performance */}
-      <SectionCard title="أداء الموظفين" icon={<BarChart3 className="h-4 w-4 text-primary" aria-hidden="true" />} testId="manager-perf">
+      <SectionCard title={ESTIMATED_PERFORMANCE_TITLE} icon={<BarChart3 className="h-4 w-4 text-primary" aria-hidden="true" />} testId="manager-perf">
+        <EstimatedPerformanceNotice className="mb-3" />
         <ResponsiveDataTable<PerfRow>
-          rows={performance ?? []}
+          rows={sortByEmployeeName(performance)}
           columns={perfColumns}
           rowKey={(p) => p.employeeId ?? p.employeeName}
           loading={perfLoading}

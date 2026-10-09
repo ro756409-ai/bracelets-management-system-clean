@@ -78,7 +78,7 @@ export default function MergeLogs() {
         actions={<Button variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-2`} data-testid="merge-refresh"><RefreshCw className="h-4 w-4" aria-hidden="true" /> تحديث</Button>}
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="إحصاءات الدمج" data-testid="merge-stats">
-          <StatCard label="إجمالي عمليات الدمج" value={totalMerges.toLocaleString("ar-EG")} tone="warning" hint="آخر 200 عملية من reports.mergeLogs" loading={isLoading} />
+          <StatCard label="إجمالي عمليات الدمج" value={totalMerges.toLocaleString("ar-EG")} tone="warning" hint="آخر 200 عملية دمج" loading={isLoading} />
           <StatCard label="إجمالي الكميات المدمجة" value={totalQtyMerged.toLocaleString("ar-EG")} tone="info" loading={isLoading} />
           <StatCard label="عملاء فريدون" value={uniqueCustomers.toLocaleString("ar-EG")} tone="success" loading={isLoading} />
           <StatCard label="دمج اليوم" value={todayMerges.toLocaleString("ar-EG")} tone="primary" loading={isLoading} />
