@@ -19,6 +19,8 @@ import { filterShipmentAgents, totalShipmentOrders } from "@/lib/shippingOperati
  */
 export default function TodayShipments() {
   const [, setLocation] = useLocation();
+  // الرجوع من حالة المنع بيحدّث صلاحيات الجلسة — فرابط الشحن يختفي من الشاشة فورًا لو الصلاحية اتسحبت.
+  const permissionUtils = trpc.useUtils();
   const [selectedDate, setSelectedDate] = useState(() => {
     const now = new Date();
     return now.toISOString().split("T")[0];
@@ -85,7 +87,7 @@ export default function TodayShipments() {
             الشاشة دي لموظفي الشحن والإدارة. بيانات شحن أوردراتك موجودة جوه كل أوردر في شاشتك.
           </p>
         </div>
-        <Button className="min-h-11" onClick={() => setLocation("/employee-dashboard")}>الرجوع لشاشتي</Button>
+        <Button className="min-h-11" onClick={() => { permissionUtils.auth.myPermissions.invalidate(); setLocation("/employee-dashboard"); }}>الرجوع لشاشتي</Button>
       </main>
     );
   }

@@ -31,9 +31,14 @@ vi.mock("./shippingOperations.service", () => ({
 
 const { appRouter } = await import("./routers");
 
+// tenant مستحيل الوجود: الاختبار مصمَّم «بلا DB»، ولما يشتغل على قاعدة اختبار حقيقية بالتوازي مع ملفات
+// تانية كان tenant رقم 1 ممكن يكون fixture لملف تاني → نتيجة بتعتمد على ترتيب التشغيل. بالمعرّف ده
+// النتيجة واحدة في الحالتين: بلا DB = null، ومع DB = [] — والاتنين fail-closed → [-1].
+const NO_SUCH_TENANT = 2_000_000_000;
+
 function employeeRow(role: string, id = 5) {
   return {
-    id, name: `موظف ${role}`, role, tenantId: 1, businessId: 7, isActive: true,
+    id, name: `موظف ${role}`, role, tenantId: NO_SUCH_TENANT, businessId: 7, isActive: true,
     email: null, username: `emp-${id}`, userId: null, createdAt: new Date(), updatedAt: new Date(),
   } as any;
 }
@@ -49,12 +54,12 @@ function dashboardContext(role: "super_admin" | "manager"): TrpcContext {
     ...baseReqRes(),
     user: { id: -1, openId: "employee-manager-1", name: "المالك", loginMethod: "employee", role: "admin" } as any,
     employee: employeeRow(role, 1),
-    tenantId: 1,
+    tenantId: NO_SUCH_TENANT,
   } as TrpcContext;
 }
 
 function employeeContext(role: string): TrpcContext {
-  return { ...baseReqRes(), user: null, employee: employeeRow(role), tenantId: 1 } as TrpcContext;
+  return { ...baseReqRes(), user: null, employee: employeeRow(role), tenantId: NO_SUCH_TENANT } as TrpcContext;
 }
 
 async function code(fn: () => Promise<unknown>): Promise<string> {
@@ -153,8 +158,8 @@ describe("🔑 مصدر منطق واحد — البوابة ماتغيرتش", 
   });
 
   it("🔑 البوابة بحارسها القديم ونطاقها fail-closed، ومفوّضة للـservice", () => {
-    expect(compact).toContain('todayShipments: requireEmployeePermission("shipping_ops.view")');
-    expect(compact).toContain('shippingRoutes: requireEmployeePermission("shipping_ops.view")');
+    expect(compact).toContain('todayShipments: requireEmployeeTenantPermission("shipping_ops.view")');
+    expect(compact).toContain('shippingRoutes: requireEmployeeTenantPermission("shipping_ops.view")');
     const portal = routers.slice(routers.indexOf("// ==================== SHIPMENTS TODAY"), routers.indexOf("// مسح QR للموظف"));
     // security: النطاق بقى fail-closed — scopeBusinessIds (denyWhenEmpty) + [NO_BUSINESS]،
     // مش الأنماط القديمة اللي فاضيها كان بيتحوّل لكل الأوردرات.

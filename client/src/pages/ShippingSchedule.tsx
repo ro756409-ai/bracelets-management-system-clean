@@ -14,6 +14,8 @@ import { parseShippingRouteRows } from "@/lib/shippingOperations";
 
 export default function ShippingSchedule() {
   const [, setLocation] = useLocation();
+  // الرجوع من حالة المنع بيحدّث صلاحيات الجلسة — فرابط الشحن يختفي من الشاشة فورًا لو الصلاحية اتسحبت.
+  const permissionUtils = trpc.useUtils();
   const { data: employee, isLoading } = trpc.employeePortal.me.useQuery(undefined, { retry: false });
   // Was useOperationalOptions("shipping_schedule_route"), which goes through
   // accountingV2.configurationListForBusinesses — authenticated, but not permission-checked,
@@ -30,7 +32,7 @@ export default function ShippingSchedule() {
       <p className="text-lg font-bold">جدول الشحن مش من مهامك</p>
       <p className="mt-1 text-sm text-muted-foreground">الشاشة دي لموظفي الشحن والإدارة. بيانات شحن أوردراتك موجودة جوه كل أوردر في شاشتك.</p>
     </div>
-    <Button className="min-h-11" onClick={() => setLocation("/employee-dashboard")}>الرجوع لشاشتي</Button>
+    <Button className="min-h-11" onClick={() => { permissionUtils.auth.myPermissions.invalidate(); setLocation("/employee-dashboard"); }}>الرجوع لشاشتي</Button>
   </main>;
   return <div className="min-h-screen bg-background" dir="rtl">
     <header className="sticky top-0 z-40 border-b border-border bg-card/95 shadow-[var(--shadow-card)] backdrop-blur print:hidden"><div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-2"><div className="flex items-center gap-2"><Button variant="ghost" className="min-h-11 min-w-11 px-2" onClick={() => setLocation("/employee-dashboard")} aria-label="الرجوع لشاشتي"><ArrowRight className="h-5 w-5" aria-hidden="true" /></Button><BrandMark className="h-8 w-8" /><div><strong>جدول توزيع الشحن</strong><p className="text-xs text-muted-foreground">إعدادات مستقلة لكل نشاط</p></div></div><Button variant="ghost" className="min-h-11 min-w-11 px-2" onClick={() => window.print()} aria-label="طباعة"><Printer className="h-5 w-5" aria-hidden="true" /></Button></div></header>

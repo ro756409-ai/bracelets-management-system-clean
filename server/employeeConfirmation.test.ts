@@ -106,14 +106,14 @@ describe("صلاحية تشغيل الشحن", () => {
 describe("حراس شاشات الشحن على السيرفر", () => {
   it("🔑 شحنات اليوم بقت وراء الصلاحية مش وراء «موظف نشط» وبس", () => {
     expect(compactRouters).toContain(
-      'todayShipments: requireEmployeePermission("shipping_ops.view")'
+      'todayShipments: requireEmployeeTenantPermission("shipping_ops.view")'
     );
     expect(compactRouters).not.toContain("todayShipments: employeePortalProcedure");
   });
 
   it("🔑 مسارات جدول الشحن ليها إجراء مخصّص محمي", () => {
     expect(compactRouters).toContain(
-      'shippingRoutes: requireEmployeePermission("shipping_ops.view")'
+      'shippingRoutes: requireEmployeeTenantPermission("shipping_ops.view")'
     );
   });
 

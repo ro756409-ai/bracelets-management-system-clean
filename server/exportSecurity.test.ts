@@ -82,7 +82,7 @@ describe("🔑 employeePortal.todayShipments — موظف بلا نشاط = fail
   const routers = fs.readFileSync("server/routers.ts", "utf-8");
   it("🔑 بيستخدم scopeBusinessIds (denyWhenEmpty) مش sessionBusinessIds ?? []", () => {
     const block = routers.slice(
-      routers.indexOf("todayShipments: requireEmployeePermission"),
+      routers.indexOf("todayShipments: requireEmployeeTenantPermission"),
       routers.indexOf("// مسح QR للموظف")
     );
     expect(block).toContain("scopeBusinessIds(empScope(ctx), {})) ?? [NO_BUSINESS]");

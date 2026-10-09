@@ -308,6 +308,26 @@ function requireEmployeePermission(permission: Permission) {
 }
 
 /**
+ * نفس `requireEmployeePermission` لكن **بتجاوزات الشركة** (`tenant_role_permissions` عبر
+ * `hasTenantPermission`) — نفس مصدر `auth.myPermissions` اللي الواجهة بتخفي بيه الروابط ونفس حارس
+ * شاشات الشحن في التطبيق الرئيسي (`permissionProcedure("shipping_ops.view")`). فمنح الصلاحية لدور
+ * بيفتح الشاشة، وسحبها بيمنع السيرفر فورًا في الطلب التالي. مستخدمة حاليًا لشاشات الشحن في البوابة.
+ */
+function requireEmployeeTenantPermission(permission: Permission) {
+  return employeePortalProcedure.use(async ({ ctx, next }) => {
+    const emp = (ctx as any).employee;
+    const tenantId = requireTenantId(emp);
+    if (!(await hasTenantPermission(tenantId, emp.role, permission))) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "ليس لديك صلاحية لتنفيذ هذا الإجراء",
+      });
+    }
+    return next({ ctx });
+  });
+}
+
+/**
  * "Is this order yours?" — the per-order half of employee-portal authorization, paired with
  * requireEmployeePermission's "can your role do this at all?".
  *
@@ -4879,7 +4899,7 @@ export const appRouter = router({
     // permission the rest of the shipping screens use.
     // المنطق نفسه في shippingOperations.service.ts — مشترك مع `operations.*` (Operations
     // workspace بتاع المالك). البوابة هنا بتحسب النطاق زي ما كانت بالظبط.
-    shippingRoutes: requireEmployeePermission("shipping_ops.view").query(
+    shippingRoutes: requireEmployeeTenantPermission("shipping_ops.view").query(
       async ({ ctx }) => {
         const emp = (ctx as any).employee;
         requireTenantId(emp);
@@ -4889,7 +4909,7 @@ export const appRouter = router({
       }
     ),
 
-    todayShipments: requireEmployeePermission("shipping_ops.view")
+    todayShipments: requireEmployeeTenantPermission("shipping_ops.view")
       .input(
         z.object({
           date: z.string().optional(), // YYYY-MM-DD format, defaults to today

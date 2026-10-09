@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermission";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { usePermission } from "@/hooks/usePermission";
@@ -186,6 +187,10 @@ export default function EmployeeDashboard() {
   }, [empSession]);
 
   const utils = trpc.useUtils();
+  // روابط الشحن بتظهر بس لما الجلسة معاها `shipping_ops.view` — نفس مصدر السيرفر (auth.myPermissions
+  // بتجاوزات الشركة). الإخفاء مش أمان: الحارس الحقيقي على employeePortal.todayShipments/shippingRoutes.
+  const { has: hasPermission } = usePermissions();
+  const canViewShipping = hasPermission("shipping_ops.view");
 
   const { data: meData, error: meError } = trpc.employeePortal.me.useQuery(undefined, {
     retry: false,
@@ -883,22 +888,26 @@ export default function EmployeeDashboard() {
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-1.5">
-            <button
-              onClick={() => setLocation("/today-shipments")}
-              className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
-              title="شحنات اليوم"
-              aria-label="شحنات اليوم"
-            >
-              <Truck className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setLocation("/shipping-schedule")}
-              className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
-              title="جدول توزيع المحافظات"
-              aria-label="جدول توزيع المحافظات"
-            >
-              <CalendarRange className="h-4 w-4" />
-            </button>
+            {canViewShipping && (
+              <>
+                <button
+                  onClick={() => setLocation("/today-shipments")}
+                  className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
+                  title="شحنات اليوم"
+                  aria-label="شحنات اليوم"
+                >
+                  <Truck className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setLocation("/shipping-schedule")}
+                  className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
+                  title="جدول توزيع المحافظات"
+                  aria-label="جدول توزيع المحافظات"
+                >
+                  <CalendarRange className="h-4 w-4" />
+                </button>
+              </>
+            )}
             {/* الحالة النشطة كانت بألوان Tailwind خام (amber-500/green-500) جوه هيدر
                 متدرّج بلون الهوية — بقت شفافية بيضا موحّدة، فبتقرا كـ"مفعّل" في أي ثيم. */}
             <button
@@ -950,7 +959,7 @@ export default function EmployeeDashboard() {
                 فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
             <span className="mx-1 h-5 w-px bg-primary-foreground/25" aria-hidden="true" />
             <button
-              onClick={() => refetch()}
+              onClick={() => { refetch(); utils.auth.myPermissions.invalidate(); }}
               className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground transition-colors hover:bg-primary-foreground/20"
               title="تحديث القائمة"
               aria-label="تحديث القائمة"
