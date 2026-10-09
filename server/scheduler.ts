@@ -1,6 +1,7 @@
 import { lt } from "drizzle-orm";
 import { rawProviderWebhooks } from "../drizzle/schema";
 import { getDb } from "./db";
+import { drainDeferredWebhooks } from "./tenantAccessDrain";
 
 export async function cleanupExpiredRawWebhooks(now = new Date()) {
   const db = await getDb();
@@ -25,10 +26,15 @@ export function startMaintenanceScheduler() {
   );
   if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1)
     throw new Error("MAINTENANCE_INTERVAL_MINUTES must be at least 1");
-  const run = () =>
-    cleanupExpiredRawWebhooks().catch(error =>
+  const run = () => {
+    void cleanupExpiredRawWebhooks().catch(error =>
       console.error("[Maintenance] Raw webhook cleanup failed", error)
     );
+    // الويبهوك المؤجل لشركات عادت full — مرة واحدة لكل حدث (خلف TENANT_ACCESS_ENFORCEMENT_ENABLED، معطل = لا شيء).
+    void drainDeferredWebhooks().catch(error =>
+      console.error("[Maintenance] Deferred webhook drain failed", error)
+    );
+  };
   const timer = setInterval(run, intervalMinutes * 60_000);
   timer.unref();
   void run();

@@ -55,7 +55,10 @@ import {
   protectedProcedure,
   permissionProcedure,
   router,
+  assertTrpcTenantAccess,
 } from "./_core/trpc";
+import { resolveTenantAccess, tenantAccessEnforcementEnabled } from "./tenantAccess";
+import { TENANT_ACCESS_MESSAGES } from "@shared/tenantAccess";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import {
@@ -266,13 +269,15 @@ async function getEmployeeFromCookie(req: any) {
   }
 }
 
-const employeePortalProcedure = publicProcedure.use(async ({ ctx, next }) => {
+const employeePortalProcedure = publicProcedure.use(async ({ ctx, next, type, path }) => {
   const emp = await getEmployeeFromCookie(ctx.req);
   if (!emp)
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "يرجى تسجيل الدخول أولاً",
     });
+  // حالة شركة **الموظف** (هوية الكوكي) — لا تعتمد على جلسة مالك مفتوحة. خلف العلم (معطل = لا شيء).
+  if (emp.tenantId != null) await assertTrpcTenantAccess(emp.tenantId, type, path);
   return next({ ctx: { ...ctx, employee: emp } });
 });
 
@@ -1148,6 +1153,14 @@ const positiveMoneyString = moneyString.refine(
 
 export const appRouter = router({
   system: systemRouter,
+  // حالة وصول الشركة للواجهة (شاشة/شريط) — العلم معطل ⇒ enforced:false فلا تظهر أي شاشة قبل جاهزية الحارس.
+  tenantAccess: router({
+    status: publicProcedure.query(async ({ ctx }) => {
+      if (!tenantAccessEnforcementEnabled() || ctx.tenantId == null) return { enforced: false as const };
+      const a = await resolveTenantAccess(ctx.tenantId);
+      return { enforced: true as const, level: a.level, reason: a.reason, message: TENANT_ACCESS_MESSAGES[a.reason], until: a.until };
+    }),
+  }),
   accountingV2: router({
     dashboard: permissionProcedure("accounting.view")
       .input(

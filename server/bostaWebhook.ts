@@ -25,8 +25,10 @@ import { findAccountByWebhookSecret, getCarrierAccountRow, recordWebhookEvent, P
 import { normalizeBostaEvent, canAdvanceOrderStatus, type NormalizedBostaEvent } from "./bostaEvents";
 import {
   receiveInboxEvent, markInboxEvent, latestProcessedEventTimestamp, getInboxEvent,
+  deferInboxEvent, claimDeferredInboxEvent,
   type InboxRow, type InboxStatus,
 } from "./carrierWebhookInbox.service";
+import { resolveTenantAccessForBusiness } from "./tenantAccess";
 
 /** مقارنة آمنة (constant-time) لتفادي تسريب معلومات عن السر عبر توقيت الاستجابة. */
 function safeCompare(a: string, b: string): boolean {
@@ -214,6 +216,10 @@ export async function handleBostaWebhook(req: Request, res: Response) {
       }
     }
 
+    // إنفاذ حالة الشركة (خلف TENANT_ACCESS_ENFORCEMENT_ENABLED، معطل = full بلا قراءة): غير full ⇒ الحدث
+    // يُخزَّن ويُؤجَّل بلا أي معالجة، ويُعالج مرة واحدة بعد إعادة التفعيل (drainDeferredWebhooks).
+    const deferForTenant = businessId != null && !(await resolveTenantAccessForBusiness(businessId)).processWebhooks;
+
     // 3) حفظ الحدث الخام **قبل** المعالجة + idempotency بمفتاح ثابت (shipment + state + timeStamp).
     const received = await receiveInboxEvent({
       tenantId, businessId, provider: PROVIDER_BOSTA,
@@ -232,6 +238,8 @@ export async function handleBostaWebhook(req: Request, res: Response) {
     } else if (received.mode === "stored") {
       inboxId = received.id;
     } else if (businessId != null) {
+      // بلا صندوق وارد لا يمكن التأجيل بلا فقد — نطلب من المرسل الإعادة لاحقًا (قبل تسجيل الـhash).
+      if (deferForTenant) return res.status(503).set("Retry-After", "3600").json({ ok: false, deferred: true });
       // قبل Migration 0039: مفيش صندوق وارد — الـidempotency من جدول 0037.
       const fresh = await recordWebhookEvent({ businessId, provider: PROVIDER_BOSTA, eventHash: event.eventKey, shipmentId: event.shipmentId, stateCode: event.state });
       if (!fresh) return res.status(200).json({ ok: true, duplicate: true });
@@ -242,6 +250,11 @@ export async function handleBostaWebhook(req: Request, res: Response) {
       if (inboxId != null) await markInboxEvent(inboxId, { status: "unmatched", failureReason: "لا توجد شحنة مطابقة" });
       console.warn(`[Bosta Webhook] unmatched shipment (legacy secret) state=${event.state}`);
       return res.status(200).json({ ok: true, status: "unmatched" });
+    }
+
+    if (deferForTenant && inboxId != null) {
+      await deferInboxEvent(inboxId);
+      return res.status(200).json({ ok: true, status: "deferred" });
     }
 
     // 4) التطبيق داخل النشاط المحدد بس.
@@ -277,6 +290,17 @@ export async function reprocessBostaInboxEvent(inboxId: number, businessId: numb
   } catch (err) {
     return { ok: false, status: "failed", reason: safeErrorText(err) };
   }
+}
+
+/** معالجة حدث مؤجل مرة واحدة بعد إعادة التفعيل — المطالبة الشرطية تضمن عدم التكرار. */
+export async function processDeferredBostaEvent(row: InboxRow): Promise<"processed" | "skipped" | "failed"> {
+  if (row.provider !== PROVIDER_BOSTA || row.businessId == null) return "skipped";
+  if (!(await claimDeferredInboxEvent(row.id))) return "skipped";
+  let payload: unknown = null;
+  try { payload = JSON.parse(row.payloadJson); } catch { /* التطبيع يرفضه */ }
+  const normalized = normalizeBostaEvent(payload);
+  if (!normalized.ok) { await markInboxEvent(row.id, { status: "failed", failureReason: normalized.error }); return "failed"; }
+  try { await processAndMark(row.businessId, row.tenantId, normalized.event, row.id, true); return "processed"; } catch { return "failed"; }
 }
 
 // ==================== Register Routes ====================

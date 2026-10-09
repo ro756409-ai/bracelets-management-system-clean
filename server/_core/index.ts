@@ -18,6 +18,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { startMaintenanceScheduler } from "../scheduler";
+import { tenantAccessExpressGuard } from "../tenantAccess";
 import { registerEvidenceUploadRoutes } from "../evidenceUpload";
 import { registerBrandingRoutes } from "../brandingUpload";
 import { registerPackageImageRoutes } from "../packageImageUpload";
@@ -58,6 +59,9 @@ async function startServer() {
   app.use(cookieParser());
   // معرّف طلب/ربط لكل request — بدري عشان يغطّي كل المسارات.
   app.use(requestIdMiddleware);
+  // إنفاذ حالة الشركة على مسارات Express (رفع/استيراد/تصدير) — خلف TENANT_ACCESS_ENFORCEMENT_ENABLED (معطل
+  // افتراضيًا = لا شيء). الجلسة تُحل بنفس createContext؛ الدخول/المنصة/الويبهوك/tRPC مستثناة (لكل منها حارسه).
+  app.use(tenantAccessExpressGuard(async (req, res) => (await createContext({ req, res } as any)).tenantId));
   // صحّة عامة — للـload balancer/المراقبة. مفيش بيانات حسّاسة.
   app.get("/api/health", makeHealthHandler(getDb));
   registerEvidenceUploadRoutes(app);

@@ -44,7 +44,8 @@ describe("🩺 التشخيص (قبل): بوابة DashboardLayout + تغليف 
     expect(routers).toContain('stocktakeList: permissionProcedure("inventory_costing.view")');
     expect(routers).toContain('purchaseReceiptCreate: permissionProcedure("inventory_costing.manage")');
     const trpcCore = readFileSync(path.resolve(__dirname, "../../../../server/_core/trpc.ts"), "utf8");
-    expect(trpcCore).toContain("export const authenticatedProcedure = t.procedure.use(requireAuthenticatedIdentity)");
+    // مبني على publicProcedure (حارس حالة الشركة المعطل افتراضيًا) — نفس هوية الجلسة كما كانت.
+    expect(trpcCore).toContain("export const authenticatedProcedure = publicProcedure.use(requireAuthenticatedIdentity)");
     expect(trpcCore).toContain("return authenticatedProcedure.use(");
   });
 });

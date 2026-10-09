@@ -2,6 +2,8 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { resolveTenantAccess, tenantAccessEnforcementEnabled, tenantAccessError } from "../tenantAccess";
+import { trpcCallAllowed } from "@shared/tenantAccess";
 import { hasTenantPermission, isFinancialPermission, isFrozenAccountingWrite, ACCOUNTING_FROZEN_MESSAGE, MANAGER_GRANT_ONLY_PERMISSIONS, type Permission } from "../permissions";
 
 const t = initTRPC.context<TrpcContext>().create({
@@ -9,7 +11,26 @@ const t = initTRPC.context<TrpcContext>().create({
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+
+/**
+ * إنفاذ حالة الشركة على **كل** إجراء tRPC (query/mutation) — الأساس لكل العائلات (public/protected/
+ * authenticated/permission/admin)، فلا إجراء يفلت. خلف TENANT_ACCESS_ENFORCEMENT_ENABLED (معطل = لا شيء ولا
+ * قراءة). tenant الجلسة من createContext؛ البوابة تُفحص مرة أخرى بهوية كوكي الموظف (employeePortalProcedure).
+ */
+const tenantAccessGuard = t.middleware(async ({ ctx, type, path, next }) => {
+  if (!tenantAccessEnforcementEnabled() || ctx.tenantId == null) return next();
+  await assertTrpcTenantAccess(ctx.tenantId, type, path);
+  return next();
+});
+
+export async function assertTrpcTenantAccess(tenantId: number, type: "query" | "mutation" | "subscription", path: string): Promise<void> {
+  if (!tenantAccessEnforcementEnabled()) return;
+  const access = await resolveTenantAccess(tenantId);
+  if (!trpcCallAllowed(access, type, path))
+    throw new TRPCError({ code: "FORBIDDEN", message: tenantAccessError(access).message });
+}
+
+export const publicProcedure = t.procedure.use(tenantAccessGuard);
 
 const requireUser = t.middleware(async opts => {
   const { ctx, next } = opts;
@@ -32,7 +53,7 @@ const requireUser = t.middleware(async opts => {
   });
 });
 
-export const protectedProcedure = t.procedure.use(requireUser);
+export const protectedProcedure = publicProcedure.use(requireUser);
 
 const requireAuthenticatedIdentity = t.middleware(async ({ ctx, next }) => {
   if ((!ctx.user && !ctx.employee) || ctx.tenantId == null) {
@@ -41,7 +62,7 @@ const requireAuthenticatedIdentity = t.middleware(async ({ ctx, next }) => {
   return next({ ctx: { ...ctx, tenantId: ctx.tenantId } });
 });
 
-export const authenticatedProcedure = t.procedure.use(requireAuthenticatedIdentity);
+export const authenticatedProcedure = publicProcedure.use(requireAuthenticatedIdentity);
 
 export function permissionProcedure(permission: Permission) {
   return authenticatedProcedure.use(async ({ ctx, next }) => {

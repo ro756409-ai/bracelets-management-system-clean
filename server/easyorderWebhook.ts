@@ -37,12 +37,13 @@
  */
 import { Request, Response, Express } from "express";
 import {
-  getDb, getSalesChannelByWebhookSecret, getOrderByExternalId, updateOrder, confirmOrder,
+  getDb, getSalesChannelByWebhookSecret, getSalesChannelWithSecrets, getOrderByExternalId, updateOrder, confirmOrder,
   StockShortfallError, OrderConfirmBlockedError, OrderStockInconsistencyError, OrderStatusGuardError,
 } from "./db";
-import { webhookLogs } from "../drizzle/schema";
+import { webhookLogs, businesses } from "../drizzle/schema";
+import { resolveTenantAccessForBusiness } from "./tenantAccess";
 import { orderEventsEnabled } from "./orderEvents.service";
-import { desc, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { upsertEasyOrder, fetchEasyOrderById, type EasyOrderPayload } from "./easyorder.service";
 import { recordIntegrationOrderEvent } from "./shippingV2.service";
 import { IdempotencyConflictError } from "./accountingV2.service";
@@ -246,7 +247,33 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       return res.status(401).json({ error: "A configured channel secret is required" });
     }
 
-    const body = req.body;
+    // إنفاذ حالة الشركة (خلف TENANT_ACCESS_ENFORCEMENT_ENABLED، معطل = full بلا قراءة): شركة غير مفعّلة للكتابة
+    // ⇒ الطلب يُخزَّن كاملًا في سجل الويبهوك كـ«مؤجل» بلا أي معالجة، ويُعالج مرة واحدة بعد إعادة التفعيل
+    // (drainDeferredEasyOrders). payload أكبر من العمود ⇒ 503 ليعيد المرسل لاحقًا (لا فقد ولا قص).
+    const access = await resolveTenantAccessForBusiness(channel.businessId);
+    if (!access.processWebhooks) {
+      const raw = JSON.stringify(req.body ?? null);
+      if (raw.length > DEFERRED_PAYLOAD_MAX) return res.status(503).set("Retry-After", "3600").json({ received: false, deferred: true });
+      await logWebhook({ eventType: DEFERRED_EVENT, status: "error", rawPayload: raw, message: `${deferredMarker(channel.id)} ⏸️ مؤجل — الشركة غير مفعّلة للكتابة؛ يُعالج تلقائيًا بعد إعادة التفعيل` });
+      return res.status(202).json({ received: true, action: "deferred" });
+    }
+
+    return await processEasyOrderBody(channel, req.body, logWebhook, res);
+  } catch (err: any) {
+    console.error("[EasyOrder Webhook] Error:", err);
+    // خطأ عام خارج نطاق القناة — بلا businessId (يُترك للـdefault).
+    await addLog({ eventType: "unknown", status: "error", message: `خطأ داخلي: ${err.message}` });
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+// ==================== Body processing (shared by the live handler and the deferred drain) ====================
+type EasyOrderChannel = NonNullable<Awaited<ReturnType<typeof getSalesChannelByWebhookSecret>>>;
+type WebhookLogFn = (entry: Omit<WebhookLogInsert, "businessId">) => Promise<void>;
+type ResLike = Pick<Response, "status" | "json">;
+
+async function processEasyOrderBody(channel: EasyOrderChannel, body: any, logWebhook: WebhookLogFn, res: ResLike) {
+  try {
 
     // ---- Status-update events ----
     if (body?.event_type === "order-status-update") {
@@ -452,10 +479,45 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     });
   } catch (err: any) {
     console.error("[EasyOrder Webhook] Error:", err);
-    // خطأ عام خارج نطاق القناة — بلا businessId (يُترك للـdefault).
     await addLog({ eventType: "unknown", status: "error", message: `خطأ داخلي: ${err.message}` });
     return res.status(500).json({ error: "Internal server error" });
   }
+}
+
+// ==================== Deferred (tenant not writable) ====================
+export const DEFERRED_EVENT = "deferred";
+const DEFERRED_CLAIMED = "deferred_claimed";
+const DEFERRED_DONE = "deferred_done";
+const DEFERRED_PAYLOAD_MAX = 60_000;
+const deferredMarker = (channelId: number) => `[channel:${channelId}]`;
+
+/**
+ * يعالج طلبات Easy Orders المؤجلة لشركة أصبحت full — كل صف يُطالَب به شرطيًا (deferred → deferred_claimed)
+ * فيُعالج مرة واحدة فقط، بنفس مسار المعالجة الحي، ثم يُعلَّم deferred_done. القناة يجب أن تبقى فعّالة.
+ */
+export async function drainDeferredEasyOrders(tenantId: number, limit = 200): Promise<{ processed: number; skipped: number }> {
+  const drizzle = await getDb();
+  if (!drizzle) return { processed: 0, skipped: 0 };
+  const rows = await drizzle.select({ id: webhookLogs.id, businessId: webhookLogs.businessId, rawPayload: webhookLogs.rawPayload, message: webhookLogs.message })
+    .from(webhookLogs).innerJoin(businesses, eq(businesses.id, webhookLogs.businessId))
+    .where(and(eq(businesses.tenantId, tenantId), eq(webhookLogs.eventType, DEFERRED_EVENT))).orderBy(webhookLogs.id).limit(limit);
+  let processed = 0, skipped = 0;
+  for (const row of rows) {
+    const [claim]: any = await drizzle.update(webhookLogs).set({ eventType: DEFERRED_CLAIMED }).where(and(eq(webhookLogs.id, row.id), eq(webhookLogs.eventType, DEFERRED_EVENT)));
+    if (Number(claim?.affectedRows ?? 0) !== 1) { skipped++; continue; }
+    const channelId = Number(/\[channel:(\d+)\]/.exec(row.message ?? "")?.[1]);
+    const channel = Number.isFinite(channelId) ? await getSalesChannelWithSecrets(channelId) : undefined;
+    let outcome = "تعذّر إيجاد قناة فعّالة — لم يُعالج";
+    if (channel && channel.isActive && channel.businessId === row.businessId) {
+      const res: ResLike & { code: number; body: any } = { code: 200, body: null, status(c: number) { this.code = c; return this as any; }, json(b: any) { this.body = b; return this as any; } } as any;
+      const logWebhook: WebhookLogFn = entry => addLog({ ...entry, businessId: channel.businessId });
+      await processEasyOrderBody(channel, JSON.parse(row.rawPayload ?? "null"), logWebhook, res);
+      outcome = `عولج بعد إعادة التفعيل (HTTP ${res.code}${res.body?.action ? ` · ${res.body.action}` : ""})`;
+      processed++;
+    } else skipped++;
+    await drizzle.update(webhookLogs).set({ eventType: DEFERRED_DONE, message: `${row.message ?? ""} → ${outcome}`.slice(0, 2000) }).where(eq(webhookLogs.id, row.id));
+  }
+  return { processed, skipped };
 }
 
 // ==================== Register routes ====================

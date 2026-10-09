@@ -13,7 +13,7 @@ import { isMissingTableError } from "./carrierAccounts.service";
  * **Fail-safe قبل Migration 0039:** غياب الجدول = `unavailable` والمعالجة بتكمل بلا سجل خام.
  */
 
-export type InboxStatus = "received" | "processed" | "unmatched" | "ignored" | "failed";
+export type InboxStatus = "received" | "processed" | "unmatched" | "ignored" | "failed" | "deferred";
 export type InboxRow = typeof carrierWebhookInbox.$inferSelect;
 
 let warned = false;
@@ -107,6 +107,37 @@ export async function markInboxEvent(
     }).where(eq(carrierWebhookInbox.id, id));
   } catch (err) {
     if (isMissingTableError(err)) { warnMissingOnce(); return; }
+    throw err;
+  }
+}
+
+/**
+ * إنفاذ حالة الشركة (TENANT_ACCESS_ENFORCEMENT_ENABLED): حدث مخزّن لشركة غير مفعّلة للكتابة يُعلَّم `deferred`
+ * بلا معالجة وبلا processedAt. بعد إعادة التفعيل يُطالَب به **شرطيًا** (deferred → received) فيُعالج مرة واحدة
+ * فقط حتى مع تشغيلين متزامنين. تكرار الحدث من المرسل وهو مؤجل = duplicate بلا معالجة.
+ */
+export async function deferInboxEvent(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(carrierWebhookInbox).set({ processingStatus: "deferred", processedAt: null })
+    .where(and(eq(carrierWebhookInbox.id, id), inArray(carrierWebhookInbox.processingStatus, ["received", "failed"])));
+}
+export async function claimDeferredInboxEvent(id: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const [r]: any = await db.update(carrierWebhookInbox).set({ processingStatus: "received" })
+    .where(and(eq(carrierWebhookInbox.id, id), eq(carrierWebhookInbox.processingStatus, "deferred")));
+  return Number(r?.affectedRows ?? 0) === 1;
+}
+export async function listDeferredInboxEvents(tenantId: number, limit = 200): Promise<InboxRow[]> {
+  const db = await getDb();
+  if (!db) return [];
+  try {
+    return await db.select().from(carrierWebhookInbox)
+      .where(and(eq(carrierWebhookInbox.tenantId, tenantId), eq(carrierWebhookInbox.processingStatus, "deferred")))
+      .orderBy(carrierWebhookInbox.id).limit(limit);
+  } catch (err) {
+    if (isMissingTableError(err)) { warnMissingOnce(); return []; }
     throw err;
   }
 }
