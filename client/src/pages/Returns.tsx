@@ -120,7 +120,7 @@ export default function Returns() {
       )}
 
       {/* Filters */}
-      <div className="flex flex-wrap items-end gap-3 [&_[role=combobox]]:min-h-11 md:[&_[role=combobox]]:min-h-9" data-testid="returns-filters">
+      <div className="flex flex-wrap items-end gap-3 [&_[role=combobox]]:min-h-[max(2.75rem,44px)] md:[&_[role=combobox]]:min-h-9" data-testid="returns-filters">
         <div>
           <Label htmlFor="returns-reason" className="mb-1 block text-xs text-muted-foreground">سبب الإرجاع</Label>
           <Select value={reasonFilter} onValueChange={v => { setReasonFilter(v); setPage(1); }}>

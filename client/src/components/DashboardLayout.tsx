@@ -122,7 +122,7 @@ export default function DashboardLayout({
             type="button"
             onClick={() => { window.location.href = getLoginUrl(); }}
             size="lg"
-            className="w-full"
+            className="min-h-11 w-full"
           >
             تسجيل الدخول
           </Button>

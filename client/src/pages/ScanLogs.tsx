@@ -156,7 +156,7 @@ export default function ScanLogs() {
 
       {/* Filters */}
       <SectionCard title="الفلاتر" testId="scan-filters">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4 [&_input]:min-h-11 md:[&_input]:min-h-9 [&_[role=combobox]]:min-h-11 md:[&_[role=combobox]]:min-h-9">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4 [&_input]:min-h-[max(2.75rem,44px)] md:[&_input]:min-h-9 [&_[role=combobox]]:min-h-[max(2.75rem,44px)] md:[&_[role=combobox]]:min-h-9">
           <SearchInput value={search} onChange={setSearch} placeholder="ابحث عن رقم أوردر أو رقم تسلسلي..." debounceMs={200} />
           <div>
             <Label htmlFor="scan-result" className="sr-only">النتيجة</Label>

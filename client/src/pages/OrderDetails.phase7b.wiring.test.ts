@@ -109,7 +109,9 @@ describe("🔐 الصلاحيات والتعطيل وحارس الضغط الم�
     expect(page).toContain("const anyPending = confirmMutation.isPending || cancelMutation.isPending || postponeMutation.isPending || noAnswerMutation.isPending || sendToBostaMutation.isPending || editMutation.isPending || editItemsMutation.isPending;");
   });
   it("الشريط ثابت أسفل الموبايل فوق MobileBottomNav (56px + safe-area) وعادي على md+", () => {
-    expect(bar).toContain("fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-30");
+    // المرحلة 8: الشريط يرتكز على --bottom-nav-h (57px + safe-area) لا على 3.5rem — فلا فجوة 6px عند 90%
+    expect(bar).toContain("fixed inset-x-0 bottom-[var(--bottom-nav-h,0px)] z-30");
+    expect(bar).not.toContain("3.5rem");
     expect(bar).toContain("md:static");
     expect(page).toContain("pb-[128px] md:pb-0"); // مساحة سفلية بالبكسل (صفّان × 44px + حشو) حتى لا يغطي الشريط آخر قسم عند 90%
   });

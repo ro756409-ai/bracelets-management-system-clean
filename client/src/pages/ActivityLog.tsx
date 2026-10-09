@@ -96,7 +96,7 @@ export default function ActivityLogPage() {
 
       {/* Filters */}
       <SectionCard testId="activity-filters">
-        <div className="flex flex-wrap items-end gap-3 [&_[role=combobox]]:min-h-11 md:[&_[role=combobox]]:min-h-9">
+        <div className="flex flex-wrap items-end gap-3 [&_[role=combobox]]:min-h-[max(2.75rem,44px)] md:[&_[role=combobox]]:min-h-9">
           <Filter className="mb-3 h-4 w-4 text-muted-foreground" aria-hidden="true" />
           <div>
             <Label htmlFor="activity-action" className="mb-1 block text-xs text-muted-foreground">نوع العملية</Label>

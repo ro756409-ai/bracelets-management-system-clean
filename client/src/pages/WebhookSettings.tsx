@@ -277,7 +277,7 @@ export default function WebhookSettings() {
                 key={f.key}
                 variant={statusFilter === f.key ? "default" : "outline"}
                 size="sm"
-                className={`${TOUCH} rounded-[var(--radius-brand-pill)] text-xs`}
+                className={`${TOUCH} min-w-11 rounded-[var(--radius-brand-pill)] text-xs`}
                 aria-pressed={statusFilter === f.key}
                 onClick={() => setStatusFilter(f.key)}
                 data-testid={`webhook-filter-${f.key}`}

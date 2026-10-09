@@ -832,18 +832,20 @@ export default function EmployeeDashboard() {
               </p>
             </div>
           </div>
-          <div className="flex items-center justify-end gap-1.5">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             <button
               onClick={() => setLocation("/today-shipments")}
-              className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
+              className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
               title="شحنات اليوم"
+              aria-label="شحنات اليوم"
             >
               <Truck className="h-4 w-4" />
             </button>
             <button
               onClick={() => setLocation("/shipping-schedule")}
-              className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
+              className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-lg bg-white/10 flex items-center justify-center text-white hover:bg-white/20 transition-colors"
               title="جدول توزيع المحافظات"
+              aria-label="جدول توزيع المحافظات"
             >
               <CalendarRange className="h-4 w-4" />
             </button>
@@ -852,59 +854,65 @@ export default function EmployeeDashboard() {
             <button
               onClick={() => setShowDateFilter(!showDateFilter)}
               aria-pressed={Boolean(dateFrom || dateTo)}
-              className={`flex h-8 w-8 items-center justify-center rounded-lg text-white transition-colors ${
+              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-lg text-white transition-colors ${
                 (dateFrom || dateTo) ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
               }`}
               title="فلتر التاريخ"
+              aria-label="فلتر التاريخ"
             >
               <CalendarDays className="h-4 w-4" />
             </button>
             <button
               onClick={() => { setShowScanPanel(!showScanPanel); if (showScanPanel) stopScanCamera(); setScanResult(null); }}
               aria-pressed={showScanPanel}
-              className={`flex h-8 w-8 items-center justify-center rounded-lg text-white transition-colors ${
+              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-lg text-white transition-colors ${
                 showScanPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
               }`}
               title="مسح QR"
+              aria-label="مسح QR"
             >
               <QrCode className="h-4 w-4" />
             </button>
             <button
               onClick={() => setShowTasksPanel(!showTasksPanel)}
               aria-pressed={showTasksPanel}
-              className={`flex h-8 w-8 items-center justify-center rounded-lg text-white transition-colors ${
+              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-lg text-white transition-colors ${
                 showTasksPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
               }`}
               title="المهام"
+              aria-label="المهام"
             >
               <MessageSquare className="h-4 w-4" />
             </button>
             <button
               onClick={() => setShowStockPanel(!showStockPanel)}
               aria-pressed={showStockPanel}
-              className={`flex h-8 w-8 items-center justify-center rounded-lg text-white transition-colors ${
+              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-lg text-white transition-colors ${
                 showStockPanel ? 'bg-white/35 hover:bg-white/45' : 'bg-white/10 hover:bg-white/20'
               }`}
               title="المخزون"
+              aria-label="المخزون"
             >
               <Box className="h-4 w-4" />
             </button>
 
             {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
                 فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
-            <span className="mx-1 h-5 w-px bg-white/25" />
+            <span className="mx-1 h-5 w-px bg-white/25" aria-hidden="true" />
             <button
               onClick={() => refetch()}
-              className="flex h-8 items-center gap-1.5 rounded-lg bg-white/10 px-2 text-white transition-colors hover:bg-white/20"
+              className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-lg bg-white/10 px-2 text-white transition-colors hover:bg-white/20"
               title="تحديث القائمة"
+              aria-label="تحديث القائمة"
             >
               <RefreshCw className="h-4 w-4" />
               <span className="hidden text-xs font-medium sm:inline">تحديث</span>
             </button>
             <button
               onClick={handleLogout}
-              className="flex h-8 items-center gap-1.5 rounded-lg bg-white/10 px-2 text-white transition-colors hover:bg-white/25"
+              className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-lg bg-white/10 px-2 text-white transition-colors hover:bg-white/25"
               title="تسجيل الخروج"
+              aria-label="تسجيل الخروج"
             >
               <LogOut className="h-4 w-4" />
               <span className="hidden text-xs font-medium sm:inline">خروج</span>
@@ -915,13 +923,13 @@ export default function EmployeeDashboard() {
 
       {/* الصفحة كانت محبوسة في max-w-2xl على كل المقاسات — على الديسكتوب كانت عمود
           ضيّق وسط شاشة فاضية. mobile-first زي ما هي، بس بتتوسّع بدل ما تتجمّد. */}
-      <div className="mx-auto max-w-2xl space-y-4 px-4 py-4 lg:max-w-6xl">
+      <main className="mx-auto max-w-2xl space-y-4 px-4 py-4 lg:max-w-6xl">
         {/* Business Group Filter - نحاس / مفروشات */}
         {groupsData.length > 0 && (
           <div className="flex gap-2">
             <button
               onClick={() => setSelectedGroupId(undefined)}
-              className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+              className={`min-h-11 md:min-h-0 flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
                 !selectedGroupId
                   ? 'bg-[var(--warning)] text-white shadow-md'
                   : 'bg-card text-muted-foreground border border-border hover:border-[var(--warning)]/30'
@@ -933,7 +941,7 @@ export default function EmployeeDashboard() {
               <button
                 key={group.id}
                 onClick={() => setSelectedGroupId(group.id)}
-                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                className={`min-h-11 md:min-h-0 flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${
                   selectedGroupId === group.id
                     ? 'bg-[var(--warning)] text-white shadow-md'
                     : 'bg-card text-muted-foreground border border-border hover:border-[var(--warning)]/30'
@@ -959,7 +967,7 @@ export default function EmployeeDashboard() {
                   </span>
                 )}
               </h3>
-              <button onClick={() => setShowStockPanel(false)} className="text-muted-foreground hover:text-muted-foreground">
+              <button onClick={() => setShowStockPanel(false)} className="min-h-11 md:min-h-0 text-muted-foreground hover:text-muted-foreground">
                 <XCircle className="h-4 w-4" />
               </button>
             </div>
@@ -1086,7 +1094,7 @@ export default function EmployeeDashboard() {
               </div>
               <button
                 onClick={() => { setShowScanPanel(false); stopScanCamera(); setScanResult(null); }}
-                className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground hover:bg-muted"
+                className="min-h-11 md:min-h-0 w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground hover:bg-muted"
               >
                 <XCircle className="h-4 w-4" />
               </button>
@@ -1139,7 +1147,7 @@ export default function EmployeeDashboard() {
                 {!scanIsScanning ? (
                   <button
                     onClick={startScanCamera}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-[var(--success)] hover:bg-[var(--success)] text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
+                    className="min-h-11 md:min-h-0 flex items-center gap-2 px-5 py-2.5 bg-[var(--success)] hover:bg-[var(--success)] text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
                   >
                     <Camera className="h-4 w-4" />
                     تشغيل الكاميرا
@@ -1147,7 +1155,7 @@ export default function EmployeeDashboard() {
                 ) : (
                   <button
                     onClick={stopScanCamera}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-destructive hover:bg-destructive text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
+                    className="min-h-11 md:min-h-0 flex items-center gap-2 px-5 py-2.5 bg-destructive hover:bg-destructive text-white rounded-xl text-sm font-bold transition-colors w-full justify-center"
                   >
                     <CameraOff className="h-4 w-4" />
                     إيقاف الكاميرا
@@ -1163,7 +1171,7 @@ export default function EmployeeDashboard() {
                     value={manualSerial}
                     onChange={e => setManualSerial(e.target.value)}
                     placeholder="ORD-2026-000001"
-                    className="flex-1 text-sm text-right"
+                    className="min-h-11 md:min-h-9 flex-1 text-sm text-right"
                     dir="ltr"
                   />
                   <Button type="submit" size="sm" className="min-h-11 md:min-h-9 bg-[var(--success)] hover:bg-[var(--success)] text-white" disabled={scanMutation.isPending}>
@@ -1219,7 +1227,7 @@ export default function EmployeeDashboard() {
                   )}
                   <button
                     onClick={() => { setScanResult(null); }}
-                    className="mt-3 text-xs text-muted-foreground underline"
+                    className="min-h-11 md:min-h-0 mt-3 text-xs text-muted-foreground underline"
                   >
                     مسح ومسح جديد
                   </button>
@@ -1264,7 +1272,7 @@ export default function EmployeeDashboard() {
                 <CalendarDays className="h-4 w-4 text-[var(--warning)]" />
                 فلتر التاريخ
               </h3>
-              <button onClick={() => setShowDateFilter(false)} className="text-muted-foreground hover:text-muted-foreground">
+              <button onClick={() => setShowDateFilter(false)} className="min-h-11 md:min-h-0 text-muted-foreground hover:text-muted-foreground">
                 <XCircle className="h-4 w-4" />
               </button>
             </div>
@@ -1272,7 +1280,7 @@ export default function EmployeeDashboard() {
             <div className="flex gap-2 mb-3">
               <button
                 onClick={() => { setDateFrom(""); setDateTo(""); }}
-                className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                className={`min-h-11 md:min-h-0 flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                   !dateFrom && !dateTo ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
                 }`}
               >اليوم</button>
@@ -1283,14 +1291,14 @@ export default function EmployeeDashboard() {
                   const yStr = yesterday.toISOString().slice(0, 10);
                   setDateFrom(yStr); setDateTo(yStr);
                 }}
-                className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                className={`min-h-11 md:min-h-0 flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                   dateFrom && dateTo && dateFrom === dateTo && dateFrom === (() => { const y = new Date(Date.now() + 2*60*60*1000); y.setUTCDate(y.getUTCDate() - 1); return y.toISOString().slice(0, 10); })()
                     ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
                 }`}
               >أمس</button>
               <button
                 onClick={() => { setDateFrom("2024-01-01"); setDateTo(""); }}
-                className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                className={`min-h-11 md:min-h-0 flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                   dateFrom === '2024-01-01' && !dateTo ? 'bg-[var(--warning)] text-white shadow-sm' : 'bg-muted text-muted-foreground hover:bg-muted'
                 }`}
               >كل الأوردرات</button>
@@ -1346,7 +1354,7 @@ export default function EmployeeDashboard() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="بحث بالاسم أو الهاتف أو رقم الأوردر..."
-            className="pr-10 bg-card"
+            className="min-h-11 md:min-h-9 pr-10 bg-card"
           />
         </div>
 
@@ -1356,7 +1364,7 @@ export default function EmployeeDashboard() {
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-1.5 ${
+              className={`min-h-11 md:min-h-0 flex-shrink-0 px-3 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-1.5 ${
                 activeTab === tab.key
                   ? "bg-primary text-primary-foreground shadow-[var(--shadow-card)]"
                   : "bg-card text-muted-foreground border border-border hover:border-primary/40"
@@ -1576,7 +1584,7 @@ export default function EmployeeDashboard() {
                         onValueChange={(v) => handleStatusSelect(order, v)}
                         disabled={updateStatusMutation.isPending || !EMPLOYEE_EDITABLE_STATUSES.includes(order.status)}
                       >
-                        <SelectTrigger className="h-9 flex-1 bg-card"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="min-h-11 md:min-h-9 h-9 flex-1 bg-card"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {!EMPLOYEE_EDITABLE_STATUSES.includes(order.status) && (
                             <SelectItem value="__locked" disabled>
@@ -1614,7 +1622,7 @@ export default function EmployeeDashboard() {
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); goToAdjacentOrder(-1); }}
-                            className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] px-2 py-1 hover:bg-muted"
+                            className="min-h-11 md:min-h-0 flex items-center gap-1 rounded-[var(--radius-brand-sm)] px-2 py-1 hover:bg-muted"
                           >
                             <ChevronRight className="h-3.5 w-3.5" /> السابق
                           </button>
@@ -1622,7 +1630,7 @@ export default function EmployeeDashboard() {
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); goToAdjacentOrder(1); }}
-                            className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] px-2 py-1 hover:bg-muted"
+                            className="min-h-11 md:min-h-0 flex items-center gap-1 rounded-[var(--radius-brand-sm)] px-2 py-1 hover:bg-muted"
                           >
                             التالي <ChevronLeft className="h-3.5 w-3.5" />
                           </button>
@@ -1659,7 +1667,7 @@ export default function EmployeeDashboard() {
                             <button
                               onClick={() => handleSaveNotes(order.id)}
                               disabled={updateNotesMutation.isPending}
-                              className="flex items-center gap-1 text-xs font-medium text-[var(--success)] hover:opacity-80"
+                              className="min-h-11 md:min-h-0 flex items-center gap-1 text-xs font-medium text-[var(--success)] hover:opacity-80"
                             >
                               <Save className="h-3 w-3" />
                               {updateNotesMutation.isPending ? 'جاري...' : 'حفظ'}
@@ -1687,7 +1695,7 @@ export default function EmployeeDashboard() {
                       <div className="flex items-center justify-end gap-2">
                         {order.isDuplicate ? (
                           <button
-                            className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-1 text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20"
+                            className="min-h-11 md:min-h-0 flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-1 text-xs text-[var(--warning)] hover:bg-[var(--warning)]/20"
                             onClick={() => setDuplicateConfirm({ orderId: order.id, action: "unmark" })}
                             disabled={unmarkDuplicateMutation.isPending}
                             title="إلغاء تعليم التكرار"
@@ -1696,7 +1704,7 @@ export default function EmployeeDashboard() {
                           </button>
                         ) : (
                           <button
-                            className="flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-border px-2 py-1 text-xs text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                            className="min-h-11 md:min-h-0 flex items-center gap-1 rounded-[var(--radius-brand-sm)] border border-border px-2 py-1 text-xs text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
                             onClick={() => setDuplicateConfirm({ orderId: order.id, action: "mark" })}
                             disabled={markDuplicateMutation.isPending}
                             title="تعليم كمكرر"
@@ -1713,7 +1721,7 @@ export default function EmployeeDashboard() {
             })}
           </div>
         )}
-      </div>
+      </main>
 
       {/* Edit Order Dialog - شاشة تعديل شاملة */}
       {/* تعديل الأوردر — نفس المكوّن اللي بتستخدمه شاشة المالك. الفرق بينهم على السيرفر
@@ -1738,7 +1746,7 @@ export default function EmployeeDashboard() {
           <>
             <button
               type="button"
-              className="text-xs text-[var(--info)] underline"
+              className="min-h-11 md:min-h-0 text-xs text-[var(--info)] underline"
               onClick={() => setShowEditHistory(!showEditHistory)}
             >
               {showEditHistory ? "إخفاء سجل التعديلات" : "عرض سجل التعديلات"}
@@ -1771,7 +1779,7 @@ export default function EmployeeDashboard() {
                 value={postponeDate}
                 onChange={e => setPostponeDate(e.target.value)}
                 min={new Date().toISOString().split("T")[0]}
-                className="mt-1"
+                className="min-h-11 md:min-h-9 mt-1"
               />
             </div>
             <div>
@@ -1780,7 +1788,7 @@ export default function EmployeeDashboard() {
                 value={postponeNotes}
                 onChange={e => setPostponeNotes(e.target.value)}
                 placeholder="سبب التأجيل..."
-                className="mt-1"
+                className="min-h-11 md:min-h-9 mt-1"
               />
             </div>
           </div>
@@ -1823,7 +1831,7 @@ export default function EmployeeDashboard() {
             <div>
               <Label>سبب الإلغاء <span className="text-destructive">*</span></Label>
               <Select value={cancelReason || undefined} onValueChange={setCancelReason}>
-                <SelectTrigger className={`mt-1 w-full ${!cancelReason ? "border-destructive/30 bg-destructive/10" : ""}`}>
+                <SelectTrigger className={`min-h-11 md:min-h-9 mt-1 w-full ${!cancelReason ? "border-destructive/30 bg-destructive/10" : ""}`}>
                   <SelectValue placeholder="اختر السبب..." />
                 </SelectTrigger>
                 <SelectContent className="max-h-[45vh]">
@@ -1905,7 +1913,7 @@ export default function EmployeeDashboard() {
                 </Button>
               ))}
             </div>
-            <Input
+            <Input className="min-h-11 md:min-h-9"
               type="number" min={1} max={20} placeholder="أو رقم مختلف..."
               value={noAnswerAttempts} onChange={e => setNoAnswerAttempts(e.target.value)}
             />
@@ -2054,7 +2062,7 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
                     value={task.status}
                     onValueChange={(v: any) => updateStatusMutation.mutate({ taskId: task.id, status: v })}
                   >
-                    <SelectTrigger className="w-28 text-xs h-7 shrink-0">
+                    <SelectTrigger className="min-h-11 md:min-h-9 w-28 text-xs h-7 shrink-0">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

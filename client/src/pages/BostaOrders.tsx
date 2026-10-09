@@ -340,7 +340,7 @@ export default function BostaOrders() {
             setPage(1);
           }}
           placeholder="بحث برقم التتبع، الهاتف، أو رقم الأوردر"
-          className="w-full sm:w-64 [&_input]:min-h-11 md:[&_input]:min-h-9"
+          className="w-full sm:w-64 [&_input]:min-h-[max(2.75rem,44px)] md:[&_input]:min-h-9"
         />
         <Select
           value={governorate ?? "all"}

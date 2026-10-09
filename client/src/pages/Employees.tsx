@@ -443,7 +443,7 @@ export default function Employees() {
       {(perfLoading || (todayPerf && todayPerf.length > 0)) && (
         <SectionCard
           title={<span className="inline-flex items-center gap-2"><Activity className="h-4 w-4 text-primary" aria-hidden="true" /> أداء الموظفين (حسب تاريخ الإنشاء)</span>}
-          action={<span className="flex items-center gap-2 [&_button]:min-h-11 md:[&_button]:min-h-9"><CalendarDays className="h-4 w-4 text-muted-foreground" aria-hidden="true" /><DateRangePicker value={perfDateRange} onChange={(range) => setPerfDateRange(range)} /></span>}
+          action={<span className="flex items-center gap-2 [&_button]:min-h-[max(2.75rem,44px)] md:[&_button]:min-h-9"><CalendarDays className="h-4 w-4 text-muted-foreground" aria-hidden="true" /><DateRangePicker value={perfDateRange} onChange={(range) => setPerfDateRange(range)} /></span>}
           flush
           testId="emp-performance"
         >
@@ -506,7 +506,7 @@ export default function Employees() {
       <SectionCard
         title="قائمة الموظفين"
         action={
-          <div className="flex flex-wrap items-center gap-2 [&_[role=combobox]]:min-h-11 md:[&_[role=combobox]]:min-h-9" data-testid="emp-filters">
+          <div className="flex flex-wrap items-center gap-2 [&_[role=combobox]]:min-h-[max(2.75rem,44px)] md:[&_[role=combobox]]:min-h-9" data-testid="emp-filters">
             <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو اسم المستخدم أو البريد" className="w-full sm:w-56" />
             <Select value={roleFilter} onValueChange={setRoleFilter}>
               <SelectTrigger className="w-40 text-sm" aria-label="فلتر الدور">

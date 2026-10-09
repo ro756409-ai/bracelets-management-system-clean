@@ -35,7 +35,7 @@ export function OrderActionBar({ phone, actionable, can, pending, onConfirm, onC
   return (
     <div
       className={cn(
-        "fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-30 border-t border-border bg-background/95 px-3 py-2 backdrop-blur",
+        "fixed inset-x-0 bottom-[var(--bottom-nav-h,0px)] z-30 border-t border-border bg-background/95 px-3 py-2 backdrop-blur",
         "md:static md:z-auto md:rounded-[var(--radius-brand-md)] md:border md:bg-card md:px-4 md:py-3 md:shadow-[var(--shadow-card)]",
         className
       )}

@@ -635,4 +635,6 @@
   .h-11 { height: max(2.75rem, 44px); }
   .w-11 { width: max(2.75rem, 44px); }
   .min-w-11 { min-width: max(2.75rem, 44px); }
+  .min-h-12 { min-height: max(3rem, 48px); }
+  .h-12 { height: max(3rem, 48px); }
 }

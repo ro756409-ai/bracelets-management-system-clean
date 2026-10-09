@@ -211,7 +211,7 @@ export default function PrintedOrders() {
         {dateFilter === 'custom' && (
           <Input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)} className={`${TOUCH} w-44 text-sm`} aria-label="تاريخ الطباعة" />
         )}
-        <div className="min-w-0 flex-1 sm:max-w-xs [&_input]:min-h-11 md:[&_input]:min-h-9">
+        <div className="min-w-0 flex-1 sm:max-w-xs [&_input]:min-h-[max(2.75rem,44px)] md:[&_input]:min-h-9">
           <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو الهاتف..." debounceMs={300} />
         </div>
       </div>
