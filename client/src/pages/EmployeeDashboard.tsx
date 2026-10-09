@@ -199,6 +199,9 @@ export default function EmployeeDashboard() {
   // «أدائي» يظهر فقط والسجل مفعّل وهوية البوابة معها view_self — العلم معطل = لا تغيير في الشاشة.
   const { data: performanceStatus } = trpc.performance.status.useQuery(undefined, { retry: false, staleTime: 5 * 60 * 1000 });
   const canViewMyPerformance = performanceStatus?.enabled === true && (portalPermissions ?? []).includes("employee_performance.view_self");
+  // «حضوري» بنفس القاعدة: الحضور مفعّل + هوية البوابة معها clock_self أو view_self.
+  const { data: attendanceStatus } = trpc.attendance.status.useQuery(undefined, { retry: false, staleTime: 5 * 60 * 1000 });
+  const canOpenMyAttendance = attendanceStatus?.enabled === true && (portalPermissions ?? []).some(p => p === "attendance.clock_self" || p === "attendance.view_self");
 
   const { data: meData, error: meError } = trpc.employeePortal.me.useQuery(undefined, {
     retry: false,
@@ -967,6 +970,18 @@ export default function EmployeeDashboard() {
 
             {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
                 فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
+            {canOpenMyAttendance && (
+              <Button
+                variant="ghost"
+                onClick={() => setLocation("/my-attendance")}
+                className="min-h-11 min-w-11 md:h-8 md:min-h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
+                title="حضوري"
+                aria-label="حضوري"
+                data-testid="my-attendance-link"
+              >
+                <Clock className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            )}
             {canViewMyPerformance && (
               <Button
                 variant="ghost"

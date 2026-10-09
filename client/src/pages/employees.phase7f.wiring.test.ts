@@ -29,7 +29,8 @@ describe("🔌 Queries/Mutations قبل = بعد", () => {
     expect(hooks(read("pages/ManagerDashboard.tsx")).length).toBe(31);
     // 23 أصلية + employeePortal.myPermissions (روابط الشحن حسب صلاحية هوية البوابة — إضافة مقصودة)
     // + performance.status (رابط «أدائي» بعد تفعيل سجل الأحداث)
-    expect(hooks(read("pages/EmployeeDashboard.tsx")).length).toBe(25);
+    // + attendance.status (رابط «حضوري» بعد تفعيل الحضور)
+    expect(hooks(read("pages/EmployeeDashboard.tsx")).length).toBe(26);
   });
 });
 

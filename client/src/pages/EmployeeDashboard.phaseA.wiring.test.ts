@@ -60,6 +60,8 @@ describe("EmployeeDashboard — Phase A view layer", () => {
       "trpc.employeePortal.myPermissions.useQuery",
       // أُضيف عن قصد (رابط «أدائي»): حالة سجل الأحداث — يظهر الرابط فقط بعد التفعيل.
       "trpc.performance.status.useQuery",
+      // أُضيف عن قصد (رابط «حضوري»): حالة الحضور — يظهر الرابط فقط بعد التفعيل.
+      "trpc.attendance.status.useQuery",
       "trpc.employeePortal.me.useQuery",
       "trpc.businesses.groupsWithBusinesses.useQuery",
       "trpc.employeePortal.stats.useQuery",

@@ -32,6 +32,8 @@ import Inventory from "./pages/Inventory";
 import Reports from "./pages/Reports";
 import Performance from "./pages/Performance";
 import MyPerformance from "./pages/MyPerformance";
+import Attendance from "./pages/Attendance";
+import MyAttendance from "./pages/MyAttendance";
 import EmployeeLogin from "./pages/EmployeeLogin";
 import EmployeeDashboard from "./pages/EmployeeDashboard";
 import ManagerDashboard from "./pages/ManagerDashboard";
@@ -173,6 +175,11 @@ function Router() {
       </Route>
       {/* «أدائي» لموظف البوابة — هوية كوكي الموظف فقط (employeePortal.myPerformance) */}
       <Route path={"/my-performance"} component={MyPerformance} />
+      <Route path={"/attendance"}>
+        <ProtectedLayout><Attendance /></ProtectedLayout>
+      </Route>
+      {/* «حضوري» لموظف البوابة — هوية كوكي الموظف فقط (employeePortal.attendance*) */}
+      <Route path={"/my-attendance"} component={MyAttendance} />
       <Route path={"/employee-login"} component={EmployeeLogin} />
       {/* النظام المحاسبي مجمّد: /accountant وكل المسارات المحاسبية بتعرض صفحة «قيد التطوير»
           الآمنة لأي دور (بما فيهم المالك) — لا بيانات تشغيلية ولا مالية. */}

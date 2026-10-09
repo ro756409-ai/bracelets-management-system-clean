@@ -15,8 +15,9 @@ const hooks = [...src.matchAll(/trpc\.[a-zA-Z0-9.]+\.use(Query|Mutation)/g)].map
 describe("🔌 التقارير — الاستعلامات والفترات كما هي", () => {
   it("نفس الثلاثة بالترتيب، كلها خلف enabled: isAdmin، ولا mutation", () => {
     // + performance.status (رابط التقرير التاريخي — يظهر فقط بعد تفعيل سجل الأحداث)
-    expect(hooks).toEqual(["trpc.reports.employeePerformance.useQuery", "trpc.reports.cancellationReasons.useQuery", "trpc.reports.dailyChart.useQuery", "trpc.performance.status.useQuery"]);
-    expect((src.match(/enabled: isAdmin/g) ?? []).length).toBe(4); // الأربعة كلها خلف isAdmin
+    // + attendance.status (رابط الحضور والانصراف — يظهر فقط بعد تفعيله)
+    expect(hooks).toEqual(["trpc.reports.employeePerformance.useQuery", "trpc.reports.cancellationReasons.useQuery", "trpc.reports.dailyChart.useQuery", "trpc.performance.status.useQuery", "trpc.attendance.status.useQuery"]);
+    expect((src.match(/enabled: isAdmin/g) ?? []).length).toBe(5); // الخمسة كلها خلف isAdmin
   });
   it("الفترات الثلاث ونطاق الأنشطة كما كانت", () => {
     expect(src).toContain('type DateRange = "today" | "week" | "month";');
