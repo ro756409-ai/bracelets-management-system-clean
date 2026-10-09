@@ -1,4 +1,6 @@
-# حزمة قرار — تقارير أداء الموظفين + الحضور والانصراف + قرارات Backend (قبل أي Migration)
+# حزمة قرار — تقارير أداء الموظفين + الحضور والانصراف + قرارات Backend
+
+**الحالة: معتمدة معماريًا (2026-10-09) مع التصحيحات الإلزامية أدناه.** التنفيذ خلف Feature Flags معطلة، والـMigrations على Docker محلي مؤقت فقط.
 
 التاريخ: 2026-10-09 · الفرع المحلي `staging/bosta-package-images`.
 **لم يُكتب أي ملف SQL ولم يُشغَّل أي Migration، ولا `drizzle-kit push/generate` (ولا حتى على قواعد الاختبار في هذه المرحلة)، ولم يُلمس Staging/Production.**
@@ -75,13 +77,27 @@
 
 ---
 
-## 4) أ) `0041_order_activity_events.sql` — DDL مقترح كامل
+## 4) 0041 — DDL النهائي المعتمد (بعد التصحيحات الإلزامية)
+
+الملف: `drizzle/0041_order_activity_events.sql` (تم التحقق من أنه يُنشأ بلا خطأ على MySQL 8.4 Docker محلي مؤقت).
 
 ```sql
--- 0041 — Order activity events (Event Ledger). ADDITIVE فقط: جدول جديد واحد (+ الفهرسان المركّبان حسب §8-أ).
--- لا تعديل لأي عمود أو صف قائم. غير مضاف للـjournal. التشغيل يدوي بعد backup وبعد Staging فقط.
+-- 0041 — Order activity events (Event Ledger لأداء الموظفين). DELTA مكتوبة بخط اليد، ADDITIVE بحت:
+--   • فهرسان فريدان مركّبان على جدولين قديمين (businesses/employees) — **فقط إذا لم يكونا موجودين**
+--     (سكربت scripts/migrate-0041-order-events يقرر: كلاهما غائب → يُنشآن؛ كلاهما موجود بنفس الأعمدة
+--     والترتيب → skip/replay؛ واحد فقط أو تعريف مختلف → partial ورفض بلا أي DDL).
+--   • جدول جديد واحد order_activity_events. لا تعديل لأي عمود أو صف قائم. غير مضاف إلى drizzle journal.
+--
+-- عزل الـtenant بالـFK المركّب: النشاط (tenantId,businessId) وكل موظف (منفّذ/منسوب/مُسنَد) (tenantId,employeeId).
+-- orderId **بلا FK** عمدًا (حذف المكررات النهائي قائم) — الخدمة تقفل الأوردر FOR UPDATE وتستخرج businessId منه
+--   وtenantId من النشاط، ولا تقبلهما من العميل، وتحفظ orderNumberSnapshot ليبقى الحدث مقروءًا بعد الحذف.
+-- eventType/source = VARCHAR بقائمة مسموحة مركزية في الخدمة (shared/orderEventsSpec.ts) — لا قيمة حرة من العميل.
+-- actorEmployeeId = من نفّذ؛ attributedEmployeeId = من يُحتسب الحدث في أدائه (التقارير تعتمده).
+-- الأحداث للإضافة فقط: لا UPDATE ولا DELETE في أي مسار كود. الوقت timestamp(3) (UTC داخليًا).
+-- CHECK: كل تعبير مكتوب بحيث لا ينتج UNKNOWN (MySQL يمرّر UNKNOWN) — شروط IS [NOT] NULL صريحة و<=>.
+-- يتطلب MySQL ≥ 8.0.16 لفرض CHECK (يفحصه الـpreflight).
+-- لا يُشغَّل إلا عبر السكربت، وفي هذه المرحلة على قواعد Docker محلية مؤقتة فقط.
 
--- (الخيار المُوصى به §8-أ: فقط إذا لم يكن 0040 مطبّقًا — الـpreflight يقرر ويرفض لو أحدهما موجود جزئيًا)
 ALTER TABLE `businesses` ADD UNIQUE INDEX `businesses_tenant_id` (`tenantId`,`id`);
 --> statement-breakpoint
 ALTER TABLE `employees` ADD UNIQUE INDEX `employees_tenant_id` (`tenantId`,`id`);
@@ -91,19 +107,20 @@ CREATE TABLE `order_activity_events` (
 	`tenantId` int NOT NULL,
 	`businessId` int NOT NULL,
 	`orderId` int NOT NULL,
-	`orderNumberSnapshot` varchar(20) NOT NULL,
-	`eventType` enum('confirm','no_answer','postpone','cancel','edit','edit_items','assign','unassign','status_change','print','ship_update','return','duplicate_mark','duplicate_restore') NOT NULL,
-	`fromStatus` enum('new','confirmed','postponed','cancelled','preparing','shipped','delivered','no_answer','returned','printed') NULL,
-	`toStatus` enum('new','confirmed','postponed','cancelled','preparing','shipped','delivered','no_answer','returned','printed') NULL,
+	`orderNumberSnapshot` varchar(100) NOT NULL,
+	`eventType` varchar(50) NOT NULL,
+	`fromStatus` varchar(30) NULL,
+	`toStatus` varchar(30) NULL,
 	`actorType` enum('employee','system','webhook','backfill') NOT NULL,
 	`actorEmployeeId` int NULL,
+	`attributedEmployeeId` int NULL,
 	`actorRoleSnapshot` varchar(50) NULL,
 	`actorNameSnapshot` varchar(100) NULL,
 	`assigneeEmployeeIdAtEvent` int NULL,
 	`previousAssigneeEmployeeId` int NULL,
 	`reason` varchar(160) NULL,
 	`callAttempt` smallint unsigned NULL,
-	`source` enum('admin_ui','employee_portal','bulk','webhook_bosta','webhook_easyorders','system','backfill') NOT NULL,
+	`source` varchar(30) NOT NULL,
 	`backfillConfidence` enum('confirmed','partial') NULL,
 	`idempotencyKey` varchar(191) NOT NULL,
 	`payloadHash` char(64) NOT NULL,
@@ -114,65 +131,76 @@ CREATE TABLE `order_activity_events` (
 	CONSTRAINT `oae_tenant_idem_unique` UNIQUE(`tenantId`,`idempotencyKey`),
 	CONSTRAINT `oae_tenant_id_unique` UNIQUE(`tenantId`,`id`),
 	INDEX `oae_tenant_occurred` (`tenantId`,`occurredAt`),
+	INDEX `oae_tenant_attributed_occurred` (`tenantId`,`attributedEmployeeId`,`occurredAt`),
 	INDEX `oae_tenant_actor_occurred` (`tenantId`,`actorEmployeeId`,`occurredAt`),
+	INDEX `oae_tenant_assignee_occurred` (`tenantId`,`assigneeEmployeeIdAtEvent`,`occurredAt`),
 	INDEX `oae_tenant_business_occurred` (`tenantId`,`businessId`,`occurredAt`),
 	INDEX `oae_tenant_type_occurred` (`tenantId`,`eventType`,`occurredAt`),
 	INDEX `oae_order_occurred` (`orderId`,`occurredAt`),
 	CONSTRAINT `fk_oae_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
 	CONSTRAINT `fk_oae_tenant_business` FOREIGN KEY (`tenantId`,`businessId`) REFERENCES `businesses`(`tenantId`,`id`),
 	CONSTRAINT `fk_oae_tenant_actor` FOREIGN KEY (`tenantId`,`actorEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
+	CONSTRAINT `fk_oae_tenant_attributed` FOREIGN KEY (`tenantId`,`attributedEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
 	CONSTRAINT `fk_oae_tenant_assignee` FOREIGN KEY (`tenantId`,`assigneeEmployeeIdAtEvent`) REFERENCES `employees`(`tenantId`,`id`),
 	CONSTRAINT `fk_oae_tenant_prev_assignee` FOREIGN KEY (`tenantId`,`previousAssigneeEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
-	CONSTRAINT `chk_oae_actor` CHECK ((`actorType` = 'employee' AND `actorEmployeeId` IS NOT NULL) OR (`actorType` <> 'employee' AND `actorEmployeeId` IS NULL)),
-	CONSTRAINT `chk_oae_backfill` CHECK ((`actorType` = 'backfill') = (`source` = 'backfill') AND ((`source` = 'backfill') = (`backfillConfidence` IS NOT NULL))),
-	CONSTRAINT `chk_oae_call` CHECK (`callAttempt` IS NULL OR `eventType` = 'no_answer')
+	CONSTRAINT `chk_oae_actor` CHECK (
+		(`actorType` = 'employee' AND `actorEmployeeId` IS NOT NULL AND `attributedEmployeeId` IS NOT NULL AND `attributedEmployeeId` = `actorEmployeeId`)
+		OR (`actorType` IN ('system','webhook') AND `actorEmployeeId` IS NULL)
+		OR (`actorType` = 'backfill' AND `actorEmployeeId` IS NULL)),
+	CONSTRAINT `chk_oae_backfill` CHECK (
+		((`actorType` = 'backfill') = (`source` = 'backfill'))
+		AND ((`source` = 'backfill') = (`backfillConfidence` IS NOT NULL))),
+	CONSTRAINT `chk_oae_call` CHECK (`callAttempt` IS NULL OR `eventType` = 'no_answer'),
+	CONSTRAINT `chk_oae_event_type` CHECK (`eventType` REGEXP '^[a-z][a-z_]{1,49}$'),
+	CONSTRAINT `chk_oae_source` CHECK (`source` REGEXP '^[a-z][a-z_]{1,29}$'),
+	CONSTRAINT `chk_oae_hash` CHECK (`payloadHash` REGEXP '^[0-9a-f]{64}$')
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- ROLLBACK قبل أي استخدام (معلّق — يُشغّل فقط عبر السكربت --rollback بعد التحقق أن الجدول فارغ):
--- DROP TABLE `order_activity_events`;
--- (والفهرسان يُحذفان فقط إذا أنشأهما 0041 ولم يُطبَّق 0040 بعدها:)
--- ALTER TABLE `employees` DROP INDEX `employees_tenant_id`;
--- ALTER TABLE `businesses` DROP INDEX `businesses_tenant_id`;
+-- ROLLBACK قبل أي استخدام — فقط عبر: scripts/migrate-0041-order-events --rollback (يتحقق أن الجدول فارغ):
+--   DROP TABLE `order_activity_events`;
+--   الفهرسان المركّبان **لا يُحذفان** إذا كانت أي جداول أخرى تعتمد عليهما (FK إليهما من ledger_* أو attendance_*)
+--   أو إذا لم يكن 0041 منشئهما (كانا موجودين قبله) — السكربت يقرر من information_schema ويُبقيهما عند الشك.
 ```
 
-### السياسات
-- **orderId بلا FK على `orders`** عن قصد: حذف المكررات اليوم حذف نهائي (routers.ts duplicates.delete)؛ FK بـRESTRICT كان سيكسر هذه الميزة. السلامة تُفرض في الخدمة: `recordOrderEvent` يقرأ الأوردر `FOR UPDATE` داخل نفس الـtransaction ويأخذ `businessId` منه (لا من العميل)، ويأخذ `tenantId` من `businesses.tenantId`؛ و`orderNumberSnapshot` يحفظ التاريخ بعد الحذف.
-- **actorType / actorEmployeeId**: `employee` ⇒ معرّف موجب حقيقي (`resolveActingEmployeeId`، لا `-emp.id`)؛ `system/webhook/backfill` ⇒ NULL — لا تُنسب لأحد (CHECK).
-- **Event types**: كما في الـenum؛ `status_change` للانتقالات غير المغطاة بنوع خاص (preparing/shipped/delivered من الإدارة).
-- **payloadHash** = SHA-256 لتمثيل قانوني (canonical JSON مرتب المفاتيح) للحمولة: نفس المفتاح + نفس الـhash ⇒ إعادة (لا شيء جديد، يرجع الحدث الموجود)؛ نفس المفتاح + hash مختلف ⇒ `CONFLICT` (منع إعادة استخدام المفتاح لفعل مختلف).
-- **غير قابلة للتعديل**: لا UPDATE ولا DELETE في أي مسار كود (اختبار ثابت يمنع `update(orderActivityEvents)`/`delete(orderActivityEvents)`). اختياري بقرار: Triggers `BEFORE UPDATE/DELETE … SIGNAL` — تحتاج صلاحية `TRIGGER` و`log_bin_trust_function_creators` على MySQL المُدار، لذلك غير مُوصى بها افتراضيًا. التصحيح = حدث جديد.
-- **الوقت**: `timestamp(3)` (UTC داخليًا، ملّي ثانية للترتيب)؛ العرض والتجميع اليومي بـ`Africa/Cairo` في طبقة الخدمة. (`timestamp` محدود بـ2038 — نفس قيد كل جداول المشروع الحالية.)
-
-### الأثر على مسارات الكتابة الحالية
-- نقطة كتابة **واحدة** داخل دوال db (لا في الراوترات) لتجنّب Dual Events: `confirmOrder`, `postponeOrder`, `cancelOrder`, `markNoAnswer*`, `updateOrder(status)`, `assignOrderToEmployee`, `bulkAssignOrders`, `unassign/reclaim`, `markPrinted`, `editOrder`, `replaceOrderItems/editOrderItems`, `duplicates.mark/restore`, `bostaWebhook` (ship_update)، `easyorderWebhook` (status). ≈ 20 موضعًا.
-- المسارات غير المعاملية حاليًا (مثل `postponeOrder`) تُلف في transaction: UPDATE الأوردر بشرط `WHERE id=? AND status=?from` ⇒ الحدث يُكتب فقط إذا `affectedRows = 1`. فشل أحدهما ⇒ يرجع الاثنان.
-- **Double-click**: الواجهة تولّد `operationId` (UUID) مرة واحدة لكل نقرة فعلية وتُعيد إرساله عند إعادة المحاولة ⇒ `idempotencyKey = ${eventType}:${orderId}:${operationId}`؛ الويبهوك: `${provider}:${externalEventId}`؛ الدُفعات: `${operationId}:${orderId}`.
-- لا تغيير في Bosta/Easy Orders/الرواتب/Ledger سوى سطر تسجيل الحدث في الويبهوك (يحتاج موافقتك ضمن §11 لأن القاعدة «لا ربط Bosta/Easy Orders»؛ البديل: أحداث الويبهوك تُسجَّل لاحقًا).
-
-### Backfill (لا يُنفَّذ إلا بموافقة، بعد Go-Live، وفي جدول منفصل منطقيًا بـ`source='backfill'`)
-| الدرجة | المصدر | ما يُرحَّل |
+### التصحيحات المطبّقة على 0041
+| # | التصحيح | التطبيق |
 |---|---|---|
-| confirmed | `orders.confirmedByEmployeeId + confirmedAt` | حدث confirm واحد (أول مؤكّد فقط) |
-| confirmed | `order_edit_logs` (field=status، موظف موجب) | status_change بقيم from/to |
-| partial | `activity_logs` confirm/cancel/postpone (الإشارة السالبة تُعكس، business عبر الأوردر) | يُعلَّم `partial` ويُعرض منفصلًا |
-| unknown | no_answer، تأجيل الإدارة، الإسنادات، الطباعة | **لا شيء** — لا تخمين |
+| 1 | فصل المنفّذ عن المنسوب إليه الأداء | `attributedEmployeeId` + FK مركّب؛ `chk_oae_actor`: employee ⇒ actor = attributed؛ system/webhook ⇒ actor NULL (attributed فقط بدليل)؛ backfill ⇒ actor NULL. التقارير تعتمد `attributedEmployeeId`. |
+| 2 | eventType مفتوح للتوسع | `varchar(50)` + `chk_oae_event_type` (صيغة فقط) + Allowlist مركزية في `shared/orderEventsSpec.ts` (refund/complaint/reassign/delivery_attempt/collection_update محجوزة)؛ لا قيمة من العميل. `source` بنفس النمط. |
+| 3 | orderNumberSnapshot | `varchar(100)` ≥ `orders.orderNumber` (varchar(20) حاليًا) ويغطي أرقام Easy Orders واليدوي؛ اختبار بأطول رقم مسموح. |
+| 4 | Idempotency في الواجهة | `operationId` يُنشأ مرة لكل عملية (فتح الحوار/بدء دورة الإرسال) ويثبت في Retry وDouble-click؛ الزر معطل أثناء isPending؛ السيرفر: قفل الأوردر ثم `UPDATE … WHERE status = expectedFrom`؛ affectedRows=0 ⇒ قراءة الحالة وتحديد Replay/Conflict؛ لا حدث بلا تغيير ولا تغيير بلا حدث والعلم مفعّل. |
+| 5 | eligibleOrders | «نسبة التأكيد من القرارات المسجلة» = أوردرات أكّدها الموظف ÷ أوردرات سجّل عليها confirm/no_answer/postpone/cancel؛ حجم العمل والإسنادات مقاييس منفصلة. |
+| 6 | Backfill | confirmed فقط من `confirmedByEmployeeId+confirmedAt` و`order_edit_logs` المؤكدة؛ partial خارج الترتيب الافتراضي؛ unknown بلا حدث؛ لا تنفيذ — سكربت Preview قراءة فقط لاحقًا. |
+| 7 | orderId بلا FK | معتمد؛ الخدمة تقفل الأوردر FOR UPDATE وتستخرج businessId/tenantId وتحفظ الرقم؛ اختبار قراءة الحدث بعد حذف أوردر مكرر. |
+| 8 | الفهرسان المركّبان | السكربت يميّز: كلاهما غائب ⇒ يُنشآن؛ كلاهما موجود بنفس الأعمدة والترتيب ⇒ skip؛ واحد فقط/تعريف مختلف ⇒ partial ورفض. سكربت 0040 يُحدَّث ليقبل وجودهما الصحيح ويتخطى عبارتيهما فقط (بلا تطبيق 0040). Rollback 0041 لا يحذفهما إن اعتمدت عليهما جداول أخرى أو لم يكن 0041 منشئهما. |
 
-### Go-Live
-1. نسخة احتياطية → preflight (قراءة فقط: الإصدار، غياب الجدول، حالة الفهرسين، لا `tenantId NULL` في businesses/employees، `foreign_key_checks=1`).
-2. تطبيق 0041 على Staging → `--verify` → نشر الكود الذي يكتب الأحداث خلف علم `ORDER_EVENTS_WRITE` (افتراضيًا off) → تفعيل → مراقبة أسبوع → Production بنفس الترتيب.
-3. التقرير الرسمي الجديد يبدأ من تاريخ التفعيل؛ ما قبله يُعرض «غير متاح» أو Backfill موسوم.
-
-### Rollback
-- **قبل أي حدث**: `--rollback` يتحقق أن الجدول فارغ ثم `DROP TABLE` (+ الفهرسين إن كان 0041 منشئهما ولم يُطبَّق 0040).
-- **بعد وجود أحداث**: لا DROP. إطفاء `ORDER_EVENTS_WRITE` فقط؛ الجدول يبقى للقراءة. أي حذف يتطلب تصديرًا كاملًا وقرارًا مكتوبًا.
+### الخدمة والمسارات (0041)
+- العلم: `ORDER_EVENTS_ENABLED` (افتراضيًا معطل). معطل ⇒ **لا أي وصول للجدول** والسلوك الحالي حرفيًا. مفعّل والجدول غائب ⇒ `PRECONDITION_FAILED` بلا سقوط صامت.
+- المسارات المربوطة: الإدارة (confirm/postpone/cancel/markNoAnswer/assign/bulkAssign/تغيير الحالة) والبوابة (confirm/postpone/cancel/markNoAnswer/updateStatus/assignOrder/bulkAssignOrders) + ويبهوك Easy Orders (تأكيد) وBosta (تحديث الشحن) كسطر Audit فقط (actorType=webhook، attributed=NULL، مفتاح من معرّف حدث المزود ⇒ Retry لا يكرر).
+- Rollback: قبل أي حدث `--rollback` (جدول فارغ)؛ بعد وجود أحداث: إطفاء العلم فقط.
 
 ---
 
-## 5) ب) `0042_attendance.sql` — DDL مقترح كامل
+## 5) 0042 — DDL النهائي المعتمد (بعد التصحيحات الإلزامية)
+
+الملف: `drizzle/0042_attendance.sql` (تم التحقق من أنه يُنشأ بلا خطأ على MySQL 8.4 Docker محلي مؤقت).
 
 ```sql
--- 0042 — الحضور والانصراف. ADDITIVE فقط: 5 جداول جديدة. يعتمد على الفهرسين المركّبين (0040 أو 0041).
--- لا ربط بالرواتب ولا Ledger. لا GPS ولا بيانات حيوية. لا حذف.
+-- 0042 — الحضور والانصراف. DELTA مكتوبة بخط اليد، ADDITIVE بحت: 5 جداول جديدة + FK لاحق واحد (كسر الدورة).
+-- يعتمد على الفهرسين المركّبين businesses_tenant_id/employees_tenant_id (ينشئهما 0040 أو 0041) — الـpreflight يرفض بدونهما.
+-- لا ربط بالرواتب ولا Ledger. لا GPS ولا بيانات حيوية. لا حذف في أي مسار كود. غير مضاف إلى drizzle journal.
+--
+-- عزل الموظف داخل الـtenant بالـFK الثلاثي: الحدث وطلب التصحيح لا يُربطان بيوم/طلب/حدث موظف آخر:
+--   (tenantId, employeeId, attendanceDayId)     → attendance_days(tenantId, employeeId, id)
+--   (tenantId, employeeId, correctionRequestId) → attendance_correction_requests(tenantId, employeeId, id)
+--   (tenantId, employeeId, correctionOfEventId) → attendance_events(tenantId, employeeId, id)
+--   (tenantId, employeeId, targetEventId)       → attendance_events(tenantId, employeeId, id)  ← ALTER بعد إنشاء الجدولين
+-- الوقت: كل الطوابع timestamp(3) (UTC داخليًا)؛ الخدمة تكتب/تقرأ بالـepoch وتضبط time_zone='+00:00' لكل معاملة؛
+--   workDate = تاريخ بداية الوردية بتوقيت الوردية (IANA، افتراضيًا Africa/Cairo) يُحسب على السيرفر.
+-- workDaysMask (ثابت في shared/attendanceSpec.ts): bit0=السبت، bit1=الأحد، bit2=الاثنين، bit3=الثلاثاء،
+--   bit4=الأربعاء، bit5=الخميس، bit6=الجمعة — بلا Default: العميل يرسل الأيام صراحةً ويوم واحد على الأقل.
+-- CHECK: كل تعبير بلا UNKNOWN (شروط IS [NOT] NULL صريحة). يتطلب MySQL ≥ 8.0.16.
+-- لا يُشغَّل إلا عبر scripts/migrate-0042-attendance، وفي هذه المرحلة على قواعد Docker محلية مؤقتة فقط.
 
 CREATE TABLE `attendance_shifts` (
 	`id` int AUTO_INCREMENT NOT NULL,
@@ -182,13 +210,13 @@ CREATE TABLE `attendance_shifts` (
 	`startTime` time NOT NULL,
 	`endTime` time NOT NULL,
 	`crossesMidnight` tinyint(1) NOT NULL,
-	`workDaysMask` tinyint unsigned NOT NULL DEFAULT 31,
-	`graceMinutes` smallint unsigned NOT NULL DEFAULT 0,
-	`allowedBreakMinutes` smallint unsigned NOT NULL DEFAULT 0,
-	`overtimeStartsAfterMinutes` smallint unsigned NOT NULL DEFAULT 0,
-	`earlyClockInLimitMinutes` smallint unsigned NOT NULL DEFAULT 60,
+	`workDaysMask` tinyint unsigned NOT NULL,
+	`graceMinutes` smallint unsigned NOT NULL,
+	`allowedBreakMinutes` smallint unsigned NOT NULL,
+	`overtimeStartsAfterMinutes` smallint unsigned NOT NULL,
+	`earlyClockInLimitMinutes` smallint unsigned NOT NULL,
 	`earlyLeaveToleranceMinutes` smallint unsigned NOT NULL DEFAULT 0,
-	`timezone` varchar(64) NOT NULL DEFAULT 'Africa/Cairo',
+	`timezone` varchar(64) NOT NULL,
 	`effectiveFrom` date NOT NULL,
 	`effectiveTo` date NULL,
 	`isActive` tinyint(1) NOT NULL DEFAULT 1,
@@ -202,10 +230,11 @@ CREATE TABLE `attendance_shifts` (
 	CONSTRAINT `fk_ash_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
 	CONSTRAINT `fk_ash_tenant_business` FOREIGN KEY (`tenantId`,`businessId`) REFERENCES `businesses`(`tenantId`,`id`),
 	CONSTRAINT `fk_ash_tenant_creator` FOREIGN KEY (`tenantId`,`createdByEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
-	CONSTRAINT `chk_ash_midnight` CHECK (`crossesMidnight` = (`endTime` <= `startTime`)),
+	CONSTRAINT `chk_ash_times` CHECK (`endTime` <> `startTime` AND `crossesMidnight` = (`endTime` < `startTime`)),
 	CONSTRAINT `chk_ash_days` CHECK (`workDaysMask` BETWEEN 1 AND 127),
 	CONSTRAINT `chk_ash_limits` CHECK (`graceMinutes` <= 240 AND `allowedBreakMinutes` <= 480 AND `earlyClockInLimitMinutes` <= 480 AND `overtimeStartsAfterMinutes` <= 720 AND `earlyLeaveToleranceMinutes` <= 240),
-	CONSTRAINT `chk_ash_range` CHECK (`effectiveTo` IS NULL OR `effectiveTo` >= `effectiveFrom`)
+	CONSTRAINT `chk_ash_range` CHECK (`effectiveTo` IS NULL OR `effectiveTo` >= `effectiveFrom`),
+	CONSTRAINT `chk_ash_name` CHECK (CHAR_LENGTH(TRIM(`name`)) >= 1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 --> statement-breakpoint
 CREATE TABLE `attendance_assignments` (
@@ -225,7 +254,7 @@ CREATE TABLE `attendance_assignments` (
 	CONSTRAINT `attendance_assignments_id` PRIMARY KEY(`id`),
 	CONSTRAINT `aas_tenant_id_unique` UNIQUE(`tenantId`,`id`),
 	INDEX `aas_tenant_employee_from` (`tenantId`,`employeeId`,`effectiveFrom`),
-	INDEX `aas_tenant_target_from` (`tenantId`,`targetType`,`effectiveFrom`),
+	INDEX `aas_tenant_target_from` (`tenantId`,`targetType`,`role`,`businessId`,`effectiveFrom`),
 	CONSTRAINT `fk_aas_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
 	CONSTRAINT `fk_aas_tenant_shift` FOREIGN KEY (`tenantId`,`shiftId`) REFERENCES `attendance_shifts`(`tenantId`,`id`),
 	CONSTRAINT `fk_aas_tenant_employee` FOREIGN KEY (`tenantId`,`employeeId`) REFERENCES `employees`(`tenantId`,`id`),
@@ -233,12 +262,12 @@ CREATE TABLE `attendance_assignments` (
 	CONSTRAINT `fk_aas_tenant_assigner` FOREIGN KEY (`tenantId`,`assignedByEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
 	CONSTRAINT `fk_aas_tenant_ender` FOREIGN KEY (`tenantId`,`endedByEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
 	CONSTRAINT `chk_aas_target` CHECK (
-		(`targetType` = 'employee' AND `employeeId` IS NOT NULL AND `role` IS NULL AND `businessId` IS NULL) OR
-		(`targetType` = 'role' AND `employeeId` IS NULL AND `role` IS NOT NULL) OR
-		(`targetType` = 'business' AND `employeeId` IS NULL AND `role` IS NULL AND `businessId` IS NOT NULL) OR
-		(`targetType` = 'tenant_default' AND `employeeId` IS NULL AND `role` IS NULL AND `businessId` IS NULL)),
+		(`targetType` = 'employee' AND `employeeId` IS NOT NULL AND `role` IS NULL AND `businessId` IS NULL)
+		OR (`targetType` = 'role' AND `employeeId` IS NULL AND `role` IS NOT NULL)
+		OR (`targetType` = 'business' AND `employeeId` IS NULL AND `role` IS NULL AND `businessId` IS NOT NULL)
+		OR (`targetType` = 'tenant_default' AND `employeeId` IS NULL AND `role` IS NULL AND `businessId` IS NULL)),
 	CONSTRAINT `chk_aas_range` CHECK (`effectiveTo` IS NULL OR `effectiveTo` >= `effectiveFrom`),
-	CONSTRAINT `chk_aas_end` CHECK ((`endedAt` IS NULL) = (`endedByEmployeeId` IS NULL))
+	CONSTRAINT `chk_aas_end` CHECK ((`endedAt` IS NULL AND `endedByEmployeeId` IS NULL) OR (`endedAt` IS NOT NULL AND `endedByEmployeeId` IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 --> statement-breakpoint
 CREATE TABLE `attendance_days` (
@@ -272,6 +301,7 @@ CREATE TABLE `attendance_days` (
 	CONSTRAINT `attendance_days_id` PRIMARY KEY(`id`),
 	CONSTRAINT `ad_tenant_employee_date_unique` UNIQUE(`tenantId`,`employeeId`,`workDate`),
 	CONSTRAINT `ad_tenant_id_unique` UNIQUE(`tenantId`,`id`),
+	CONSTRAINT `ad_tenant_employee_id_unique` UNIQUE(`tenantId`,`employeeId`,`id`),
 	INDEX `ad_tenant_date_status` (`tenantId`,`workDate`,`status`),
 	INDEX `ad_tenant_business_date` (`tenantId`,`businessId`,`workDate`),
 	CONSTRAINT `fk_ad_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
@@ -280,8 +310,8 @@ CREATE TABLE `attendance_days` (
 	CONSTRAINT `fk_ad_tenant_shift` FOREIGN KEY (`tenantId`,`shiftId`) REFERENCES `attendance_shifts`(`tenantId`,`id`),
 	CONSTRAINT `fk_ad_tenant_approver` FOREIGN KEY (`tenantId`,`approvedByEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
 	CONSTRAINT `chk_ad_times` CHECK (`lastOutAt` IS NULL OR `firstInAt` IS NULL OR `lastOutAt` >= `firstInAt`),
-	CONSTRAINT `chk_ad_break` CHECK ((`status` = 'on_break') = (`openBreakStartedAt` IS NOT NULL)),
-	CONSTRAINT `chk_ad_approval` CHECK ((`approvedAt` IS NULL) = (`approvedByEmployeeId` IS NULL)),
+	CONSTRAINT `chk_ad_break` CHECK ((`status` = 'on_break' AND `openBreakStartedAt` IS NOT NULL) OR (`status` <> 'on_break' AND `openBreakStartedAt` IS NULL)),
+	CONSTRAINT `chk_ad_approval` CHECK ((`approvedAt` IS NULL AND `approvedByEmployeeId` IS NULL) OR (`approvedAt` IS NOT NULL AND `approvedByEmployeeId` IS NOT NULL)),
 	CONSTRAINT `chk_ad_snapshot` CHECK (`shiftId` IS NULL OR `shiftSnapshotJson` IS NOT NULL)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 --> statement-breakpoint
@@ -291,8 +321,10 @@ CREATE TABLE `attendance_correction_requests` (
 	`employeeId` int NOT NULL,
 	`attendanceDayId` int NULL,
 	`workDate` date NOT NULL,
-	`requestType` enum('missing_clock_in','missing_clock_out','wrong_time','break_fix','absence_to_leave','absence_to_mission','other') NOT NULL,
+	`requestType` enum('missing_clock_in','missing_clock_out','wrong_time','break_fix','absence_to_leave','absence_to_mission','early_leave_reason','other') NOT NULL,
+	`targetEventId` bigint NULL,
 	`requestedAt` timestamp(3) NULL,
+	`requestedValueJson` json NULL,
 	`reason` varchar(500) NOT NULL,
 	`note` varchar(500) NULL,
 	`status` enum('pending','approved','rejected','canceled') NOT NULL DEFAULT 'pending',
@@ -300,22 +332,27 @@ CREATE TABLE `attendance_correction_requests` (
 	`reviewedAt` timestamp(3) NULL,
 	`reviewReason` varchar(500) NULL,
 	`idempotencyKey` varchar(191) NOT NULL,
+	`payloadHash` char(64) NOT NULL,
 	`version` int unsigned NOT NULL DEFAULT 1,
 	`createdAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 	`updatedAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
 	CONSTRAINT `attendance_correction_requests_id` PRIMARY KEY(`id`),
 	CONSTRAINT `acr_tenant_idem_unique` UNIQUE(`tenantId`,`idempotencyKey`),
 	CONSTRAINT `acr_tenant_id_unique` UNIQUE(`tenantId`,`id`),
+	CONSTRAINT `acr_tenant_employee_id_unique` UNIQUE(`tenantId`,`employeeId`,`id`),
 	INDEX `acr_tenant_status_created` (`tenantId`,`status`,`createdAt`),
 	INDEX `acr_tenant_employee_date` (`tenantId`,`employeeId`,`workDate`),
 	CONSTRAINT `fk_acr_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
 	CONSTRAINT `fk_acr_tenant_employee` FOREIGN KEY (`tenantId`,`employeeId`) REFERENCES `employees`(`tenantId`,`id`),
-	CONSTRAINT `fk_acr_tenant_day` FOREIGN KEY (`tenantId`,`attendanceDayId`) REFERENCES `attendance_days`(`tenantId`,`id`),
+	CONSTRAINT `fk_acr_tenant_employee_day` FOREIGN KEY (`tenantId`,`employeeId`,`attendanceDayId`) REFERENCES `attendance_days`(`tenantId`,`employeeId`,`id`),
 	CONSTRAINT `fk_acr_tenant_reviewer` FOREIGN KEY (`tenantId`,`reviewedByEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
 	CONSTRAINT `chk_acr_reason` CHECK (CHAR_LENGTH(TRIM(`reason`)) >= 3),
+	CONSTRAINT `chk_acr_review` CHECK (
+		(`status` IN ('pending','canceled') AND `reviewedByEmployeeId` IS NULL AND `reviewedAt` IS NULL)
+		OR (`status` IN ('approved','rejected') AND `reviewedByEmployeeId` IS NOT NULL AND `reviewedAt` IS NOT NULL)),
 	CONSTRAINT `chk_acr_reject` CHECK (`status` <> 'rejected' OR CHAR_LENGTH(TRIM(COALESCE(`reviewReason`, ''))) >= 3),
-	CONSTRAINT `chk_acr_review` CHECK ((`status` IN ('pending','canceled')) = (`reviewedByEmployeeId` IS NULL)),
-	CONSTRAINT `chk_acr_no_self` CHECK (`reviewedByEmployeeId` IS NULL OR `reviewedByEmployeeId` <> `employeeId`)
+	CONSTRAINT `chk_acr_no_self` CHECK (`reviewedByEmployeeId` IS NULL OR `reviewedByEmployeeId` <> `employeeId`),
+	CONSTRAINT `chk_acr_hash` CHECK (`payloadHash` REGEXP '^[0-9a-f]{64}$')
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 --> statement-breakpoint
 CREATE TABLE `attendance_events` (
@@ -341,163 +378,124 @@ CREATE TABLE `attendance_events` (
 	CONSTRAINT `attendance_events_id` PRIMARY KEY(`id`),
 	CONSTRAINT `ae_tenant_idem_unique` UNIQUE(`tenantId`,`idempotencyKey`),
 	CONSTRAINT `ae_tenant_id_unique` UNIQUE(`tenantId`,`id`),
+	CONSTRAINT `ae_tenant_employee_id_unique` UNIQUE(`tenantId`,`employeeId`,`id`),
 	INDEX `ae_tenant_employee_occurred` (`tenantId`,`employeeId`,`occurredAt`),
 	INDEX `ae_day_occurred` (`attendanceDayId`,`occurredAt`),
 	CONSTRAINT `fk_ae_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
-	CONSTRAINT `fk_ae_tenant_day` FOREIGN KEY (`tenantId`,`attendanceDayId`) REFERENCES `attendance_days`(`tenantId`,`id`),
 	CONSTRAINT `fk_ae_tenant_employee` FOREIGN KEY (`tenantId`,`employeeId`) REFERENCES `employees`(`tenantId`,`id`),
+	CONSTRAINT `fk_ae_tenant_employee_day` FOREIGN KEY (`tenantId`,`employeeId`,`attendanceDayId`) REFERENCES `attendance_days`(`tenantId`,`employeeId`,`id`),
 	CONSTRAINT `fk_ae_tenant_actor` FOREIGN KEY (`tenantId`,`actorEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
-	CONSTRAINT `fk_ae_tenant_correction_of` FOREIGN KEY (`tenantId`,`correctionOfEventId`) REFERENCES `attendance_events`(`tenantId`,`id`),
-	CONSTRAINT `fk_ae_tenant_request` FOREIGN KEY (`tenantId`,`correctionRequestId`) REFERENCES `attendance_correction_requests`(`tenantId`,`id`),
-	CONSTRAINT `chk_ae_self` CHECK (`actorType` <> 'self' OR `actorEmployeeId` = `employeeId`),
-	CONSTRAINT `chk_ae_admin` CHECK (`actorType` <> 'admin' OR (`actorEmployeeId` IS NOT NULL AND CHAR_LENGTH(TRIM(COALESCE(`reason`, ''))) >= 3)),
-	CONSTRAINT `chk_ae_system` CHECK (`actorType` <> 'system' OR `actorEmployeeId` IS NULL),
-	CONSTRAINT `chk_ae_correction` CHECK (`eventType` <> 'correction' OR `correctionOfEventId` IS NOT NULL OR `correctionRequestId` IS NOT NULL)
+	CONSTRAINT `fk_ae_tenant_employee_correction_of` FOREIGN KEY (`tenantId`,`employeeId`,`correctionOfEventId`) REFERENCES `attendance_events`(`tenantId`,`employeeId`,`id`),
+	CONSTRAINT `fk_ae_tenant_employee_request` FOREIGN KEY (`tenantId`,`employeeId`,`correctionRequestId`) REFERENCES `attendance_correction_requests`(`tenantId`,`employeeId`,`id`),
+	CONSTRAINT `chk_ae_actor` CHECK (
+		(`actorType` = 'self' AND `actorEmployeeId` IS NOT NULL AND `actorEmployeeId` = `employeeId`)
+		OR (`actorType` = 'admin' AND `actorEmployeeId` IS NOT NULL AND CHAR_LENGTH(TRIM(COALESCE(`reason`, ''))) >= 3)
+		OR (`actorType` = 'system' AND `actorEmployeeId` IS NULL)),
+	CONSTRAINT `chk_ae_correction` CHECK (`eventType` <> 'correction' OR `correctionOfEventId` IS NOT NULL OR `correctionRequestId` IS NOT NULL),
+	CONSTRAINT `chk_ae_hash` CHECK (`payloadHash` REGEXP '^[0-9a-f]{64}$')
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+--> statement-breakpoint
+ALTER TABLE `attendance_correction_requests` ADD CONSTRAINT `fk_acr_tenant_employee_target_event` FOREIGN KEY (`tenantId`,`employeeId`,`targetEventId`) REFERENCES `attendance_events`(`tenantId`,`employeeId`,`id`);
 
--- ROLLBACK قبل أي استخدام (معلّق — عبر السكربت بعد التحقق أن الجداول فارغة)، بالترتيب العكسي:
--- DROP TABLE `attendance_events`; DROP TABLE `attendance_correction_requests`;
--- DROP TABLE `attendance_days`; DROP TABLE `attendance_assignments`; DROP TABLE `attendance_shifts`;
+-- ROLLBACK قبل أي استخدام — فقط عبر: scripts/migrate-0042-attendance --rollback (يتحقق أن الجداول الخمسة فارغة):
+--   ALTER TABLE `attendance_correction_requests` DROP FOREIGN KEY `fk_acr_tenant_employee_target_event`;
+--   DROP TABLE `attendance_events`; DROP TABLE `attendance_correction_requests`;
+--   DROP TABLE `attendance_days`; DROP TABLE `attendance_assignments`; DROP TABLE `attendance_shifts`;
 ```
 
-### سياسات الحضور
-- **الهوية**: `employeeId` و`tenantId` من الجلسة فقط (`employeePortalProcedure` + `requireTenantId`)؛ أي employeeId يرسله العميل يُرفض (مدخلات strict). الوقت من السيرفر (`occurredAt`) لا من الجهاز.
-- **سياسة الوقت**: كل الطوابع `timestamp(3)` (UTC داخليًا). `workDate` = تاريخ **بداية الوردية** بتوقيت الوردية/النشاط (`Africa/Cairo` افتراضيًا) يُحسب على السيرفر بقاعدة بيانات المناطق الزمنية (تراعي التوقيت الصيفي المصري).
-- **الوردية الليلية**: `crossesMidnight=1` ⇒ الانصراف بعد منتصف الليل يُلحق بيوم `workDate` السابق المفتوح؛ حضور جديد قبل إغلاق يوم مفتوح يُرفض أو يحتاج «إغلاق اليوم».
-- **Snapshot الوردية**: `shiftSnapshotJson` يُكتب عند فتح اليوم (الأوقات، السماح، الاستراحة، الإضافي، المنطقة). تعديل الوردية لاحقًا لا يعيد حساب الماضي (CHECK يمنع يومًا بوردية بلا لقطة).
-- **Idempotency**: الواجهة تولّد مفتاحًا لكل نقرة؛ نفس المفتاح + نفس الـhash = نفس النتيجة؛ hash مختلف = CONFLICT.
-- **Concurrency**: داخل transaction واحدة: قفل صف الموظف (`SELECT … FROM employees WHERE id=? FOR UPDATE`) ثم إنشاء/قراءة يوم العمل (`UNIQUE(tenantId,employeeId,workDate)` يمنع يومين) و`FOR UPDATE` عليه، تحقق التسلسل (لا انصراف بلا حضور، لا استراحتين مفتوحتين — CHECK `chk_ad_break`)، إدراج الحدث، إعادة حساب المجاميع من الأحداث، `version = version + 1`. تعديلات المدير على الورديات والطلبات بقفل تفاؤلي `WHERE version = ?`.
-- **Audit والتصحيح**: لا UPDATE صامت لوقت حضور؛ التصحيح حدث `correction` بقيم قبل/بعد وسبب (CHECK للمدير)، والمراجع لا يعتمد طلبه بنفسه (CHECK `chk_acr_no_self`)، والرفض يتطلب سببًا.
-- **عدم الحذف**: لا DELETE في أي مسار؛ الموظف المعطّل يبقى تاريخه (`employeePortalProcedure` يرفض دخوله أصلًا).
-- **Go-Live**: أول يوم عمل بعد التفعيل. **لا Backfill** — لا مصدر مؤكد (Login/Logout لا يعني حضورًا).
-- **Rollback**: قبل الاستخدام DROP بالترتيب العكسي بعد التحقق من الفراغ؛ بعده إخفاء الواجهة وسحب `attendance.clock_self` فقط، والتاريخ يبقى.
+### التصحيحات المطبّقة على 0042
+| # | التصحيح | التطبيق |
+|---|---|---|
+| 1 | الحدث لا يُربط بيوم موظف آخر | `ad_tenant_employee_id_unique(tenantId,employeeId,id)` + FK ثلاثي من events وrequests. |
+| 2 | الحدث لا يُربط بطلب موظف آخر | `acr_tenant_employee_id_unique` + FK ثلاثي من events. |
+| 3 | CHECK الفاعل بلا UNKNOWN | `chk_ae_actor` تعبير واحد صريح (self/admin/system) — اختبار DB لكل تركيبة خاطئة. |
+| 4 | طلبات التصحيح | `targetEventId bigint` + `requestedValueJson json` (Zod صارم حسب requestType)؛ الدورة events↔requests مكسورة بإنشاء الجدولين ثم `ALTER … ADD CONSTRAINT fk_acr_tenant_employee_target_event`. |
+| 5 | مراجعة الطلب | `chk_acr_review` (pending/canceled ⇒ الاثنان NULL؛ approved/rejected ⇒ الاثنان NOT NULL) + `chk_acr_reject` + `chk_acr_no_self`. |
+| 6 | الوردية | `chk_ash_times`: startTime ≠ endTime، وcrossesMidnight = (endTime < startTime). |
+| 7 | workDaysMask | Mapping ثابت (bit0=السبت … bit6=الجمعة) في الكود وتعليق الـDDL؛ **بلا Default**؛ يوم واحد على الأقل. |
+| 8 | دور داخل نشاط | `targetType='role'` يقبل businessId NULL أو قيمة. الأولوية: موظف ← دور+نشاط ← نشاط ← دور على الشركة ← افتراضي الشركة (مكتوبة ومختبرة). |
+| 9 | منع التداخل | خدمة داخل Transaction تقفل صف الـtenant FOR UPDATE، تبحث عن تقاطع لنفس الهدف، ترفض برسالة واضحة، وإنهاء القديم + الجديد في نفس المعاملة؛ اختبار طلبين متزامنين. |
+| 10 | الوقت | حسابات IANA على السيرفر (`Intl`، Africa/Cairo)، تخزين UTC، `SET time_zone='+00:00'` لكل معاملة حضور، قراءة/كتابة الطوابع بالـepoch؛ اختبارات منتصف الليل/الشهر/الوردية الليلية/التوقيت الصيفي. |
+| 11 | المجاميع المخزنة | Projection من الأحداث: دالة إعادة حساب نقية + `reconcileAttendance` قراءة فقط + اختبار عبث بـworkedMinutes؛ التحديث داخل نفس المعاملة تحت FOR UPDATE. |
+| 12 | Idempotency | operationId ثابت للعملية؛ نفس المفتاح+hash ⇒ Replay؛ hash مختلف ⇒ Conflict؛ طلبان متزامنان ⇒ حدث واحد. |
+
+العلم: `ATTENDANCE_ENABLED` (افتراضيًا معطل): معطل ⇒ لا وصول للجداول ولا ظهور للواجهة؛ مفعّل والجداول غائبة ⇒ `PRECONDITION_FAILED`.
 
 ---
 
-## 6) ج) الصلاحيات المقترحة (لم تُنفّذ)
+## 6) الصلاحيات المعتمدة (كود فقط — بلا Migration)
 
-**مكان الإضافة:** `server/permissions.ts` (`ALL_PERMISSIONS` + `ROLE_PERMISSIONS` الافتراضية) و`shared/permissionLabels.ts` (التسميات العربية). بلا Migration (`tenant_role_permissions.permission` varchar(100)). الحارس: `permissionProcedure` للويب و`requireEmployeeTenantPermission` للبوابة (كلاهما يحترم تخصيص الشركة).
+**المكان:** `server/permissions.ts` (`ALL_PERMISSIONS` + `ROLE_PERMISSIONS`) و`shared/permissionLabels.ts`. الحارس: `permissionProcedure` (ويب) و`requireEmployeeTenantPermission` (كل البوابة بعد التوحيد).
 
-| الصلاحية | super_admin | admin | manager | moderator | order_confirmation / agent | warehouse / shipping / scanner / data_entry / facebook_entry | accountant | viewer |
-|---|---|---|---|---|---|---|---|---|
-| employee_performance.view_self | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| employee_performance.view_team | مؤجّل (لا نموذج فريق) | | | | | | | |
-| employee_performance.view_all | ✓ | ✓ | منح | — | — | — | — | — |
-| employee_performance.export | ✓ | منح | — | — | — | — | — | — |
-| attendance.clock_self | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| attendance.view_self | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| attendance.request_correction | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| attendance.view_team | مؤجّل | | | | | | | |
-| attendance.view_all | ✓ | ✓ | ✓ | — | — | — | منح | — |
-| attendance.manage_shifts | ✓ | ✓ | منح | — | — | — | — | — |
-| attendance.correct | ✓ | ✓ | منح | — | — | — | — | — |
-| attendance.approve_corrections | ✓ | ✓ | منح | — | — | — | — | — |
-| attendance.manage_leaves | ✓ | ✓ | منح | — | — | — | — | — |
-| attendance.export | ✓ | منح | — | — | — | — | منح | — |
+| الصلاحية | super_admin | admin | manager | warehouse | agent / order_confirmation / moderator / shipping / scanner / data_entry / facebook_entry | accountant | viewer |
+|---|---|---|---|---|---|---|---|
+| employee_performance.view_self | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| employee_performance.view_all | ✓ | ✓ | منح | — | — | — | — |
+| employee_performance.export | ✓ | ✓ | منح | — | — | — | — |
+| attendance.clock_self / view_self / request_correction | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| attendance.view_all | ✓ | ✓ | منح | — | — | منح | — |
+| attendance.manage_shifts / correct / approve_corrections / manage_leaves | ✓ | ✓ | منح | — | — | — | — |
+| attendance.export | ✓ | ✓ | منح | — | — | منح | — |
+| inventory.view / inventory.adjust (جديدتان) | ✓ | ✓ | ✓ | ✓ | — | — | — |
 
-«منح» = غير مفعّلة افتراضيًا وتُمنح من شاشة الصلاحيات لكل شركة. المدير لا يأخذ أي صلاحية مالية (قاعدة `permissionProcedure` الحالية)؛ هذه الصلاحيات ليست مالية.
-
-**اختبارات المصفوفة (مخططة):** لكل دور × صلاحية: الافتراضي، المنح، السحب، عزل الشركة (منح في A لا يؤثر على B)، المالك وحده يرى `export` إن لم يُمنح، الواجهة تُخفي من نفس المصدر، والسيرفر يرفض عند السحب في الطلب التالي (نفس نمط shippingPortalPermission.security.test.ts).
+`*.view_team` مؤجّل (لا نموذج فريق). `inventory.adjust` لا تعني رؤية التكلفة (`inventory_costing.*` منفصلة). «منح» = غير مفعّلة افتراضيًا. لا Leaderboard عام.
 
 ---
 
-## 7) تعريف المقاييس (C2)
+## 7) المقاييس المعتمدة
 
 | المقياس | التعريف |
 |---|---|
-| uniqueHandledOrders | `COUNT(DISTINCT orderId)` لأحداث الموظف من: confirm, no_answer, postpone, cancel, edit, edit_items, status_change |
-| confirmedOrders | `COUNT(DISTINCT orderId)` حيث eventType = confirm |
-| noAnswerOrders / noAnswerAttempts | `COUNT(DISTINCT orderId)` / `COUNT(*)` لـ no_answer |
-| eligibleOrders (المقام) | يُحدد بقرارك (§12-2) |
-| confirmationRate | confirmedOrders ÷ eligibleOrders (≤ 100% لأن البسط جزء من المقام) |
-| needsFollowUp | أوردرات آخر حدث للموظف فيها no_answer/postpone بلا confirm/cancel لاحق من أي أحد |
-| firstResponseMinutes | من `assign` إلى أول حدث قرار للموظف — للأوردرات المُسندة بعد Go-Live فقط |
-| activeDays | أيام مختلفة (بتوقيت القاهرة) فيها حدث للموظف |
-
-كل حدث لصاحبه؛ إعادة الإسناد لا تنقل التاريخ؛ كل نسبة تُعرض بجانب عددها؛ لا ترتيب تحت حد العينة.
+| decisionEligibleOrders | `COUNT(DISTINCT orderId)` لأحداث المنسوب إليه من confirm/no_answer/postpone/cancel في الفترة |
+| confirmedOrders | `COUNT(DISTINCT orderId)` لأحداث confirm المنسوبة إليه |
+| «نسبة التأكيد من القرارات المسجلة» | confirmedOrders ÷ decisionEligibleOrders (≤ 100%) |
+| noAnswerOrders / noAnswerAttempts | `COUNT(DISTINCT orderId)` / `COUNT(*)` لـno_answer |
+| workload (حجم العمل) | أوردرات مختلفة له أي حدث منسوب (منفصل عن النسبة) |
+| assignedOrders (الإسنادات) | أوردرات مختلفة أُسندت إليه (assign/reassign، `assigneeEmployeeIdAtEvent`) — منفصل |
+| الترتيب | فقط لمن decisionEligibleOrders ≥ 20؛ الأقل تظهر أرقامهم ونسبتهم بلا ترتيب |
+| الأيام | بتوقيت Africa/Cairo |
 
 ---
 
-## 8) قرارات تقنية تحتاج اعتمادك مع الـDDL
+## 8) قرارات المالك المعتمدة
 
-أ) **الفهرسان المركّبان** (`businesses_tenant_id`, `employees_tenant_id`) — مطلوبان لكل FK مركّب، ويُنشئهما 0040 غير المطبّق:
-   1. **(مُوصى به)** 0041 يُنشئهما إن لم يكونا موجودين (preflight يقرر)، ويُعدَّل preflight الخاص بـ0040 لاحقًا ليقبل وجودهما ويتخطى عبارتيه — تعديل كود سكربت لا يغيّر 0040 نفسه.
-   2. تطبيق 0040 أولًا (جداوله تبقى فارغة وV3 غير مفعّل) — يتعارض مع قاعدة «لا تشغيل 0040».
-   3. FK بسيط بلا tenant + تحقق بالخدمة — أضعف، غير مُوصى به.
-ب) **orderId بلا FK** على orders (للحفاظ على حذف المكررات) — مُوصى به.
-ج) **Triggers لمنع UPDATE/DELETE** على جداول الأحداث — غير مُوصى بها افتراضيًا (صلاحيات MySQL المُدار)؛ المنع بالكود والاختبارات.
-د) **إصدار MySQL في Production ≥ 8.0.16** لتفعيل CHECK — يُتحقق في preflight؛ وإلا تُنقل القيود للخدمة.
-
----
-
-## 9) الفترة التجريبية — تصميم كامل (لا تنفيذ قبل قرارك)
-
-**الحقائق:** `tenants.status` = trialing/active/past_due/canceled/suspended/expired؛ `approveSignupRequest` يضبط trialing + 14 يومًا؛ **لا قراءة لـ`trialEndsAt` في أي مكان**؛ لا انتقال تلقائي إلى expired؛ جدول `subscriptions` غير مقروء.
-
-**نقطة Enforcement مركزية:** دالة واحدة `resolveTenantAccess(tenantId, now)` → `full | read_only | blocked` بكاش قصير (60 ثانية) ومفعّلة في:
-1. `createContext` (server/_core/context.ts) — يُرفق `ctx.tenantAccess` لكل جلسة ويب/بوابة.
-2. middleware موحّد على `protectedProcedure` و`authenticatedProcedure` و`permissionProcedure` و`employeePortalProcedure` و`managerPortalProcedure`: أي **mutation** مع `read_only` ⇒ `FORBIDDEN` برمز `TENANT_TRIAL_EXPIRED`؛ `blocked` ⇒ كل شيء عدا الخروج والاشتراك.
-3. مسارات Express خارج tRPC (تتجاوز الـmiddleware حاليًا): `/api/import/{preview,execute}`, `/api/import/whatsapp/*`, `/api/branding/upload`, `/api/carrier/package-image/upload`, `/api/evidence/upload` ⇒ كتابة = تُمنع؛ `/api/export/*` و`/api/orders/*/bosta-awb` ⇒ قراءة = مسموحة في `read_only`.
-4. Webhooks: `/api/webhooks/bosta` و`/api/webhooks/easyorder` تُستقبل وتُخزَّن في صناديقها الحالية **بلا معالجة** لشركة غير `full` (لا فقد بيانات) — قرار §12-10.
-5. المجدول الخلفي (Maintenance/Bosta sync) يتخطى الشركات غير `full`.
-6. مسارا الدخول (`/api/auth/login`, `/api/employee/login`) يسمحان بالدخول ويُرجعان حالة الوصول للواجهة.
-
-| الحالة | الوصول المقترح |
-|---|---|
-| trialing قبل `trialEndsAt` | full |
-| trialing بعد `trialEndsAt` | read_only + شاشة «انتهت الفترة التجريبية» |
-| active | full |
-| past_due | full لمدة سماح (اقتراح 7 أيام) ثم read_only — قرار |
-| canceled | blocked (دخول + تصدير + اشتراك فقط) |
-| suspended | blocked |
-| expired | read_only |
-
-**ما يبقى متاحًا بعد الانتهاء (read_only):** تسجيل الدخول؛ قراءة البيانات؛ التصدير؛ إعدادات الاشتراك؛ تسجيل الخروج. **Platform Admin مستثنى تمامًا** (مصادقة منفصلة لا تمر بأي من هذا).
-**الشاشة** (لا تُبنى قبل الحارس): صفحة بـ`<main>` واحد: «انتهت الفترة التجريبية»، تاريخ الانتهاء بتوقيت القاهرة، «بياناتك محفوظة ولم تُحذف»، «تواصل مع إدارة المنصة»، «تسجيل الخروج»؛ suspended/canceled برسائل مستقلة؛ الموظف غير المالك يرى رسالة بلا تفاصيل اشتراك.
-**الاختبارات:** كل حالة × كل نوع إجراء (query/mutation/Express/webhook/بوابة/مجدول)، والحد بالضبط عند `trialEndsAt`، وPlatform Admin غير متأثر، وعزل الشركات.
+1. حد عينة الترتيب: 20 أوردرًا مؤهلًا؛ الأقل يظهرون بلا ترتيب.
+2. eligibleOrders: confirm/no_answer/postpone/cancel؛ الاسم «نسبة التأكيد من القرارات المسجلة».
+3. المقارنة: super_admin، admin، ومن يُمنح `employee_performance.view_all`؛ الموظف يرى نفسه فقط؛ لا Leaderboard عام.
+4. الورديات: لا ورديات افتراضية ولا Seed؛ المالك ينشئها من الواجهة (يُدعم مثال 11:00–18:00 بلا أن يكون افتراضيًا).
+5. سماح التأخير: 10 دقائق كاقتراح أولي في نموذج الإنشاء، قابل للتغيير لكل وردية.
+6. الاستراحة: 60 دقيقة كاقتراح أولي؛ الزيادة تُسجَّل ولا تُخصم.
+7. الخروج المبكر: دقائق + سبب + مراجعة؛ لا خصم.
+8. الإضافي: بعد 30 دقيقة كاقتراح؛ يحتاج اعتمادًا؛ لا ربط بالراتب.
+9. الإجازة/المأمورية: طلب واعتماد فقط؛ لا رصيد ولا خصم.
+10. انتهاء التجربة: trialing قبل النهاية Full؛ بعدها Read-only؛ active Full؛ past_due سماح 7 أيام ثم Read-only؛ expired Read-only؛ suspended وcanceled Blocked. Read-only: دخول، قراءة، تصدير، إعدادات الاشتراك، خروج؛ كل كتابة تشغيلية ممنوعة؛ الويبهوك تُستقبل وتُحفظ في الـInbox بلا معالجة، وتُعالج مرة واحدة بعد إعادة التفعيل.
 
 ---
 
-## 10) توحيد صلاحيات `/manager-dashboard` — جدول قرار (لا تنفيذ)
+## 9) Tenant Access Enforcement (خلف `TENANT_ACCESS_ENFORCEMENT_ENABLED=false`)
 
-الوضع: `managerPortalProcedure` يقبل super_admin/admin/manager (فحص دور)، بينما `productsList/lowStockProducts/inventoryMovements/addInventoryMovement` تشترط حرفيًا manager/warehouse. الواجهة تعرض التبويبات لدور manager فقط (لا تبويب يرفضه السيرفر).
-
-| التبويب | البيانات | الصلاحية الأنسب الموجودة | من يملكها افتراضيًا | يلزم جديد؟ |
-|---|---|---|---|---|
-| لوحة التحكم | عدادات الأوردرات، الرسم اليومي | `dashboard.view` | super_admin, admin, manager, moderator, agent, order_confirmation, warehouse, accountant, viewer | لا — لكنها واسعة؛ مُوصى: `orders.view` + نطاق |
-| لوحة التحكم | الرسالة الجماعية (إرسال/إلغاء) | `employees.manage` | super_admin, admin, manager | لا |
-| الأوردرات | القائمة | `orders.view` | الكل تقريبًا | لا |
-| الأوردرات | إسناد/إسناد جماعي | `orders.update` | super_admin, admin, manager, moderator, agent, order_confirmation | لا — لكن الإسناد للآخرين أقوى من التعديل ⇒ مُوصى `employees.manage` |
-| الأوردرات | تأكيد/إلغاء/تأجيل | `orders.confirm` / `orders.cancel` / `orders.update` | كما في الخريطة | لا |
-| المخزون | المنتجات، المنخفض، الحركات، إضافة حركة | **لا يوجد** (`inventory_costing.*` للتكلفة) | — | **نعم**: `inventory.view` و`inventory.adjust` (افتراضيًا: super_admin, admin, manager, warehouse) |
-| التقارير | الملخص التقديري، أسباب الإلغاء | `orders.view` (الإلغاءات) + `employee_performance.view_all` (C) | — | نعم ضمن C |
-| الموظفين | قائمة / إنشاء / تعديل / بيانات دخول | `employees.view` / `employees.manage` | view: +moderator؛ manage: super_admin, admin, manager | لا |
-| توزيع المهام | قائمة / إنشاء / حالة / حذف | `employees.view` / `employees.manage` | كما سبق | لا |
-
-**التوصية:** تحويل الفحص من «الدور» إلى الصلاحيات الموجودة أعلاه (tenant-aware) لكل Endpoint، مع إبقاء النطاق كما هو. الأثر: admin/super_admin يحتفظان بكل شيء؛ manager كما هو؛ **moderator سيكتسب** الأوردرات والموظفين (عرض) في البوابة — توسيع يحتاج موافقتك أو منعًا صريحًا له؛ warehouse لا يرى إلا المخزون (بعد `inventory.*`). الواجهة تعرض كل تبويب حسب نفس المصدر (`employeePortal.myPermissions`) والسيرفر يبقى الحارس، وحالات FORBIDDEN تعرض رسالة السيرفر.
+- `resolveTenantAccess(tenantId, now)` نقطة واحدة ← `full | read_only | blocked` + السبب.
+- مُطبَّق في: middleware موحّد لكل إجراءات tRPC المصادَق عليها (ويب وبوابة، query/mutation)، مسارات Express (import/upload ⇒ كتابة؛ export/awb ⇒ قراءة)، المجدول الخلفي، ومعالجة الويبهوك (استقبال وحفظ دون معالجة).
+- Platform Admin مستثنى (مصادقة منفصلة). العلم معطل = السلوك الحالي حرفيًا. لا تغيير status لأي Tenant.
+- شاشة «انتهت الفترة التجريبية» تُعرض فقط عند رمز `TENANT_READ_ONLY`/`TENANT_BLOCKED` من الحارس.
 
 ---
 
-## 11) قرارات Backend متبقية (بلا Migration) — تحتاج موافقتك
+## 10) Manager Dashboard — المعتمد
 
-1. **مهام الموظف في البوابة**: `tasks.*` على `protectedProcedure` ⇒ لوحة مهام الموظف غير الإداري ترجع UNAUTHORIZED منذ قبل هذا العمل. الاقتراح: `tasks.listMine/updateMyStatus` على البوابة بنطاق الموظف (مهامه + العامة لنشاطه).
-2. **بوابة الموظف وتخصيص الشركة**: `requireEmployeePermission` (routers.ts) يقرأ الخريطة الافتراضية فقط ويتجاهل `tenant_role_permissions` (ما عدا شاشتي الشحن بعد هذا العمل). الاقتراح: توحيد كل البوابة على `requireEmployeeTenantPermission` — يغيّر السلوك حيث توجد تخصيصات.
-3. **تسجيل أحداث الويبهوك في 0041** (Bosta / Easy Orders): سطر تسجيل فقط بلا تغيير منطقهما — يحتاج إذنًا لأن القاعدة تمنع ربطهما بالميزات الجديدة.
-4. **Backfill الأداء «المؤكد» فقط** بعد Go-Live.
+- الدخول للمسار يبقى super_admin/admin/manager (لا moderator).
+- كل تبويب وإجراء يحتاج صلاحيته: الأوردرات `orders.view/update/confirm/cancel`؛ الموظفون `employees.view/manage`؛ المهام `employees.view` (قراءة) و`employees.manage` (إنشاء/حذف/إسناد الآخرين)؛ المخزون `inventory.view/adjust`.
+- warehouse يستخدم Warehouse Dashboard (يحتفظ بالمخزون عبر `inventory.*`).
+
+## 11) Backend معتمد
+
+1. `employeePortal.tasks.listMine` / `employeePortal.tasks.updateMyStatus`: مهامه + المهام العامة لنشاطه؛ لا إنشاء ولا حذف؛ fail-closed.
+2. كل إجراءات البوابة على `requireEmployeeTenantPermission` (منح/سحب فوري، عزل A/B، لا صلاحيات جلسة المالك).
+3. أحداث الويبهوك في 0041 خلف العلم (Audit فقط، بلا منطق Bosta/Easy Orders ولا كتابة مالية).
 
 ---
 
-## 12) قرارات تحتاج إجابة المالك (10)
+## 12) ترتيب التنفيذ وقيود التشغيل
 
-1. **حد عينة ترتيب نسبة التأكيد** — اقتراح: 20 أوردرًا eligible في الفترة؛ تحته تُعرض النسبة بلا ترتيب.
-2. **تعريف eligible orders** — اقتراح: الأوردرات المختلفة التي اتخذ فيها الموظف قرار تأكيد (confirm / no_answer / postpone / cancel) في الفترة، مع استبعاد المكررات المحذوفة والأوردرات المُلغاة من النظام/الويبهوك.
-3. **من يرى مقارنة الموظفين** — اقتراح: المالك والأدمن ومن يُمنح `employee_performance.view_all`؛ الموظف يرى نفسه فقط؛ لا لوحة ترتيب عامة.
-4. **مواعيد الورديات الفعلية** — لكل نشاط: البداية/النهاية وأيام العمل والوردية الليلية إن وُجدت.
-5. **سماح التأخير** — اقتراح: 10 دقائق.
-6. **مدة الاستراحة** — اقتراح: 60 دقيقة إجمالًا، والزيادة تُسجَّل «استراحة زائدة» بلا خصم.
-7. **سياسة الخروج المبكر** — اقتراح: تُسجَّل الدقائق ويُطلب سبب، ومراجعة المدير، بلا خصم.
-8. **سياسة الإضافي** — اقتراح: يُحتسب بعد 30 دقيقة من نهاية الوردية، ويحتاج اعتمادًا، بلا ربط بالرواتب.
-9. **الإجازات** — اقتراح: إجازة/مأمورية بطلب واعتماد (`attendance.manage_leaves`)، بلا رصيد إجازات في هذه النسخة.
-10. **وضع الشركة بعد انتهاء التجربة** — اقتراح: قراءة + تصدير + إعدادات الاشتراك، منع كل الكتابات التشغيلية، والويبهوك تُخزَّن بلا معالجة؛ past_due: سماح 7 أيام.
-
-**لم يُكتب 0041 ولا 0042 ولا أي Migration صلاحيات ولا أي Backfill.** التنفيذ يبدأ فقط بعد اعتمادك لهذه الحزمة.
+Commits مستقلة: (1) هذه الحزمة؛ (2) ملفات 0041 + السكربتات؛ (3) خدمة Event Ledger وربط المسارات؛ (4) تقرير الأداء؛ (5) ملفات 0042 + السكربتات؛ (6) خدمات الحضور؛ (7) Routers والصلاحيات؛ (8) الواجهات؛ (9) مهام الموظف وتوحيد البوابة؛ (10) صلاحيات لوحة المدير؛ (11) Tenant Access خلف العلم؛ (12) مراجعة واختبارات.
+مسموح: تشغيل 0041/0042 على Docker محلي مؤقت فقط. ممنوع: Push، Deploy، Staging، Production، تشغيل 0040، Backfill حقيقي، تفعيل أي علم، تغيير Tenant Status، كتابة Ledger V3 أو Payroll، drizzle-kit push/generate.
