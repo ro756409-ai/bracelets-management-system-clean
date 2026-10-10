@@ -263,10 +263,18 @@ export async function readMessages(actor: MessagingActor, perms: Partial<Messagi
         acks: k ? { count: Number(k.n), mine: Number(k.mine) > 0 } : { count: 0, mine: false },
       };
     });
+    // «تمت القراءة» للمحادثة الخاصة فقط: مؤشر قراءة الطرف الآخر (msg_members.lastReadMessageId — يتقدم فقط،
+    // ويتحرك بـmarkRead أو عند إرساله هو). للعضو فقط: المطّلع والمجموعات والقنوات = null (لا قراءة جماعية).
+    // قراءة المالك المطّلع لا تكتب أي مؤشر، فلا تجعل رسالة «مقروءة».
+    let peerLastReadMessageId: number | null = null;
+    if (a.member && a.conv.kind === "direct") {
+      const peer = await one(tx, sql`SELECT lastReadMessageId FROM msg_members WHERE tenantId = ${t} AND conversationId = ${a.conv.id} AND employeeId <> ${me.id} AND leftAt IS NULL LIMIT 1`);
+      peerLastReadMessageId = num(peer?.lastReadMessageId);
+    }
     return {
       conversation: { id: Number(a.conv.id), kind: a.conv.kind as ConversationKind, title: a.conv.title ?? null, businessId: num(a.conv.businessId) },
       readOnly: a.monitor, privacyNotice: MONITORABLE.includes(a.conv.kind) ? PRIVACY_NOTICE : null,
-      messages, hasMore, lastReadMessageId: num(a.member?.lastReadMessageId),
+      messages, hasMore, lastReadMessageId: num(a.member?.lastReadMessageId), peerLastReadMessageId,
     };
   });
 }

@@ -309,6 +309,37 @@ describe("💬 المحادثة", () => {
     delete (globalThis as any).ResizeObserver;
   });
 
+  it("«تمت القراءة»: في الخاص فقط، على رسالة واحدة، وتتحدث مع الـPolling بلا إعادة تنزيل الصوت؛ لا في الاطلاع ولا المجموعات", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    const voice = msg(13, { mine: true, senderEmployeeId: 1, kind: "voice", body: null, attachments: [{ kind: "voice", mime: "audio/webm", bytes: 9, width: null, height: null, durationMs: 3000, waveform: null, purged: false }] });
+    let peer: number | null = null;
+    st.read[5] = () => page("direct", [msg(10, { mine: true, senderEmployeeId: 1 }), msg(11), msg(12, { mine: true, senderEmployeeId: 1, editedAt: 5 }), voice], { peerLastReadMessageId: peer });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    center({ conversationId: 5, voice: messagingVoiceHooks });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+    expect(screen.queryAllByTestId(/^read-receipt-/)).toHaveLength(0); // وصلت فقط
+    peer = 12; // الطرف الآخر قرأ حتى 12
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_100); }); // Polling عادي
+    expect(screen.queryAllByTestId(/^read-receipt-/).map(e => e.getAttribute("data-testid"))).toEqual(["read-receipt-12"]);
+    peer = 13;
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_100); });
+    expect(screen.queryAllByTestId(/^read-receipt-/).map(e => e.getAttribute("data-testid"))).toEqual(["read-receipt-13"]);
+    expect(audioController.__srcSets()).toBe(0); // التحديث لم ينزّل الصوت
+    vi.useRealTimers();
+    cleanup();
+    // وضع الاطلاع والمجموعات: لا علامة حتى لو وصل مؤشر
+    st.read[5] = page("direct", [msg(10, { mine: true })], { readOnly: true, peerLastReadMessageId: 99 });
+    center({ conversationId: 5 });
+    await screen.findByTestId("message-10");
+    expect(screen.queryAllByTestId(/^read-receipt-/)).toHaveLength(0);
+    cleanup();
+    st.read[5] = page("group", [msg(10, { mine: true })], { peerLastReadMessageId: 99 });
+    center({ conversationId: 5 });
+    await screen.findByTestId("message-10");
+    expect(screen.queryAllByTestId(/^read-receipt-/)).toHaveLength(0);
+  });
+
   it("أهداف اللمس: كل زر في المركز ≥ 44px (min-h-11/12/14 أو h-11)", async () => {
     st.status = { enabled: true, permissions: PERMS({ voice: true, manageGroups: true, announce: true }) };
     st.read[5] = page("team", [msg(10, { mine: true, editedAt: 1, reactions: [{ reaction: "like", count: 1, mine: true }] }), msg(11)], { hasMore: true });

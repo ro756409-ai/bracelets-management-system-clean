@@ -39,3 +39,16 @@ export function isNearBottom(el: { scrollHeight: number; scrollTop: number; clie
 export function shouldStickToBottom(o: { firstLoad: boolean; nearBottom: boolean; sentByMe: boolean }): boolean {
   return o.firstLoad || o.sentByMe || o.nearBottom;
 }
+
+/**
+ * «تمت القراءة» — علامة **واحدة** على آخر رسالة لي قرأها الطرف الآخر (محادثة خاصة فقط). المحذوفة ورسائل
+ * النظام لا تحمل العلامة؛ بلا مؤشر قراءة للطرف الآخر (أو في المجموعات/الاطلاع) = لا علامة.
+ */
+export function readReceiptMessageId(messages: readonly { id: number; mine: boolean; deletedAt: number | null; kind: string }[], peerLastReadMessageId: number | null | undefined): number | null {
+  if (!peerLastReadMessageId) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.mine && m.deletedAt == null && m.kind !== "system" && m.id <= peerLastReadMessageId) return m.id;
+  }
+  return null;
+}

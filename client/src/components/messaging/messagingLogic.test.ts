@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { PollScheduler, type PollEnv } from "./pollScheduler";
-import { isNearBottom, mergeById, mergeLatestPage, shouldStickToBottom } from "./messageStore";
+import { isNearBottom, mergeById, mergeLatestPage, readReceiptMessageId, shouldStickToBottom } from "./messageStore";
 import { downsampleLevels, extensionFor, pickMimeType } from "./useVoiceRecorder";
 
 /** بيئة جدولة مزيّفة: وقت يدوي + ظهور/اتصال قابلان للتبديل. */
@@ -122,6 +122,24 @@ describe("🧩 دمج الرسائل", () => {
     expect(shouldStickToBottom({ firstLoad: false, nearBottom: false, sentByMe: false })).toBe(false);
     expect(isNearBottom({ scrollHeight: 2000, scrollTop: 1500, clientHeight: 450 })).toBe(true);
     expect(isNearBottom({ scrollHeight: 2000, scrollTop: 200, clientHeight: 450 })).toBe(false);
+  });
+});
+
+describe("✓✓ «تمت القراءة»", () => {
+  const M = (id: number, mine: boolean, p: any = {}) => ({ id, mine, deletedAt: null, kind: "text", ...p });
+  const list = [M(1, true), M(2, false), M(3, true), M(4, true), M(5, false)];
+  it("لا علامة قبل قراءة الطرف الآخر", () => {
+    expect(readReceiptMessageId(list, null)).toBeNull();
+    expect(readReceiptMessageId(list, 0)).toBeNull();
+  });
+  it("علامة واحدة على آخر رسالة لي ≤ مؤشر الطرف الآخر", () => {
+    expect(readReceiptMessageId(list, 3)).toBe(3);
+    expect(readReceiptMessageId(list, 4)).toBe(4);
+    expect(readReceiptMessageId(list, 99)).toBe(4);
+  });
+  it("المحذوفة ورسائل النظام لا تحمل العلامة — تنتقل لأقرب رسالة لي سابقة", () => {
+    expect(readReceiptMessageId([M(1, true), M(3, true, { deletedAt: 1 })], 5)).toBe(1);
+    expect(readReceiptMessageId([M(1, true, { kind: "system" })], 5)).toBeNull();
   });
 });
 

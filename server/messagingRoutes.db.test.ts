@@ -98,6 +98,16 @@ describe.runIf(CAN)("🛂 مسارات الرسائل", () => {
     expect((await w.messages.conversations() as any).conversations.map((c: any) => c.id)).toContain(teamA);
   });
 
+  it("«تمت القراءة» عبر البوابة: لا قبل قراءة الطرف الآخر، تظهر بعد markRead، ولا تُكشف لشركة أخرى", async () => {
+    const p1 = await portal(emp.a1), p2 = await portal(emp.a2);
+    const before = await p1.read({ conversationId: dmA });
+    const myLast = before.messages.filter(m => m.mine).at(-1)!.id;
+    expect(before.peerLastReadMessageId ?? 0).toBeLessThan(myLast);
+    await p2.markRead({ conversationId: dmA, messageId: myLast });
+    expect((await p1.read({ conversationId: dmA })).peerLastReadMessageId).toBe(myLast);
+    expect(await code(async () => (await portal(emp.bE)).read({ conversationId: dmA }))).toBe("NOT_FOUND");
+  });
+
   it("عزل A/B: الرسائل والمجموعات والإعلانات والخاص", async () => {
     const b = await portal(emp.bE);
     expect(await code(() => b.read({ conversationId: teamA }))).toBe("NOT_FOUND");

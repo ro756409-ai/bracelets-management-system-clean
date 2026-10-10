@@ -11,7 +11,7 @@ import { MessageBubble, type BubbleActions } from "./MessageBubble";
 import { HistoryDialog, ReadsDialog } from "./MessagingDialogs";
 import { MessagingError } from "./MessagingStates";
 import { conversationTitle, KIND_LABEL, useOnline } from "./format";
-import { isNearBottom, maxId, minId, shouldStickToBottom } from "./messageStore";
+import { isNearBottom, maxId, minId, readReceiptMessageId, shouldStickToBottom } from "./messageStore";
 import { messagingErrorText, useMessagingApi, useMessagingUtils, type ChatMessage, type MessagingStatus, type MessagingVia } from "./messagingApi";
 import { useConversationThread } from "./useConversationThread";
 
@@ -203,6 +203,11 @@ export function ConversationView(props: {
   }), [react, ack, afterChange, once]);
 
   const byId = useMemo(() => new Map(thread.messages.map(m => [m.id, m])), [thread.messages]);
+  // محادثة خاصة وعضو فقط (المطّلع يأخذ null من السيرفر) — تتحدث مع الـPolling العادي بلا طلب إضافي
+  const receiptId = useMemo(
+    () => (conv?.kind === "direct" && !readOnly ? readReceiptMessageId(thread.messages, meta?.peerLastReadMessageId) : null),
+    [conv?.kind, readOnly, thread.messages, meta?.peerLastReadMessageId],
+  );
 
   const title = props.titleHint || (conv ? conversationTitle(conv) : "");
   return (
@@ -264,6 +269,7 @@ export function ConversationView(props: {
                     readOnly={!interactive}
                     canAnnounceStats={permissions.announce && m.kind === "announcement"}
                     busy={busy}
+                    readReceipt={receiptId === m.id}
                     actions={actions}
                     voice={m.kind === "voice" && props.voice ? props.voice.renderPlayer(m, conversationId) : undefined}
                   />

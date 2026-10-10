@@ -30,6 +30,8 @@ export const MessageBubble = memo(function MessageBubble(props: {
   readOnly: boolean;
   canAnnounceStats: boolean;
   busy: boolean;
+  /** «تمت القراءة» — تظهر على رسالة واحدة فقط (آخر رسالة لي قرأها الطرف الآخر في المحادثة الخاصة). */
+  readReceipt?: boolean;
   actions: BubbleActions;
   voice?: ReactNode;
 }) {
@@ -88,6 +90,11 @@ export const MessageBubble = memo(function MessageBubble(props: {
               </button>
             )}
             {m.kind === "voice" && m.mine && m.listens.count > 0 && <span className="text-primary-text">سمعها {m.listens.count}</span>}
+            {props.readReceipt && (
+              <span className="inline-flex items-center gap-0.5 text-primary-text" data-testid={`read-receipt-${m.id}`}>
+                <CheckCheck className="h-3.5 w-3.5" aria-hidden="true" /> تمت القراءة
+              </span>
+            )}
           </div>
           {m.reactions.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1" aria-label="التفاعلات">
