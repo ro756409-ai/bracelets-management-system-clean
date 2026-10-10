@@ -21,11 +21,14 @@ CREATE TABLE `msg_conversations` (
 	`lastMessageId` int NULL,
 	`lastMessageAt` timestamp(3) NULL,
 	`isArchived` tinyint(1) NOT NULL DEFAULT 0,
+	`idempotencyKey` varchar(100) NULL,
+	`payloadHash` char(64) NULL,
 	`createdAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 	`updatedAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
 	CONSTRAINT `msg_conversations_id` PRIMARY KEY(`id`),
 	CONSTRAINT `msc_tenant_id_unique` UNIQUE(`tenantId`,`id`),
 	CONSTRAINT `msc_tenant_key_unique` UNIQUE(`tenantId`,`uniqueKey`),
+	CONSTRAINT `msc_tenant_idempotency_unique` UNIQUE(`tenantId`,`idempotencyKey`),
 	INDEX `msc_tenant_last` (`tenantId`,`lastMessageAt`),
 	CONSTRAINT `fk_msc_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
 	CONSTRAINT `fk_msc_tenant_business` FOREIGN KEY (`tenantId`,`businessId`) REFERENCES `businesses`(`tenantId`,`id`),
@@ -35,7 +38,8 @@ CREATE TABLE `msg_conversations` (
 		OR (`kind` = 'team' AND `businessId` IS NULL AND `uniqueKey` IS NOT NULL AND `uniqueKey` = 'team')
 		OR (`kind` = 'business' AND `businessId` IS NOT NULL AND `uniqueKey` IS NOT NULL AND `uniqueKey` = CONCAT('business:', `businessId`))
 		OR (`kind` = 'group' AND `businessId` IS NULL AND `uniqueKey` IS NULL AND `title` IS NOT NULL AND CHAR_LENGTH(TRIM(`title`)) >= 1 AND `createdByEmployeeId` IS NOT NULL)
-		OR (`kind` = 'direct' AND `businessId` IS NULL AND `uniqueKey` IS NOT NULL AND `uniqueKey` LIKE 'direct:%' AND `createdByEmployeeId` IS NOT NULL))
+		OR (`kind` = 'direct' AND `businessId` IS NULL AND `uniqueKey` IS NOT NULL AND `uniqueKey` LIKE 'direct:%' AND `createdByEmployeeId` IS NOT NULL)),
+	CONSTRAINT `chk_msc_idem` CHECK ((`idempotencyKey` IS NULL AND `payloadHash` IS NULL) OR (`idempotencyKey` IS NOT NULL AND `payloadHash` IS NOT NULL AND `kind` = 'group'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 --> statement-breakpoint
 CREATE TABLE `msg_members` (

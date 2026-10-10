@@ -52,7 +52,7 @@ describe.runIf(CAN)("💬 خدمات الرسائل", () => {
     __setDbForTests(drizzle(tmp.url));
     A = await createCoreTestFixture("msg-a"); B = await createCoreTestFixture("msg-b");
     const mk = async (key: string, role: string, f: CoreTestFixture, active = true) => { emp[key] = insId(await createEmployee({ name: `${key}-msg`, role, isActive: active, tenantId: f.tenantId, businessId: f.businessId, username: `${key}_${tmp.name}`.slice(0, 50) } as any)); };
-    await mk("e1", "agent", A); await mk("e2", "agent", A); await mk("e3", "warehouse", A); await mk("boss", "super_admin", A); await mk("mgr", "manager", A); await mk("off", "agent", A, false); await mk("eb", "agent", B);
+    await mk("e1", "agent", A); await mk("e2", "agent", A); await mk("e3", "warehouse", A); await mk("boss", "super_admin", A); await mk("mgr", "manager", A); await mk("off", "agent", A, false); await mk("eb", "agent", B); await mk("eb2", "agent", B);
     a1 = actor("e1", A); a2 = actor("e2", A); a3 = actor("e3", A, "warehouse"); boss = actor("boss", A, "super_admin"); mgr = actor("mgr", A, "manager"); bE = actor("eb", B);
     process.env.MESSAGING_ENABLED = "true";
   }, 240_000);
@@ -227,14 +227,39 @@ describe.runIf(CAN)("💬 خدمات الرسائل", () => {
   });
 
   it("المجموعات: بالصلاحية فقط، أعضاء من نفس الشركة ونشطون، والمنشئ مشرف", async () => {
-    expect(await code(() => msg.createGroup(a1, BASIC, { title: "الشحن", memberIds: [emp.e2] }))).toBe("FORBIDDEN");
-    expect(await code(() => msg.createGroup(mgr, ALL, { title: "الشحن", memberIds: [emp.e2, emp.eb] }))).toBe("BAD_REQUEST");
-    expect(await code(() => msg.createGroup(mgr, ALL, { title: "الشحن", memberIds: [emp.off] }))).toBe("BAD_REQUEST");
-    const { conversationId } = await msg.createGroup(mgr, ALL, { title: "الشحن", memberIds: [emp.e2, emp.e3, emp.e3] });
+    expect(await code(() => msg.createGroup(a1, BASIC, { title: "الشحن", memberIds: [emp.e2], operationId: op() }))).toBe("FORBIDDEN");
+    expect(await code(() => msg.createGroup(mgr, ALL, { title: "الشحن", memberIds: [emp.e2, emp.eb], operationId: op() }))).toBe("BAD_REQUEST");
+    expect(await code(() => msg.createGroup(mgr, ALL, { title: "الشحن", memberIds: [emp.off], operationId: op() }))).toBe("BAD_REQUEST");
+    expect(await code(() => msg.createGroup(mgr, ALL, { title: "الشحن", memberIds: [emp.e2] } as any))).toBe("ZodError");
+    const { conversationId } = await msg.createGroup(mgr, ALL, { title: "الشحن", memberIds: [emp.e2, emp.e3, emp.e3], operationId: op() });
     expect(await q("SELECT employeeId, role FROM msg_members WHERE conversationId = ? ORDER BY employeeId", [conversationId]))
       .toEqual([{ employeeId: emp.e2, role: "member" }, { employeeId: emp.e3, role: "member" }, { employeeId: emp.mgr, role: "admin" }].sort((x, y) => x.employeeId - y.employeeId));
     expect(await code(() => msg.readMessages(a1, BASIC, { conversationId }))).toBe("FORBIDDEN");
     expect((await msg.readMessages(boss, ALL, { conversationId })).readOnly).toBe(true);
+  });
+
+  it("createGroup: ضغطتان متزامنتان بنفس operationId = مجموعة واحدة، وReplay لاحق، وحمولة مختلفة = CONFLICT", async () => {
+    const operationId = op();
+    const input = { title: "التغليف", memberIds: [emp.e3, emp.e1], operationId };
+    const before = Number((await q("SELECT COUNT(*) n FROM msg_conversations WHERE kind = 'group'"))[0].n);
+    const [r1, r2] = await Promise.all([msg.createGroup(mgr, ALL, input), msg.createGroup(mgr, ALL, input)]);
+    expect(r1.conversationId).toBe(r2.conversationId);
+    expect([r1.replay, r2.replay].sort()).toEqual([false, true]);
+    expect(Number((await q("SELECT COUNT(*) n FROM msg_conversations WHERE kind = 'group'"))[0].n)).toBe(before + 1);
+    expect(Number((await q("SELECT COUNT(*) n FROM msg_members WHERE conversationId = ?", [r1.conversationId]))[0].n)).toBe(3);
+    // نفس الأعضاء بترتيب مختلف = نفس الحمولة
+    expect(await msg.createGroup(mgr, ALL, { ...input, memberIds: [emp.e1, emp.e3] })).toEqual({ conversationId: r1.conversationId, replay: true });
+    expect(await code(() => msg.createGroup(mgr, ALL, { ...input, title: "اسم آخر" }))).toBe("CONFLICT");
+    // نفس المفتاح في شركة أخرى مستقل
+    const other = await msg.createGroup(bE, ALL, { title: "B", memberIds: [emp.eb2], operationId });
+    expect(other.replay).toBe(false); expect(other.conversationId).not.toBe(r1.conversationId);
+  });
+
+  it("sendMessage: ضغطتان متزامنتان بنفس المفتاح = رسالة واحدة", async () => {
+    const idempotencyKey = op();
+    const [r1, r2] = await Promise.all([1, 2].map(() => msg.sendMessage(a1, BASIC, { conversationId: teamA, body: "مرة واحدة", idempotencyKey })));
+    expect(r1.messageId).toBe(r2.messageId);
+    expect(Number((await q("SELECT COUNT(*) n FROM msg_messages WHERE idempotencyKey = ?", [idempotencyKey]))[0].n)).toBe(1);
   });
 
   it("الصفحات: beforeId/afterId للـPolling + changesSince", async () => {

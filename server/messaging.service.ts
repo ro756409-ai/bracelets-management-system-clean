@@ -102,6 +102,26 @@ async function replayCheck(tx: any, tenantId: number, key: string, hash: string)
   throw conflict("نفس معرّف العملية استُخدم لرسالة مختلفة — لم يُنفَّذ أي تغيير");
 }
 
+/**
+ * سباق نفس معرّف العملية: قراءتان قافلتان لمفتاح غير موجود تأخذان قفل فجوة متوافقًا ثم يتعارض الإدراجان
+ * (Deadlock 1213 أو Duplicate 1062 على فهرس الـidempotency). نعيد المحاولة مرة فتتحول للـReplay/CONFLICT.
+ */
+async function withIdempotentRetry<T>(attempt: () => Promise<T>): Promise<T> {
+  try {
+    return await attempt();
+  } catch (e: any) {
+    if (isIdempotencyRace(e)) return attempt();
+    throw e;
+  }
+}
+function isIdempotencyRace(e: any): boolean {
+  for (let c = e; c; c = c.cause) {
+    if (c.errno === 1213 || c.code === "ER_LOCK_DEADLOCK") return true;
+    if ((c.errno === 1062 || c.code === "ER_DUP_ENTRY") && /_idempotency_unique/.test(String(c.sqlMessage ?? c.message ?? ""))) return true;
+  }
+  return false;
+}
+
 async function touchConversation(tx: any, actor: MessagingActor, conversationId: number, messageId: number, senderId: number | null) {
   await tx.execute(sql`UPDATE msg_conversations SET lastMessageId = ${messageId}, lastMessageAt = NOW(3) WHERE id = ${conversationId} AND tenantId = ${actor.tenantId}`);
   if (senderId != null) await tx.execute(sql`UPDATE msg_members SET lastReadMessageId = GREATEST(COALESCE(lastReadMessageId, 0), ${messageId}) WHERE tenantId = ${actor.tenantId} AND conversationId = ${conversationId} AND employeeId = ${senderId}`);
@@ -281,7 +301,7 @@ async function assertOrderInTenant(tx: any, tenantId: number, orderId: number) {
 /** رسالة نصية — أو إعلان (عنوان + نص، ويمكن تثبيته) في قناة الإعلانات لمن يملك صلاحية النشر فقط. */
 export async function sendMessage(actor: MessagingActor, perms: Partial<MessagingPerms>, input: z.infer<typeof sendInput>) {
   const v = sendInput.parse(input);
-  return runMessagingTx(async tx => {
+  return withIdempotentRetry(() => runMessagingTx(async tx => {
     const me = await loadMe(tx, actor, perms);
     const a = await access(tx, actor, me, v.conversationId, true);
     requireMember(a);
@@ -301,7 +321,7 @@ export async function sendMessage(actor: MessagingActor, perms: Partial<Messagin
       VALUES (${actor.tenantId}, ${a.conv.id}, ${me.id}, ${isAnn ? "announcement" : "text"}, ${isAnn ? v.title! : null}, ${v.body}, ${v.replyToMessageId ?? null}, ${v.orderId ?? null}, ${isAnn && v.isPinned ? 1 : 0}, ${v.idempotencyKey}, ${hash})`));
     await touchConversation(tx, actor, a.conv.id, id, me.id);
     return { messageId: id, replay: false };
-  });
+  }));
 }
 
 export const voiceInput = z.object({
@@ -323,7 +343,7 @@ export async function sendVoice(actor: MessagingActor, perms: Partial<MessagingP
   const v = voiceInput.parse(input);
   if (!perms.voice) throw forbidden("الرسائل الصوتية غير متاحة لك");
   if (!v.storageKey.startsWith(attachmentKeyPrefix(actor.tenantId)) || v.storageKey.includes("..")) throw bad("مسار الملف غير صالح");
-  return runMessagingTx(async tx => {
+  return withIdempotentRetry(() => runMessagingTx(async tx => {
     const me = await loadMe(tx, actor, perms);
     const a = await access(tx, actor, me, v.conversationId, true);
     requireMember(a);
@@ -341,7 +361,7 @@ export async function sendVoice(actor: MessagingActor, perms: Partial<MessagingP
       VALUES (${actor.tenantId}, ${id}, 'voice', ${v.storageKey}, ${v.mime}, ${v.bytes}, ${v.durationMs}, ${v.waveform ? JSON.stringify(v.waveform) : null}, NOW(3) + INTERVAL ${MESSAGING_LIMITS.attachmentRetentionDays} DAY)`);
     await touchConversation(tx, actor, a.conv.id, id, me.id);
     return { messageId: id, replay: false };
-  });
+  }));
 }
 
 // ==================== التعديل والحذف ====================
@@ -481,23 +501,35 @@ export async function startDirect(actor: MessagingActor, input: { employeeId: nu
 export const groupInput = z.object({
   title: z.string().trim().min(1, "اسم المجموعة مطلوب").max(MESSAGING_LIMITS.groupTitleMaxChars),
   memberIds: z.array(ID).min(1, "اختر عضوًا واحدًا على الأقل").max(MESSAGING_LIMITS.groupMaxMembers - 1),
+  operationId: OP,
 }).strict();
 
-/** مجموعة جديدة (صلاحية إدارة المجموعات) — الأعضاء موظفون نشطون في نفس الشركة، والمنشئ مشرفها. */
+/**
+ * مجموعة جديدة (صلاحية إدارة المجموعات) — الأعضاء موظفون نشطون في نفس الشركة، والمنشئ مشرفها.
+ * Idempotent بـoperationId: نفس المعرّف + نفس الحمولة = نفس المجموعة (Replay)، حمولة مختلفة = CONFLICT.
+ * الضغطتان المتزامنتان تتسلسلان على القيد الفريد (tenantId, idempotencyKey) فتنشأ مجموعة واحدة.
+ */
 export async function createGroup(actor: MessagingActor, perms: Partial<MessagingPerms>, input: z.infer<typeof groupInput>) {
   const v = groupInput.parse(input);
   if (!perms.manageGroups) throw forbidden("إنشاء المجموعات لمن يملك صلاحية إدارة المجموعات");
-  return runMessagingTx(async tx => {
+  const attempt = () => runMessagingTx(async tx => {
     const me = await loadMe(tx, actor, perms);
-    const ids = [...new Set(v.memberIds.filter(i => i !== me.id))];
+    const ids = [...new Set(v.memberIds.filter(i => i !== me.id))].sort((a, b) => a - b);
     if (!ids.length) throw bad("اختر عضوًا واحدًا على الأقل");
+    const hash = canonicalHash({ group: v.title, by: me.id, members: ids });
+    const ex = await one(tx, sql`SELECT id, payloadHash FROM msg_conversations WHERE tenantId = ${actor.tenantId} AND idempotencyKey = ${v.operationId} FOR UPDATE`);
+    if (ex) {
+      if (ex.payloadHash !== hash) throw conflict("نفس معرّف العملية استُخدم لمجموعة مختلفة — لم يُنفَّذ أي تغيير");
+      return { conversationId: Number(ex.id), replay: true };
+    }
     const found = rows(await tx.execute(sql`SELECT id FROM employees WHERE tenantId = ${actor.tenantId} AND isActive = 1 AND id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})`));
     if (found.length !== ids.length) throw bad("بعض الأعضاء غير موجودين أو غير نشطين");
-    const id = insertId(await tx.execute(sql`INSERT INTO msg_conversations (tenantId, kind, title, createdByEmployeeId) VALUES (${actor.tenantId}, 'group', ${v.title}, ${me.id})`));
+    const id = insertId(await tx.execute(sql`INSERT INTO msg_conversations (tenantId, kind, title, createdByEmployeeId, idempotencyKey, payloadHash) VALUES (${actor.tenantId}, 'group', ${v.title}, ${me.id}, ${v.operationId}, ${hash})`));
     await tx.execute(sql`INSERT INTO msg_members (tenantId, conversationId, employeeId, role) VALUES (${actor.tenantId}, ${id}, ${me.id}, 'admin')`);
     for (const e of ids) await tx.execute(sql`INSERT INTO msg_members (tenantId, conversationId, employeeId) VALUES (${actor.tenantId}, ${id}, ${e})`);
-    return { conversationId: id };
+    return { conversationId: id, replay: false };
   });
+  return withIdempotentRetry(attempt);
 }
 
 /** من اطّلع على إعلان ومن لم يطّلع (لأصحاب صلاحية الإعلانات). */

@@ -69,6 +69,11 @@ describe.runIf(CAN)("🏗️ 0043 على قواعد مؤقتة", () => {
     await conv({ tenantId: ta, kind: "business", businessId: ba, uniqueKey: `business:${ba}` });
     await expect(conv({ tenantId: ta, kind: "business", businessId: bb, uniqueKey: `business:${bb}` })).rejects.toThrow(/fk_msc_tenant_business/);
     await expect(conv({ tenantId: ta, kind: "group", createdByEmployeeId: e1 })).rejects.toThrow(/chk_msc_kind/);
+    // مفتاح العملية للمجموعات فقط، ومع الـhash دائمًا، وفريد داخل الشركة
+    await expect(conv({ tenantId: ta, kind: "group", title: "ج", createdByEmployeeId: e1, idempotencyKey: "g1" })).rejects.toThrow(/chk_msc_idem/);
+    await expect(conv({ tenantId: ta, kind: "direct", uniqueKey: "direct:0:1", createdByEmployeeId: e1, idempotencyKey: "g1", payloadHash: "b".repeat(64) })).rejects.toThrow(/chk_msc_idem/);
+    await conv({ tenantId: ta, kind: "group", title: "ج", createdByEmployeeId: e1, idempotencyKey: "g1", payloadHash: "b".repeat(64) });
+    await expect(conv({ tenantId: ta, kind: "group", title: "ج2", createdByEmployeeId: e1, idempotencyKey: "g1", payloadHash: "c".repeat(64) })).rejects.toThrow(/Duplicate/);
     await expect(conv({ tenantId: ta, kind: "group", title: "فريق", createdByEmployeeId: eb })).rejects.toThrow(/fk_msc_tenant_creator/);
     const dm = ((await conv({ tenantId: ta, kind: "direct", uniqueKey: conversationUniqueKey.direct(e1, e2), createdByEmployeeId: e1 })) as any)[0].insertId;
 

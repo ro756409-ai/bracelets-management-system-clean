@@ -58,11 +58,14 @@ export const MESSAGING_SPEC: Record<MessagingTable, TableSpec> = {
       int("id"), int("tenantId"), { name: "kind", type: "enum", nullable: false }, int("businessId", true),
       { name: "title", type: "varchar(120)", nullable: true }, { name: "uniqueKey", type: "varchar(40)", nullable: true },
       int("createdByEmployeeId", true), int("lastMessageId", true), ts("lastMessageAt", true),
-      { name: "isArchived", type: "tinyint(1)", nullable: false }, ts("createdAt"), ts("updatedAt"),
+      { name: "isArchived", type: "tinyint(1)", nullable: false },
+      { name: "idempotencyKey", type: "varchar(100)", nullable: true }, { name: "payloadHash", type: "char(64)", nullable: true },
+      ts("createdAt"), ts("updatedAt"),
     ],
     uniques: [
       { name: "PRIMARY", columns: ["id"] }, { name: "msc_tenant_id_unique", columns: ["tenantId", "id"] },
       { name: "msc_tenant_key_unique", columns: ["tenantId", "uniqueKey"] },
+      { name: "msc_tenant_idempotency_unique", columns: ["tenantId", "idempotencyKey"] },
     ],
     indexes: [{ name: "msc_tenant_last", columns: ["tenantId", "lastMessageAt"] }],
     foreignKeys: [
@@ -70,7 +73,7 @@ export const MESSAGING_SPEC: Record<MessagingTable, TableSpec> = {
       fk("fk_msc_tenant_business", ["tenantId", "businessId"], "businesses", ["tenantId", "id"]),
       empFk("fk_msc_tenant_creator", "createdByEmployeeId"),
     ],
-    checks: ["chk_msc_kind"],
+    checks: ["chk_msc_kind", "chk_msc_idem"],
   },
   msg_members: {
     columns: [
