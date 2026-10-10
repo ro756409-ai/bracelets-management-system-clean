@@ -10,6 +10,8 @@ import { useLeaderAccess } from "@/components/teams/useLeaderAccess";
 import { QueryError, type LedTeam } from "@/components/teams/leader/common";
 import { SummaryTab } from "@/components/teams/leader/SummaryTab";
 import { MembersTab } from "@/components/teams/leader/MembersTab";
+import { AttendanceTab } from "@/components/teams/leader/AttendanceTab";
+import { PerformanceTab } from "@/components/teams/leader/PerformanceTab";
 
 /**
  * «فريقي» — لوحة قائد الفريق داخل بوابة الموظف (هوية كوكي الموظف فقط).
@@ -17,7 +19,7 @@ import { MembersTab } from "@/components/teams/leader/MembersTab";
  *  • كل تبويب يظهر بصلاحيته، وكل endpoint يتحقق من الصلاحية + القيادة الفعّالة؛ رفضه يظهر كـPermissionDenied.
  *  • العلم معطل ⇒ «غير متاح» بلا أي استعلام آخر.
  */
-type TabKey = "summary" | "members";
+type TabKey = "summary" | "members" | "attendance" | "performance";
 
 export default function TeamLeaderDashboard() {
   const access = useLeaderAccess();
@@ -45,7 +47,9 @@ function LeaderBoard({ teams, has, leaderName }: { teams: LedTeam[]; has: (p: st
   const tabs: UnderlineTab[] = useMemo(() => [
     { key: "summary", label: "الملخص" },
     { key: "members", label: "الأعضاء والورديات" },
-  ], []);
+    ...(has("team_attendance.view") ? [{ key: "attendance", label: "الحضور" }] : []),
+    ...(has("team_performance.view") ? [{ key: "performance", label: "الأداء" }] : []),
+  ], [has]);
   const [tab, setTab] = useState<TabKey>("summary");
   const perms = { has };
   return (
@@ -63,6 +67,8 @@ function LeaderBoard({ teams, has, leaderName }: { teams: LedTeam[]; has: (p: st
       <div role="tabpanel" key={`${team.teamId}:${tab}`}>
         {tab === "summary" && <SummaryTab team={team} perms={perms} leaderName={leaderName} />}
         {tab === "members" && <MembersTab team={team} perms={perms} />}
+        {tab === "attendance" && has("team_attendance.view") && <AttendanceTab team={team} perms={perms} />}
+        {tab === "performance" && has("team_performance.view") && <PerformanceTab team={team} perms={perms} />}
       </div>
     </>
   );
