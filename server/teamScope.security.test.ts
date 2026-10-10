@@ -197,7 +197,8 @@ describe.runIf(CAN_E2E)("🔒 P0 الرسائل والمهام — Tenant A / Te
     const d = await db();
     await d.insert(tasks).values({ title: `t-legacy-A ${tag}`, assignedTo: emp.agentA, assignedToName: names.agentA, createdBy: -emp.mgrA, createdByName: names.mgrA });
     await d.insert(tasks).values({ title: `t-legacy-unproven ${tag}`, assignedTo: null, createdBy: 999_999_999, createdByName: "غير معروف" });
-    await d.insert(broadcastMessages).values({ message: `msg-legacy-B ${tag}`, sentBy: emp.mgrB, sentByName: names.mgrB, isActive: true });
+    // عقد الفاعل: جلسة المدير على الويب تكتب sentBy = -employeeId (الموجب users.id فقط — اختباراته في legacyActorScope.db.test)
+    await d.insert(broadcastMessages).values({ message: `msg-legacy-B ${tag}`, sentBy: -emp.mgrB, sentByName: names.mgrB, isActive: true });
     const mgrA = await portal(emp.mgrA), mgrB = await portal(emp.mgrB);
     const listA = (await mgrA.tasks.list({})).map(t => t.title);
     expect(listA).toContain(`t-legacy-A ${tag}`);

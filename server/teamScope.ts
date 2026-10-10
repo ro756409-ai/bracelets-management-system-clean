@@ -9,12 +9,17 @@ import { broadcastMessages, tasks } from "../drizzle/schema";
  * (`businesses.tenantId`)، والجلسة بتاخد قايمة أنشطتها المسموحة من `scopeBusinessIds` (من
  * الجلسة بس، مش من العميل) — والقايمة الفاضية بتوصل هنا `[-1]` فمابتطابقش ولا صف.
  *
- * **الصفوف القديمة (`businessId IS NULL`)** تفضل مرئية لشركتها وبس، بإثبات مش بتخمين:
+ * **الصفوف القديمة (`businessId IS NULL`)** تفضل مرئية لشركتها وبس، بإثبات قاطع مش بتخمين:
  *   • مهمة مسندة لموظف → الموظف ده (`assignedTo` = employees.id دايمًا) لازم يكون في نفس
  *     الـtenant وفي نشاط من نطاق الجلسة.
- *   • رسالة جماعية أو مهمة عامة → المُرسِل/المنشئ: `ABS(sentBy|createdBy)` = employees.id
- *     **و** الاسم المحفوظ = اسم الموظف (الـid السالب = جلسة admin صناعية `-emp.id`؛ الموجب قديم
- *     وممكن يكون users.id — مطابقة الاسم كمان بتقفل الاحتمال ده). أي صف مايتثبتش → مخفي.
+ *   • رسالة جماعية أو مهمة عامة → المُرسِل/المنشئ بعقد الفاعل (sentBy / createdBy) — بلا ABS وبلا اسم:
+ *       < 0  ⇒ employees.id = -القيمة **فقط** (جلسة admin الصناعية `-emp.id` — كل جلسات الويب الحالية).
+ *       > 0  ⇒ users.id **فقط** — لا يُفسَّر employees.id أبدًا. الشركة تُثبت بالربط الموثوق employees.userId
+ *              وحده، وبشرط ألا يرتبط نفس المستخدم بموظف في أي شركة أخرى (أو بلا شركة) — وإلا مخفي.
+ *       0 / NULL ⇒ فاعل غير معروف/نظام — لا يُنسب لأحد ⇒ مخفي.
+ *     الاسم المحفوظ (sentByName / createdByName) للعرض فقط وليس دليل ملكية ولا يعبر به أي Tenant.
+ *   أي صف مايتثبتش قطعيًا → مخفي عن كل الشركات (fail-closed).
+ * الصفوف بـbusinessId: النشاط هو مصدر النطاق الأساسي — بلا تغيير.
  * لا Schema ولا Backfill هنا — الصفوف القديمة ماتتعدّلش.
  */
 export type TeamScope = {
@@ -39,9 +44,17 @@ function inList(ids: number[]): SQL {
   return sql.join(ids.map(id => sql`${id}`), sql`, `);
 }
 
-/** موظف (بالمعرّف + الاسم المحفوظ) تابع لنفس الـtenant ولنشاط في النطاق. */
-function legacyActorInScope(idColumn: SQL | unknown, nameColumn: unknown, scope: TeamScope): SQL {
-  return sql`EXISTS (SELECT 1 FROM employees e WHERE e.id = ABS(${idColumn}) AND e.name = ${nameColumn} AND e.tenantId = ${scope.tenantId} AND e.businessId IN (${inList(scopeIds(scope))}))`;
+/**
+ * فاعل صف قديم (sentBy / createdBy) مثبت قطعيًا في نطاق الجلسة — بعقد الإشارة وحده (انظر أعلى الملف):
+ * السالب موظف بمعرّفه، والموجب مستخدم يُربط بموظف واحد الشركة عبر employees.userId، والصفر/NULL لا أحد.
+ * NULL يجعل المقارنتين UNKNOWN ⇒ لا تطابق. لا اسم ولا ABS.
+ */
+export function legacyActorInScope(idColumn: SQL | unknown, scope: TeamScope): SQL {
+  const ids = inList(scopeIds(scope));
+  return sql`((${idColumn} < 0 AND EXISTS (SELECT 1 FROM employees e WHERE e.id = -(${idColumn}) AND e.tenantId = ${scope.tenantId} AND e.businessId IN (${ids})))
+    OR (${idColumn} > 0
+      AND EXISTS (SELECT 1 FROM employees e WHERE e.userId = ${idColumn} AND e.tenantId = ${scope.tenantId} AND e.businessId IN (${ids}))
+      AND NOT EXISTS (SELECT 1 FROM employees x WHERE x.userId = ${idColumn} AND (x.tenantId IS NULL OR x.tenantId <> ${scope.tenantId}))))`;
 }
 
 /** شرط WHERE لكل قراءة/إلغاء تفعيل على الرسائل الجماعية. */
@@ -50,7 +63,7 @@ export function broadcastScopeCondition(scope: TeamScope): SQL {
     inArray(broadcastMessages.businessId, scopeIds(scope)),
     and(
       isNull(broadcastMessages.businessId),
-      legacyActorInScope(broadcastMessages.sentBy, broadcastMessages.sentByName, scope)
+      legacyActorInScope(broadcastMessages.sentBy, scope)
     )
   )!;
 }
@@ -68,7 +81,7 @@ export function taskScopeCondition(scope: TeamScope): SQL {
     and(
       isNull(tasks.businessId),
       isNull(tasks.assignedTo),
-      legacyActorInScope(tasks.createdBy, tasks.createdByName, scope)
+      legacyActorInScope(tasks.createdBy, scope)
     )
   )!;
 }
