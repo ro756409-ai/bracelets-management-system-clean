@@ -129,4 +129,28 @@ describe.runIf(CAN)("🏗️ 0043 على قواعد مؤقتة", () => {
     expect((await run(db, "rollback")).ok).toBe(true);
     expect((await run(db, "check")).state).toBe("not_applied");
   }, 180_000);
+
+  it("الشكل القديم لـ0043 (قبل أعمدة idempotency في msg_conversations) يُكتشف partial ويُرفض — لا يُعتبر مطابقًا", async () => {
+    // الشكل القديم = الملف الحالي ناقص سطور idempotency في العبارة الأولى فقط (الفرق الوحيد بين 4ba39a3 وHEAD)
+    const stmts = SQL43.split("--> statement-breakpoint");
+    const NEW_ONLY = /`idempotencyKey`|`payloadHash`|msc_tenant_idempotency_unique|chk_msc_idem/;
+    stmts[0] = stmts[0].split("\n").filter(l => !NEW_ONLY.test(l)).join("\n").replace(/\)\),\n\) ENGINE/, "))\n) ENGINE");
+    expect(stmts[0]).not.toMatch(NEW_ONLY);
+    expect(stmts.slice(1).join("")).toMatch(/`idempotencyKey` varchar\(100\) NULL/); // msg_messages لم تُلمس
+    const old = await createTempSchema("msg_old");
+    try {
+      expect((await runHandMigration(ORDER_EVENTS_MIGRATION, { databaseUrl: old.url, mode: "apply", sqlText: SQL41, deployEnv: "test", confirm: confirmPhrase("0041", "apply", old.name) })).ok).toBe(true);
+      for (const st of stmts) await old.raw.query(st);
+      const chk = await run(old, "check");
+      expect(chk.state).toBe("partial");
+      const conv = chk.issues.filter(i => i.table === "msg_conversations").map(i => i.detail).join(" | ");
+      expect(conv).toMatch(/idempotencyKey/); expect(conv).toMatch(/payloadHash/);
+      expect(conv).toMatch(/msc_tenant_idempotency_unique/); expect(conv).toMatch(/chk_msc_idem/);
+      expect(chk.issues.every(i => i.table === "msg_conversations")).toBe(true); // باقي الجداول مطابقة
+      const ap = await run(old, "apply");
+      expect(ap.ok).toBe(false); expect(ap.refused).toBe("partial"); expect(ap.applied).toBe(0);
+      const [[cols]] = (await old.raw.query("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'msg_conversations' AND COLUMN_NAME = 'idempotencyKey'")) as any;
+      expect(Number(cols.n)).toBe(0); // لا إكمال تلقائي
+    } finally { await old.drop(); }
+  }, 180_000);
 });
