@@ -425,7 +425,8 @@ export async function assertTeamInScope(tenantId: number, teamId: number, allowe
 
 // ==================== نطاق القائد (البوابة) + Helpers قراءة/تحقق للمراحل اللاحقة ====================
 
-export type LeaderTeam = { teamId: number; businessId: number; name: string };
+/** businessName من علاقة الفريق ← النشاط الموثوقة (نفس الشركة)؛ مضمون غير فارغ بقيد FK (tenantId, businessId) RESTRICT + businesses.name NOT NULL — لا يُقبل من العميل. */
+export type LeaderTeam = { teamId: number; businessId: number; name: string; businessName: string };
 
 /**
  * فرق يقودها الموظف **فعليًا** لحظة atMs (افتراضيًا الآن): صف قيادة فعّال، فريق نشط، الموظف نشط، نفس الشركة.
@@ -437,14 +438,15 @@ export async function leaderTeams(actor: TeamsActor, atMs?: number): Promise<Lea
 async function leaderTeamsTx(tx: any, actor: TeamsActor, atMs?: number): Promise<LeaderTeam[]> {
   if (!Number.isInteger(actor.employeeId) || actor.employeeId <= 0) return [];
   const at = ts(atMs ?? (await dbNowMs(tx)));
-  return rows(await tx.execute(sql`SELECT t.id AS teamId, t.businessId, t.name
+  return rows(await tx.execute(sql`SELECT t.id AS teamId, t.businessId, t.name, b.name AS businessName
     FROM team_memberships m
     JOIN teams t ON t.id = m.teamId AND t.tenantId = m.tenantId
+    JOIN businesses b ON b.id = t.businessId AND b.tenantId = t.tenantId
     JOIN employees e ON e.id = m.employeeId AND e.tenantId = m.tenantId
     WHERE m.tenantId = ${actor.tenantId} AND m.employeeId = ${actor.employeeId} AND m.membershipRole = 'leader'
       AND m.effectiveFromAt <= ${at} AND (m.effectiveToAt IS NULL OR ${at} < m.effectiveToAt)
       AND t.isActive = 1 AND e.isActive = 1
-    ORDER BY t.id`)).map(r => ({ teamId: Number(r.teamId), businessId: Number(r.businessId), name: r.name }));
+    ORDER BY t.id`)).map(r => ({ teamId: Number(r.teamId), businessId: Number(r.businessId), name: r.name, businessName: String(r.businessName) }));
 }
 
 /** نفس حارس القائد داخل معاملة قائمة (للكتابات التي تقفل صف الفريق أولًا ثم تتحقق من القيادة ذريًا). */
