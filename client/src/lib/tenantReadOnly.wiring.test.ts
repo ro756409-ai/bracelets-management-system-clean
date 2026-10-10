@@ -70,6 +70,15 @@ describe("🔌 وضع القراءة فقط — الوصلات", () => {
   it("الخروج متاح من كل شاشة (لا يُعطَّل أبدًا)", () => {
     for (const f of ["pages/EmployeeDashboard.tsx", "pages/ManagerDashboard.tsx", "pages/WarehouseDashboard.tsx", "pages/FacebookEntry.tsx", "pages/TodayShipments.tsx", "pages/ledger/LedgerLayout.tsx"]) {
       const s = read(f);
+      if (s.includes("<PortalHeaderActions") && s.includes("onLogout={handleLogout}")) {
+        // الخروج عبر المكوّن المشترك: زره داخل الحاوية المعلّمة data-readonly-safe
+        const c = read("components/shell/PortalHeaderActions.tsx");
+        const box = c.indexOf('data-testid="portal-header-actions"');
+        expect(c.lastIndexOf("<div", box), f).toBeGreaterThan(-1);
+        expect(c.slice(c.lastIndexOf("<div", box), box), f).toContain("data-readonly-safe");
+        expect(c.indexOf("onClick={onLogout}"), f).toBeGreaterThan(box);
+        continue;
+      }
       const i = s.search(/onClick=\{(handleLogout|logout)\}/);
       expect(i, f).toBeGreaterThan(-1);
       const tag = s.lastIndexOf("<Button", i) > s.lastIndexOf("<button", i) ? s.lastIndexOf("<Button", i) : s.lastIndexOf("<button", i);

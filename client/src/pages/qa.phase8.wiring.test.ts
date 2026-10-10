@@ -31,9 +31,15 @@ describe("🧪 المرحلة 8", () => {
     const s = read("pages/EmployeeDashboard.tsx");
     expect((s.match(/<main\b/g) ?? []).length).toBe(1);
     const header = s.slice(s.indexOf("<header"), s.indexOf("</header>"));
-    const buttons = header.match(/<button\b(?:=>|[^>])*>/gs) ?? [];
-    expect(buttons.length).toBe(8);
-    for (const b of buttons) { expect(b).toMatch(/min-h-11/); expect(b).toMatch(/aria-label="[^"]+"/); }
+    // أزرار الرأس انتقلت للمكوّن المشترك PortalHeaderActions (صف واحد على الهاتف + «المزيد»)
+    expect(header).toContain("<PortalHeaderActions");
+    expect(header.match(/label: "[^"]+"/g)?.length ?? 0).toBeGreaterThanOrEqual(9);
+    const c = read("components/shell/PortalHeaderActions.tsx");
+    expect(c).toMatch(/const BTN = "[^"]*\bmin-h-11\b[^"]*min-w-11/);
+    const buttons = c.match(/<button\b(?:=>|[^>])*>/gs) ?? [];
+    expect(buttons.length).toBe(3); // الفعل، «المزيد»، الخروج
+    for (const b of buttons) { expect(b).toMatch(/className=\{cn\(BTN/); expect(b).toMatch(/aria-label=/); }
+    expect(c).toMatch(/DropdownMenuItem[^>]*min-h-11/);
   });
   it("زر الدخول في DashboardLayout 44px", () => {
     expect(read("components/DashboardLayout.tsx")).toContain('className="min-h-11 w-full"');

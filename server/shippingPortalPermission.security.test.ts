@@ -30,7 +30,10 @@ describe("🔒 روابط الشحن — حراس نصّية", () => {
     expect(dash).toContain("trpc.employeePortal.myPermissions.useQuery(");
     expect(dash).toContain('const canViewShipping = (portalPermissions ?? []).includes("shipping_ops.view");');
     expect(dash).not.toContain("usePermissions(");
-    const gated = dash.slice(dash.indexOf("{canViewShipping && ("), dash.indexOf("{canViewShipping && (") + 2200);
+    // الرابطان داخل أفعال الرأس المشتركة (PortalHeaderActions) — محكومان بنفس canViewShipping
+    const gateAt = dash.indexOf("...(canViewShipping ? [");
+    expect(gateAt).toBeGreaterThan(-1);
+    const gated = dash.slice(gateAt, dash.indexOf("] : [])", gateAt));
     expect(gated).toContain('setLocation("/today-shipments")');
     expect(gated).toContain('setLocation("/shipping-schedule")');
     expect(dash.match(/setLocation\("\/today-shipments"\)/g)!.length).toBe(1);
