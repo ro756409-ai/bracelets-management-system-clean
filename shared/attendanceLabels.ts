@@ -71,3 +71,14 @@ export const formatMinutes = (m: number | string | null | undefined) => {
   const h = Math.floor(n / 60), r = n % 60;
   return h ? `${h}س ${r}د` : `${r}د`;
 };
+
+/** أسماء أحداث التسجيل القابلة للتصحيح (اختيار الحدث في «وقت مسجّل خطأ»). */
+export const CORRECTABLE_EVENT_LABELS = { clock_in: "حضور", break_start: "بداية استراحة", break_end: "نهاية استراحة", clock_out: "انصراف" } as const;
+
+/** ms ⇒ «12:16 م» (12 ساعة، أرقام لاتينية كبقية الشاشة) بتوقيت اليوم. */
+export function formatClock12(ms: number | string | null | undefined, timeZone: string): string {
+  if (ms == null || ms === "") return "—";
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", minute: "2-digit", hour12: true }).formatToParts(new Date(Number(ms)));
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
+  return `${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase() === "AM" ? "ص" : "م"}`;
+}

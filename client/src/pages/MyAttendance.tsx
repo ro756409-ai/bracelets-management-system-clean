@@ -12,7 +12,7 @@ import { EmployeeShell } from "@/components/shell/EmployeeShell";
 import { businessDateKey } from "@shared/businessTime";
 import { CORRECTION_REQUEST_TYPES, type CorrectionRequestType } from "@shared/attendanceSpec";
 import {
-  CLOCK_ACTION_LABELS, DAY_STATUS_LABELS, REQUEST_STATUS_LABELS, REQUEST_TYPE_LABELS, availableClockActions, formatClock, formatMinutes, localTimeToIso, type ClockActionKey,
+  CLOCK_ACTION_LABELS, CORRECTABLE_EVENT_LABELS, DAY_STATUS_LABELS, formatClock12, REQUEST_STATUS_LABELS, REQUEST_TYPE_LABELS, availableClockActions, formatClock, formatMinutes, localTimeToIso, type ClockActionKey,
 } from "@shared/attendanceLabels";
 import { EmptyState, ErrorState, LoadingSkeleton, SectionCard, StatusBadge, toast } from "@/components/shared";
 
@@ -43,8 +43,16 @@ export default function MyAttendance() {
   });
   const cancel = trpc.employeePortal.attendanceCancelRequest.useMutation({ onSuccess: () => { toast.success("تم إلغاء الطلب"); refresh(); }, onError: e => toast.error(e.message) });
 
-  const blankForm = () => ({ workDate: today(), requestType: "" as CorrectionRequestType | "", at: "", start: "", end: "", nextDay: false, reason: "" });
+  // targetEventId: يختاره الموظف صراحةً من أحداث اليوم في «وقت مسجّل خطأ» — لا قيمة افتراضية ولا تخمين.
+  const blankForm = () => ({ workDate: today(), requestType: "" as CorrectionRequestType | "", at: "", start: "", end: "", nextDay: false, reason: "", targetEventId: null as number | null });
   const [form, setForm] = useState(blankForm);
+  const isWrongTime = form.requestType === "wrong_time";
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(form.workDate);
+  const dayEvents = trpc.employeePortal.attendanceMyDayEvents.useQuery({ workDate: form.workDate }, { enabled: isWrongTime && validDate, retry: false });
+  const events = dayEvents.data && dayEvents.data.enabled ? dayEvents.data.events : [];
+  const eventsTz = (dayEvents.data && dayEvents.data.enabled ? dayEvents.data.timezone : null) ?? TZ;
+  // الاختيار يسقط إن لم يعد من أحداث اليوم المعروضة (تغيّر اليوم/تحدّثت الأحداث).
+  const selectedTarget = form.targetEventId != null && events.some(e => e.id === form.targetEventId) ? form.targetEventId : null;
 
   const data = q.data && q.data.enabled ? q.data : null;
   const open = data?.open ?? null;
@@ -66,10 +74,14 @@ export default function MyAttendance() {
     return {};
   };
   const value = requestedValue();
-  const canSubmit = !!form.requestType && value != null && form.reason.trim().length >= 3 && !request.isPending;
+  const canSubmit = !!form.requestType && value != null && form.reason.trim().length >= 3 && (!isWrongTime || selectedTarget != null) && !request.isPending;
   const submit = () => {
     if (!canSubmit || !form.requestType) return;
-    request.mutate({ workDate: form.workDate, requestType: form.requestType, requestedValue: value!, reason: form.reason.trim(), operationId: operationIdFor(`attendance-request:${form.workDate}:${form.requestType}`) });
+    request.mutate({
+      workDate: form.workDate, requestType: form.requestType, requestedValue: value!, reason: form.reason.trim(),
+      ...(isWrongTime ? { targetEventId: selectedTarget } : {}),
+      operationId: operationIdFor(`attendance-request:${form.workDate}:${form.requestType}:${isWrongTime ? selectedTarget : "-"}`),
+    });
   };
 
   return (
@@ -120,14 +132,41 @@ export default function MyAttendance() {
 
               <SectionCard title="طلب تصحيح" description="الطلب يُراجع من الإدارة — لا يغيّر يومك قبل الاعتماد." testId="my-attendance-request">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div><Label htmlFor="req-date">اليوم</Label><Input id="req-date" type="date" className={TOUCH} value={form.workDate} max={today()} onChange={e => setForm(f => ({ ...f, workDate: e.target.value }))} /></div>
+                  <div><Label htmlFor="req-date">اليوم</Label><Input id="req-date" type="date" className={TOUCH} value={form.workDate} max={today()} onChange={e => setForm(f => ({ ...f, workDate: e.target.value, targetEventId: null }))} /></div>
                   <div>
                     <Label htmlFor="req-type">النوع</Label>
-                    <Select value={form.requestType} onValueChange={v => setForm(f => ({ ...f, requestType: v as CorrectionRequestType }))}>
+                    <Select value={form.requestType} onValueChange={v => setForm(f => ({ ...f, requestType: v as CorrectionRequestType, targetEventId: null }))}>
                       <SelectTrigger id="req-type" className={TOUCH}><SelectValue placeholder="اختر نوع الطلب" /></SelectTrigger>
                       <SelectContent>{CORRECTION_REQUEST_TYPES.map(t => <SelectItem key={t} value={t}>{REQUEST_TYPE_LABELS[t]}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
+                  {isWrongTime && (
+                    <fieldset className="sm:col-span-2" data-testid="req-target" aria-describedby="req-target-hint">
+                      <legend className="mb-1 text-sm font-medium">الحدث المطلوب تصحيح وقته</legend>
+                      <p id="req-target-hint" className="mb-2 text-xs text-muted-foreground">اختر من أحداث يوم {form.workDate} المسجّلة لك.</p>
+                      {!validDate ? <p className="text-sm text-destructive" role="alert">اختر يومًا صحيحًا أولًا.</p>
+                        : dayEvents.isLoading ? <p className="text-sm text-muted-foreground" role="status" data-testid="req-target-loading">جارٍ تحميل أحداث اليوم…</p>
+                        : dayEvents.isError ? <ErrorState message={dayEvents.error?.message ?? "تعذّر تحميل أحداث اليوم"} onRetry={() => dayEvents.refetch()} />
+                        : events.length === 0 ? (
+                          <p className="rounded-[var(--radius-brand-md)] border border-dashed border-border p-3 text-sm text-muted-foreground" role="status" data-testid="req-target-empty">
+                            لا توجد أحداث مسجّلة قابلة للتصحيح في هذا اليوم. إن نسيت التسجيل فاختر «نسيت تسجيل الحضور» أو «نسيت تسجيل الانصراف».
+                          </p>
+                        ) : (
+                          <div className="grid gap-2" role="radiogroup" aria-label="الحدث المطلوب تصحيح وقته">
+                            {events.map(e => (
+                              <label key={e.id} className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-[var(--radius-brand-md)] border px-3 text-sm ${selectedTarget === e.id ? "border-primary bg-accent" : "border-border"}`} data-testid={`req-target-${e.id}`}>
+                                <input type="radio" name="req-target" value={e.id} aria-label={`${CORRECTABLE_EVENT_LABELS[e.eventType]} — ${formatClock12(e.atMs, eventsTz)}`} className="h-5 w-5 shrink-0 accent-[var(--primary)]" checked={selectedTarget === e.id} onChange={() => setForm(f => ({ ...f, targetEventId: e.id }))} />
+                                <span className="font-medium">{CORRECTABLE_EVENT_LABELS[e.eventType]}</span>
+                                <span aria-hidden="true">—</span>
+                                <bdi className="tabular-nums">{formatClock12(e.atMs, eventsTz)}</bdi>
+                                {e.corrected && <span className="text-xs text-muted-foreground">(مصحّح سابقًا)</span>}
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      {validDate && !dayEvents.isLoading && events.length > 0 && selectedTarget == null && <p className="mt-1 text-xs text-[var(--warning)]" data-testid="req-target-required">اختر الحدث قبل الإرسال.</p>}
+                    </fieldset>
+                  )}
                   {form.requestType && TIME_TYPES.includes(form.requestType) && (
                     <div><Label htmlFor="req-at">الوقت الصحيح</Label><Input id="req-at" type="time" className={TOUCH} value={form.at} onChange={e => setForm(f => ({ ...f, at: e.target.value }))} /></div>
                   )}
@@ -138,7 +177,7 @@ export default function MyAttendance() {
                     </>
                   )}
                   {form.requestType && (TIME_TYPES.includes(form.requestType) || form.requestType === "break_fix") && (
-                    <label className="flex min-h-11 items-center gap-2 text-sm sm:col-span-2"><Checkbox checked={form.nextDay} onCheckedChange={v => setForm(f => ({ ...f, nextDay: v === true }))} /> الوقت بعد منتصف الليل (وردية ليلية)</label>
+                    <label htmlFor="req-night" className="flex min-h-11 items-center gap-2 text-sm sm:col-span-2"><Checkbox id="req-night" aria-label="الوقت بعد منتصف الليل (وردية ليلية)" checked={form.nextDay} onCheckedChange={v => setForm(f => ({ ...f, nextDay: v === true }))} /> الوقت بعد منتصف الليل (وردية ليلية)</label>
                   )}
                   <div className="sm:col-span-2"><Label htmlFor="req-reason">السبب</Label><Textarea id="req-reason" value={form.reason} maxLength={500} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="اكتب السبب باختصار" /></div>
                 </div>

@@ -26,3 +26,15 @@ describe("تسميات وتحويلات الحضور", () => {
     expect(formatMinutes(125)).toBe("2س 5د");
   });
 });
+
+import { formatClock12 } from "./attendanceLabels";
+describe("الوقت بصيغة 12 ساعة", () => {
+  it("12:16 م و12:19 م بتوقيت القاهرة (السيناريو المبلّغ)، والصباح ص، ومنتصف الليل 12:05 ص", () => {
+    expect(formatClock12(Date.parse("2026-10-10T12:16:00+03:00"), "Africa/Cairo")).toBe("12:16 م");
+    expect(formatClock12(Date.parse("2026-10-10T12:19:00+03:00"), "Africa/Cairo")).toBe("12:19 م");
+    expect(formatClock12(Date.parse("2026-10-10T09:05:00+03:00"), "Africa/Cairo")).toBe("9:05 ص");
+    expect(formatClock12(Date.parse("2026-10-10T00:05:00+03:00"), "Africa/Cairo")).toBe("12:05 ص");
+    expect(formatClock12(Date.parse("2026-01-15T10:00:00Z"), "Africa/Cairo")).toBe("12:00 م");
+    expect(formatClock12(null, "Africa/Cairo")).toBe("—");
+  });
+});

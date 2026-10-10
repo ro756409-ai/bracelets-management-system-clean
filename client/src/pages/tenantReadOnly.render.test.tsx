@@ -26,6 +26,7 @@ vi.mock("@/lib/trpc", () => ({
     employees: { activeList: { useQuery: () => q([]) } },
     employeePortal: {
       attendanceMine: { useQuery: () => q({ enabled: true, days: [], requests: [{ id: 9, workDate: "2026-10-08", requestType: "other", status: "pending", reason: "x" }], open: null }) },
+      attendanceMyDayEvents: { useQuery: () => q(undefined) },
       attendanceClock: m("clock"), attendanceRequestCorrection: m("request"), attendanceCancelRequest: m("cancelRequest"),
       me: { useQuery: () => q({ name: "سارة" }) },
     },

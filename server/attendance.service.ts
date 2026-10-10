@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { isValidIanaTimeZone } from "../shared/businessTime";
-import { addDays, pickAssignment, projectDay, rangesOverlap, scheduledWindow, workDateFor, type AssignmentCandidate, type DayProjection, type ProjectionEvent, type ShiftSnapshot } from "../shared/attendanceCalc";
+import { addDays, correctableEvents, pickAssignment, projectDay, rangesOverlap, scheduledWindow, workDateFor, type AssignmentCandidate, type CorrectableEvent, type DayProjection, type ProjectionEvent, type ShiftSnapshot } from "../shared/attendanceCalc";
 import { ATTENDANCE_TABLES, maskFromDays, WEEKDAYS, type CorrectionRequestType, type WeekdayKey } from "../shared/attendanceSpec";
 import { getDb } from "./db";
 import { canonicalHash } from "./orderEvents.service";
@@ -327,7 +327,7 @@ export async function requestCorrection(actor: AttendanceActor, input: Correctio
   const v = correctionRequestInput.parse(input);
   const value = REQUESTED_VALUE_SCHEMAS[v.requestType].safeParse(v.requestedValue);
   if (!value.success) throw bad("قيمة الطلب غير صالحة لهذا النوع");
-  if (v.requestType === "wrong_time" && v.targetEventId == null) throw bad("حدّد الحدث المطلوب تصحيح وقته");
+  if (v.requestType === "wrong_time" && v.targetEventId == null) throw bad("اختر الحدث المطلوب تصحيح وقته من أحداث اليوم");
   return runAttendanceTx(async tx => {
     const key = `req:${v.operationId}`;
     const hash = canonicalHash({ ...v, operationId: undefined, employeeId: actor.employeeId, requestedValue: value.data });
@@ -335,8 +335,13 @@ export async function requestCorrection(actor: AttendanceActor, input: Correctio
       return { replay: true, id: Number((await one(tx, sql`SELECT id FROM attendance_correction_requests WHERE tenantId = ${actor.tenantId} AND idempotencyKey = ${key}`)).id) };
     const day = await one(tx, sql`SELECT id FROM attendance_days WHERE tenantId = ${actor.tenantId} AND employeeId = ${actor.employeeId} AND workDate = ${v.workDate}`);
     if (v.targetEventId != null) {
-      const ev = await one(tx, sql`SELECT id FROM attendance_events WHERE id = ${v.targetEventId} AND tenantId = ${actor.tenantId} AND employeeId = ${actor.employeeId}`);
+      // الحدث المستهدف: للموظف نفسه، في نفس الشركة، **في يوم الطلب نفسه**، ومن الأنواع القابلة للتصحيح وغير ملغى.
+      // (الاعتماد يطبّق التصحيح على يوم الطلب؛ حدث من يوم آخر كان سيُقبل ثم يُتجاهل بصمت في الإسقاط.)
+      const ev = await one(tx, sql`SELECT id, attendanceDayId FROM attendance_events WHERE id = ${v.targetEventId} AND tenantId = ${actor.tenantId} AND employeeId = ${actor.employeeId}`);
       if (!ev) throw forbidden("الحدث المستهدف ليس لك");
+      if (!day || Number(ev.attendanceDayId) !== Number(day.id)) throw bad("الحدث المستهدف ليس من أحداث اليوم المحدد");
+      if (!correctableEvents(await dayEvents(tx, Number(day.id))).some(e => e.id === Number(v.targetEventId)))
+        throw bad("هذا الحدث غير قابل لتصحيح الوقت");
     }
     const firstAt = (value.data as any).at ?? (value.data as any).start ?? null;
     const r = await tx.execute(sql`INSERT INTO attendance_correction_requests (tenantId, employeeId, attendanceDayId, workDate, requestType, targetEventId, requestedAt, requestedValueJson, reason, note, idempotencyKey, payloadHash)
@@ -449,6 +454,16 @@ export async function myDays(actor: AttendanceActor, fromDate: string, toDate: s
     const requests = rows(await tx.execute(sql`SELECT id, DATE_FORMAT(workDate, '%Y-%m-%d') AS workDate, requestType, status, reason, reviewReason FROM attendance_correction_requests WHERE tenantId = ${actor.tenantId} AND employeeId = ${actor.employeeId} AND workDate BETWEEN ${fromDate} AND ${toDate} ORDER BY id DESC`));
     const open = await one(tx, sql`SELECT ${DAY_COLS} FROM attendance_days WHERE tenantId = ${actor.tenantId} AND employeeId = ${actor.employeeId} AND status IN ('open','on_break') ORDER BY workDate DESC LIMIT 1`);
     return { days, requests, open: open ?? null };
+  });
+}
+
+/** أحداث يوم الموظف القابلة لتصحيح الوقت (هوية البوابة فقط) — بوقتها الحالي بعد التصحيحات المعتمدة. */
+export async function myCorrectableEvents(actor: AttendanceActor, workDate: string) {
+  if (!ISO_DATE.test(workDate)) throw bad("تاريخ غير صالح");
+  return runAttendanceTx(async tx => {
+    const day = await one(tx, sql`SELECT id, timezone FROM attendance_days WHERE tenantId = ${actor.tenantId} AND employeeId = ${actor.employeeId} AND workDate = ${workDate}`);
+    if (!day) return { timezone: null as string | null, events: [] as CorrectableEvent[] };
+    return { timezone: String(day.timezone), events: correctableEvents(await dayEvents(tx, Number(day.id))) };
   });
 }
 

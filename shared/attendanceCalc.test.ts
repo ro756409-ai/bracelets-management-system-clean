@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { addDays, assignmentPriority, pickAssignment, projectDay, rangesOverlap, scheduledWindow, workDateFor, type AssignmentCandidate, type ShiftSnapshot } from "./attendanceCalc";
+import { addDays, assignmentPriority, correctableEvents, pickAssignment, projectDay, rangesOverlap, scheduledWindow, workDateFor, type AssignmentCandidate, type ShiftSnapshot } from "./attendanceCalc";
 import { maskFromDays } from "./attendanceSpec";
 
 const ALL = maskFromDays(["sat", "sun", "mon", "tue", "wed", "thu", "fri"]);
@@ -114,4 +114,24 @@ describe("أولوية التعيين والتداخل", () => {
     expect(rangesOverlap("2026-10-01", "2026-10-31", "2026-11-01", null)).toBe(false);
     expect(rangesOverlap("2026-10-01", "2026-10-31", "2026-10-31", null)).toBe(true);
   });
+});
+
+describe("أحداث اليوم القابلة لتصحيح الوقت", () => {
+  it("أنواع التسجيل فقط بوقتها الحالي؛ الملغى والتصحيحات والإضافات والغياب مستبعدة", () => {
+    const ev = correctableEvents([
+      { id: 1, eventType: "clock_in", atMs: 1000 },
+      { id: 2, eventType: "clock_out", atMs: 4000 },
+      { id: 3, eventType: "break_start", atMs: 2000 },
+      { id: 4, eventType: "correction", atMs: 5000, correctionOfEventId: 2, newValue: { atMs: 4500 } },
+      { id: 5, eventType: "correction", atMs: 5000, correctionOfEventId: 3, newValue: { void: true } },
+      { id: 6, eventType: "correction", atMs: 5000, correctionOfEventId: null, newValue: { eventType: "break_end", atMs: 3000 } },
+      { id: 7, eventType: "absence", atMs: 900 },
+      { id: 8, eventType: "day_close", atMs: 6000 },
+    ]);
+    expect(ev).toEqual([
+      { id: 1, eventType: "clock_in", atMs: 1000, corrected: false },
+      { id: 2, eventType: "clock_out", atMs: 4500, corrected: true },
+    ]);
+  });
+  it("يوم بلا أحداث ⇒ قائمة فارغة", () => expect(correctableEvents([])).toEqual([]));
 });

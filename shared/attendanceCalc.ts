@@ -137,6 +137,30 @@ export function projectDay(events: ProjectionEvent[], snap: ShiftSnapshot | null
   };
 }
 
+/** أنواع التسجيل التي يمكن تصحيح وقتها (wrong_time) — ليست التصحيحات ولا الغياب/الإجازة/الإقفال. */
+export const CORRECTABLE_EVENT_TYPES = ["clock_in", "break_start", "break_end", "clock_out"] as const;
+export type CorrectableEvent = { id: number; eventType: (typeof CORRECTABLE_EVENT_TYPES)[number]; atMs: number; corrected: boolean };
+
+/**
+ * أحداث اليوم القابلة لتصحيح الوقت بوقتها **الحالي** — بنفس دلالة projectDay: التصحيح بـcorrectionOfEventId يغيّر
+ * الوقت/النوع أو يلغي الحدث (void ⇒ يُستبعد). الأحداث المضافة بتصحيح بلا هدف ليست أحداثًا أصلية فلا تُستهدف.
+ */
+export function correctableEvents(events: ProjectionEvent[]): CorrectableEvent[] {
+  const ordered = [...events].sort((a, b) => a.atMs - b.atMs || a.id - b.id);
+  const base = new Map<number, { eventType: string; atMs: number; corrected: boolean }>();
+  for (const e of ordered) if (e.eventType !== "correction") base.set(e.id, { eventType: e.eventType, atMs: e.atMs, corrected: false });
+  for (const e of [...events].sort((a, b) => a.id - b.id)) {
+    if (e.eventType !== "correction" || !e.newValue || e.correctionOfEventId == null || !base.has(e.correctionOfEventId)) continue;
+    const cur = base.get(e.correctionOfEventId)!;
+    if (e.newValue.void) base.delete(e.correctionOfEventId);
+    else base.set(e.correctionOfEventId, { eventType: e.newValue.eventType ?? cur.eventType, atMs: e.newValue.atMs ?? cur.atMs, corrected: true });
+  }
+  return [...base.entries()]
+    .filter(([, v]) => (CORRECTABLE_EVENT_TYPES as readonly string[]).includes(v.eventType))
+    .map(([id, v]) => ({ id, eventType: v.eventType as CorrectableEvent["eventType"], atMs: v.atMs, corrected: v.corrected }))
+    .sort((a, b) => a.atMs - b.atMs || a.id - b.id);
+}
+
 /** أولوية التعيين (قرار المالك، مكتوبة ومختبرة): موظف ← دور+نشاط ← نشاط ← دور على الشركة ← افتراضي الشركة. */
 export type AssignmentCandidate = { id: number; targetType: "employee" | "role" | "business" | "tenant_default"; employeeId: number | null; role: string | null; businessId: number | null; effectiveFrom: string; effectiveTo: string | null; shiftId: number };
 export function assignmentPriority(a: AssignmentCandidate): number {

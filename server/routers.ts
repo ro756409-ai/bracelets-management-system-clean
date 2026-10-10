@@ -4425,6 +4425,13 @@ export const appRouter = router({
     attendanceClock: requireEmployeeTenantPermission("attendance.clock_self")
       .input(z.object({ action: z.enum(["clock_in", "break_start", "break_end", "clock_out"]), operationId: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/), source: z.enum(["web", "mobile_web"]).optional() }).strict())
       .mutation(async ({ ctx, input }) => attendanceSvc.clock(portalAttendanceActor(ctx), input.action, input.operationId, input.source ?? "web")),
+    // أحداث يومي القابلة لتصحيح الوقت — لاختيار targetEventId صراحةً في «وقت مسجّل خطأ» (لا تخمين). هوية البوابة فقط.
+    attendanceMyDayEvents: requireEmployeeTenantPermission("attendance.request_correction")
+      .input(z.object({ workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict())
+      .query(async ({ ctx, input }) => {
+        if (!attendanceSvc.attendanceEnabled()) return { enabled: false as const };
+        return { enabled: true as const, ...(await attendanceSvc.myCorrectableEvents(portalAttendanceActor(ctx), input.workDate)) };
+      }),
     attendanceRequestCorrection: requireEmployeeTenantPermission("attendance.request_correction")
       .input(attendanceSvc.correctionRequestInput)
       .mutation(async ({ ctx, input }) => attendanceSvc.requestCorrection(portalAttendanceActor(ctx), input)),

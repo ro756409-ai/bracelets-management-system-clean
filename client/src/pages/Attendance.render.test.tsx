@@ -18,6 +18,7 @@ vi.mock("@/lib/trpc", () => ({
     employees: { activeList: { useQuery: () => q([]) } },
     employeePortal: {
       attendanceMine: { useQuery: () => q(st.enabled ? { enabled: true, days: st.days, requests: [], open: st.open } : { enabled: false }) },
+      attendanceMyDayEvents: { useQuery: () => q(undefined) },
       attendanceClock: { useMutation: () => m({ isPending: st.clockPending, mutate: (v: any) => st.clockCalls.push(v) }) },
       attendanceRequestCorrection: { useMutation: () => m() },
       attendanceCancelRequest: { useMutation: () => m() },
