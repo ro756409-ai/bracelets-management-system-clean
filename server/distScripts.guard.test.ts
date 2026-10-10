@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -20,7 +20,12 @@ const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf-8")
 const buildCmd: string = pkg.scripts.build;
 const scriptsPart = buildCmd.slice(buildCmd.lastIndexOf("esbuild scripts/"));
 const ENTRIES = scriptsPart.split(/\s+/).filter(t => /^scripts\/[\w-]+\.ts$/.test(t));
-const OUT = path.join(ROOT, "node_modules", ".cache", "matjarak-dist-scripts-guard");
+/**
+ * مجلد bundle **فريد لكل عملية** (mkdtemp داخل node_modules/.cache حتى تُحل الحزم من node_modules الجذر) —
+ * تشغيلان متوازيان (قاعدتان، أو جلستان) لا يحذف أحدهما مجلد الآخر. التنظيف يقتصر على ما أنشأه هذا الاختبار.
+ */
+const CACHE = path.join(ROOT, "node_modules", ".cache");
+let OUT = "";
 const PROD = new Set(Object.keys(pkg.dependencies));
 const BUILTIN = new Set([...builtinModules, ...builtinModules.map(m => `node:${m}`)]);
 
@@ -41,9 +46,11 @@ const runNode = (file: string, env: Record<string, string>, cwd: string, args: s
 
 describe("📦 سكربتات النشر — node فقط", () => {
   beforeAll(async () => {
-    fs.rmSync(OUT, { recursive: true, force: true });
+    fs.mkdirSync(CACHE, { recursive: true });
+    OUT = fs.mkdtempSync(path.join(CACHE, `matjarak-dist-scripts-guard-${process.pid}-`));
     await build({ entryPoints: ENTRIES.map(e => path.join(ROOT, e)), platform: "node", packages: "external", bundle: true, format: "esm", outdir: OUT, outExtension: { ".js": ".mjs" }, logLevel: "silent", absWorkingDir: ROOT });
   }, 120_000);
+  afterAll(() => { if (OUT) fs.rmSync(OUT, { recursive: true, force: true }); });
 
   it("أمر build يتضمن كل سكربتات 0041/0042/0044/Tenant Access", () => {
     for (const s of DEPLOY_SCRIPTS) expect(ENTRIES, s).toContain(`scripts/${s}.ts`);
@@ -79,7 +86,8 @@ describe("📦 سكربتات النشر — node فقط", () => {
     for (const s of ["migrate-0041-order-events", "migrate-0042-attendance", "migrate-0044-teams"]) {
       // نفس موضع النشر (dist/scripts) حتى يكون ../../drizzle هو جذر المشروع.
       fs.mkdirSync(distLike, { recursive: true });
-      const target = path.join(distLike, `__guard-${s}.mjs`);
+      // اسم فريد لكل عملية في نفس موضع النشر — لا يكتب/يحذف ملف عملية أخرى.
+      const target = path.join(distLike, `__guard-${s}-${path.basename(OUT)}.mjs`);
       fs.copyFileSync(path.join(OUT, `${s}.mjs`), target);
       try {
         const r = runNode(target, { DATABASE_URL: "mysql://guard:guard@127.0.0.1:9/none" }, neutral);
