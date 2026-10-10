@@ -178,9 +178,26 @@ describe("🔑 regression Sprint 2 — الوجهة ذات البند الواح
     expect(builder).not.toContain("collapsible: true");
   });
   it("🔑 الفريق والتقارير وجهات ذات بند واحد فعلًا (فتبان مباشرة)", () => {
+    // «الفرق» ابن ثانٍ خلف flag: بلا الميزة (الافتراضي) تبقى الوجهة ببند مرئي واحد؛ ومعها تصير مجموعة قابلة للطي (items>1).
     for (const key of ["team", "reports"]) {
       const dest = PRIMARY_DESTINATIONS.find(d => d.key === key)!;
-      expect(dest.children?.length ?? 0, key).toBeLessThanOrEqual(1);
+      expect(visibleChildren(dest, true, ["teams.view_all"]).length, key).toBeLessThanOrEqual(1);
+      expect((dest.children ?? []).filter(c => !c.flag).length, key).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe("🚩 بوابة flag — «الفرق» خلف TEAMS_ENABLED + teams.view_all", () => {
+  const teamPaths = (isAdmin: boolean, perms: string[], flags: ("teams")[] = []) => {
+    const dest = visibleDestinations(isAdmin, perms, flags).find(d => d.key === "team");
+    return dest ? visibleChildren(dest, isAdmin, perms, flags).map(c => c.path) : [];
+  };
+  it("الميزة مقفولة (بلا flags): الرابط مخفي حتى للمالك صاحب الصلاحية", () => {
+    expect(teamPaths(true, ["teams.view_all"])).not.toContain("/teams");
+    expect(canSeeNav({ flag: "teams" }, true, ["teams.view_all"])).toBe(false);
+  });
+  it("الميزة مفعّلة + teams.view_all: يظهر؛ بلا الصلاحية: مخفي", () => {
+    expect(teamPaths(true, ["teams.view_all"], ["teams"])).toContain("/teams");
+    expect(teamPaths(true, [], ["teams"])).not.toContain("/teams");
   });
 });
