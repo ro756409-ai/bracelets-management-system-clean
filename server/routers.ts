@@ -4545,6 +4545,31 @@ export const appRouter = router({
           return { enabled: true as const, team: r.team, ...report };
         }),
 
+      // ── ورديات أعضاء الفريق اليوم: team_attendance.view + قيادة فعّالة (بلا أي بيانات مالية).
+      memberShifts: requireEmployeeTenantPermission("team_attendance.view")
+        .input(z.object({ teamId: z.number().int().positive() }).strict())
+        .query(async ({ ctx, input }) => {
+          if (!teamsSvc.teamsEnabled() || !attendanceSvc.attendanceEnabled()) return { enabled: false as const };
+          return { enabled: true as const, ...(await teamLeaderSvc.leaderTeamMemberShifts(portalTeamsActor(ctx), input.teamId)) };
+        }),
+      // ── سجل عضويات الفريق للقراءة: teams.view_own + قيادة فعّالة؛ أسماء فقط بلا معرّفات خام.
+      history: requireEmployeeTenantPermission("teams.view_own")
+        .input(z.object({ teamId: z.number().int().positive() }).strict())
+        .query(async ({ ctx, input }) => {
+          if (!teamsSvc.teamsEnabled()) return { enabled: false as const };
+          return { enabled: true as const, ...(await teamLeaderSvc.leaderTeamHistory(portalTeamsActor(ctx), input.teamId)) };
+        }),
+      // ── تصدير أداء الفريق CSV: team_performance.view **و** employee_performance.export + قيادة فعّالة.
+      performanceCsv: requireEmployeeTenantPermission("team_performance.view")
+        .input(z.object({ teamId: z.number().int().positive(), dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict())
+        .query(async ({ ctx, input }) => {
+          const emp = (ctx as any).employee;
+          if (!(await hasTenantPermission(requireTenantId(emp), emp.role, "employee_performance.export")))
+            throw new TRPCError({ code: "FORBIDDEN", message: "ليس لديك صلاحية تصدير الأداء" });
+          if (!teamsSvc.teamsEnabled()) return { enabled: false as const };
+          return teamLeaderSvc.leaderTeamPerformanceCsv(portalTeamsActor(ctx), input.teamId, input.dateFrom, input.dateTo);
+        }),
+
       // ── المهام: team_tasks.manage + قيادة فعّالة؛ أعضاء فعّالون أو مهمة عامة لنشاط الفريق، بلا حذف.
       tasks: router({
         list: requireEmployeeTenantPermission("team_tasks.manage")
@@ -6796,6 +6821,13 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         if (!teamsSvc.teamsEnabled()) return { enabled: false as const };
         return { enabled: true as const, ...(await teamsSvc.teamHistory(ctx.tenantId, input.teamId, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))) };
+      }),
+    // تحذيرات ورديات الأعضاء اليوم (بلا وردية / فعالة / تعارض) — نفس منطق الحضور، قراءة فقط، يتطلب علمي الفرق والحضور.
+    memberShifts: permissionProcedure("teams.view_all")
+      .input(z.object({ teamId: z.number().int().positive() }).strict())
+      .query(async ({ ctx, input }) => {
+        if (!teamsSvc.teamsEnabled() || !attendanceSvc.attendanceEnabled()) return { enabled: false as const };
+        return { enabled: true as const, ...(await teamLeaderSvc.ownerTeamMemberShifts(ctx.tenantId, input.teamId, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))) };
       }),
     create: permissionProcedure("teams.manage").input(teamsSvc.createTeamInput)
       .mutation(async ({ ctx, input }) => teamsSvc.createTeam(webTeamsActor(ctx), input, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),

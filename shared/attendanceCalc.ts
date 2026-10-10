@@ -170,14 +170,29 @@ export function assignmentPriority(a: AssignmentCandidate): number {
   if (a.targetType === "role") return 4;
   return 5;
 }
-export function pickAssignment(cands: AssignmentCandidate[], emp: { id: number; role: string | null; businessId: number | null }, workDate: string): AssignmentCandidate | null {
+/** كل التعيينات المنطبقة على الموظف في يوم العمل، بترتيب الاختيار نفسه (الأول = ما يطبّقه الحضور). */
+export function applicableAssignments(cands: AssignmentCandidate[], emp: { id: number; role: string | null; businessId: number | null }, workDate: string): AssignmentCandidate[] {
   const applies = (a: AssignmentCandidate) =>
     a.effectiveFrom <= workDate && (a.effectiveTo == null || a.effectiveTo >= workDate) && (
       (a.targetType === "employee" && a.employeeId === emp.id) ||
       (a.targetType === "role" && a.role === emp.role && (a.businessId == null || a.businessId === emp.businessId)) ||
       (a.targetType === "business" && a.businessId === emp.businessId) ||
       a.targetType === "tenant_default");
-  return cands.filter(applies).sort((x, y) => assignmentPriority(x) - assignmentPriority(y) || (y.effectiveFrom < x.effectiveFrom ? -1 : y.effectiveFrom > x.effectiveFrom ? 1 : 0) || y.id - x.id)[0] ?? null;
+  return cands.filter(applies).sort((x, y) => assignmentPriority(x) - assignmentPriority(y) || (y.effectiveFrom < x.effectiveFrom ? -1 : y.effectiveFrom > x.effectiveFrom ? 1 : 0) || y.id - x.id);
+}
+export function pickAssignment(cands: AssignmentCandidate[], emp: { id: number; role: string | null; businessId: number | null }, workDate: string): AssignmentCandidate | null {
+  return applicableAssignments(cands, emp, workDate)[0] ?? null;
+}
+/**
+ * تعارض تعيينات: أكثر من تعيين منطبق في **نفس أعلى أولوية** — الحضور يختار واحدًا منها بالأحدث بداية ثم الأعلى
+ * رقمًا (pickAssignment)، فالتعارض يُعرض للمراجعة ولا يغيّر الاختيار. [] = لا تعارض.
+ */
+export function tiedTopAssignments(cands: AssignmentCandidate[], emp: { id: number; role: string | null; businessId: number | null }, workDate: string): AssignmentCandidate[] {
+  const all = applicableAssignments(cands, emp, workDate);
+  if (all.length < 2) return [];
+  const top = assignmentPriority(all[0]);
+  const tied = all.filter(a => assignmentPriority(a) === top);
+  return tied.length > 1 ? tied : [];
 }
 
 /** هل فترتا تاريخ (شاملة، to=null مفتوحة) تتقاطعان؟ */

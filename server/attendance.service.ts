@@ -2,8 +2,8 @@ import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { isValidIanaTimeZone } from "../shared/businessTime";
-import { addDays, correctableEvents, pickAssignment, projectDay, rangesOverlap, scheduledWindow, workDateFor, type AssignmentCandidate, type CorrectableEvent, type DayProjection, type ProjectionEvent, type ShiftSnapshot } from "../shared/attendanceCalc";
-import { ATTENDANCE_TABLES, maskFromDays, WEEKDAYS, type CorrectionRequestType, type WeekdayKey } from "../shared/attendanceSpec";
+import { addDays, correctableEvents, pickAssignment, tiedTopAssignments, projectDay, rangesOverlap, scheduledWindow, workDateFor, type AssignmentCandidate, type CorrectableEvent, type DayProjection, type ProjectionEvent, type ShiftSnapshot } from "../shared/attendanceCalc";
+import { ATTENDANCE_TABLES, daysFromMask, isWorkDay, maskFromDays, WEEKDAYS, type CorrectionRequestType, type WeekdayKey } from "../shared/attendanceSpec";
 import { getDb } from "./db";
 import { canonicalHash } from "./orderEvents.service";
 import type { ReadOnlyExecutor } from "./balanceReconciliation.service";
@@ -185,20 +185,64 @@ export async function listAssignments(tenantId: number) {
     WHERE a.tenantId = ${tenantId} AND a.endedAt IS NULL ORDER BY a.effectiveFrom DESC, a.id DESC`)));
 }
 
-async function snapshotFor(tx: any, tenantId: number, emp: { id: number; role: string | null; businessId: number | null }, workDate: string): Promise<ShiftSnapshot | null> {
-  const cands = rows(await tx.execute(sql`SELECT id, shiftId, targetType, employeeId, role, businessId, DATE_FORMAT(effectiveFrom, '%Y-%m-%d') AS effectiveFrom, DATE_FORMAT(effectiveTo, '%Y-%m-%d') AS effectiveTo
+async function loadAssignmentCandidates(tx: any, tenantId: number): Promise<AssignmentCandidate[]> {
+  return rows(await tx.execute(sql`SELECT id, shiftId, targetType, employeeId, role, businessId, DATE_FORMAT(effectiveFrom, '%Y-%m-%d') AS effectiveFrom, DATE_FORMAT(effectiveTo, '%Y-%m-%d') AS effectiveTo
     FROM attendance_assignments WHERE tenantId = ${tenantId} AND endedAt IS NULL`)).map(r => ({ ...r, id: Number(r.id), shiftId: Number(r.shiftId), employeeId: r.employeeId == null ? null : Number(r.employeeId), businessId: r.businessId == null ? null : Number(r.businessId) })) as AssignmentCandidate[];
-  const pick = pickAssignment(cands, emp, workDate);
-  if (!pick) return null;
+}
+
+/** لقطة الوردية إن كانت نشطة وسارية في يوم العمل، وإلا null (نفس شرط الحضور). */
+async function loadShiftSnapshot(tx: any, tenantId: number, shiftId: number, workDate: string): Promise<ShiftSnapshot | null> {
   const s = await one(tx, sql`SELECT id, name, startTime, endTime, crossesMidnight, timezone, workDaysMask, graceMinutes, allowedBreakMinutes, overtimeStartsAfterMinutes, earlyClockInLimitMinutes, earlyLeaveToleranceMinutes,
     DATE_FORMAT(effectiveFrom, '%Y-%m-%d') AS effectiveFrom, DATE_FORMAT(effectiveTo, '%Y-%m-%d') AS effectiveTo, isActive
-    FROM attendance_shifts WHERE id = ${pick.shiftId} AND tenantId = ${tenantId}`);
+    FROM attendance_shifts WHERE id = ${shiftId} AND tenantId = ${tenantId}`);
   if (!s || !Number(s.isActive) || s.effectiveFrom > workDate || (s.effectiveTo && s.effectiveTo < workDate)) return null;
   return {
     shiftId: Number(s.id), name: s.name, startTime: String(s.startTime), endTime: String(s.endTime), crossesMidnight: Boolean(Number(s.crossesMidnight)), timezone: s.timezone,
     workDaysMask: Number(s.workDaysMask), graceMinutes: Number(s.graceMinutes), allowedBreakMinutes: Number(s.allowedBreakMinutes), overtimeStartsAfterMinutes: Number(s.overtimeStartsAfterMinutes),
     earlyClockInLimitMinutes: Number(s.earlyClockInLimitMinutes), earlyLeaveToleranceMinutes: Number(s.earlyLeaveToleranceMinutes),
   };
+}
+
+async function snapshotFor(tx: any, tenantId: number, emp: { id: number; role: string | null; businessId: number | null }, workDate: string): Promise<ShiftSnapshot | null> {
+  const pick = pickAssignment(await loadAssignmentCandidates(tx, tenantId), emp, workDate);
+  if (!pick) return null;
+  return loadShiftSnapshot(tx, tenantId, pick.shiftId, workDate);
+}
+
+export type MemberShiftView = {
+  employeeId: number;
+  /** none = لا وردية سارية؛ active = وردية واحدة؛ conflict = أكثر من تعيين بنفس أعلى أولوية (الحضور يطبّق shift) */
+  status: "none" | "active" | "conflict";
+  shift: { name: string; startTime: string; endTime: string; crossesMidnight: boolean; timezone: string; workDays: WeekdayKey[]; worksOnDate: boolean } | null;
+  conflictingShiftNames: string[];
+};
+/**
+ * ورديات موظفين محددين في يوم عمل — **نفس منطق الحضور حرفيًا** (snapshotFor: pickAssignment + صلاحية الوردية)،
+ * مع كشف تعارض التعيينات (tiedTopAssignments). قراءة فقط، بلا أي بيانات مالية.
+ */
+export async function memberShiftsFor(tenantId: number, emps: { id: number; role: string | null; businessId: number | null }[], workDate: string): Promise<MemberShiftView[]> {
+  if (!ISO_DATE.test(workDate)) throw bad("تاريخ غير صالح");
+  return runAttendanceTx(async tx => {
+    const cands = await loadAssignmentCandidates(tx, tenantId);
+    const out: MemberShiftView[] = [];
+    for (const emp of emps) {
+      const pick = pickAssignment(cands, emp, workDate);
+      const snap = pick ? await loadShiftSnapshot(tx, tenantId, pick.shiftId, workDate) : null;
+      const tied = tiedTopAssignments(cands, emp, workDate);
+      const names: string[] = [];
+      for (const t of tied) {
+        const n = await one(tx, sql`SELECT name FROM attendance_shifts WHERE id = ${t.shiftId} AND tenantId = ${tenantId}`);
+        if (n) names.push(String(n.name));
+      }
+      out.push({
+        employeeId: emp.id,
+        status: tied.length > 1 ? "conflict" : snap ? "active" : "none",
+        shift: snap ? { name: snap.name, startTime: snap.startTime.slice(0, 5), endTime: snap.endTime.slice(0, 5), crossesMidnight: snap.crossesMidnight, timezone: snap.timezone, workDays: daysFromMask(snap.workDaysMask), worksOnDate: isWorkDay(snap.workDaysMask, workDate) } : null,
+        conflictingShiftNames: tied.length > 1 ? names : [],
+      });
+    }
+    return out;
+  });
 }
 
 // ==================== اليوم والأحداث ====================

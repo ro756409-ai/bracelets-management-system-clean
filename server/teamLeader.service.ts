@@ -4,12 +4,13 @@ import { z } from "zod";
 import { orders } from "../drizzle/schema";
 import { businessDayRange } from "../shared/businessTime";
 import { isActiveAt, scopeEventsToTeam } from "../shared/teamsSpec";
-import { daysForEmployees, reviewCorrection, type AttendanceActor } from "./attendance.service";
+import { daysForEmployees, memberShiftsFor, reviewCorrection, type AttendanceActor } from "./attendance.service";
+import { teamPerformanceCsv } from "../shared/employeePerformance";
 import { assignOrderToEmployee, getDb, getOrders } from "./db";
 import { loadPerformance } from "./employeePerformance.service";
 import { canonicalHash } from "./orderEvents.service";
 import type { OrderEventContext } from "./orderEvents.service";
-import { assertAssignableTeamMember, operationIdSchema, requireLeaderOf, requireLeaderOfTx, runTeamsTx, teamAttributionScope, teamMembersAt, type LeaderTeam, type TeamsActor } from "./teams.service";
+import { assertAssignableTeamMember, assertTeamInScope, operationIdSchema, requireLeaderOf, requireLeaderOfTx, runTeamsTx, teamAttributionScope, teamHistory, teamMembersAt, teamWorkContext, type LeaderTeam, type TeamsActor } from "./teams.service";
 
 /**
  * مسارات القائد (حضور/أداء/مهام/أوردرات) — خدمات قراءة وكتابة **داخل نطاق فريقه فقط**، خلف TEAMS_ENABLED.
@@ -233,4 +234,56 @@ export async function assignTeamOrder(actor: TeamsActor, input: z.infer<typeof t
   await assertAssignableTeamMember(actor.tenantId, v.teamId, v.employeeId);
   await assignOrderToEmployee(v.orderId, v.employeeId, actor.employeeId, eventCtx);
   return { success: true, team };
+}
+
+// ==================== إضافات معتمدة (2026-10-11): ورديات الأعضاء، سجل القائد، تصدير الأداء ====================
+
+/** ورديات أعضاء الفريق الحاليين اليوم (بتوقيت نشاط الفريق) — نفس منطق الحضور (memberShiftsFor)، بلا بيانات مالية. */
+async function memberShifts(tenantId: number, teamId: number) {
+  const ctx = await teamWorkContext(tenantId, teamId);
+  const views = await memberShiftsFor(tenantId, ctx.members.map(m => ({ id: m.employeeId, role: m.role, businessId: m.businessId })), ctx.workDate);
+  const byId = new Map(views.map(v => [v.employeeId, v]));
+  return {
+    team: ctx.team, workDate: ctx.workDate, timeZone: ctx.timeZone,
+    members: ctx.members.map(m => {
+      const { employeeId: _same, ...shift } = byId.get(m.employeeId)!;
+      return { employeeId: m.employeeId, employeeName: m.employeeName, membershipRole: m.membershipRole, ...shift };
+    }),
+  };
+}
+
+/** المالك (teams.view_all): تحذيرات ورديات الأعضاء — بلا وردية / وردية فعالة / تعارض — للفريق داخل نطاق الجلسة. */
+export async function ownerTeamMemberShifts(tenantId: number, teamId: number, allowedBusinessIds: number[]) {
+  await assertTeamInScope(tenantId, teamId, allowedBusinessIds);
+  return memberShifts(tenantId, teamId);
+}
+
+/** القائد (team_attendance.view): ورديات أعضاء فريقه الحالي اليوم — قيادة فعّالة إلزامية. */
+export async function leaderTeamMemberShifts(actor: TeamsActor, teamId: number) {
+  await requireLeaderOf(actor, teamId);
+  return memberShifts(actor.tenantId, teamId);
+}
+
+/**
+ * القائد: سجل العضويات الكامل لفريقه الحالي للقراءة — العضو، الدور، البداية، النهاية، ومن أضاف/أنهى **بالاسم فقط**
+ * (بلا معرّفات خام ولا username ولا بيانات دخول). المالك يبقى على teams.history.
+ */
+export async function leaderTeamHistory(actor: TeamsActor, teamId: number) {
+  const team = await requireLeaderOf(actor, teamId);
+  const h = await teamHistory(actor.tenantId, teamId, [team.businessId]);
+  return {
+    team: { name: team.name },
+    history: h.history.map(r => ({ memberName: r.employeeName, membershipRole: r.membershipRole, fromMs: r.fromMs, toMs: r.toMs, addedByName: r.assignedByName, endedByName: r.endedByName })),
+  };
+}
+
+/**
+ * تصدير أداء الفريق CSV: نفس تقرير الشاشة حرفيًا (teamPerformance: نفس الشركة/النشاط/العضوية لحظة الحدث، حد 20،
+ * بلا Backfill جزئي) — والخلايا آمنة من Formula Injection، ورأس بالفترة والمنطقة الزمنية.
+ */
+export async function leaderTeamPerformanceCsv(actor: TeamsActor, teamId: number, fromDate: string, toDate: string) {
+  const r = await teamPerformance(actor, teamId, fromDate, toDate);
+  if (!r.report.enabled) return { enabled: false as const };
+  const csv = teamPerformanceCsv({ teamName: r.team.name, fromDate, toDate, timeZone: r.report.timeZone, minSample: r.report.minSample }, r.report.rows);
+  return { enabled: true as const, csv, filename: `team-performance-${fromDate}_${toDate}.csv`, rowCount: r.report.rows.length };
 }

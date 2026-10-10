@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
+import { businessDateKey } from "../shared/businessTime";
 import { intervalsOverlap, TEAMS_LIMITS, TEAMS_TABLES, type MembershipInterval } from "../shared/teamsSpec";
 import { getDb } from "./db";
 import { canonicalHash } from "./orderEvents.service";
@@ -398,6 +399,28 @@ export async function teamHistory(tenantId: number, teamId: number, allowedBusin
       }));
     return { team, history };
   });
+}
+
+/**
+ * سياق يوم العمل للفريق (قراءة فقط): أعضاؤه الحاليون بدور الموظف ونشاطه الأصلي (مدخلات منطق الورديات)، وتاريخ
+ * العمل اليوم بتوقيت نشاط الفريق (businesses.timezone، وإلا Africa/Cairo).
+ */
+export async function teamWorkContext(tenantId: number, teamId: number) {
+  return runTeamsTx(async tx => {
+    const t = await one(tx, sql`SELECT t.id, t.name, t.businessId, COALESCE(b.timezone, 'Africa/Cairo') AS tz FROM teams t JOIN businesses b ON b.id = t.businessId AND b.tenantId = t.tenantId WHERE t.id = ${teamId} AND t.tenantId = ${tenantId}`);
+    if (!t) throw notFound();
+    const members = rows(await tx.execute(sql`SELECT m.employeeId, m.membershipRole, e.name AS employeeName, e.role, e.businessId
+      FROM team_memberships m JOIN employees e ON e.id = m.employeeId AND e.tenantId = m.tenantId
+      WHERE m.tenantId = ${tenantId} AND m.teamId = ${teamId} AND m.effectiveToAt IS NULL ORDER BY m.membershipRole = 'leader' DESC, e.name`))
+      .map(r => ({ employeeId: Number(r.employeeId), membershipRole: r.membershipRole as "member" | "leader", employeeName: r.employeeName as string, role: (r.role ?? null) as string | null, businessId: num(r.businessId) }));
+    const nowMs = await dbNowMs(tx);
+    return { team: { teamId: Number(t.id), name: String(t.name), businessId: Number(t.businessId) }, timeZone: String(t.tz), workDate: businessDateKey(new Date(nowMs), String(t.tz)), members };
+  });
+}
+
+/** تحقق نطاق المالك للفريق (نفس الشركة وأنشطة الجلسة) — بلا بيانات. */
+export async function assertTeamInScope(tenantId: number, teamId: number, allowedBusinessIds: number[]): Promise<void> {
+  await runTeamsTx(async tx => { await teamInScope(tx, tenantId, teamId, allowedBusinessIds); });
 }
 
 // ==================== نطاق القائد (البوابة) + Helpers قراءة/تحقق للمراحل اللاحقة ====================
