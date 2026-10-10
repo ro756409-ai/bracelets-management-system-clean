@@ -92,6 +92,16 @@ export async function putObject(
   contentType: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
+  return putObjectAtKey(evidenceObjectKey(filename), body, contentType, env);
+}
+
+/** نفس putObject بمفتاح كامل (لوحدات غير المرفقات، مثل صوت الرسائل `msg/<tenant>/...`). */
+export async function putObjectAtKey(
+  key: string,
+  body: Buffer,
+  contentType: string,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<void> {
   const config = readObjectStorageConfig(env);
   if (!config) throw new Error("Object storage is not configured");
   const { PutObjectCommand } = await import("@aws-sdk/client-s3");
@@ -99,16 +109,36 @@ export async function putObject(
   await client.send(
     new PutObjectCommand({
       Bucket: config.bucket,
-      Key: evidenceObjectKey(filename),
+      Key: key,
       Body: body,
       ContentType: contentType,
     })
   );
 }
 
+/** حذف كائن بمفتاح كامل — Idempotent (غير الموجود = نجاح، سلوك S3 الطبيعي). */
+export async function deleteObjectAtKey(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<void> {
+  const config = readObjectStorageConfig(env);
+  if (!config) throw new Error("Object storage is not configured");
+  const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+  const client = await getClient(config);
+  await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
+}
+
 /** ينزّل كائن كـBuffer، أو null لو مش موجود. */
 export async function getObject(
   filename: string,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<Buffer | null> {
+  return getObjectAtKey(evidenceObjectKey(filename), env);
+}
+
+/** ينزّل كائن بمفتاح كامل كـBuffer، أو null لو مش موجود. */
+export async function getObjectAtKey(
+  key: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<Buffer | null> {
   const config = readObjectStorageConfig(env);
@@ -119,7 +149,7 @@ export async function getObject(
     const out: GetObjectCommandOutput = await client.send(
       new GetObjectCommand({
         Bucket: config.bucket,
-        Key: evidenceObjectKey(filename),
+        Key: key,
       })
     );
     if (!out.Body) return null;

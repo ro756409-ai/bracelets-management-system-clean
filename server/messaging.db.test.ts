@@ -9,6 +9,7 @@ import { createTempSchema, type TempSchema } from "./testTempSchema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import * as msg from "./messaging.service";
 import { PRIVACY_NOTICE, MESSAGING_LIMITS } from "../shared/messagingSpec";
+import { memoryMessagingStorage, newVoiceKey } from "./messagingStorage";
 
 /**
  * خدمات الرسائل على قاعدة Docker مؤقتة (نسخة المخطط + 0041 + 0043): العلم/الجداول، القنوات الافتراضية،
@@ -201,29 +202,72 @@ describe.runIf(CAN)("💬 خدمات الرسائل", () => {
 
   it("الصوت: حدود المدة والحجم والمسار، انتهاء بعد 6 أشهر، «سمعها»، لا يُعدَّل، واستماع المالك مسجَّل", async () => {
     const dm = (await msg.startDirect(a1, { employeeId: emp.e3 })).conversationId;
-    const base = { conversationId: dm, mime: "audio/webm;codecs=opus", bytes: 48_000, durationMs: 12_000 };
-    const key = (n: string) => `${msg.attachmentKeyPrefix(A.tenantId)}voice/${n}.webm`;
-    expect(await code(() => msg.sendVoice(a1, { ...BASIC, voice: false }, { ...base, storageKey: key("a"), idempotencyKey: op() }))).toBe("FORBIDDEN");
-    expect(await code(() => msg.sendVoice(a1, BASIC, { ...base, durationMs: MESSAGING_LIMITS.voiceMaxMs + 1, storageKey: key("b"), idempotencyKey: op() }))).toBe("ZodError");
-    expect(await code(() => msg.sendVoice(a1, BASIC, { ...base, bytes: MESSAGING_LIMITS.attachmentMaxBytes + 1, storageKey: key("c"), idempotencyKey: op() }))).toBe("ZodError");
-    expect(await code(() => msg.sendVoice(a1, BASIC, { ...base, storageKey: `${msg.attachmentKeyPrefix(B.tenantId)}voice/x.webm`, idempotencyKey: op() }))).toBe("BAD_REQUEST");
-    expect(await code(() => msg.sendVoice(mgr, BASIC, { ...base, conversationId: annA, storageKey: key("d"), idempotencyKey: op() }))).toBe("BAD_REQUEST");
-    const { messageId } = await msg.sendVoice(a1, BASIC, { ...base, storageKey: key("ok"), waveform: [0.1, 0.5, 0.9], idempotencyKey: op() });
+    const sha = (n: string) => n.repeat(64).slice(0, 64);
+    const base = { conversationId: dm, mime: "audio/webm" as const, bytes: 48_000, durationMs: 12_000, contentSha256: sha("a") };
+    const key = () => newVoiceKey(A.tenantId, ".webm");
+    expect(await code(() => msg.sendVoice(a1, { ...BASIC, voice: false }, { ...base, storageKey: key(), idempotencyKey: op() }))).toBe("FORBIDDEN");
+    expect(await code(() => msg.sendVoice(a1, BASIC, { ...base, durationMs: MESSAGING_LIMITS.voiceMaxMs + 1, storageKey: key(), idempotencyKey: op() }))).toBe("ZodError");
+    expect(await code(() => msg.sendVoice(a1, BASIC, { ...base, bytes: MESSAGING_LIMITS.attachmentMaxBytes + 1, storageKey: key(), idempotencyKey: op() }))).toBe("ZodError");
+    expect(await code(() => msg.sendVoice(a1, BASIC, { ...base, mime: "image/svg+xml" as any, storageKey: key(), idempotencyKey: op() }))).toBe("ZodError");
+    expect(await code(() => msg.sendVoice(a1, BASIC, { ...base, storageKey: newVoiceKey(B.tenantId, ".webm"), idempotencyKey: op() }))).toBe("BAD_REQUEST");
+    expect(await code(() => msg.sendVoice(a1, BASIC, { ...base, storageKey: `msg/${A.tenantId}/voice/../../x.webm`, idempotencyKey: op() }))).toBe("ZodError");
+    expect(await code(() => msg.sendVoice(mgr, BASIC, { ...base, conversationId: annA, storageKey: key(), idempotencyKey: op() }))).toBe("BAD_REQUEST");
+    const idem = op();
+    const { messageId } = await msg.sendVoice(a1, BASIC, { ...base, storageKey: key(), waveform: [0.1, 0.5, 0.9], idempotencyKey: idem });
+    // إعادة الرفع بنفس المعرّف ونفس المحتوى = Replay حتى لو اختلف مفتاح التخزين؛ محتوى مختلف = CONFLICT
+    expect(await msg.precheckVoice(a1, BASIC, { ...base, idempotencyKey: idem })).toBe(messageId);
+    expect((await msg.sendVoice(a1, BASIC, { ...base, storageKey: key(), idempotencyKey: idem })).replay).toBe(true);
+    expect(await code(() => msg.precheckVoice(a1, BASIC, { ...base, contentSha256: sha("b"), idempotencyKey: idem }))).toBe("CONFLICT");
+    expect(await msg.precheckVoice(a1, BASIC, { ...base, idempotencyKey: op() })).toBeNull();
     const [att] = await q("SELECT DATEDIFF(expiresAt, createdAt) AS days, durationMs FROM msg_attachments WHERE messageId = ?", [messageId]);
     expect(Number(att.days)).toBe(MESSAGING_LIMITS.attachmentRetentionDays); expect(Number(att.durationMs)).toBe(12_000);
     expect(await code(() => msg.editMessage(a1, { messageId, body: "نص" }))).toBe("BAD_REQUEST");
-    expect(await msg.listenVoice(a1, BASIC, { messageId })).toEqual({ recorded: false, audited: false }); // المرسل
-    expect(await msg.listenVoice(a3, BASIC, { messageId })).toEqual({ recorded: true, audited: false });
-    await msg.listenVoice(a3, BASIC, { messageId });
-    expect(await msg.listenVoice(boss, ALL, { messageId })).toEqual({ recorded: false, audited: true });
+    // التشغيل: المرسل بلا «سمعها»، المستلم مرة واحدة، المالك المطّلع سجل listen واحد رغم طلبات Range المتكررة
+    expect((await msg.authorizeVoicePlayback(a1, BASIC, messageId)).monitor).toBe(false);
+    await msg.authorizeVoicePlayback(a3, BASIC, messageId); await msg.authorizeVoicePlayback(a3, BASIC, messageId);
+    expect((await msg.authorizeVoicePlayback(boss, ALL, messageId)).monitor).toBe(true);
+    await msg.authorizeVoicePlayback(boss, ALL, messageId);
+    expect(await code(() => msg.authorizeVoicePlayback(boss, BASIC, messageId))).toBe("FORBIDDEN");
+    expect(await code(() => msg.authorizeVoicePlayback(a2, BASIC, messageId))).toBe("FORBIDDEN");
+    expect(await code(() => msg.authorizeVoicePlayback(bE, ALL, messageId))).toBe("NOT_FOUND");
     const v = (await msg.readMessages(a1, BASIC, { conversationId: dm })).messages.find(x => x.id === messageId)!;
     expect(v.listens).toEqual({ count: 1, mine: false });
     expect(v.attachments[0]).toMatchObject({ kind: "voice", durationMs: 12_000, waveform: [0.1, 0.5, 0.9], purged: false });
     expect(await q("SELECT action, messageId FROM msg_access_audit WHERE action = 'listen'", [])).toEqual([{ action: "listen", messageId }]);
-    // الحذف يعلّم الملف للإزالة من التخزين فورًا
+    // الحذف يعلّم الملف للإزالة فورًا، ولا تشغيل بعده
     await msg.deleteMessage(a1, { messageId });
     const [after] = await q("SELECT expiresAt <= NOW(3) AS due FROM msg_attachments WHERE messageId = ?", [messageId]);
     expect(Number(after.due)).toBe(1);
+    expect(await code(() => msg.authorizeVoicePlayback(a3, BASIC, messageId))).toBe("NOT_FOUND");
+  });
+
+  it("مهمة حذف المرفقات المنتهية: Idempotent، تتخطى مفاتيح شركة أخرى، ولا تلمس غير المنتهي", async () => {
+    const store = memoryMessagingStorage();
+    const dm = (await msg.startDirect(a2, { employeeId: emp.e3 })).conversationId;
+    const send = async (k: string) => (await msg.sendVoice(a2, BASIC, { conversationId: dm, mime: "audio/ogg", bytes: 10, durationMs: 1000, contentSha256: "c".repeat(64), storageKey: k, idempotencyKey: op() })).messageId;
+    const kOld = newVoiceKey(A.tenantId, ".ogg"), kNew = newVoiceKey(A.tenantId, ".ogg"), kB = newVoiceKey(B.tenantId, ".ogg");
+    for (const k of [kOld, kNew, kB]) store.files.set(k, Buffer.from("x"));
+    const old = await send(kOld); const fresh = await send(kNew); const forged = await send(newVoiceKey(A.tenantId, ".ogg"));
+    await q("UPDATE msg_attachments SET expiresAt = NOW(3) - INTERVAL 1 DAY WHERE messageId IN (?, ?)", [old, forged]);
+    await q("UPDATE msg_attachments SET storageKey = ? WHERE messageId = ?", [kB, forged]); // صف A يشير لمفتاح B (تلاعب مباشر بالقاعدة)
+    // أي مرفقات منتهية متبقية من اختبارات سابقة (مثل الصوت المحذوف) تُحتسب كذلك
+    const dry = await msg.purgeExpiredAttachments({ storage: store, dryRun: true });
+    expect(dry.state).toBe("dry_run"); expect(store.files.size).toBe(3);
+    store.fail.del = true;
+    const failed = await msg.purgeExpiredAttachments({ storage: store });
+    expect(failed.purged).toBe(0); expect(failed.skippedForeignKey).toBe(1);
+    expect((await q("SELECT purgedAt FROM msg_attachments WHERE messageId = ?", [old]))[0].purgedAt).toBeNull();
+    store.fail.del = false;
+    const r1 = await msg.purgeExpiredAttachments({ storage: store });
+    expect(r1.skippedForeignKey).toBe(1); expect(r1.failed).toBe(0);
+    expect(store.files.has(kOld)).toBe(false); expect(store.files.has(kNew)).toBe(true); expect(store.files.has(kB)).toBe(true);
+    expect((await q("SELECT purgedAt IS NOT NULL p FROM msg_attachments WHERE messageId = ?", [old]))[0].p).toBe(1);
+    const r2 = await msg.purgeExpiredAttachments({ storage: store });
+    expect(r2.purged).toBe(0); expect(r2.failed).toBe(0);
+    const v = (await msg.readMessages(a3, BASIC, { conversationId: dm })).messages.find(m => m.id === old)!;
+    expect(v.attachments[0].purged).toBe(true);
+    expect(await code(() => msg.authorizeVoicePlayback(a3, BASIC, old))).toBe("NOT_FOUND");
+    expect(fresh).toBeGreaterThan(0);
   });
 
   it("المجموعات: بالصلاحية فقط، أعضاء من نفس الشركة ونشطون، والمنشئ مشرف", async () => {

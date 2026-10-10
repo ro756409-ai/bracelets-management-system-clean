@@ -5,6 +5,7 @@ import { MESSAGING_LIMITS, MESSAGING_TABLES, PRIVACY_NOTICE, REACTIONS, conversa
 import { getDb } from "./db";
 import { canonicalHash } from "./orderEvents.service";
 import { OWNER_ROLES } from "./permissions";
+import { MESSAGE_KEY_PATTERN, keyBelongsToTenant } from "./messagingStorage";
 
 /**
  * مركز الرسائل (0043) — خلف العلم `MESSAGING_ENABLED` (افتراضيًا معطل).
@@ -326,29 +327,51 @@ export async function sendMessage(actor: MessagingActor, perms: Partial<Messagin
 
 export const voiceInput = z.object({
   conversationId: ID,
-  storageKey: z.string().min(3).max(255),
-  mime: z.string().regex(/^audio\/(webm|ogg|mp4|mpeg|aac|x-m4a)(;.*)?$/, "نوع ملف صوتي غير مدعوم").max(100),
+  storageKey: z.string().regex(MESSAGE_KEY_PATTERN, "مسار الملف غير صالح"),
+  /** يحدده السيرفر من محتوى الملف (audioProbe) — لا من المتصفح. */
+  mime: z.enum(["audio/webm", "audio/ogg", "audio/mp4"]),
   bytes: z.number().int().min(1).max(MESSAGING_LIMITS.attachmentMaxBytes, "الملف أكبر من 10 ميجا"),
   durationMs: z.number().int().min(1).max(MESSAGING_LIMITS.voiceMaxMs, "الحد الأقصى للتسجيل 5 دقائق"),
+  contentSha256: z.string().regex(/^[0-9a-f]{64}$/),
   waveform: z.array(z.number().min(0).max(1)).max(128).optional(),
   replyToMessageId: ID.optional(),
   idempotencyKey: OP,
 }).strict();
+export type VoiceInput = z.infer<typeof voiceInput>;
 
-/** مسار التخزين المسموح لمرفقات الشركة — يمنع الإشارة لملف شركة أخرى. */
-export const attachmentKeyPrefix = (tenantId: number) => `msg/${tenantId}/`;
+/** بصمة الرسالة الصوتية: المحتوى (sha256) لا مفتاح التخزين — فإعادة رفع نفس الملف بنفس المعرّف = Replay. */
+const voiceHash = (conversationId: number, senderId: number, v: Pick<VoiceInput, "contentSha256" | "durationMs" | "bytes" | "replyToMessageId">) =>
+  canonicalHash({ c: conversationId, s: senderId, voice: v.contentSha256, d: v.durationMs, b: v.bytes, r: v.replyToMessageId ?? null });
 
-/** رسالة صوتية (الملف مرفوع مسبقًا عبر الراوتر) — تنتهي بعد 6 أشهر؛ لا تُعدَّل، تُحذف فقط. */
-export async function sendVoice(actor: MessagingActor, perms: Partial<MessagingPerms>, input: z.infer<typeof voiceInput>) {
+/**
+ * فحص مسبق قبل الرفع للتخزين (لا يكتب شيئًا): الصلاحية والعضوية، وهل المعرّف مستخدم مسبقًا؟
+ * نفس الحمولة → messageId (Replay بلا رفع جديد)، حمولة مختلفة → CONFLICT، غير مستخدم → null.
+ */
+export async function precheckVoice(actor: MessagingActor, perms: Partial<MessagingPerms>, input: Omit<VoiceInput, "storageKey" | "mime">) {
+  if (!perms.voice) throw forbidden("الرسائل الصوتية غير متاحة لك");
+  return runMessagingTx(async tx => {
+    const me = await loadMe(tx, actor, perms);
+    const a = await access(tx, actor, me, input.conversationId);
+    requireMember(a);
+    if (a.conv.kind === "announcement") throw bad("الإعلانات نصية فقط");
+    const ex = await one(tx, sql`SELECT id, payloadHash FROM msg_messages WHERE tenantId = ${actor.tenantId} AND idempotencyKey = ${input.idempotencyKey}`);
+    if (!ex) return null;
+    if (ex.payloadHash === voiceHash(a.conv.id, me.id, input)) return Number(ex.id);
+    throw conflict("نفس معرّف العملية استُخدم لرسالة مختلفة — لم يُنفَّذ أي تغيير");
+  });
+}
+
+/** رسالة صوتية (الملف مرفوع مسبقًا للتخزين الخاص) — تنتهي بعد 6 أشهر؛ لا تُعدَّل، تُحذف فقط. */
+export async function sendVoice(actor: MessagingActor, perms: Partial<MessagingPerms>, input: VoiceInput) {
   const v = voiceInput.parse(input);
   if (!perms.voice) throw forbidden("الرسائل الصوتية غير متاحة لك");
-  if (!v.storageKey.startsWith(attachmentKeyPrefix(actor.tenantId)) || v.storageKey.includes("..")) throw bad("مسار الملف غير صالح");
+  if (!keyBelongsToTenant(v.storageKey, actor.tenantId)) throw bad("مسار الملف غير صالح");
   return withIdempotentRetry(() => runMessagingTx(async tx => {
     const me = await loadMe(tx, actor, perms);
     const a = await access(tx, actor, me, v.conversationId, true);
     requireMember(a);
     if (a.conv.kind === "announcement") throw bad("الإعلانات نصية فقط");
-    const hash = canonicalHash({ c: a.conv.id, s: me.id, voice: v.storageKey, d: v.durationMs, b: v.bytes, r: v.replyToMessageId ?? null });
+    const hash = voiceHash(a.conv.id, me.id, v);
     const replay = await replayCheck(tx, actor.tenantId, v.idempotencyKey, hash);
     if (replay != null) return { messageId: replay, replay: true };
     if (v.replyToMessageId) {
@@ -362,6 +385,71 @@ export async function sendVoice(actor: MessagingActor, perms: Partial<MessagingP
     await touchConversation(tx, actor, a.conv.id, id, me.id);
     return { messageId: id, replay: false };
   }));
+}
+
+/**
+ * تصريح تشغيل صوت (قبل قراءة الملف من التخزين): عضو، أو المالك المطّلع (قراءة فقط). المحذوف أو المنتهي = غير موجود.
+ * المطّلع: سجل «listen» (مرة كل 30 دقيقة للرسالة — طلبات Range المتتالية لا تُغرق السجل). المستلم: «سمعها» أول مرة.
+ * يعيد المفتاح للمتصل فقط (لا يُرسل للعميل ولا يُسجَّل في الـlogs).
+ */
+export async function authorizeVoicePlayback(actor: MessagingActor, perms: Partial<MessagingPerms>, messageId: number) {
+  const id = ID.parse(messageId);
+  return runMessagingTx(async tx => {
+    const me = await loadMe(tx, actor, perms);
+    const m = await messageInTenant(tx, actor, id);
+    const a = await access(tx, actor, me, Number(m.conversationId));
+    if (m.kind !== "voice" || m.deletedAt) throw notFound("الرسالة غير موجودة");
+    const att = await one(tx, sql`SELECT storageKey, mime, bytes FROM msg_attachments WHERE tenantId = ${actor.tenantId} AND messageId = ${m.id} AND kind = 'voice' AND purgedAt IS NULL AND (expiresAt IS NULL OR expiresAt > NOW(3)) ORDER BY id LIMIT 1`);
+    if (!att || !keyBelongsToTenant(att.storageKey, actor.tenantId)) throw notFound("الملف لم يعد متاحًا");
+    if (a.monitor) {
+      const recent = await one(tx, sql`SELECT id FROM msg_access_audit WHERE tenantId = ${actor.tenantId} AND viewerEmployeeId = ${me.id} AND messageId = ${m.id} AND action = 'listen' AND viewedAt > NOW(3) - INTERVAL ${AUDIT_DEDUPE_MINUTES} MINUTE LIMIT 1`);
+      if (!recent) await tx.execute(sql`INSERT INTO msg_access_audit (tenantId, viewerEmployeeId, conversationId, action, messageId) VALUES (${actor.tenantId}, ${me.id}, ${a.conv.id}, 'listen', ${m.id})`);
+    } else if (Number(m.senderEmployeeId) !== me.id) {
+      await tx.execute(sql`INSERT INTO msg_voice_listens (tenantId, messageId, employeeId) VALUES (${actor.tenantId}, ${m.id}, ${me.id}) ON DUPLICATE KEY UPDATE id = id`);
+    }
+    return { storageKey: String(att.storageKey), mime: String(att.mime), bytes: Number(att.bytes), monitor: a.monitor };
+  });
+}
+
+// ==================== حذف المرفقات المنتهية (مهمة صيانة) ====================
+/**
+ * يحذف ملفات المرفقات المنتهية (6 أشهر، أو فور حذف الرسالة) من التخزين ثم يعلّم الصف purgedAt.
+ *   • Idempotent: purgedAt يمنع التكرار، وحذف ملف غير موجود = نجاح؛ إعادة التشغيل آمنة.
+ *   • متزامن بأمان: كل صف يُطالب به بـFOR UPDATE SKIP LOCKED — نسختان من المهمة لا تعالجان نفس الصف.
+ *   • لا يحذف إلا مفتاحًا بالشكل المولَّد وداخل بادئة **نفس شركة الصف** — غير ذلك يُتخطى ويُعدّ (لا حذف).
+ *   • الإعلانات المثبّتة لا تُمس. لا يعتمد على علم التشغيل (الاحتفاظ يُحترم حتى لو أُطفئت الرسائل).
+ *   • لا يطبع مفاتيح التخزين — أرقام فقط.
+ */
+export async function purgeExpiredAttachments(opts: { storage: { del(key: string): Promise<void> }; limit?: number; dryRun?: boolean }) {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
+  const ready = rows(await db.execute(sql`SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${sql.join(MESSAGING_TABLES.map(t => sql`${t}`), sql`, `)})`));
+  if (Number(ready[0]?.n ?? 0) !== MESSAGING_TABLES.length) return { state: "not_applied" as const, due: 0, purged: 0, failed: 0, skippedForeignKey: 0 };
+  const limit = Math.min(Math.max(1, Math.floor(opts.limit ?? 500)), 5000);
+  await db.execute(sql`SET time_zone = '+00:00'`);
+  const due = rows(await db.execute(sql`SELECT a.id FROM msg_attachments a JOIN msg_messages m ON m.tenantId = a.tenantId AND m.id = a.messageId
+    WHERE a.purgedAt IS NULL AND a.expiresAt IS NOT NULL AND a.expiresAt <= NOW(3) AND (m.isPinned = 0 OR m.deletedAt IS NOT NULL)
+    ORDER BY a.id LIMIT ${limit}`)).map(r => Number(r.id));
+  let purged = 0, failed = 0, skippedForeignKey = 0;
+  if (opts.dryRun) return { state: "dry_run" as const, due: due.length, purged, failed, skippedForeignKey };
+  for (const id of due) {
+    try {
+      const r = await db.transaction(async tx => {
+        await tx.execute(sql`SET time_zone = '+00:00'`);
+        const row = await one(tx, sql`SELECT id, tenantId, storageKey FROM msg_attachments WHERE id = ${id} AND purgedAt IS NULL AND expiresAt <= NOW(3) FOR UPDATE SKIP LOCKED`);
+        if (!row) return "gone";
+        if (!keyBelongsToTenant(String(row.storageKey), Number(row.tenantId))) return "foreign";
+        await opts.storage.del(String(row.storageKey));
+        await tx.execute(sql`UPDATE msg_attachments SET purgedAt = NOW(3) WHERE id = ${id} AND tenantId = ${row.tenantId} AND purgedAt IS NULL`);
+        return "purged";
+      });
+      if (r === "purged") purged++;
+      else if (r === "foreign") skippedForeignKey++;
+    } catch {
+      failed++; // يبقى الصف بلا purgedAt فيُعاد في التشغيل التالي
+    }
+  }
+  return { state: "done" as const, due: due.length, purged, failed, skippedForeignKey };
 }
 
 // ==================== التعديل والحذف ====================
@@ -461,24 +549,6 @@ export async function ackAnnouncement(actor: MessagingActor, input: { messageId:
     if (m.kind !== "announcement" || m.deletedAt) throw bad("ليست إعلانًا");
     await tx.execute(sql`INSERT INTO msg_announcement_acks (tenantId, messageId, employeeId) VALUES (${actor.tenantId}, ${m.id}, ${me.id}) ON DUPLICATE KEY UPDATE id = id`);
     return { ok: true };
-  });
-}
-
-/** تشغيل رسالة صوتية: المستلم يسجّل «سمعها» (أول مرة)، والمالك المطّلع يُسجَّل في سجل الاطلاع فقط. */
-export async function listenVoice(actor: MessagingActor, perms: Partial<MessagingPerms>, input: { messageId: number }) {
-  const messageId = ID.parse(input.messageId);
-  return runMessagingTx(async tx => {
-    const me = await loadMe(tx, actor, perms);
-    const m = await messageInTenant(tx, actor, messageId);
-    const a = await access(tx, actor, me, Number(m.conversationId));
-    if (m.kind !== "voice" || m.deletedAt) throw bad("ليست رسالة صوتية");
-    if (a.monitor) {
-      await tx.execute(sql`INSERT INTO msg_access_audit (tenantId, viewerEmployeeId, conversationId, action, messageId) VALUES (${actor.tenantId}, ${me.id}, ${a.conv.id}, 'listen', ${m.id})`);
-      return { recorded: false, audited: true };
-    }
-    if (Number(m.senderEmployeeId) === me.id) return { recorded: false, audited: false };
-    await tx.execute(sql`INSERT INTO msg_voice_listens (tenantId, messageId, employeeId) VALUES (${actor.tenantId}, ${m.id}, ${me.id}) ON DUPLICATE KEY UPDATE id = id`);
-    return { recorded: true, audited: false };
   });
 }
 
