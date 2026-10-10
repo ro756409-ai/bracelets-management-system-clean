@@ -64,8 +64,8 @@ vi.mock("@/components/shared/toast", () => ({ toast: { success: vi.fn(), error: 
 import TeamLeaderDashboard from "./TeamLeaderDashboard";
 
 const ALL = ["teams.view_own", "team_attendance.view", "team_performance.view", "team_orders.view", "team_orders.assign", "team_tasks.manage", "attendance.approve_corrections"];
-const T7 = { teamId: 7, businessId: 3, name: "فريق الأفندي" };
-const T8 = { teamId: 8, businessId: 4, name: "فريق نوفا" };
+const T7 = { teamId: 7, businessId: 3, name: "فريق الأفندي", businessName: "الأفندي" };
+const T8 = { teamId: 8, businessId: 4, name: "فريق نوفا", businessName: "نوفا" };
 beforeEach(() => {
   Object.assign(st, { perms: [...ALL], enabled: true, teams: [T7], readOnly: false, hold: false, queried: [], calls: [], csvFetched: [], perfRows: [],
     pending: [
@@ -105,6 +105,22 @@ describe("🧭 «فريقي» — الوصول", () => {
     expect([...sel.options].map(o => o.value)).toEqual(["", "7", "8"]);
     fireEvent.change(sel, { target: { value: "8" } });
     expect(st.queried.filter(x => x[0] === "members").at(-1)![1]).toEqual({ teamId: 8 });
+  });
+  it("اسم النشاط الحقيقي من myTeams (لكل فريق اسمه)، بلا «غير متاح من الخادم»", () => {
+    st.teams = [T7, T8];
+    render(<TeamLeaderDashboard />);
+    expect(screen.getByTestId("leader-business-name").textContent).toBe("الأفندي");
+    expect(document.body.textContent).not.toContain("غير متاح من الخادم");
+    fireEvent.change(screen.getByTestId("leader-team-select"), { target: { value: "8" } });
+    expect(screen.getByTestId("leader-business-name").textContent).toBe("نوفا");
+  });
+  it("بيانات تالفة (اسم نشاط فارغ): «نشاط غير معروف» كحالة خطأ لا كقيمة عادية", () => {
+    st.teams = [{ ...T7, businessName: "" }];
+    render(<TeamLeaderDashboard />);
+    const el = screen.getByTestId("leader-business-unknown");
+    expect(el.getAttribute("role")).toBe("alert");
+    expect(el.textContent).toContain("نشاط غير معروف");
+    expect(screen.queryByTestId("leader-business-name")).toBeNull();
   });
   it("التبويبات حسب الصلاحية: بلا team_orders.view لا تبويب أوردرات", () => {
     st.perms = ALL.filter(p => p !== "team_orders.view");

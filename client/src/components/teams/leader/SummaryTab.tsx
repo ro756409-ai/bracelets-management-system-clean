@@ -1,3 +1,4 @@
+import { AlertTriangle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { LoadingSkeleton, SectionCard, StatCard } from "@/components/shared";
 import { dayKey, fmtNum } from "../teamsUi";
@@ -40,7 +41,10 @@ export function SummaryTab({ team, perms, leaderName }: { team: LedTeam; perms: 
       <SectionCard title="الفريق">
         <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
           <div><dt className="text-muted-foreground">الفريق</dt><dd className="font-semibold">{team.name}</dd></div>
-          <div><dt className="text-muted-foreground">النشاط</dt><dd className="text-muted-foreground" data-testid="leader-business-gap">اسم النشاط غير متاح من الخادم</dd></div>
+          <div><dt className="text-muted-foreground">النشاط</dt>{team.businessName?.trim()
+            ? <dd className="font-semibold" data-testid="leader-business-name">{team.businessName}</dd>
+            // السيرفر يضمن الاسم (FK + NOT NULL)؛ غيابه = بيانات تالفة ⇒ حالة خطأ صريحة لا قيمة عادية
+            : <dd className="flex items-center gap-1 text-destructive" role="alert" data-testid="leader-business-unknown"><AlertTriangle className="h-4 w-4" aria-hidden="true" /> نشاط غير معروف</dd>}</div>
           <div><dt className="text-muted-foreground">القائد</dt><dd className="font-semibold">{leaderName ?? "—"}</dd></div>
         </dl>
       </SectionCard>
