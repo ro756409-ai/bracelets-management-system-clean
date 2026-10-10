@@ -218,6 +218,31 @@ describe("📦 الأوردرات والمهام", () => {
     expect(c[1]).toMatchObject({ teamId: 7, title: "مراجعة المؤجل", assignedTo: null });
     expect(c[1].operationId).toMatch(/^[A-Za-z0-9_-]{8,80}$/);
   });
+  it("تغيير حالة المهمة بضغط مزدوج = تحديث واحد، ونفس الحالة = لا طلب", () => {
+    render(<TeamLeaderDashboard />);
+    tab("المهام");
+    const sel = screen.getByTestId("task-status-5") as HTMLSelectElement;
+    fireEvent.change(sel, { target: { value: "new" } }); // نفس الحالة: No-op في الواجهة أيضًا
+    expect(st.calls.filter(c => c[0] === "taskStatus")).toHaveLength(0);
+    st.hold = true;
+    fireEvent.change(sel, { target: { value: "done" } });
+    fireEvent.change(sel, { target: { value: "in_progress" } });
+    const u = st.calls.filter(c => c[0] === "taskStatus");
+    expect(u).toHaveLength(1);
+    expect(u[0][1]).toEqual({ teamId: 7, taskId: 5, status: "done" });
+  });
+  it("الرفض بضغط مزدوج = قرار واحد", () => {
+    render(<TeamLeaderDashboard />);
+    tab("الحضور");
+    fireEvent.click(screen.getByTestId("pending-reject-32"));
+    fireEvent.change(screen.getByLabelText("سبب الرفض"), { target: { value: "خارج الوردية" } });
+    st.hold = true;
+    fireEvent.click(screen.getByTestId("pending-reject-confirm-32"));
+    fireEvent.click(screen.getByTestId("pending-reject-confirm-32"));
+    const r = st.calls.filter(c => c[0] === "reviewCorrection");
+    expect(r).toHaveLength(1);
+    expect(r[0][1]).toEqual({ teamId: 7, requestId: 32, decision: "reject", reviewReason: "خارج الوردية" });
+  });
   it("القراءة فقط للشركة: الإسناد وإنشاء المهام معطّلان والعرض باقٍ", () => {
     st.readOnly = true;
     render(<TeamLeaderDashboard />);
