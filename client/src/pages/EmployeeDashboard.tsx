@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
+import { PortalHeaderActions } from "@/components/shell/PortalHeaderActions";
 import { operationIdFor } from "@/lib/operationId";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
@@ -20,7 +21,7 @@ import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, Clock, Phone, PhoneOff, MapPin, Package,
-  LogOut, RefreshCw, ChevronDown, ChevronUp,
+  RefreshCw, ChevronDown, ChevronUp,
   ShoppingBag, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle, Megaphone, History } from "lucide-react";
 import jsQR from "jsqr";
 import { BusinessAvatar } from "@/components/BusinessAvatar";
@@ -901,122 +902,26 @@ export default function EmployeeDashboard() {
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
-            {canViewShipping && (
-              <>
-                <button data-readonly-safe
-                  onClick={() => setLocation("/today-shipments")}
-                  className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
-                  title="شحنات اليوم"
-                  aria-label="شحنات اليوم"
-                >
-                  <Truck className="h-4 w-4" />
-                </button>
-                <button data-readonly-safe
-                  onClick={() => setLocation("/shipping-schedule")}
-                  className="min-h-11 min-w-11 md:min-h-8 md:min-w-8 md:w-8 md:h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 flex items-center justify-center text-primary-foreground hover:bg-primary-foreground/20 transition-colors"
-                  title="جدول توزيع المحافظات"
-                  aria-label="جدول توزيع المحافظات"
-                >
-                  <CalendarRange className="h-4 w-4" />
-                </button>
-              </>
-            )}
-            {/* الحالة النشطة كانت بألوان Tailwind خام (amber-500/green-500) جوه هيدر
-                متدرّج بلون الهوية — بقت شفافية بيضا موحّدة، فبتقرا كـ"مفعّل" في أي ثيم. */}
-            <button
-              onClick={() => setShowDateFilter(!showDateFilter)}
-              aria-pressed={Boolean(dateFrom || dateTo)}
-              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-[var(--radius-brand-md)] text-primary-foreground transition-colors ${
-                (dateFrom || dateTo) ? 'bg-primary-foreground/35 hover:bg-primary-foreground/45' : 'bg-primary-foreground/10 hover:bg-primary-foreground/20'
-              }`}
-              title="فلتر التاريخ"
-              aria-label="فلتر التاريخ"
-            >
-              <CalendarDays className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => { setShowScanPanel(!showScanPanel); if (showScanPanel) stopScanCamera(); setScanResult(null); }}
-              aria-pressed={showScanPanel}
-              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-[var(--radius-brand-md)] text-primary-foreground transition-colors ${
-                showScanPanel ? 'bg-primary-foreground/35 hover:bg-primary-foreground/45' : 'bg-primary-foreground/10 hover:bg-primary-foreground/20'
-              }`}
-              title="مسح QR"
-              aria-label="مسح QR"
-            >
-              <QrCode className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setShowTasksPanel(!showTasksPanel)}
-              aria-pressed={showTasksPanel}
-              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-[var(--radius-brand-md)] text-primary-foreground transition-colors ${
-                showTasksPanel ? 'bg-primary-foreground/35 hover:bg-primary-foreground/45' : 'bg-primary-foreground/10 hover:bg-primary-foreground/20'
-              }`}
-              title="المهام"
-              aria-label="المهام"
-            >
-              <MessageSquare className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => setShowStockPanel(!showStockPanel)}
-              aria-pressed={showStockPanel}
-              className={`flex min-h-11 min-w-11 md:h-8 md:w-8 md:min-h-8 md:min-w-8 items-center justify-center rounded-[var(--radius-brand-md)] text-primary-foreground transition-colors ${
-                showStockPanel ? 'bg-primary-foreground/35 hover:bg-primary-foreground/45' : 'bg-primary-foreground/10 hover:bg-primary-foreground/20'
-              }`}
-              title="المخزون"
-              aria-label="المخزون"
-            >
-              <Box className="h-4 w-4" />
-            </button>
-
-            {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
-                فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
-            {/* الرسائل (هوية البوابة): لا يظهر والعلم معطل أو بلا messages.use */}
-            <MessagesEntryButton via="portal" className="bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/20 md:h-8 md:min-h-8 md:w-8 md:min-w-8" />
-            {canOpenMyAttendance && (
-              <Button data-readonly-safe
-                variant="ghost"
-                onClick={() => setLocation("/my-attendance")}
-                className="min-h-11 min-w-11 md:h-8 md:min-h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
-                title="حضوري"
-                aria-label="حضوري"
-                data-testid="my-attendance-link"
-              >
-                <Clock className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            )}
-            {canViewMyPerformance && (
-              <Button data-readonly-safe
-                variant="ghost"
-                onClick={() => setLocation("/my-performance")}
-                className="min-h-11 min-w-11 md:h-8 md:min-h-8 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground"
-                title="أدائي"
-                aria-label="أدائي"
-                data-testid="my-performance-link"
-              >
-                <History className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            )}
-            <span className="mx-1 hidden h-5 w-px bg-primary-foreground/25 sm:inline-block" aria-hidden="true" />
-            <button data-readonly-safe
-              onClick={() => { refetch(); utils.employeePortal.myPermissions.invalidate(); }}
-              className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground transition-colors hover:bg-primary-foreground/20"
-              title="تحديث القائمة"
-              aria-label="تحديث القائمة"
-            >
-              <RefreshCw className="h-4 w-4" />
-              <span className="hidden text-xs font-medium sm:inline">تحديث</span>
-            </button>
-            <button data-readonly-safe
-              onClick={handleLogout}
-              className="flex min-h-11 min-w-11 md:h-8 md:min-h-8 md:min-w-0 items-center gap-1.5 rounded-[var(--radius-brand-md)] bg-primary-foreground/10 px-2 text-primary-foreground transition-colors hover:bg-primary-foreground/25"
-              title="تسجيل الخروج"
-              aria-label="تسجيل الخروج"
-            >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden text-xs font-medium sm:inline">خروج</span>
-            </button>
-          </div>
+          {/* الأفعال عبر المكوّن المشترك: صف واحد على الهاتف (المثبّت + الرسائل + «المزيد» + الخروج)، والكل ظاهر من 640px.
+              نفس الأفعال والصلاحيات والمنطق — لا شيء حُذف. */}
+          <PortalHeaderActions
+            messages={<MessagesEntryButton via="portal" className="bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/20 md:h-8 md:min-h-8 md:w-8 md:min-w-8" />}
+            onLogout={handleLogout}
+            messagesBefore={canOpenMyAttendance ? "attendance" : canViewMyPerformance ? "performance" : "refresh"}
+            actions={[
+              ...(canViewShipping ? [
+                { key: "shipments", label: "شحنات اليوم", icon: Truck, onSelect: () => setLocation("/today-shipments") },
+                { key: "schedule", label: "جدول توزيع المحافظات", icon: CalendarRange, onSelect: () => setLocation("/shipping-schedule") },
+              ] : []),
+              { key: "date", label: "فلتر التاريخ", icon: CalendarDays, pinned: true, pressed: Boolean(dateFrom || dateTo), onSelect: () => setShowDateFilter(!showDateFilter) },
+              { key: "scan", label: "مسح QR", icon: QrCode, pinned: true, pressed: showScanPanel, onSelect: () => { setShowScanPanel(!showScanPanel); if (showScanPanel) stopScanCamera(); setScanResult(null); } },
+              { key: "tasks", label: "المهام", icon: MessageSquare, pressed: showTasksPanel, onSelect: () => setShowTasksPanel(!showTasksPanel) },
+              { key: "stock", label: "المخزون", icon: Box, pressed: showStockPanel, onSelect: () => setShowStockPanel(!showStockPanel) },
+              ...(canOpenMyAttendance ? [{ key: "attendance", label: "حضوري", icon: Clock, onSelect: () => setLocation("/my-attendance"), testId: "my-attendance-link" }] : []),
+              ...(canViewMyPerformance ? [{ key: "performance", label: "أدائي", icon: History, onSelect: () => setLocation("/my-performance"), testId: "my-performance-link" }] : []),
+              { key: "refresh", label: "تحديث القائمة", icon: RefreshCw, textFromSm: "تحديث", separatorBefore: true, onSelect: () => { refetch(); utils.employeePortal.myPermissions.invalidate(); } },
+            ]}
+          />
         </div>
       </header>
 

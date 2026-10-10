@@ -13,9 +13,14 @@ const src = strip(readFileSync(path.join(root, "pages/EmployeeDashboard.tsx"), "
 const hooks = (s: string) => [...s.matchAll(/trpc\.[a-zA-Z0-9.]+\.use(Query|Mutation)/g)].map(m => m[0]);
 
 describe("EmployeeDashboard — Phase A view layer", () => {
-  it("no raw <button> outside the header (the 8 header buttons stay raw, pinned by qa.phase8)", () => {
+  it("no raw <button> outside the header; header actions come from the shared PortalHeaderActions with every action kept", () => {
     const header = src.slice(src.indexOf("<header"), src.indexOf("</header>"));
-    expect((header.match(/<button\b/g) ?? []).length).toBe(8);
+    // الأفعال انتقلت للمكوّن المشترك (صف واحد على الهاتف + «المزيد») — كل فعل باسمه كما كان، والخروج والرسائل
+    expect(header).toContain("<PortalHeaderActions");
+    for (const label of ["شحنات اليوم", "جدول توزيع المحافظات", "فلتر التاريخ", "مسح QR", "المهام", "المخزون", "حضوري", "أدائي", "تحديث القائمة"])
+      expect(header).toContain(`label: "${label}"`);
+    expect(header).toContain("onLogout={handleLogout}");
+    expect(header).toContain('<MessagesEntryButton via="portal"');
     const outside = src.slice(0, src.indexOf("<header")) + src.slice(src.indexOf("</header>"));
     expect(outside).not.toMatch(/<button\b/);
   });
