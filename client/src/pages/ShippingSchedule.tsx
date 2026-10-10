@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
 import { useLocation } from "wouter";
 import { ArrowRight, Printer, Truck } from "lucide-react";
 import { cairoArabicWeekday } from "@/lib/cairoDate";
@@ -35,7 +36,7 @@ export default function ShippingSchedule() {
     <Button className="min-h-11" onClick={() => { permissionUtils.employeePortal.myPermissions.invalidate(); setLocation("/employee-dashboard"); }}>الرجوع لشاشتي</Button>
   </main>;
   return <div className="min-h-screen bg-background" dir="rtl">
-    <header className="sticky top-0 z-40 border-b border-border bg-card/95 shadow-[var(--shadow-card)] backdrop-blur print:hidden"><div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-2"><div className="flex items-center gap-2"><Button data-readonly-safe variant="ghost" className="min-h-11 min-w-11 px-2" onClick={() => setLocation("/employee-dashboard")} aria-label="الرجوع لشاشتي"><ArrowRight className="h-5 w-5" aria-hidden="true" /></Button><BrandMark className="h-8 w-8" /><div><strong>جدول توزيع الشحن</strong><p className="text-xs text-muted-foreground">إعدادات مستقلة لكل نشاط</p></div></div><Button data-readonly-safe variant="ghost" className="min-h-11 min-w-11 px-2" onClick={() => window.print()} aria-label="طباعة"><Printer className="h-5 w-5" aria-hidden="true" /></Button></div></header>
+    <header className="sticky top-0 z-40 border-b border-border bg-card/95 shadow-[var(--shadow-card)] backdrop-blur print:hidden"><div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-2"><div className="flex items-center gap-2"><Button data-readonly-safe variant="ghost" className="min-h-11 min-w-11 px-2" onClick={() => setLocation("/employee-dashboard")} aria-label="الرجوع لشاشتي"><ArrowRight className="h-5 w-5" aria-hidden="true" /></Button><BrandMark className="h-8 w-8" /><div><strong>جدول توزيع الشحن</strong><p className="text-xs text-muted-foreground">إعدادات مستقلة لكل نشاط</p></div></div><div className="flex items-center gap-1"><MessagesEntryButton via="portal" /><Button data-readonly-safe variant="ghost" className="min-h-11 min-w-11 px-2" onClick={() => window.print()} aria-label="طباعة"><Printer className="h-5 w-5" aria-hidden="true" /></Button></div></div></header>
     <main className="mx-auto max-w-5xl space-y-4 p-4"><div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-5 shadow-[var(--shadow-card)]"><h1 className="text-2xl font-bold">مسارات شركات الشحن</h1><p className="mt-1 text-sm text-muted-foreground">اليوم: {today}. البيانات دي جاية من إعدادات الحسابات ومفيش جدول ثابت داخل الكود.</p></div>
       <ShippingRoutesBoard routes={parsed} today={today} />
     </main>

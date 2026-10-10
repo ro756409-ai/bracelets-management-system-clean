@@ -16,7 +16,7 @@ vi.mock("@/lib/trpc", () => ({
       assign: { useMutation: () => m() }, endAssignment: { useMutation: () => m() }, adminCorrect: { useMutation: () => m() },
     },
     employees: { activeList: { useQuery: () => q([]) } },
-    employeePortal: {
+    employeePortal: { /* مدخل الرسائل في القشرة: العلم معطل (الافتراضي) */ messages: { status: { useQuery: () => ({ data: { enabled: false } }) }, conversations: { useQuery: () => ({ data: undefined, refetch: async () => ({}) }) } }, 
       attendanceMine: { useQuery: () => q(st.enabled ? { enabled: true, days: st.days, requests: [], open: st.open } : { enabled: false }) },
       attendanceMyDayEvents: { useQuery: () => q(undefined) },
       attendanceClock: { useMutation: () => m({ isPending: st.clockPending, mutate: (v: any) => st.clockCalls.push(v) }) },

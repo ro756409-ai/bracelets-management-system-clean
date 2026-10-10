@@ -4,7 +4,7 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 
 const state = vi.hoisted(() => ({ user: null as any, loading: false, me: null as any, fetches: [] as string[], location: "/ledger" }));
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ user: state.user, loading: state.loading }) }));
-vi.mock("@/lib/trpc", () => ({ trpc: { employeePortal: { me: { useQuery: () => ({ data: state.me, isLoading: false }) } } } }));
+vi.mock("@/lib/trpc", () => ({ trpc: { employeePortal: { /* مدخل الرسائل في القشرة: العلم معطل (الافتراضي) */ messages: { status: { useQuery: () => ({ data: { enabled: false } }) }, conversations: { useQuery: () => ({ data: undefined, refetch: async () => ({}) }) } },  me: { useQuery: () => ({ data: state.me, isLoading: false }) } } } }));
 vi.mock("@/components/DashboardLayout", () => ({ default: ({ children }: any) => <div data-testid="dashboard-layout">{children}</div> }));
 vi.mock("wouter", () => ({
   Link: ({ href, children, ...rest }: any) => <a href={href} {...rest}>{children}</a>,

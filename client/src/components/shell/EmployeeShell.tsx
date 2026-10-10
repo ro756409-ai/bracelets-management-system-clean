@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
 import { useLocation } from "wouter";
 import { ArrowRight, LogOut, type LucideIcon } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -35,9 +36,13 @@ export function EmployeeShell({ title, icon: Icon, backTo = "/employee-dashboard
               {me.data?.name && <p className="truncate text-xs text-muted-foreground" data-testid="employee-shell-user">{me.data.name}</p>}
             </div>
           </div>
+          <div className="flex shrink-0 items-center gap-1">
+          {/* مدخل الرسائل المشترك لكل صفحات القشرة (هوية البوابة؛ لا يُرسم والعلم معطل أو بلا messages.use) */}
+          <MessagesEntryButton via="portal" className="shrink-0" />
           <Button data-readonly-safe variant="ghost" size="sm" onClick={logout} className="min-h-11 shrink-0" data-testid="employee-shell-logout">
             <LogOut className="h-4 w-4 ml-1" aria-hidden="true" /> خروج
           </Button>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-3 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">{children}</main>

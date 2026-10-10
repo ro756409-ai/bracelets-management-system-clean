@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, createContext, useContext } from "react";
+import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { operationIdFor } from "@/lib/operationId";
@@ -186,6 +187,7 @@ export default function ManagerDashboard() {
               <p className="text-sm font-medium text-sidebar-foreground truncate">{managerName}</p>
               <p className="text-xs text-sidebar-foreground/60">مدير</p>
             </div>
+            <MessagesEntryButton via="portal" className="text-sidebar-foreground/70 hover:bg-sidebar-accent/50 md:h-9 md:min-h-9 md:w-9 md:min-w-9" />
             <Button data-readonly-safe
               type="button"
               variant="ghost"
@@ -275,7 +277,10 @@ export default function ManagerDashboard() {
               </Button>
               <p className="truncate text-primary-foreground font-bold text-sm">{tabs.find(t => t.key === currentTab)?.label}</p>
             </div>
-            <p className="truncate px-2 text-primary-foreground/80 text-xs">أهلاً، {managerName}</p>
+            <div className="flex min-w-0 shrink items-center gap-1">
+              <p className="truncate px-1 text-primary-foreground/80 text-xs">أهلاً، {managerName}</p>
+              <MessagesEntryButton via="portal" className="shrink-0 text-primary-foreground hover:bg-primary-foreground/10" />
+            </div>
           </div>
         </header>
 

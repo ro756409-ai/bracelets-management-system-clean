@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -188,6 +189,7 @@ export default function WarehouseDashboard() {
           >
             <RefreshCw className="h-4 w-4" />
           </Button>
+          <MessagesEntryButton via="portal" className="text-primary-foreground hover:bg-primary-foreground/10 md:h-9 md:min-h-9 md:w-9 md:min-w-9" />
           <Button data-readonly-safe
             variant="ghost"
             size="sm"
