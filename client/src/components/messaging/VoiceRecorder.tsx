@@ -35,8 +35,10 @@ export function VoiceRecorder(props: { via: MessagingVia; conversationId: number
   const scope = () => `msg-voice:${props.conversationId}:${session.current}`;
 
   const begin = () => { session.current++; setUploadError(null); void rec.start(); };
+  const inFlight = useRef(false); // حارس متزامن ضد الضغط المزدوج قبل إعادة الرسم
   const send = async () => {
-    if (!rec.recording || uploading) return;
+    if (!rec.recording || uploading || inFlight.current) return;
+    inFlight.current = true;
     setUploading(true);
     setUploadError(null);
     const operationId = operationIdFor(scope());
@@ -48,6 +50,7 @@ export function VoiceRecorder(props: { via: MessagingVia; conversationId: number
     } catch (e) {
       setUploadError(messagingErrorText(e));
     } finally {
+      inFlight.current = false;
       setUploading(false);
     }
   };
@@ -76,7 +79,12 @@ export function VoiceRecorder(props: { via: MessagingVia; conversationId: number
               <Button type="button" variant="ghost" size="icon" className="min-h-11 min-w-11" onClick={() => rec.setError(null)} aria-label="إغلاق" data-readonly-safe><X className="h-4 w-4" aria-hidden="true" /></Button>
             </div>
           )}
-          {rec.phase === "requesting" && <p className="text-sm text-muted-foreground" role="status">جارٍ طلب إذن الميكروفون…</p>}
+          {rec.phase === "requesting" && (
+            <div className="flex items-center gap-2">
+              <p className="flex-1 text-sm text-muted-foreground" role="status">جارٍ طلب إذن الميكروفون… وافق من نافذة المتصفح.</p>
+              <Button type="button" variant="ghost" className="min-h-11" onClick={rec.cancel} data-testid="voice-cancel-request">إلغاء</Button>
+            </div>
+          )}
           {rec.phase === "recording" && (
             <div className="flex items-center gap-2" data-testid="voice-recording">
               <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-destructive" aria-hidden="true" />

@@ -18,7 +18,6 @@ export default function MyMessages() {
         via="portal"
         conversationId={id}
         onOpen={next => setLocation(next == null ? "/my-messages" : `/my-messages/${next}`)}
-        topOffset="3.75rem"
         desktopHeight="calc(100dvh - 6.5rem)"
         voice={messagingVoiceHooks}
       />

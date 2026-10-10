@@ -15,7 +15,6 @@ export default function Messages() {
       via="web"
       conversationId={id}
       onOpen={next => setLocation(next == null ? "/messages" : `/messages/${next}`)}
-      topOffset="3.5rem"
       desktopHeight="calc(100dvh - 7rem)"
       voice={messagingVoiceHooks}
     />

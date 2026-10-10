@@ -81,8 +81,9 @@ export const MessageBubble = memo(function MessageBubble(props: {
           )}
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
             <time dateTime={new Date(m.createdAt).toISOString()} title={formatFullTime(m.createdAt)}>{formatTime(m.createdAt)}</time>
+            {/* «عُدّلت»: منطقة لمس 44px بهوامش سالبة — الشكل يبقى صغيرًا داخل سطر الوقت */}
             {m.editedAt != null && !deleted && (
-              <button type="button" className="min-h-6 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded" onClick={() => actions.onHistory(m)} data-readonly-safe>
+              <button type="button" className="-my-3 inline-flex min-h-11 min-w-11 items-center justify-center rounded px-1 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => actions.onHistory(m)} data-readonly-safe>
                 عُدّلت
               </button>
             )}
@@ -98,10 +99,12 @@ export const MessageBubble = memo(function MessageBubble(props: {
                   aria-pressed={r.mine}
                   aria-label={`${REACTION_LABEL[r.reaction as Reaction]}: ${r.count}`}
                   onClick={() => actions.onReact(m, r.reaction as Reaction)}
-                  className={cn("inline-flex min-h-8 items-center gap-1 rounded-full border px-2 text-xs tabular-nums disabled:opacity-70", r.mine ? "border-primary bg-primary/15" : "border-border bg-background")}
+                  className="group/chip -my-1.5 inline-flex min-h-11 min-w-11 items-center justify-center disabled:opacity-70 focus-visible:outline-none"
                   data-readonly-write
                 >
-                  <span aria-hidden="true">{REACTION_EMOJI[r.reaction as Reaction]}</span>{r.count}
+                  <span className={cn("inline-flex h-8 items-center gap-1 rounded-full border px-2 text-xs tabular-nums group-focus-visible/chip:ring-2 group-focus-visible/chip:ring-ring", r.mine ? "border-primary bg-primary/15" : "border-border bg-background")}>
+                    <span aria-hidden="true">{REACTION_EMOJI[r.reaction as Reaction]}</span>{r.count}
+                  </span>
                 </button>
               ))}
             </div>

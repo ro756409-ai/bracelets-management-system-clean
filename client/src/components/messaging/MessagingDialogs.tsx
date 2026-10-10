@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check, Search } from "lucide-react";
 import { MESSAGING_LIMITS } from "@shared/messagingSpec";
 import { roleLabel } from "@shared/permissionLabels";
@@ -59,9 +59,11 @@ export function NewDirectDialog({ via, open, onOpenChange, onCreated }: { via: M
   const dir = api.directory.useQuery(undefined, { enabled: open, retry: false, staleTime: 60_000 });
   const start = api.startDirect.useMutation();
   const [picked, setPicked] = useState<number | null>(null);
+  const inFlight = useRef(false);
   const submit = () => {
-    if (picked == null || start.isPending) return;
-    start.mutate({ employeeId: picked }, { onSuccess: r => { onOpenChange(false); setPicked(null); onCreated(r.conversationId); } });
+    if (picked == null || start.isPending || inFlight.current) return;
+    inFlight.current = true;
+    start.mutate({ employeeId: picked }, { onSuccess: r => { onOpenChange(false); setPicked(null); onCreated(r.conversationId); }, onSettled: () => { inFlight.current = false; } });
   };
   return (
     <Dialog open={open} onOpenChange={o => { if (!start.isPending) onOpenChange(o); }}>
@@ -98,11 +100,13 @@ export function NewGroupDialog({ via, open, onOpenChange, onCreated }: { via: Me
     if (!o) { setTitle(""); setMembers([]); completeOperation(operationIdFor(scope)); setSession(s => s + 1); create.reset(); }
   };
   const valid = title.trim().length > 0 && members.length > 0 && members.length < MESSAGING_LIMITS.groupMaxMembers;
+  const inFlight = useRef(false); // حارس متزامن — والسيرفر يعيدها Replay بنفس operationId على أي حال
   const submit = () => {
-    if (!valid || create.isPending) return;
+    if (!valid || create.isPending || inFlight.current) return;
+    inFlight.current = true;
     create.mutate(
       { title: title.trim(), memberIds: members, operationId: operationIdFor(scope) },
-      { onSuccess: r => { onCreated(r.conversationId); close(false); } },
+      { onSuccess: r => { inFlight.current = false; onCreated(r.conversationId); close(false); }, onSettled: () => { inFlight.current = false; } },
     );
   };
   // تغيير الاسم/الأعضاء بعد محاولة فاشلة = عملية جديدة

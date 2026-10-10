@@ -8,7 +8,7 @@ import { ConversationView, type VoiceHooks } from "./ConversationView";
 import { NewDirectDialog, NewGroupDialog } from "./MessagingDialogs";
 import { MessagingError, MessagingUnavailable } from "./MessagingStates";
 import { OFFLINE_TEXT, errorCode, messagingErrorText, useMessagingApi, type MessagingStatus, type MessagingVia } from "./messagingApi";
-import { useOnline } from "./format";
+import { conversationTitle, useOnline } from "./format";
 import { usePoller } from "./pollScheduler";
 
 export const CONVERSATION_LIST_POLL_MS = 20_000;
@@ -19,8 +19,6 @@ export type MessagingCenterProps = {
   /** المحادثة المفتوحة من المسار (للتنقل فقط — السيرفر يقرر الوصول). */
   conversationId: number | null;
   onOpen: (id: number | null) => void;
-  /** ارتفاع الشريط العلوي للشاشة المضيفة (شاشة المحادثة على الموبايل تبدأ تحته). */
-  topOffset: string;
   /** ارتفاع المركز على الديسكتوب (القائمة + المحادثة جنبًا إلى جنب). */
   desktopHeight: string;
   voice?: (perms: MessagingStatus["permissions"], via: MessagingVia) => VoiceHooks | undefined;
@@ -69,6 +67,13 @@ function CenterBody(props: MessagingCenterProps & { permissions: MessagingStatus
   const voice = props.voice?.(permissions, via);
   const data = list.data && list.data.enabled ? list.data : null;
   const noConversations = data && data.conversations.length === 0 && data.monitor.length === 0;
+  const titleHint = (() => {
+    if (!data || conversationId == null) return null;
+    const row = data.conversations.find(c => c.id === conversationId);
+    if (row) return conversationTitle(row);
+    const mon = data.monitor.find(m => m.id === conversationId);
+    return mon ? (mon.kind === "group" ? mon.title ?? "مجموعة" : mon.participants.join(" ↔ ")) : null;
+  })();
 
   return (
     <div className="flex min-h-0 flex-col" data-testid="messaging-center" dir="rtl">
@@ -105,11 +110,9 @@ function CenterBody(props: MessagingCenterProps & { permissions: MessagingStatus
         </div>
 
         {conversationId != null ? (
-          // الموبايل: شاشة المحادثة كاملة تحت الشريط العلوي وفوق القائمة السفلية (--bottom-nav-h)؛ الديسكتوب: العمود الثاني.
-          <div
-            className="fixed inset-x-0 bottom-[var(--bottom-nav-h,0px)] top-[var(--msg-top)] z-30 flex min-h-0 flex-col bg-background md:static md:z-auto"
-            style={{ "--msg-top": props.topOffset } as CSSProperties}
-          >
+          // الموبايل: شاشة المحادثة كاملة من أعلى الشاشة (برأسها وزر الرجوع) وحتى أعلى القائمة السفلية (--bottom-nav-h) —
+          // بلا تخمين لارتفاع شريط الصفحة المضيفة (يتغير مع حجم الخط). الديسكتوب: العمود الثاني.
+          <div className="fixed inset-x-0 bottom-[var(--bottom-nav-h,0px)] top-0 z-[45] flex min-h-0 flex-col bg-background pt-[env(safe-area-inset-top)] md:static md:z-auto md:pt-0">
             <ConversationView
               key={conversationId}
               via={via}
@@ -117,6 +120,7 @@ function CenterBody(props: MessagingCenterProps & { permissions: MessagingStatus
               permissions={permissions}
               onBack={() => props.onOpen(null)}
               onListChanged={() => listPoller.trigger()}
+              titleHint={titleHint}
               voice={voice}
             />
           </div>

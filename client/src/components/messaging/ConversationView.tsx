@@ -28,6 +28,8 @@ export function ConversationView(props: {
   permissions: MessagingStatus["permissions"];
   onBack: () => void;
   onListChanged: () => void;
+  /** عنوان من صف القائمة (أسماء أطراف الخاص/الاطلاع) — المسار المفتوح لا يعيد الأسماء. */
+  titleHint?: string | null;
   voice?: VoiceHooks;
 }) {
   const { via, conversationId, permissions } = props;
@@ -97,6 +99,19 @@ export function ConversationView(props: {
     prev.current = { height: el.scrollHeight, firstId, lastId, conv: conversationId };
   }, [thread.version, thread.messages, thread.status, conversationId]);
 
+  // تغيّر ارتفاع المحتوى بعد الرسم (تحميل الخط، تكبير النص، صورة/موجة): من كان في الأسفل يبقى في الأسفل.
+  const contentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scrollRef.current, content = contentRef.current;
+    if (!el || !content || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      if (nearBottom.current) el.scrollTop = el.scrollHeight;
+      prev.current.height = el.scrollHeight;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [thread.status]);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -122,19 +137,24 @@ export function ConversationView(props: {
     if (lastId <= base || markRead.isPending) return;
     lastMarked.current = { conv: conversationId, id: lastId };
     markRead.mutate({ conversationId, messageId: lastId }, { onSuccess: () => props.onListChanged() });
-  }, [lastId, interactive, thread.status, conversationId, showJump]); // eslint-disable-line react-hooks/exhaustive-deps
+    // يُعاد الفحص بعد كل تحديث (version) — فعودة ظهور الصفحة أو الوصول للأسفل تعلّم القراءة حتى بلا رسائل جديدة.
+  }, [lastId, interactive, thread.status, conversationId, showJump, thread.version]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // فاصل «رسائل جديدة»: لقطة عند أول فتح
   const unreadFrom = useRef<{ conv: number; id: number | null }>({ conv: 0, id: null });
   if (thread.status === "ready" && unreadFrom.current.conv !== conversationId && meta) {
     const lr = meta.lastReadMessageId ?? 0;
-    unreadFrom.current = { conv: conversationId, id: thread.messages.find(m => m.id > lr && !m.mine && m.kind !== "system")?.id ?? null };
+    // المطّلع ليس عضوًا (لا مؤشر قراءة له) — لا فاصل «رسائل جديدة»
+    unreadFrom.current = { conv: conversationId, id: meta.readOnly ? null : thread.messages.find(m => m.id > lr && !m.mine && m.kind !== "system")?.id ?? null };
   }
 
   const afterChange = useCallback(() => { thread.refreshNow(); props.onListChanged(); }, [thread.refreshNow, props.onListChanged]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // حارس متزامن: isPending لا يتغير قبل إعادة الرسم، فضغطتان في نفس اللحظة كانتا تمرّان معًا.
+  const writing = useRef(false);
   const onSend = async (p: SendPayload) => {
-    if (send.isPending) return false;
+    if (writing.current || send.isPending) return false;
+    writing.current = true;
     setSendError(null);
     try {
       await send.mutateAsync({ conversationId, ...p });
@@ -144,10 +164,13 @@ export function ConversationView(props: {
     } catch (e) {
       setSendError(messagingErrorText(e));
       return false;
+    } finally {
+      writing.current = false;
     }
   };
   const onEdit = async (m: ChatMessage, body: string, title?: string) => {
-    if (edit.isPending) return false;
+    if (writing.current || edit.isPending) return false;
+    writing.current = true;
     setSendError(null);
     try {
       await edit.mutateAsync({ messageId: m.id, body, ...(title ? { title } : {}) });
@@ -156,23 +179,32 @@ export function ConversationView(props: {
     } catch (e) {
       setSendError(messagingErrorText(e));
       return false;
+    } finally {
+      writing.current = false;
     }
   };
 
   const busy = react.isPending || ack.isPending || remove.isPending;
+  const inFlight = useRef(new Set<string>());
+  const once = useCallback((key: string, run: (done: () => void) => void) => {
+    if (inFlight.current.has(key)) return;
+    inFlight.current.add(key);
+    run(() => inFlight.current.delete(key));
+  }, []);
   const actions: BubbleActions = useMemo(() => ({
     onReply: m => setMode({ type: "reply", to: m }),
     onEdit: m => setMode({ type: "edit", message: m }),
     onDelete: m => setToDelete(m),
     onHistory: m => setHistoryId(m.id),
-    onReact: (m, r: Reaction) => { if (!react.isPending) react.mutate({ messageId: m.id, reaction: r }, { onSuccess: afterChange, onError: e => setActionError(messagingErrorText(e)) }); },
-    onAck: m => { if (!ack.isPending) ack.mutate({ messageId: m.id }, { onSuccess: afterChange, onError: e => setActionError(messagingErrorText(e)) }); },
+    // التفاعل toggle: ضغطتان متتاليتان قبل إعادة الرسم كانتا تلغيان بعضهما — حارس متزامن لكل فعل
+    onReact: (m, r: Reaction) => once(`react:${m.id}`, done => react.mutate({ messageId: m.id, reaction: r }, { onSuccess: afterChange, onError: e => setActionError(messagingErrorText(e)), onSettled: done })),
+    onAck: m => once(`ack:${m.id}`, done => ack.mutate({ messageId: m.id }, { onSuccess: afterChange, onError: e => setActionError(messagingErrorText(e)), onSettled: done })),
     onReads: m => setReadsId(m.id),
-  }), [react, ack, afterChange]);
+  }), [react, ack, afterChange, once]);
 
   const byId = useMemo(() => new Map(thread.messages.map(m => [m.id, m])), [thread.messages]);
 
-  const title = conv ? conversationTitle(conv) : "";
+  const title = props.titleHint || (conv ? conversationTitle(conv) : "");
   return (
     <section className="flex h-full min-h-0 flex-col bg-background" aria-label={title || "المحادثة"} data-testid="conversation-view">
       <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border bg-card px-2" data-readonly-safe>
@@ -204,13 +236,13 @@ export function ConversationView(props: {
       )}
 
       <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-2 py-2 md:px-4" data-testid="message-scroll" aria-live="polite" aria-relevant="additions">
+        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-2 py-2 [overflow-anchor:none] md:px-4" data-testid="message-scroll" aria-live="polite" aria-relevant="additions">
           {thread.status === "loading" && <LoadingSkeleton variant="cards" rows={4} />}
           {thread.status === "denied" && <MessagingError message="لست عضوًا في هذه المحادثة أو ليست لديك صلاحية عرضها." />}
           {thread.status === "notfound" && <MessagingError message="المحادثة غير موجودة." />}
           {thread.status === "error" && <MessagingError message={messagingErrorText(thread.error)} onRetry={thread.retry} />}
           {thread.status === "ready" && (
-            <>
+            <div ref={contentRef}>
               {thread.hasOlder && (
                 <div className="flex justify-center py-2" data-readonly-safe>
                   <Button type="button" variant="outline" size="sm" className="min-h-11" onClick={() => void thread.loadOlder()} disabled={thread.loadingOlder} data-testid="load-older">
@@ -237,7 +269,7 @@ export function ConversationView(props: {
                   />
                 </div>
               ))}
-            </>
+            </div>
           )}
         </div>
         {showJump && (
@@ -275,9 +307,11 @@ export function ConversationView(props: {
         tone="destructive"
         pending={remove.isPending}
         onConfirm={async () => {
-          if (!toDelete || remove.isPending) return;
+          if (!toDelete || remove.isPending || inFlight.current.has("remove")) return;
+          inFlight.current.add("remove");
           try { await remove.mutateAsync({ messageId: toDelete.id }); setToDelete(null); afterChange(); utils.history.invalidate(); }
           catch (e) { setActionError(messagingErrorText(e)); setToDelete(null); }
+          finally { inFlight.current.delete("remove"); }
         }}
       />
     </section>

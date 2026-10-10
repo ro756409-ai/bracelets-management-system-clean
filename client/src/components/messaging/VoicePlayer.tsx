@@ -22,7 +22,8 @@ export const VoicePlayer = memo(function VoicePlayer({ via, message }: { via: Me
   const current = st.currentId === id;
   const playing = current && st.playing;
   const loading = current && st.loading && !st.playing;
-  const total = att.durationMs ?? 0;
+  // المدة من السيرفر (مقاسة من الملف)؛ ما دون الثانية يُعرض 0:01 لا 0:00
+  const total = att.durationMs ? Math.max(att.durationMs, 1000) : 0;
   const pos = current ? Math.min(st.positionMs, total) : 0;
   const bars = Array.isArray(att.waveform) && att.waveform.length ? (att.waveform as number[]).slice(0, 48) : null;
   const progress = total ? pos / total : 0;
@@ -37,7 +38,7 @@ export const VoicePlayer = memo(function VoicePlayer({ via, message }: { via: Me
         data-readonly-safe
         data-testid={`voice-play-${id}`}
       >
-        {loading ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : playing ? <Pause className="h-5 w-5" aria-hidden="true" /> : <Play className="h-5 w-5 -scale-x-100" aria-hidden="true" />}
+        {loading ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : playing ? <Pause className="h-5 w-5" aria-hidden="true" /> : <Play className="h-5 w-5" aria-hidden="true" />}
       </button>
       <div className="min-w-0 flex-1">
         {bars ? (

@@ -73,15 +73,18 @@ export function useVoiceRecorder() {
     setError(null);
     if (!recorderSupported()) { setError("unsupported"); return; }
     setPhase("requesting");
+    r.current.discard = false;
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     } catch (e: any) {
+      if (r.current.discard) return; // أُلغي أثناء انتظار الإذن
       setPhase("idle");
       setError(e?.name === "NotAllowedError" || e?.name === "SecurityError" ? "denied" : e?.name === "NotFoundError" || e?.name === "OverconstrainedError" ? "no_device" : "failed");
       return;
     }
     const x = r.current;
+    if (x.discard) { stream.getTracks().forEach(t => t.stop()); return; } // أُلغي أثناء انتظار الإذن: أغلق الميكروفون فورًا
     x.stream = stream; x.chunks = []; x.levels = []; x.discard = false;
     const mimeType = pickMimeType();
     let rec: MediaRecorder;
@@ -123,6 +126,7 @@ export function useVoiceRecorder() {
   /** إلغاء أثناء التسجيل (بلا معاينة). */
   const cancel = useCallback(() => {
     r.current.discard = true;
+    // أثناء انتظار الإذن أو التسجيل — الإذن المتأخر يُغلق فورًا في start()
     if (r.current.rec && r.current.rec.state !== "inactive") r.current.rec.stop();
     else { releaseDevices(); setPhase("idle"); setElapsed(0); }
   }, [releaseDevices]);
