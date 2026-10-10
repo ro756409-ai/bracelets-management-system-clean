@@ -110,6 +110,15 @@ export const ALL_PERMISSIONS = [
   "attendance.approve_corrections",
   "attendance.manage_leaves",
   "attendance.export",
+  // ==================== مركز الرسائل (0043) ====================
+  // use: المحادثات والخاص والقراءة والتفاعل. voice: تسجيل الصوت ورفعه. announce: النشر في الإعلانات.
+  // manage_groups: إنشاء المجموعات. view_private: اطلاع المالك على المحادثات الخاصة (قراءة فقط ومسجَّل) —
+  // **مقفولة**: لا يأخذها أي دور افتراضيًا (ولا المالك)، وتُفتح للمالك فقط بمنح صريح لشركته.
+  "messages.use",
+  "messages.voice",
+  "messages.announce",
+  "messages.manage_groups",
+  "messages.view_private",
 ] as const;
 
 /** صلاحيات دفتر V3 التي يملكها المالك وحده افتراضيًا (لا يأخذها admin إلا بمنح صريح لكل tenant). */
@@ -119,6 +128,15 @@ const LEDGER_PERMISSIONS: readonly Permission[] = [
 ];
 
 export type Permission = (typeof ALL_PERMISSIONS)[number];
+
+/**
+ * صلاحيات **مقفولة للمالك**: خارج كل الأدوار افتراضيًا (حتى super_admin)، ولا تُحتسب إلا لدور المالك
+ * وبمنح صريح في tenant_role_permissions لشركته. منحها لأي دور آخر مرفوض عند الحفظ ومتجاهَل عند التقييم.
+ */
+export const LOCKED_OWNER_PERMISSIONS: readonly Permission[] = ["messages.view_private"];
+export const isLockedOwnerPermission = (p: string) => (LOCKED_OWNER_PERMISSIONS as readonly string[]).includes(p);
+/** الرسائل لكل موظف: المحادثة والصوت. الإعلانات والمجموعات للإدارة افتراضيًا (وتُمنح لغيرها لكل شركة). */
+const MESSAGING_BASIC: readonly Permission[] = ["messages.use", "messages.voice"];
 
 /** صلاحيات لا يأخذها المدير افتراضيًا — تُمنح له لكل شركة عبر tenant_role_permissions (قرار المالك). */
 export const MANAGER_GRANT_ONLY_PERMISSIONS: readonly Permission[] = [
@@ -241,11 +259,11 @@ export function isOwnerRole(role: string | null | undefined): boolean {
 }
 
 const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
-  super_admin: ALL_PERMISSIONS,
+  super_admin: ALL_PERMISSIONS.filter(p => !isLockedOwnerPermission(p)),
   // admin: كل شيء عدا ما هو للمالك وحده في دفتر V3 (إعادة فتح الفترة والتفعيل).
-  admin: ALL_PERMISSIONS.filter(p => !LEDGER_OWNER_ONLY_PERMISSIONS.includes(p)),
+  admin: ALL_PERMISSIONS.filter(p => !LEDGER_OWNER_ONLY_PERMISSIONS.includes(p) && !isLockedOwnerPermission(p)),
   // المدير تشغيلي: كل الصلاحيات القديمة كما كانت، وبلا أي صلاحية على دفتر V3 (مالي).
-  manager: ALL_PERMISSIONS.filter(p => !LEDGER_PERMISSIONS.includes(p) && !MANAGER_GRANT_ONLY_PERMISSIONS.includes(p)),
+  manager: ALL_PERMISSIONS.filter(p => !LEDGER_PERMISSIONS.includes(p) && !MANAGER_GRANT_ONLY_PERMISSIONS.includes(p) && !isLockedOwnerPermission(p)),
   // المحاسب هو الدور الوحيد غير الإداري اللي بيدخل حركات على الخزنة — الدور كان موجود
   // في القائمة من غير أي صلاحية محاسبية، فكان بيشوف الأوردرات وبس.
   accountant: [
@@ -264,9 +282,9 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     // الاتنين دول (`accounting.approve` و`reports.view_profit`) بيمنحهم المالك يدويًا لو
     // حب — عن طريق tenant_role_permissions من غير أي Deploy.
     "accounting.create", "treasury.transfer", "settlements.create",
-    ...SELF_PERFORMANCE,
+    ...SELF_PERFORMANCE, ...MESSAGING_BASIC,
   ],
-  viewer: ["dashboard.view", "orders.view"],
+  viewer: ["dashboard.view", "orders.view", ...MESSAGING_BASIC],
   // مشرف تشغيلي: بيشوف ويشتغل على كل الأوردرات ويصدّر ويستورد ويتابع الموظفين والشحن —
   // من غير أي صلاحية مالية (مفيش accounting/payroll/treasury/... خالص).
   moderator: [
@@ -274,15 +292,15 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     "orders.view", "orders.create", "orders.update", "orders.edit_items",
     "orders.confirm", "orders.cancel", "orders.export", "orders.import",
     "employees.view", "audit.view",
-    ...SELF_PERFORMANCE,
+    ...SELF_PERFORMANCE, ...MESSAGING_BASIC,
   ],
-  order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items", ...SELF_PERFORMANCE],
-  agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items", ...SELF_PERFORMANCE],
-  data_entry: ["orders.view", "orders.create", ...SELF_PERFORMANCE],
-  facebook_entry: ["orders.view", "orders.create", ...SELF_PERFORMANCE],
-  shipping: ["orders.view", "orders.export", "shipping_ops.view", ...SELF_PERFORMANCE],
-  scanner: ["orders.view", ...SELF_PERFORMANCE],
-  warehouse: ["dashboard.view", "orders.view", "inventory.view", "inventory.adjust", ...SELF_PERFORMANCE],
+  order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],
+  agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],
+  data_entry: ["orders.view", "orders.create", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],
+  facebook_entry: ["orders.view", "orders.create", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],
+  shipping: ["orders.view", "orders.export", "shipping_ops.view", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],
+  scanner: ["orders.view", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],
+  warehouse: ["dashboard.view", "orders.view", "inventory.view", "inventory.adjust", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],
 };
 
 export function permissionsForRole(role: string | null | undefined): readonly Permission[] {
@@ -290,6 +308,7 @@ export function permissionsForRole(role: string | null | undefined): readonly Pe
 }
 
 export function hasPermission(role: string | null | undefined, permission: Permission): boolean {
+  if (isLockedOwnerPermission(permission)) return false; // مقفولة افتراضيًا للجميع
   return permissionsForRole(role).includes(permission);
 }
 
@@ -303,6 +322,7 @@ export async function hasTenantPermission(
     import("../drizzle/schema"),
     import("drizzle-orm"),
   ]);
+  if (isLockedOwnerPermission(permission) && !isOwnerRole(role)) return false; // لا تُمنح لغير المالك أبدًا
   const db = await getDb();
   if (!db) return hasPermission(role, permission);
   const [override] = await db.select().from(tenantRolePermissions).where(and(
@@ -337,5 +357,6 @@ export async function tenantPermissionsForRole(
     for (const r of rows) overrides.set(r.permission, r.isAllowed);
   }
   return ALL_PERMISSIONS.filter(p => (overrides.has(p) ? overrides.get(p)! : hasPermission(role, p)))
-    .filter(p => !LEDGER_OWNER_ONLY_PERMISSIONS.includes(p) || isOwnerRole(role));
+    .filter(p => !LEDGER_OWNER_ONLY_PERMISSIONS.includes(p) || isOwnerRole(role))
+    .filter(p => !isLockedOwnerPermission(p) || isOwnerRole(role));
 }

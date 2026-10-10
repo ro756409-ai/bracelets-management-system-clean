@@ -137,6 +137,7 @@ import {
   permissionsForRole,
   type Permission,
   LEDGER_OWNER_ONLY_PERMISSIONS,
+  isLockedOwnerPermission,
   tenantPermissionsForRole,
 } from "./permissions";
 import { EMPLOYEE_SETTABLE_ORDER_STATUSES } from "@shared/const";
@@ -1493,6 +1494,9 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        // الصلاحيات المقفولة للمالك (اطلاع المالك على المحادثات الخاصة) لا تُمنح لأي دور آخر.
+        if (isLockedOwnerPermission(input.permission) && !isOwnerRole(input.role))
+          throw new TRPCError({ code: "FORBIDDEN", message: "هذه الصلاحية للمالك فقط ولا يمكن منحها لأي دور آخر" });
         const actor = await requireActor(ctx);
         const db = await getDb();
         if (!db)
@@ -2733,7 +2737,7 @@ export const appRouter = router({
         // جلسة مالك بلا صف موظف → كل شيء. مع صف موظف (super_admin/admin/manager): الصلاحيات
         // الفعلية للدور + تجاوزات الشركة — فالأدمن لا يرى reopen/activate (للمالك وحده)، والمدير
         // (غير مالي) يرى ما يُمنح له من دفتر V3 فقط دون باقي المالي.
-        if (!role || ctx.tenantId == null) return [...ALL_PERMISSIONS];
+        if (!role || ctx.tenantId == null) return ALL_PERMISSIONS.filter(p => !isLockedOwnerPermission(p));
         const effective = await Promise.all(ALL_PERMISSIONS.map(async p => (await hasTenantPermission(ctx.tenantId!, role, p)) ? p : null));
         return effective.filter((p): p is (typeof ALL_PERMISSIONS)[number] => p !== null)
           .filter(p => !ownerOnlyLedger(p) || isOwnerRole(role))

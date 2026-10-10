@@ -481,15 +481,16 @@ describe("Auth middleware module", () => {
 // ============================================================
 describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
   it("admin-tier roles (super_admin, admin, manager) can do everything, unchanged — except Ledger V3: owner-only (reopen/activate) off admin, all ledger.* off manager", async () => {
-    const { hasPermission, ALL_PERMISSIONS, LEDGER_OWNER_ONLY_PERMISSIONS, MANAGER_GRANT_ONLY_PERMISSIONS } = await import("./permissions");
-    for (const permission of ALL_PERMISSIONS) expect(hasPermission("super_admin", permission)).toBe(true);
+    const { hasPermission, ALL_PERMISSIONS, LEDGER_OWNER_ONLY_PERMISSIONS, MANAGER_GRANT_ONLY_PERMISSIONS, isLockedOwnerPermission } = await import("./permissions");
+    // المقفولة للمالك (اطلاع المالك على الخاص) خارج كل الأدوار افتراضيًا — حتى super_admin (منح صريح فقط)
+    for (const permission of ALL_PERMISSIONS) expect(hasPermission("super_admin", permission), permission).toBe(!isLockedOwnerPermission(permission));
     for (const permission of ALL_PERMISSIONS) {
-      const expected = !LEDGER_OWNER_ONLY_PERMISSIONS.includes(permission);
+      const expected = !LEDGER_OWNER_ONLY_PERMISSIONS.includes(permission) && !isLockedOwnerPermission(permission);
       expect(hasPermission("admin", permission), permission).toBe(expected);
     }
     for (const permission of ALL_PERMISSIONS) {
       // المدير: كل شيء ما عدا دفتر V3 وما قرر المالك منحه له بالمنح فقط (مقارنة/تصدير الأداء)
-      const expected = !permission.startsWith("ledger.") && !MANAGER_GRANT_ONLY_PERMISSIONS.includes(permission);
+      const expected = !permission.startsWith("ledger.") && !MANAGER_GRANT_ONLY_PERMISSIONS.includes(permission) && !isLockedOwnerPermission(permission);
       expect(hasPermission("manager", permission), permission).toBe(expected);
     }
     // المحاسب: لا شيء على دفتر V3 افتراضيًا (يمنحه المالك view/post عبر tenant_role_permissions)
