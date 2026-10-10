@@ -67,6 +67,8 @@ describe("EmployeeDashboard — Phase A view layer", () => {
       "trpc.performance.status.useQuery",
       // أُضيف عن قصد (رابط «حضوري»): حالة الحضور — يظهر الرابط فقط بعد التفعيل.
       "trpc.attendance.status.useQuery",
+      // أُضيف عن قصد (رابط «فريقي»): الفرق التي يقودها الموظف الآن — لا يُطلب بلا teams.view_own.
+      "trpc.employeePortal.team.myTeams.useQuery",
       "trpc.employeePortal.me.useQuery",
       "trpc.businesses.groupsWithBusinesses.useQuery",
       "trpc.employeePortal.stats.useQuery",

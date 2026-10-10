@@ -29,6 +29,7 @@ import SupplierStatements from "./pages/SupplierStatements";
 import AgentWorkspace from "./pages/AgentWorkspace";
 import Employees from "./pages/Employees";
 import Teams from "./pages/Teams";
+import TeamLeaderDashboard from "./pages/TeamLeaderDashboard";
 import Inventory from "./pages/Inventory";
 import Reports from "./pages/Reports";
 import Performance from "./pages/Performance";
@@ -184,6 +185,8 @@ function Router() {
       </Route>
       {/* «أدائي» لموظف البوابة — هوية كوكي الموظف فقط (employeePortal.myPerformance) */}
       <Route path={"/my-performance"} component={MyPerformance} />
+      {/* «فريقي» لقائد الفريق — هوية كوكي الموظف فقط؛ الفريق من myTeams على السيرفر لا من الرابط */}
+      <Route path={"/team-leader-dashboard"} component={TeamLeaderDashboard} />
       <Route path={"/attendance"}>
         <ProtectedLayout><Attendance /></ProtectedLayout>
       </Route>

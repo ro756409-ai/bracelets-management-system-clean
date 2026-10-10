@@ -1,5 +1,6 @@
 import { TRPCClientError } from "@trpc/client";
 import { useTenantAccess } from "@/contexts/TenantAccessContext";
+import { businessDateKey } from "@shared/businessTime";
 
 /**
  * مساعدات واجهة الفرق (0044، خلف TEAMS_ENABLED). العقد على السيرفر هو الحكم: الواجهة لا تفترض نجاح أي عملية،
@@ -57,3 +58,8 @@ export function useWritesBlocked(): { blocked: boolean; reason: string | null } 
 }
 
 export const TOUCH = "min-h-11 md:min-h-9";
+
+/** مفتاح يوم «YYYY-MM-DD» بتوقيت النشاط، قبل n يوم من الآن. */
+export function dayKey(daysAgo = 0, tz = TEAMS_TZ): string {
+  return businessDateKey(new Date(Date.now() - daysAgo * 86_400_000), tz);
+}

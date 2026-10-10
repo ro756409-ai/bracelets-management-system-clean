@@ -22,7 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   CheckCircle2, XCircle, Clock, Phone, PhoneOff, MapPin, Package,
   RefreshCw, ChevronDown, ChevronUp,
-  ShoppingBag, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle, Megaphone, History } from "lucide-react";
+  ShoppingBag, AlertCircle, MessageSquare, Box, Save, Truck, Edit2, CalendarDays, Filter, CalendarRange, QrCode, Camera, CameraOff, Hash, CheckCircle, Megaphone, History, UsersRound } from "lucide-react";
 import jsQR from "jsqr";
 import { BusinessAvatar } from "@/components/BusinessAvatar";
 import { useBusinessContext } from "@/contexts/BusinessContext";
@@ -204,6 +204,11 @@ export default function EmployeeDashboard() {
   // «حضوري» بنفس القاعدة: الحضور مفعّل + هوية البوابة معها clock_self أو view_self.
   const { data: attendanceStatus } = trpc.attendance.status.useQuery(undefined, { retry: false, staleTime: 5 * 60 * 1000 });
   const canOpenMyAttendance = attendanceStatus?.enabled === true && (portalPermissions ?? []).some(p => p === "attendance.clock_self" || p === "attendance.view_self");
+  // «فريقي» لقائد الفريق فقط: الفرق مفعّلة + teams.view_own + قيادة فعّالة الآن (myTeams على السيرفر). بلا الصلاحية لا يُطلب
+  // myTeams أصلًا؛ وانتهاء القيادة/سحب الصلاحية يخفي الرابط مع التحديث التالي (كل دقيقة أو زر التحديث).
+  const canViewOwnTeam = (portalPermissions ?? []).includes("teams.view_own");
+  const { data: myTeams } = trpc.employeePortal.team.myTeams.useQuery(undefined, { enabled: canViewOwnTeam, retry: false, staleTime: 60 * 1000, refetchInterval: 60 * 1000 });
+  const canOpenMyTeam = canViewOwnTeam && myTeams?.enabled === true && myTeams.teams.length > 0;
 
   const { data: meData, error: meError } = trpc.employeePortal.me.useQuery(undefined, {
     retry: false,
@@ -919,7 +924,8 @@ export default function EmployeeDashboard() {
               { key: "stock", label: "المخزون", icon: Box, pressed: showStockPanel, onSelect: () => setShowStockPanel(!showStockPanel) },
               ...(canOpenMyAttendance ? [{ key: "attendance", label: "حضوري", icon: Clock, onSelect: () => setLocation("/my-attendance"), testId: "my-attendance-link" }] : []),
               ...(canViewMyPerformance ? [{ key: "performance", label: "أدائي", icon: History, onSelect: () => setLocation("/my-performance"), testId: "my-performance-link" }] : []),
-              { key: "refresh", label: "تحديث القائمة", icon: RefreshCw, textFromSm: "تحديث", separatorBefore: true, onSelect: () => { refetch(); utils.employeePortal.myPermissions.invalidate(); } },
+              ...(canOpenMyTeam ? [{ key: "team", label: "فريقي", icon: UsersRound, onSelect: () => setLocation("/team-leader-dashboard"), testId: "my-team-link" }] : []),
+              { key: "refresh", label: "تحديث القائمة", icon: RefreshCw, textFromSm: "تحديث", separatorBefore: true, onSelect: () => { refetch(); utils.employeePortal.myPermissions.invalidate(); utils.employeePortal.team.myTeams.invalidate(); } },
             ]}
           />
         </div>
