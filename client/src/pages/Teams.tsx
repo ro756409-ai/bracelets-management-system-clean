@@ -12,6 +12,7 @@ import {
   ConfirmDialog, Drawer, ErrorState, LoadingSkeleton, PageHeader, PermissionDeniedState, ResponsiveDataTable, SectionCard, StatusBadge, toast, type Column,
 } from "@/components/shared";
 import { TeamsUnavailable } from "@/components/teams/TeamsStates";
+import { MemberShiftsList, type MemberShift } from "@/components/teams/MemberShifts";
 import { TOUCH, fmtNum, formatMs, serverErrorText, useWritesBlocked } from "@/components/teams/teamsUi";
 
 /**
@@ -142,13 +143,14 @@ function TeamDrawer({ teamId, canManage, canWrite, onClose }: { teamId: number; 
   const utils = trpc.useUtils();
   const team = trpc.teams.get.useQuery({ teamId }, { retry: false });
   const history = trpc.teams.history.useQuery({ teamId }, { retry: false });
+  const shifts = trpc.teams.memberShifts.useQuery({ teamId }, { retry: false });
   const data = team.data?.enabled ? team.data : null;
   const t = data?.team;
   const members = data?.members ?? [];
   const writable = canWrite && Boolean(t?.isActive);
   const employees = trpc.employees.activeList.useQuery(t ? { businessId: t.businessId } : undefined, { enabled: canManage && Boolean(t), retry: false });
 
-  const refresh = () => Promise.all([utils.teams.get.invalidate({ teamId }), utils.teams.history.invalidate({ teamId }), utils.teams.list.invalidate()]);
+  const refresh = () => Promise.all([utils.teams.get.invalidate({ teamId }), utils.teams.history.invalidate({ teamId }), utils.teams.memberShifts.invalidate({ teamId }), utils.teams.list.invalidate()]);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(new Set<string>());
   const run = (key: string, fn: (done: () => void) => void) => {
@@ -274,11 +276,14 @@ function TeamDrawer({ teamId, canManage, canWrite, onClose }: { teamId: number; 
             <p className="mt-2 text-xs text-muted-foreground">كل إضافة/إنهاء/تعيين يسري من الآن، ولا تواريخ سابقة أو مستقبلية.</p>
           </SectionCard>
 
-          <SectionCard title="تحذيرات الورديات">
-            <p className="flex items-start gap-2 text-sm text-muted-foreground" data-testid="team-shift-warnings">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              غير متاح من الخادم — لا يوجد بعد مسار لقراءة تعارض الورديات لأعضاء الفريق. لا نعرض أي تحذير محسوب في الواجهة.
-            </p>
+          <SectionCard title="الورديات والتحذيرات (قراءة فقط)">
+            {shifts.isLoading ? <LoadingSkeleton variant="cards" rows={2} />
+              : shifts.error ? <ErrorState message={serverErrorText(shifts.error)} onRetry={() => shifts.refetch()} />
+              : !shifts.data?.enabled ? (
+                <p className="flex items-start gap-2 text-sm text-muted-foreground" data-testid="team-shift-warnings">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" /> غير متاح حاليًا — نظام الحضور غير مفعّل.
+                </p>
+              ) : <MemberShiftsList workDate={shifts.data.workDate} timeZone={shifts.data.timeZone} members={shifts.data.members as MemberShift[]} />}
           </SectionCard>
 
           <SectionCard title="سجل العضويات والقيادة">

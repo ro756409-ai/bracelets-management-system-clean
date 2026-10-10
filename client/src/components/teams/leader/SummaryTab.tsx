@@ -1,7 +1,7 @@
 import { trpc } from "@/lib/trpc";
 import { LoadingSkeleton, SectionCard, StatCard } from "@/components/shared";
 import { dayKey, fmtNum } from "../teamsUi";
-import { QueryError, ServerGap, type LedTeam, type LeaderPerms } from "./common";
+import { QueryError, type LedTeam, type LeaderPerms } from "./common";
 
 /**
  * ملخص الفريق — كل رقم من endpoint حقيقي ومقيّد بالصلاحية؛ قسم بلا صلاحيته يقول ذلك ولا يطلب شيئًا.
@@ -96,7 +96,7 @@ export function SummaryTab({ team, perms, leaderName }: { team: LedTeam; perms: 
         {!canPerf ? <p className="text-sm text-muted-foreground">لا تملك صلاحية «عرض أداء الفريق».</p>
           : perf.isLoading ? <LoadingSkeleton variant="cards" rows={1} />
           : perf.error ? <QueryError error={perf.error} onRetry={() => perf.refetch()} />
-          : !perf.data?.enabled ? <ServerGap>سجل الأحداث غير مفعّل.</ServerGap>
+          : !perf.data?.enabled ? <p className="text-sm text-muted-foreground">غير متاح حاليًا — سجل الأحداث غير مفعّل.</p>
           : (
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3" data-testid="leader-summary-performance">
               <StatCard label="مجموع قرارات الأعضاء" value={<span className="tabular-nums">{fmtNum(sum("decisionEligibleOrders"))}</span>} />

@@ -62,7 +62,7 @@ function LeaderBoard({ teams, has, leaderName }: { teams: LedTeam[]; has: (p: st
       <UnderlineTabs tabs={tabs} value={tab} onChange={k => setTab(k as TabKey)} ariaLabel="أقسام الفريق" />
       <div role="tabpanel" key={`${team.teamId}:${tab}`}>
         {tab === "summary" && <SummaryTab team={team} perms={perms} leaderName={leaderName} />}
-        {tab === "members" && <MembersTab team={team} />}
+        {tab === "members" && <MembersTab team={team} perms={perms} />}
       </div>
     </>
   );
