@@ -1,12 +1,13 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, isNull, or, desc, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { orders, tasks } from "../drizzle/schema";
+import { orders } from "../drizzle/schema";
 import { businessDayRange } from "../shared/businessTime";
 import { isActiveAt, scopeEventsToTeam } from "../shared/teamsSpec";
 import { daysForEmployees, reviewCorrection, type AttendanceActor } from "./attendance.service";
 import { assignOrderToEmployee, getDb, getOrders } from "./db";
 import { loadPerformance } from "./employeePerformance.service";
+import { canonicalHash } from "./orderEvents.service";
 import type { OrderEventContext } from "./orderEvents.service";
 import { assertAssignableTeamMember, operationIdSchema, requireLeaderOf, requireLeaderOfTx, runTeamsTx, teamAttributionScope, teamMembersAt, type LeaderTeam, type TeamsActor } from "./teams.service";
 
@@ -16,7 +17,8 @@ import { assertAssignableTeamMember, operationIdSchema, requireLeaderOf, require
  *  • التاريخ بالعضوية لحظة الحدث: يوم الحضور بلحظة أول حضور (أو بداية الوردية المجدولة، أو بداية اليوم بتوقيته)،
  *    والأداء بـoccurredAt بالضبط (scopeEventsToTeam). العضوية المنتهية تظهر في التاريخ لا في الحالي.
  *  • الكتابة: إسناد الأوردر عبر المسار القائم (assignOrderToEmployee ⇒ سجل الأحداث) بلا تغيير حالات ولا عقود؛
- *    المهام بلا حذف، والمستلم عضو فعّال الآن. لا teamId في orders ولا تعديل لجداول orders/tasks.
+ *    المهام بلا حذف، والمستلم عضو فعّال الآن، وIdempotency بـoperationId في team_task_operations. لا teamId في
+ *    orders ولا تعديل لمخطط orders/tasks.
  */
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_TZ = "Africa/Cairo";
@@ -24,6 +26,7 @@ const DAY_MS = 86_400_000;
 const forbidden = (message: string) => new TRPCError({ code: "FORBIDDEN", message });
 const notFound = (message: string) => new TRPCError({ code: "NOT_FOUND", message });
 const bad = (message: string) => new TRPCError({ code: "BAD_REQUEST", message });
+const conflict = (message: string) => new TRPCError({ code: "CONFLICT", message });
 const rows = (r: any): any[] => (Array.isArray(r) ? (Array.isArray(r[0]) ? r[0] : r) : r?.rows ?? []);
 const num = (v: any) => (v == null ? null : Number(v));
 
@@ -91,15 +94,33 @@ export async function teamPerformance(actor: TeamsActor, teamId: number, fromDat
 const memberIdsNow = async (tx: any, tenantId: number, teamId: number) => rows(await tx.execute(sql`SELECT employeeId FROM team_memberships
   WHERE tenantId = ${tenantId} AND teamId = ${teamId} AND effectiveToAt IS NULL`)).map(r => Number(r.employeeId));
 
+/**
+ * المنشئ صريحًا: مهام القائد لها سجل في team_task_operations (actorEmployeeId ⇒ اسم الموظف من employees)، وغيرها
+ * «legacy» باسمها المحفوظ فقط — لا يُفسَّر tasks.createdBy أبدًا (مزدوج المعنى: users.id موجب / -employeeId).
+ */
+export type TeamTaskCreator = { kind: "employee"; employeeId: number; name: string } | { kind: "legacy"; name: string };
+export type TeamTaskRow = { id: number; businessId: number | null; title: string; description: string | null; assignedTo: number | null; assignedToName: string | null; status: string; createdAtMs: number; updatedAtMs: number; creator: TeamTaskCreator };
+
 /** مهام الفريق: داخل نشاط الفريق، لأعضائه الفعّالين أو عامة (بلا مستلم). */
-export async function listTeamTasks(actor: TeamsActor, teamId: number, status?: "new" | "in_progress" | "done") {
+export async function listTeamTasks(actor: TeamsActor, teamId: number, status?: "new" | "in_progress" | "done"): Promise<TeamTaskRow[]> {
   const team = await requireLeaderOf(actor, teamId);
-  const members = (await teamMembersAt(actor.tenantId, teamId)).map(m => m.employeeId);
-  const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
-  const conds: any[] = [eq(tasks.businessId, team.businessId), or(isNull(tasks.assignedTo), inArray(tasks.assignedTo, members.length ? members : [-1]))];
-  if (status) conds.push(eq(tasks.status, status));
-  return db.select().from(tasks).where(and(...conds)).orderBy(desc(tasks.createdAt)).limit(100);
+  return runTeamsTx(async tx => {
+    const members = await memberIdsNow(tx, actor.tenantId, teamId);
+    const inMembers = sql.join((members.length ? members : [-1]).map(m => sql`${m}`), sql`, `);
+    return rows(await tx.execute(sql`SELECT t.id, t.businessId, t.title, t.description, t.assignedTo, t.assignedToName, t.taskStatus AS status, t.createdByName,
+        UNIX_TIMESTAMP(t.createdAt) * 1000 AS createdAtMs, UNIX_TIMESTAMP(t.updatedAt) * 1000 AS updatedAtMs, o.actorEmployeeId, e.name AS actorName
+      FROM tasks t
+      LEFT JOIN team_task_operations o ON o.taskId = t.id AND o.tenantId = ${actor.tenantId}
+      LEFT JOIN employees e ON e.id = o.actorEmployeeId AND e.tenantId = o.tenantId
+      WHERE t.businessId = ${team.businessId} AND (t.assignedTo IS NULL OR t.assignedTo IN (${inMembers}))${status ? sql` AND t.taskStatus = ${status}` : sql``}
+      ORDER BY t.createdAt DESC, t.id DESC LIMIT 100`)).map(r => ({
+        id: Number(r.id), businessId: num(r.businessId), title: r.title, description: r.description ?? null, assignedTo: num(r.assignedTo), assignedToName: r.assignedToName ?? null,
+        status: r.status, createdAtMs: Number(r.createdAtMs), updatedAtMs: Number(r.updatedAtMs),
+        creator: r.actorEmployeeId != null
+          ? { kind: "employee" as const, employeeId: Number(r.actorEmployeeId), name: r.actorName ?? r.createdByName }
+          : { kind: "legacy" as const, name: r.createdByName },
+      }));
+  });
 }
 
 export const teamTaskInput = z.object({
@@ -109,33 +130,53 @@ export const teamTaskInput = z.object({
   assignedTo: z.number().int().positive().nullable().optional(),
   operationId: operationIdSchema,
 }).strict();
-/** نافذة منع التكرار (لا عمود مفتاح في tasks): نفس المنشئ + نفس المحتوى خلالها = Replay بلا صف جديد. */
-export const TEAM_TASK_DEDUPE_SECONDS = 120;
 /**
- * إنشاء مهمة من القائد: قفل صف الفريق يسلسل الطلبات ← القيادة داخل نفس المعاملة ← المستلم عضو فعّال الآن
- * (أو مهمة عامة لنشاط الفريق) ← منع التكرار بالمحتوى خلال النافذة ← إدراج. لا إسناد لموظف خارج الفريق.
+ * إنشاء مهمة من القائد — Idempotency حتمية بـoperationId (team_task_operations، UNIQUE(tenantId, operationId)):
+ * قفل صف الفريق ← القيادة داخل نفس المعاملة ← قراءة قافلة للعملية: نفس البصمة ونفس الفاعل = Replay بنفس المهمة،
+ * غير ذلك = CONFLICT ← المستلم عضو فعّال الآن (أو مهمة عامة لنشاط الفريق) ← المهمة + سجل العملية معًا.
+ * لا مدة زمنية ولا مقارنة نص: مهمتان متطابقتان بعمليتين مختلفتين = مهمتان. tasks.createdBy = -employeeId (عقد
+ * جلسة الإدارة القائم: السالب = موظف) فلا يُفسَّر users.id؛ والمنشئ الحقيقي في سجل العملية.
  */
 export async function createTeamTask(actor: TeamsActor, input: z.infer<typeof teamTaskInput>) {
   const v = teamTaskInput.parse(input);
-  return runTeamsTx(async tx => {
-    const t = rows(await tx.execute(sql`SELECT id, isActive FROM teams WHERE id = ${v.teamId} AND tenantId = ${actor.tenantId} FOR UPDATE`))[0];
+  const assignedTo = v.assignedTo ?? null;
+  const description = v.description ? v.description : null;
+  const hash = canonicalHash({ op: "team_task_create", teamId: v.teamId, title: v.title, description, assignedTo });
+  return withTaskOpRetry(() => runTeamsTx(async tx => {
+    const t = rows(await tx.execute(sql`SELECT id FROM teams WHERE id = ${v.teamId} AND tenantId = ${actor.tenantId} FOR UPDATE`))[0];
     if (!t) throw forbidden("لست قائدًا فعّالًا لهذا الفريق");
     const team = await requireLeaderOfTx(tx, actor, v.teamId);
-    const assignedTo = v.assignedTo ?? null;
+    const ex = rows(await tx.execute(sql`SELECT taskId, payloadHash, actorEmployeeId FROM team_task_operations WHERE tenantId = ${actor.tenantId} AND operationId = ${v.operationId} FOR UPDATE`))[0];
+    if (ex) {
+      // Replay لنفس الفاعل ونفس البصمة فقط — مفتاح عملية شخص آخر لا يكشف مهمته
+      if (ex.payloadHash !== hash || Number(ex.actorEmployeeId) !== actor.employeeId) throw conflict("نفس معرّف العملية استُخدم لمهمة مختلفة — لم يُنفَّذ أي تغيير");
+      if (ex.taskId == null) throw notFound("المهمة المنشأة بهذه العملية حُذفت — لم يُنشأ بديل");
+      return { id: Number(ex.taskId), replay: true };
+    }
     let assignedToName: string | null = null;
     if (assignedTo != null) {
       if (!(await memberIdsNow(tx, actor.tenantId, v.teamId)).includes(assignedTo)) throw forbidden("الموظف ليس عضوًا فعّالًا في فريقك");
       assignedToName = rows(await tx.execute(sql`SELECT name FROM employees WHERE id = ${assignedTo} AND tenantId = ${actor.tenantId}`))[0]?.name ?? null;
     }
-    const description = v.description ? v.description : null;
-    const dup = rows(await tx.execute(sql`SELECT id FROM tasks WHERE businessId = ${team.businessId} AND createdBy = ${actor.employeeId} AND title = ${v.title}
-      AND description <=> ${description} AND assignedTo <=> ${assignedTo} AND createdAt >= NOW() - INTERVAL ${TEAM_TASK_DEDUPE_SECONDS} SECOND ORDER BY id DESC LIMIT 1 FOR UPDATE`))[0];
-    if (dup) return { id: Number(dup.id), replay: true };
     const me = rows(await tx.execute(sql`SELECT name FROM employees WHERE id = ${actor.employeeId} AND tenantId = ${actor.tenantId}`))[0];
     const r = await tx.execute(sql`INSERT INTO tasks (businessId, title, description, assignedTo, assignedToName, createdBy, createdByName)
-      VALUES (${team.businessId}, ${v.title}, ${description}, ${assignedTo}, ${assignedToName}, ${actor.employeeId}, ${me?.name ?? "قائد الفريق"})`);
-    return { id: Number((Array.isArray(r) ? r[0] : r)?.insertId), replay: false };
-  });
+      VALUES (${team.businessId}, ${v.title}, ${description}, ${assignedTo}, ${assignedToName}, ${-actor.employeeId}, ${me?.name ?? "قائد الفريق"})`);
+    const taskId = Number((Array.isArray(r) ? r[0] : r)?.insertId);
+    await tx.execute(sql`INSERT INTO team_task_operations (tenantId, teamId, taskId, operationId, payloadHash, actorEmployeeId)
+      VALUES (${actor.tenantId}, ${v.teamId}, ${taskId}, ${v.operationId}, ${hash}, ${actor.employeeId})`);
+    return { id: taskId, replay: false };
+  }));
+}
+
+/** سباق نفس العملية على فريقين مختلفين: تعارض فهرس العملية (1062) أو Deadlock ⇒ محاولة ثانية تتحول Replay/CONFLICT. */
+async function withTaskOpRetry<T>(attempt: () => Promise<T>): Promise<T> {
+  try { return await attempt(); }
+  catch (e: any) {
+    let race = false;
+    for (let c = e; c; c = c.cause) if (c.errno === 1213 || ((c.errno === 1062 || c.code === "ER_DUP_ENTRY") && /tto_tenant_op_idem_unique/.test(String(c.sqlMessage ?? c.message ?? "")))) race = true;
+    if (!race) throw e;
+    return attempt();
+  }
 }
 
 export const teamTaskStatusInput = z.object({ teamId: z.number().int().positive(), taskId: z.number().int().positive(), status: z.enum(["new", "in_progress", "done"]) }).strict();

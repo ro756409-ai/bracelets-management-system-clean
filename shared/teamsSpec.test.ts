@@ -54,10 +54,12 @@ describe("📄 0044 — الملف مطابق للمواصفة", () => {
   const body = (t: string) => stmts.find(s => s.startsWith(`CREATE TABLE \`${t}\``)) ?? "";
   const names = (t: string, re: RegExp) => [...body(t).matchAll(re)].map(m => m[1]);
 
-  it("جدولان بالترتيب، بلا ALTER/DROP/UPDATE/DELETE، وبلا لمس orders/tasks أو أي جدول قائم", () => {
+  it("ثلاثة جداول بالترتيب، بلا ALTER/DROP/UPDATE/DELETE؛ orders لا تُذكر، وtasks مرجع FK فقط (بلا أي تعديل عليها)", () => {
     expect(stmts.map(s => s.match(/^CREATE TABLE `([^`]+)`/)?.[1])).toEqual([...TEAMS_TABLES]);
     expect(code).not.toMatch(/ALTER TABLE|DROP |DELETE FROM|^\s*UPDATE |INSERT INTO/im);
-    expect(code).not.toMatch(/`orders`|`tasks`/);
+    expect(code).not.toMatch(/`orders`/);
+    expect(code.match(/`tasks`/g)).toHaveLength(1);
+    expect(code).toContain("CONSTRAINT `fk_tto_task` FOREIGN KEY (`taskId`) REFERENCES `tasks`(`id`) ON DELETE SET NULL");
   });
 
   for (const t of TEAMS_TABLES) {
@@ -76,8 +78,10 @@ describe("📄 0044 — الملف مطابق للمواصفة", () => {
   }
 
   it("مفاتيح idempotency والبصمات NOT NULL للإنشاء، ومفاتيح الإغلاق مرتبطة بحالته", () => {
-    const col = (t: "teams" | "team_memberships", n: string) => TEAMS_SPEC[t].columns.find(c => c.name === n)!;
-    for (const t of TEAMS_TABLES) { expect(col(t, "idempotencyKey").nullable).toBe(false); expect(col(t, "payloadHash").nullable).toBe(false); }
+    const col = (t: "teams" | "team_memberships" | "team_task_operations", n: string) => TEAMS_SPEC[t].columns.find(c => c.name === n)!;
+    for (const t of ["teams", "team_memberships"] as const) { expect(col(t, "idempotencyKey").nullable).toBe(false); expect(col(t, "payloadHash").nullable).toBe(false); }
+    const tto = (n: string) => TEAMS_SPEC.team_task_operations.columns.find(c => c.name === n)!;
+    expect([tto("operationId").nullable, tto("payloadHash").nullable, tto("actorEmployeeId").nullable, tto("taskId").nullable]).toEqual([false, false, false, true]);
     expect(TEAM_IDEMPOTENCY_KEY_RE.test("team_create:Ab12_xy-9")).toBe(true);
     expect(TEAM_IDEMPOTENCY_KEY_RE.test("")).toBe(false);
     expect(TEAM_IDEMPOTENCY_KEY_RE.test("short")).toBe(false);

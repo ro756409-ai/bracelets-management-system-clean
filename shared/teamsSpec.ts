@@ -8,7 +8,7 @@ import type { TableSpec } from "./schemaSpec";
  *   • الفترات Timestamp(3) UTC نصف مفتوحة [from, to): المتلامسة مسموحة، والتداخل ولو بملّي ثانية مرفوض.
  *   • نسب الحدث للفريق: نفس tenantId + businessId الحدث = businessId الفريق + عضوية فعّالة لحظة occurredAt.
  */
-export const TEAMS_TABLES = ["teams", "team_memberships"] as const;
+export const TEAMS_TABLES = ["teams", "team_memberships", "team_task_operations"] as const;
 export type TeamsTable = (typeof TEAMS_TABLES)[number];
 
 export const TEAM_MEMBERSHIP_ROLES = ["member", "leader"] as const;
@@ -124,5 +124,24 @@ export const TEAMS_SPEC: Record<TeamsTable, TableSpec> = {
       empFk("fk_tmb_tenant_ender", "endedByEmployeeId"),
     ],
     checks: ["chk_tmb_range", "chk_tmb_end", "chk_tmb_ids", "chk_tmb_keys", "chk_tmb_hash"],
+  },
+  team_task_operations: {
+    columns: [
+      int("id"), int("tenantId"), int("teamId"), int("taskId", true), { name: "operationId", type: "varchar(80)", nullable: false },
+      hash("payloadHash"), int("actorEmployeeId"), ts("createdAt"),
+    ],
+    uniques: [
+      { name: "PRIMARY", columns: ["id"] },
+      { name: "tto_tenant_op_idem_unique", columns: ["tenantId", "operationId"] },
+      { name: "tto_task_unique", columns: ["taskId"] },
+    ],
+    indexes: [{ name: "tto_tenant_team_created", columns: ["tenantId", "teamId", "createdAt"] }],
+    foreignKeys: [
+      fk("fk_tto_tenant", ["tenantId"], "tenants", ["id"]),
+      fk("fk_tto_tenant_team", ["tenantId", "teamId"], "teams", ["tenantId", "id"]),
+      empFk("fk_tto_tenant_actor", "actorEmployeeId"),
+      { ...fk("fk_tto_task", ["taskId"], "tasks", ["id"]), onDelete: "SET NULL" },
+    ],
+    checks: ["chk_tto_operation", "chk_tto_hash", "chk_tto_actor"],
   },
 };

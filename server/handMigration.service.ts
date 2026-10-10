@@ -22,6 +22,7 @@ import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconcilia
  *   • الفهرسان المركّبان (businesses_tenant_id / employees_tenant_id): كلاهما غائب → 0041 ينشئهما؛ كلاهما موجود
  *     بنفس الأعمدة والترتيب → skip؛ واحد فقط أو تعريف مختلف → partial ورفض. 0042 و0043 و0044 تشترط وجودهما.
  *   • الأعمدة المولّدة (0044): النوع STORED وتعبير التوليد جزء من المطابقة (بعد التطبيع)، لا الاسم والنوع فقط.
+ *   • قاعدة ON DELETE لـFK جزء من المطابقة حين تصفها المواصفة (0044: team_task_operations.taskId → SET NULL).
  *   • لا يُطبع ولا يُرجع أي رابط أو كلمة سر. DDL في MySQL غير معاملاتي — التوقف عند أول خطأ يترك partial ظاهرًا.
  *
  * البيئات المسموح فيها apply/rollback: DEPLOY_ENV=staging مع قاعدة غير إنتاجية باسم staging/stage/test (للـRunbook
@@ -85,6 +86,8 @@ export async function loadSchemaSnapshot(exec: ReadOnlyExecutor, tableNames: str
   const fks = await exec.query<{ TABLE_NAME: string; CONSTRAINT_NAME: string; COLUMN_NAME: string; REFERENCED_TABLE_NAME: string; REFERENCED_COLUMN_NAME: string }>(
     `SELECT TABLE_NAME, CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph}) AND REFERENCED_TABLE_NAME IS NOT NULL ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION`, tableNames);
+  const rules = await exec.query<{ TABLE_NAME: string; CONSTRAINT_NAME: string; DELETE_RULE: string }>(
+    `SELECT TABLE_NAME, CONSTRAINT_NAME, DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph})`, tableNames);
   const checks = await exec.query<{ TABLE_NAME: string; CONSTRAINT_NAME: string }>(
     `SELECT TABLE_NAME, CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph}) AND CONSTRAINT_TYPE = 'CHECK'`, tableNames);
   const s: SchemaSnapshot = { tables: new Set(tables.map(t => t.TABLE_NAME)), columns: {}, uniques: {}, indexes: {}, foreignKeys: {}, checks: {} };
@@ -102,6 +105,7 @@ export async function loadSchemaSnapshot(exec: ReadOnlyExecutor, tableNames: str
     const slot = ((s.foreignKeys[f.TABLE_NAME] ??= {})[f.CONSTRAINT_NAME] ??= { columns: [], refTable: f.REFERENCED_TABLE_NAME, refColumns: [] });
     slot.columns.push(f.COLUMN_NAME); slot.refColumns.push(f.REFERENCED_COLUMN_NAME);
   }
+  for (const r of rules) { const fk = s.foreignKeys[r.TABLE_NAME]?.[r.CONSTRAINT_NAME]; if (fk) fk.deleteRule = r.DELETE_RULE; }
   for (const k of checks) (s.checks[k.TABLE_NAME] ??= new Set()).add(k.CONSTRAINT_NAME);
   return s;
 }

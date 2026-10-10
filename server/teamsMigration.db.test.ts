@@ -26,7 +26,7 @@ const u = (iso: string) => new Date(iso).toISOString().replace("T", " ").replace
 const errCode = async (p: Promise<unknown>) => { try { await p; return "ok"; } catch (e: any) { return String(e?.code ?? "ERR"); } };
 
 describe("0044 — نص الملف", () => {
-  it("جدولان بالترتيب، بلا فهارس مركّبة ولا FK لاحق", () => {
+  it("ثلاثة جداول بالترتيب، بلا فهارس مركّبة ولا FK لاحق", () => {
     expect(describeStatements(SQL44).map(s => `${s.kind}:${s.name}`)).toEqual(TEAMS_TABLES.map(t => `table:${t}`));
   });
 });
@@ -68,7 +68,7 @@ describe.runIf(CAN)("🏗️ 0044 على قواعد مؤقتة", () => {
     expect((await run(db, "apply", { confirm: "APPLY 0044 TO x" })).refused).toMatch(/عبارة التأكيد/);
     expect((await run(db, "apply", { deployEnv: "production" })).refused).toMatch(/DEPLOY_ENV/);
     const ap = await run(db, "apply");
-    expect(ap.ok).toBe(true); expect(ap.applied).toBe(2); expect(ap.issues).toEqual([]);
+    expect(ap.ok).toBe(true); expect(ap.applied).toBe(3); expect(ap.issues).toEqual([]);
     expect((await run(db, "apply")).replay).toBe(true);
     expect((await run(db, "check")).state).toBe("applied");
 
@@ -286,7 +286,56 @@ describe.runIf(CAN)("🏗️ 0044 على قواعد مؤقتة", () => {
     expect(await count("team_memberships", "tenantId = ? AND idempotencyKey = ?", [ta, key])).toBe(1);
   }, 120_000);
 
-  it("rollback: يرفض مع بيانات؛ فارغة ⇒ يحذف الجدولين فقط ويُبقي الفهرسين المركّبين", async () => {
+  it("team_task_operations: عملية واحدة لكل (شركة، operationId)، فاعل موجب من نفس الشركة، وحذف المهمة لا يحذف سجل العملية (SET NULL)", async () => {
+    const team = (await q("SELECT id FROM teams WHERE tenantId = ? AND businessId = ? AND isActive = 1", [ta, ba3]))[0].id;
+    const task = async (title: string) => id("INSERT INTO tasks (businessId, title, createdBy, createdByName) VALUES (?, ?, ?, 'قائد')", [ba3, title, -e[1]]);
+    const op = (o: Record<string, unknown>) => ins("team_task_operations", { tenantId: ta, teamId: team, operationId: `opk${Date.now().toString(36)}${++seq}`, payloadHash: H, actorEmployeeId: e[1], ...o });
+    const t1 = await task("مهمة 1");
+    const opId = "sameOperation01";
+    await id(...op({ taskId: t1, operationId: opId }));
+    await rejected("team_task_operations", ...op({ taskId: await task("مهمة 2"), operationId: opId }), /tto_tenant_op_idem_unique/);
+    await rejected("team_task_operations", ...op({ taskId: t1 }), /tto_task_unique/); // مهمة واحدة لعملية واحدة
+    // نفس operationId في شركة أخرى مسموح (فريق وفاعل تلك الشركة)
+    const tbTeam = (await q("SELECT id FROM teams WHERE tenantId = ? LIMIT 1", [tb]))[0].id;
+    await id(...ins("team_task_operations", { tenantId: tb, teamId: tbTeam, taskId: null, operationId: opId, payloadHash: H, actorEmployeeId: eb }));
+    // FK مركّب: فريق/فاعل من شركة أخرى
+    await rejected("team_task_operations", ...op({ teamId: tbTeam }), /fk_tto_tenant_team/);
+    await rejected("team_task_operations", ...op({ actorEmployeeId: eb }), /fk_tto_tenant_actor/);
+    await rejected("team_task_operations", ...op({ taskId: 99_999_999 }), /fk_tto_task/);
+    // CHECK: operationId بنفس قاعدة الواجهة، بصمة صغيرة، فاعل موجب حتى مع تعطيل FK
+    for (const operationId of ["", "short", "has space 12", "مفتاح-عربي-1234"]) await rejected("team_task_operations", ...op({ operationId }), /chk_tto_operation/);
+    await rejected("team_task_operations", ...op({ payloadHash: "A".repeat(64) }), /chk_tto_hash/);
+    expect(await errCode(db.raw.query(...op({ operationId: null })))).toBe("ER_BAD_NULL_ERROR");
+    await q("SET foreign_key_checks = 0");
+    try { for (const v of [-1, 0]) await rejected("team_task_operations", ...op({ actorEmployeeId: v }), /chk_tto_actor/); }
+    finally { await q("SET foreign_key_checks = 1"); }
+    // حذف المهمة من المسار القديم يبقى ناجحًا، والعملية تبقى بـtaskId = NULL
+    await q("DELETE FROM tasks WHERE id = ?", [t1]);
+    expect((await q("SELECT taskId FROM team_task_operations WHERE tenantId = ? AND operationId = ?", [ta, opId]))[0].taskId).toBeNull();
+    // سباق نفس العملية (8 اتصالات) ⇒ صف واحد
+    const conns = await Promise.all(Array.from({ length: 8 }, () => mysql.createConnection(db.url)));
+    try {
+      const raceOp = `race${Date.now().toString(36)}`;
+      const r = await Promise.allSettled(conns.map(async c => {
+        await c.beginTransaction();
+        try { await c.query(...op({ operationId: raceOp })); await new Promise(res => setTimeout(res, 150)); await c.commit(); }
+        catch (err) { await c.rollback(); throw err; }
+      }));
+      expect(r.filter(x => x.status === "fulfilled")).toHaveLength(1);
+      expect(new Set(r.filter(x => x.status === "rejected").map(x => (x as PromiseRejectedResult).reason?.code))).toEqual(new Set(["ER_DUP_ENTRY"]));
+    } finally { await Promise.all(conns.map(c => c.end())); }
+    // verify يكشف تغيير قاعدة الحذف (CASCADE بدل SET NULL) ثم يعود مطابقًا
+    await q("ALTER TABLE team_task_operations DROP FOREIGN KEY fk_tto_task");
+    await q("ALTER TABLE team_task_operations ADD CONSTRAINT fk_tto_task FOREIGN KEY (taskId) REFERENCES tasks(id) ON DELETE CASCADE");
+    const drift = await run(db, "check");
+    expect(drift.state).toBe("partial");
+    expect(drift.issues.map(i => i.detail).join("\n")).toMatch(/fk_tto_task: ON DELETE CASCADE ≠ SET NULL/);
+    await q("ALTER TABLE team_task_operations DROP FOREIGN KEY fk_tto_task");
+    await q("ALTER TABLE team_task_operations ADD CONSTRAINT fk_tto_task FOREIGN KEY (taskId) REFERENCES tasks(id) ON DELETE SET NULL");
+    expect((await run(db, "check")).state).toBe("applied");
+  }, 120_000);
+
+  it("rollback: يرفض مع بيانات؛ فارغة ⇒ يحذف الجداول الثلاثة فقط ويُبقي الفهرسين المركّبين", async () => {
     expect((await run(db, "rollback")).refused).toBe("not_empty");
     expect((await run(db, "check")).state).toBe("applied");
     await q("SET foreign_key_checks = 0");

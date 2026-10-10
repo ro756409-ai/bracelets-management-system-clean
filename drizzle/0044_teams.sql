@@ -1,4 +1,4 @@
--- 0044 — الفرق التشغيلية والقيادة المؤرخة. DELTA مكتوبة بخط اليد، ADDITIVE بحت: جدولان جديدان، بلا FK لاحق.
+-- 0044 — الفرق التشغيلية والقيادة المؤرخة. DELTA مكتوبة بخط اليد، ADDITIVE بحت: ثلاثة جداول جديدة، بلا FK لاحق.
 -- يعتمد على الفهرسين المركّبين businesses_tenant_id/employees_tenant_id (ينشئهما 0040 أو 0041) — الـpreflight يرفض بدونهما.
 -- لا تعديل على orders ولا tasks ولا أي جدول قائم. لا Backfill ولا Seed. لا حذف في أي مسار كود. غير مضاف إلى drizzle journal.
 --
@@ -22,6 +22,11 @@
 -- معرّفات الفاعلين (created/assigned/ended/deactivated By) موجبة وموجودة في employees لنفس الـtenant — لا الهوية
 --   السالبة لجلسة الإدارة (CHECK > 0 + FK مركّب).
 -- CHECK: كل تعبير بلا UNKNOWN (شروط IS [NOT] NULL صريحة). يتطلب MySQL ≥ 8.0.16.
+-- team_task_operations (إضافة 2026-10-10 قبل أي تطبيق لـ0044): Idempotency مهام القائد وفاعلها الصريح — بلا أي
+--   تعديل على tasks (جدول قديم بلا tenantId ولا مفتاح عملية، و`createdBy` فيه مزدوج المعنى users.id/-employeeId):
+--   UNIQUE(tenantId, operationId) = عملية واحدة ⇒ مهمة واحدة (replay بنفس البصمة، CONFLICT ببصمة مختلفة)؛
+--   actorEmployeeId موجب ومربوط بموظف نفس الشركة (مصدر حقيقة المنشئ واسمه)؛ taskId → tasks ON DELETE SET NULL
+--   حتى يبقى حذف المهام من المسار القديم كما هو ويبقى سجل التدقيق.
 -- لا يُشغَّل إلا عبر scripts/migrate-0044-teams، وفي هذه المرحلة على قواعد Docker محلية مؤقتة فقط.
 
 CREATE TABLE `teams` (
@@ -108,6 +113,28 @@ CREATE TABLE `team_memberships` (
 	CONSTRAINT `chk_tmb_hash` CHECK (REGEXP_LIKE(`payloadHash`, '^[0-9a-f]{64}$', 'c')
 		AND (`endPayloadHash` IS NULL OR REGEXP_LIKE(`endPayloadHash`, '^[0-9a-f]{64}$', 'c')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+--> statement-breakpoint
+CREATE TABLE `team_task_operations` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`tenantId` int NOT NULL,
+	`teamId` int NOT NULL,
+	`taskId` int NULL,
+	`operationId` varchar(80) NOT NULL,
+	`payloadHash` char(64) NOT NULL,
+	`actorEmployeeId` int NOT NULL,
+	`createdAt` timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+	CONSTRAINT `team_task_operations_id` PRIMARY KEY(`id`),
+	CONSTRAINT `tto_tenant_op_idem_unique` UNIQUE(`tenantId`,`operationId`),
+	CONSTRAINT `tto_task_unique` UNIQUE(`taskId`),
+	INDEX `tto_tenant_team_created` (`tenantId`,`teamId`,`createdAt`),
+	CONSTRAINT `fk_tto_tenant` FOREIGN KEY (`tenantId`) REFERENCES `tenants`(`id`),
+	CONSTRAINT `fk_tto_tenant_team` FOREIGN KEY (`tenantId`,`teamId`) REFERENCES `teams`(`tenantId`,`id`),
+	CONSTRAINT `fk_tto_tenant_actor` FOREIGN KEY (`tenantId`,`actorEmployeeId`) REFERENCES `employees`(`tenantId`,`id`),
+	CONSTRAINT `fk_tto_task` FOREIGN KEY (`taskId`) REFERENCES `tasks`(`id`) ON DELETE SET NULL,
+	CONSTRAINT `chk_tto_operation` CHECK (REGEXP_LIKE(`operationId`, '^[A-Za-z0-9_-]{8,80}$', 'c')),
+	CONSTRAINT `chk_tto_hash` CHECK (REGEXP_LIKE(`payloadHash`, '^[0-9a-f]{64}$', 'c')),
+	CONSTRAINT `chk_tto_actor` CHECK (`actorEmployeeId` > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- ROLLBACK قبل أي استخدام — فقط عبر: scripts/migrate-0044-teams --rollback (يتحقق أن الجدولين فارغان):
---   DROP TABLE `team_memberships`; DROP TABLE `teams`;
+-- ROLLBACK قبل أي استخدام — فقط عبر: scripts/migrate-0044-teams --rollback (يتحقق أن الجداول الثلاثة فارغة):
+--   DROP TABLE `team_task_operations`; DROP TABLE `team_memberships`; DROP TABLE `teams`;

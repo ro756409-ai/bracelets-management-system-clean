@@ -4,7 +4,8 @@
  */
 /** generated: تعبير عمود مولّد STORED كما يُكتب في الملف — يُقارن بعد التطبيع (normalizeGenerationExpression). */
 export type ColumnSpec = { name: string; type: string; nullable: boolean; generated?: string };
-export type ForeignKeySpec = { name: string; columns: string[]; refTable: string; refColumns: string[] };
+/** onDelete (اختياري): قاعدة الحذف المتوقعة (RESTRICT/NO ACTION تُعامل كواحدة) — تُفحص فقط إن وُصفت. */
+export type ForeignKeySpec = { name: string; columns: string[]; refTable: string; refColumns: string[]; onDelete?: "SET NULL" | "CASCADE" | "RESTRICT" };
 export type IndexSpec = { name: string; columns: string[] };
 export type TableSpec = {
   columns: ColumnSpec[];
@@ -22,7 +23,7 @@ export type SchemaSnapshot = {
   columns: Record<string, Array<{ name: string; columnType: string; nullable: boolean; generated?: string | null }>>;
   uniques: Record<string, Record<string, string[]>>;
   indexes: Record<string, Record<string, string[]>>;
-  foreignKeys: Record<string, Record<string, { columns: string[]; refTable: string; refColumns: string[] }>>;
+  foreignKeys: Record<string, Record<string, { columns: string[]; refTable: string; refColumns: string[]; deleteRule?: string | null }>>;
   checks: Record<string, Set<string>>;
 };
 
@@ -79,6 +80,10 @@ export function verifyTable(table: string, spec: TableSpec, snapshot: SchemaSnap
     if (!actual) { issues.push({ table, kind: "foreign_key", detail: `المفتاح الأجنبي ${fk.name} غير موجود` }); continue; }
     if (actual.columns.join(",") !== fk.columns.join(",") || actual.refTable !== fk.refTable || actual.refColumns.join(",") !== fk.refColumns.join(","))
       issues.push({ table, kind: "foreign_key", detail: `${fk.name}: (${actual.columns}) → ${actual.refTable}(${actual.refColumns}) ≠ (${fk.columns}) → ${fk.refTable}(${fk.refColumns})` });
+    else if (fk.onDelete) {
+      const norm = (r: string | null | undefined) => (r == null || r === "NO ACTION" ? "RESTRICT" : r);
+      if (norm(actual.deleteRule) !== norm(fk.onDelete)) issues.push({ table, kind: "foreign_key", detail: `${fk.name}: ON DELETE ${actual.deleteRule ?? "?"} ≠ ${fk.onDelete}` });
+    }
   }
   for (const chk of spec.checks) if (!snapshot.checks[table]?.has(chk)) issues.push({ table, kind: "check", detail: `قيد CHECK ${chk} غير موجود` });
   return issues;

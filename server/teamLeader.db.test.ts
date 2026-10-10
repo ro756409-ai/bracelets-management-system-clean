@@ -212,33 +212,90 @@ describe.runIf(CAN)("🧭 مسارات القائد", () => {
     expect(rows2[0]).toMatchObject({ decisionEligibleOrders: 2, confirmedOrders: 1, cancelledOrders: 1 });
   });
 
-  it("المهام: لأعضاء الفريق الفعّالين أو عامة في نشاط الفريق؛ لا إسناد خارج الفريق؛ مهمة فريق آخر غير موجودة؛ الضغط المزدوج صف واحد", async () => {
+  it("المهام: لأعضاء الفريق الفعّالين أو عامة في نشاط الفريق؛ لا إسناد خارج الفريق؛ مهمة فريق آخر غير موجودة", async () => {
     const L1 = await portal(e.L1);
     const count = () => n("SELECT COUNT(*) n FROM tasks WHERE businessId IN (?, ?)", [A.businessId, farhat]);
     const before = await count();
-    const input = { teamId: T1, title: "اتصل بعملاء الأمس", assignedTo: e.m1, operationId: op() };
-    const both = await Promise.all([L1.employeePortal.team.tasks.create(input), L1.employeePortal.team.tasks.create({ ...input, operationId: op() })]);
-    expect(new Set(both.map(x => x.id)).size).toBe(1);
-    expect(both.filter(x => x.replay)).toHaveLength(1);
-    expect(await count()).toBe(before + 1);
+    const mine = await L1.employeePortal.team.tasks.create({ teamId: T1, title: "اتصل بعملاء الأمس", assignedTo: e.m1, operationId: op() });
     const general = await L1.employeePortal.team.tasks.create({ teamId: T1, title: "مهمة عامة للفريق", operationId: op() });
     expect(Number((await q("SELECT businessId FROM tasks WHERE id = ?", [general.id]))[0].businessId)).toBe(A.businessId);
-    // خارج الفريق / عضوية منتهية / شركة أخرى = مرفوض بلا كتابة
+    // خارج الفريق / عضوية منتهية / شركة أخرى = مرفوض بلا كتابة (لا مهمة ولا سجل عملية)
+    const ops = () => n("SELECT COUNT(*) n FROM team_task_operations WHERE tenantId = ?", [A.tenantId]);
+    const opsBefore = await ops();
     for (const assignedTo of [e.outsider, e.m3, e.mB]) expect(await code(() => L1.employeePortal.team.tasks.create({ teamId: T1, title: "لا يجب أن تُنشأ", assignedTo, operationId: op() }))).toBe("FORBIDDEN");
-    expect(await count()).toBe(before + 2);
+    expect(await count()).toBe(before + 2); expect(await ops()).toBe(opsBefore);
     // مهام لا تخص الفريق
     const otherBiz = insId(await q("INSERT INTO tasks (businessId, title, assignedTo, createdBy, createdByName) VALUES (?, 'مهمة فرحات', ?, ?, 'x')", [farhat, e.m2, e.owner]));
     const outsiderTask = insId(await q("INSERT INTO tasks (businessId, title, assignedTo, createdBy, createdByName) VALUES (?, 'مهمة خارجية', ?, ?, 'x')", [A.businessId, e.outsider, e.owner]));
     const list = await L1.employeePortal.team.tasks.list({ teamId: T1 });
     const ids = list.enabled ? list.rows.map((t: any) => t.id) : [];
-    expect(ids).toContain(both[0].id); expect(ids).toContain(general.id);
+    expect(ids).toContain(mine.id); expect(ids).toContain(general.id);
     expect(ids).not.toContain(otherBiz); expect(ids).not.toContain(outsiderTask);
     expect(await code(() => L1.employeePortal.team.tasks.updateStatus({ teamId: T1, taskId: otherBiz, status: "done" }))).toBe("NOT_FOUND");
     expect(await code(() => L1.employeePortal.team.tasks.updateStatus({ teamId: T1, taskId: outsiderTask, status: "done" }))).toBe("FORBIDDEN");
     expect((await q("SELECT taskStatus s FROM tasks WHERE id IN (?, ?)", [otherBiz, outsiderTask])).map((r: any) => r.s)).toEqual(["new", "new"]);
-    expect(await L1.employeePortal.team.tasks.updateStatus({ teamId: T1, taskId: both[0].id, status: "in_progress" })).toMatchObject({ changed: true });
-    expect(await L1.employeePortal.team.tasks.updateStatus({ teamId: T1, taskId: both[0].id, status: "in_progress" })).toMatchObject({ changed: false });
-    expect(await code(async () => (await portal(e.L2)).employeePortal.team.tasks.updateStatus({ teamId: T1, taskId: both[0].id, status: "done" }))).toBe("FORBIDDEN");
+    expect(await L1.employeePortal.team.tasks.updateStatus({ teamId: T1, taskId: mine.id, status: "in_progress" })).toMatchObject({ changed: true });
+    expect(await L1.employeePortal.team.tasks.updateStatus({ teamId: T1, taskId: mine.id, status: "in_progress" })).toMatchObject({ changed: false });
+    expect(await code(async () => (await portal(e.L2)).employeePortal.team.tasks.updateStatus({ teamId: T1, taskId: mine.id, status: "done" }))).toBe("FORBIDDEN");
+  });
+
+  it("المهام — Idempotency حتمية بـoperationId: ضغط متزامن = مهمة واحدة، عمليتان بنفس المحتوى = مهمتان، بصمة مختلفة = CONFLICT، والحذف لا يُعيد الإنشاء", async () => {
+    const L1 = await portal(e.L1);
+    const tasksCount = () => n("SELECT COUNT(*) n FROM tasks WHERE businessId = ?", [A.businessId]);
+    const before = await tasksCount();
+    const input = { teamId: T1, title: "راجع أوردرات اليوم", assignedTo: e.m2, operationId: op() };
+    // (1) ضغط متزامن بنفس operationId (6 طلبات) ⇒ مهمة واحدة وسجل عملية واحد، والباقي Replay بنفس المهمة
+    const burst = await Promise.all(Array.from({ length: 6 }, () => L1.employeePortal.team.tasks.create(input)));
+    expect(new Set(burst.map(x => x.id)).size).toBe(1);
+    expect(burst.filter(x => !x.replay)).toHaveLength(1);
+    expect(await tasksCount()).toBe(before + 1);
+    expect(await n("SELECT COUNT(*) n FROM team_task_operations WHERE tenantId = ? AND operationId = ?", [A.tenantId, input.operationId])).toBe(1);
+    // (2) نفس المحتوى بعملية مختلفة ⇒ مهمة ثانية حقيقية (لا دمج بالمحتوى ولا بالوقت)
+    const twin = await L1.employeePortal.team.tasks.create({ ...input, operationId: op() });
+    expect(twin.replay).toBe(false); expect(twin.id).not.toBe(burst[0].id);
+    expect(await tasksCount()).toBe(before + 2);
+    // (3) نفس العملية ببيانات مختلفة ⇒ CONFLICT بلا كتابة
+    expect(await code(() => L1.employeePortal.team.tasks.create({ ...input, title: "عنوان مختلف" }))).toBe("CONFLICT");
+    expect(await code(() => L1.employeePortal.team.tasks.create({ ...input, assignedTo: e.m1 }))).toBe("CONFLICT");
+    // (4) مفتاح عملية قائد آخر لا يكشف مهمته (نفس البصمة مستحيلة لفريق آخر، ونفس الفريق يتطلب القيادة)
+    expect(await code(async () => (await portal(e.L2)).employeePortal.team.tasks.create({ ...input, teamId: T2, assignedTo: e.m2 }))).toBe("CONFLICT");
+    expect(await tasksCount()).toBe(before + 2);
+    // (5) حذف المهمة من المسار القديم ينجح، وسجل العملية يبقى (taskId = NULL)، والـReplay لا ينشئ بديلًا
+    await q("DELETE FROM tasks WHERE id = ?", [burst[0].id]);
+    expect((await q("SELECT taskId FROM team_task_operations WHERE tenantId = ? AND operationId = ?", [A.tenantId, input.operationId]))[0].taskId).toBeNull();
+    expect(await code(() => L1.employeePortal.team.tasks.create(input))).toBe("NOT_FOUND");
+    expect(await tasksCount()).toBe(before + 1);
+  });
+
+  it("المهام — الفاعل صريح: اسم القائد الصحيح من سجل العملية، وcreatedBy لا يحمل employeeId موجبًا؛ userId وemployeeId بنفس الرقم في شركتين لا يختلطان", async () => {
+    const L1 = await portal(e.L1);
+    const t = await L1.employeePortal.team.tasks.create({ teamId: T1, title: "مهمة لاختبار الفاعل", assignedTo: e.m1, operationId: op() });
+    const [row] = await q("SELECT createdBy, createdByName FROM tasks WHERE id = ?", [t.id]);
+    expect(Number(row.createdBy)).toBe(-e.L1); // عقد جلسة الإدارة القائم: السالب = موظف، لا users.id
+    expect(row.createdByName).toBe("L1-ldr");
+    expect((await q("SELECT actorEmployeeId FROM team_task_operations WHERE taskId = ?", [t.id]))[0].actorEmployeeId).toBe(e.L1);
+    // مهمة قديمة في الشركة B أنشأها users.id يساوي رقم موظف القائد في A (تصادم أرقام مقصود)
+    const legacyB = insId(await q("INSERT INTO tasks (businessId, title, assignedTo, createdBy, createdByName) VALUES (?, 'مهمة مستخدم B', ?, ?, 'مستخدم B')", [B.businessId, e.mB, e.L1]));
+    // قراءة بالرقم الموجب تجد مهمة B وحدها — مهمة القائد لا تُفسَّر كـusers.id
+    expect((await q("SELECT id FROM tasks WHERE createdBy = ?", [e.L1])).map((r: any) => r.id)).toEqual([legacyB]);
+    // قائمة الفريق: المنشئ موظف باسمه الصحيح؛ ومهمة B غير ظاهرة
+    const list = await L1.employeePortal.team.tasks.list({ teamId: T1 });
+    const rows = list.enabled ? list.rows : [];
+    expect(rows.find((r: any) => r.id === t.id)?.creator).toEqual({ kind: "employee", employeeId: e.L1, name: "L1-ldr" });
+    expect(rows.some((r: any) => r.id === legacyB)).toBe(false);
+    expect(rows.every((r: any) => !("createdBy" in r))).toBe(true); // لا يُعاد الرقم الخام الملتبس
+    // مهمة قديمة في نشاط الفريق بلا سجل عملية = legacy باسمها المحفوظ فقط
+    const legacyA = insId(await q("INSERT INTO tasks (businessId, title, assignedTo, createdBy, createdByName) VALUES (?, 'مهمة قديمة', ?, ?, 'المدير القديم')", [A.businessId, e.m1, e.L1]));
+    const list2 = await L1.employeePortal.team.tasks.list({ teamId: T1 });
+    expect((list2.enabled ? list2.rows : []).find((r: any) => r.id === legacyA)?.creator).toEqual({ kind: "legacy", name: "المدير القديم" });
+    // مسارات المهام القديمة كما هي: مالك B يرى مهمته باسمها، ولا يرى مهمة القائد في A
+    const ownerB = (await (await web(e.ownerB)).tasks.list({})) as any[];
+    expect(ownerB.find(r => r.id === legacyB)?.createdByName).toBe("مستخدم B");
+    expect(ownerB.some(r => r.id === t.id)).toBe(false);
+    // ومالك A يرى مهمة القائد باسم القائد في المسار القديم (createdByName)
+    const ownerA = (await (await web(e.owner)).tasks.list({})) as any[];
+    expect(ownerA.find(r => r.id === t.id)?.createdByName).toBe("L1-ldr");
+    expect(ownerA.some(r => r.id === legacyB)).toBe(false);
   });
 
   it("الأوردرات: كل أوردرات نشاط الفريق ومنها غير المسندة؛ الإسناد لعضو فعّال عبر سجل الأحداث مرة واحدة؛ خارج الفريق/النشاط مرفوض بلا كتابة", async () => {
