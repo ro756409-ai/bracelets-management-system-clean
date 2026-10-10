@@ -278,9 +278,12 @@ describe.runIf(CAN)("🛂 مسارات الرسائل", () => {
     __setMessagingStorageForTests(null);
     const env = { ...process.env };
     process.env.DEPLOY_ENV = "staging"; delete process.env.S3_BUCKET; delete process.env.S3_ACCESS_KEY_ID; delete process.env.S3_SECRET_ACCESS_KEY;
+    // عدّ الملفات قبل/بعد (لا الاعتماد على غياب المجلد): مسار 503 لا يكتب أي ملف محلي
+    const localFiles = () => (fs.existsSync("uploads/messages") ? fs.readdirSync("uploads/messages", { recursive: true }).filter(f => fs.statSync(`uploads/messages/${f}`).isFile()).length : 0);
+    const before = localFiles();
     try {
       expect((await upload(emp.a1, { conversationId: dmA, durationMs: 1000, operationId: op() }, fakeWebm(1000))).status).toBe(503);
-      expect(fs.existsSync("uploads/messages")).toBe(false);
+      expect(localFiles()).toBe(before);
     } finally {
       for (const k of ["DEPLOY_ENV", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"]) { if (env[k] == null) delete process.env[k]; else process.env[k] = env[k]; }
       __setMessagingStorageForTests(store);
