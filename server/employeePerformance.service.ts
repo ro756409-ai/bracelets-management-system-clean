@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { employees } from "../drizzle/schema";
 import { businessDayRange, isValidIanaTimeZone } from "../shared/businessTime";
-import { computePerformance, type EmployeePerformanceRow } from "../shared/employeePerformance";
+import { computePerformance, type EmployeePerformanceRow, type PerformanceEventRow } from "../shared/employeePerformance";
 import { PERFORMANCE_RANKING_MIN_SAMPLE } from "../shared/orderEventsSpec";
 import { getDb } from "./db";
 import { assertOrderEventsReady, orderEventsEnabled } from "./orderEvents.service";
@@ -30,6 +30,11 @@ export async function loadPerformance(opts: {
   timeZone?: string;
   /** تقييد للموظف نفسه (view_self) */
   onlyEmployeeId?: number;
+  /**
+   * نطاق الفريق (قائد): تحويل الأحداث قبل الحساب — يُبقي نسب الحدث فقط لعضو فعّال لحظة occurredAt (يُلغى
+   * المنسوب/المُسنَد خارج العضوية). الحساب والترتيب (حد 20) بعدها كما هو، والصفوف لأعضاء الفريق فقط.
+   */
+  scopeEvents?: (rows: (PerformanceEventRow & { businessId: number })[]) => PerformanceEventRow[];
 }): Promise<PerformanceReport> {
   if (!orderEventsEnabled()) return { enabled: false };
   const timeZone = opts.timeZone ?? "Africa/Cairo";
@@ -48,7 +53,7 @@ export async function loadPerformance(opts: {
     ? sql`AND (attributedEmployeeId = ${opts.onlyEmployeeId} OR assigneeEmployeeIdAtEvent = ${opts.onlyEmployeeId})`
     : sql``;
   const res: any = await db.execute(sql`
-    SELECT orderId, eventType, attributedEmployeeId, assigneeEmployeeIdAtEvent, callAttempt, source, backfillConfidence,
+    SELECT orderId, businessId, eventType, attributedEmployeeId, assigneeEmployeeIdAtEvent, callAttempt, source, backfillConfidence,
            UNIX_TIMESTAMP(occurredAt) * 1000 AS occurredAtMs
     FROM order_activity_events
     WHERE tenantId = ${opts.tenantId}
@@ -57,11 +62,12 @@ export async function loadPerformance(opts: {
       AND occurredAt < FROM_UNIXTIME(${to.getTime() / 1000})
       ${self}`);
   const rows = (Array.isArray(res) ? res[0] : res) as any[];
-  let computed = computePerformance(rows.map(r => ({
-    orderId: Number(r.orderId), eventType: String(r.eventType), attributedEmployeeId: r.attributedEmployeeId == null ? null : Number(r.attributedEmployeeId),
+  const events = rows.map(r => ({
+    orderId: Number(r.orderId), businessId: Number(r.businessId), eventType: String(r.eventType), attributedEmployeeId: r.attributedEmployeeId == null ? null : Number(r.attributedEmployeeId),
     assigneeEmployeeIdAtEvent: r.assigneeEmployeeIdAtEvent == null ? null : Number(r.assigneeEmployeeIdAtEvent), callAttempt: r.callAttempt == null ? null : Number(r.callAttempt),
     occurredAtMs: Number(r.occurredAtMs), source: String(r.source), backfillConfidence: r.backfillConfidence ?? null,
-  })), { timeZone });
+  }));
+  let computed = computePerformance(opts.scopeEvents ? opts.scopeEvents(events) : events, { timeZone });
   if (opts.onlyEmployeeId != null) computed = computed.filter(r => r.employeeId === opts.onlyEmployeeId).map(r => ({ ...r, rank: null }));
   const empIds = computed.map(r => r.employeeId);
   const people = empIds.length

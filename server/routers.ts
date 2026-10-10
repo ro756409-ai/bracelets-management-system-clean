@@ -115,6 +115,7 @@ import { loadPerformance } from "./employeePerformance.service";
 import { buildMessagingRouter, webMessagingIdentity, portalMessagingIdentity } from "./messagingRouter";
 import * as attendanceSvc from "./attendance.service";
 import * as teamsSvc from "./teams.service";
+import * as teamLeaderSvc from "./teamLeader.service";
 import { attendanceCsv } from "../shared/attendanceCalc";
 import { performanceCsv } from "../shared/employeePerformance";
 import {
@@ -4481,6 +4482,64 @@ export const appRouter = router({
           await requireTeamLeader(ctx, input.teamId);
           return { enabled: true as const, members: await teamsSvc.teamMembersAt(requireTenantId((ctx as any).employee), input.teamId) };
         }),
+
+      // ── الحضور: team_attendance.view + قيادة فعّالة. الاعتماد يضيف approve_corrections (وmanage_leaves للإجازة/المأمورية).
+      attendance: requireEmployeeTenantPermission("team_attendance.view")
+        .input(z.object({ teamId: z.number().int().positive(), dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict())
+        .query(async ({ ctx, input }) => {
+          if (!teamsSvc.teamsEnabled() || !attendanceSvc.attendanceEnabled()) return { enabled: false as const };
+          return { enabled: true as const, ...(await teamLeaderSvc.teamAttendance(portalTeamsActor(ctx), input.teamId, input.dateFrom, input.dateTo)) };
+        }),
+      reviewCorrection: requireEmployeeTenantPermission("team_attendance.view")
+        .input(teamLeaderSvc.teamReviewInput)
+        .mutation(async ({ ctx, input }) => {
+          const emp = (ctx as any).employee;
+          const tenantId = requireTenantId(emp);
+          // الاعتماد ليس افتراضيًا للقائد: approve_corrections إلزامية دائمًا، وmanage_leaves للإجازة/المأمورية (في الخدمة).
+          const perms = { approveCorrections: await hasTenantPermission(tenantId, emp.role, "attendance.approve_corrections"), manageLeaves: await hasTenantPermission(tenantId, emp.role, "attendance.manage_leaves") };
+          if (!perms.approveCorrections) throw new TRPCError({ code: "FORBIDDEN", message: "ليس لديك صلاحية اعتماد طلبات التصحيح" });
+          return teamLeaderSvc.reviewTeamCorrection(portalTeamsActor(ctx), input, perms);
+        }),
+
+      // ── الأداء: team_performance.view + قيادة فعّالة؛ order_activity_events فقط بعضوية لحظة الحدث.
+      performance: requireEmployeeTenantPermission("team_performance.view")
+        .input(z.object({ teamId: z.number().int().positive(), dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict())
+        .query(async ({ ctx, input }) => {
+          if (!teamsSvc.teamsEnabled()) return { enabled: false as const };
+          const r = await teamLeaderSvc.teamPerformance(portalTeamsActor(ctx), input.teamId, input.dateFrom, input.dateTo);
+          if (!r.report.enabled) return { enabled: false as const };
+          const { enabled: _on, ...report } = r.report;
+          return { enabled: true as const, team: r.team, ...report };
+        }),
+
+      // ── المهام: team_tasks.manage + قيادة فعّالة؛ أعضاء فعّالون أو مهمة عامة لنشاط الفريق، بلا حذف.
+      tasks: router({
+        list: requireEmployeeTenantPermission("team_tasks.manage")
+          .input(z.object({ teamId: z.number().int().positive(), status: z.enum(["new", "in_progress", "done"]).optional() }).strict())
+          .query(async ({ ctx, input }) => {
+            if (!teamsSvc.teamsEnabled()) return { enabled: false as const, rows: [] as any[] };
+            return { enabled: true as const, rows: await teamLeaderSvc.listTeamTasks(portalTeamsActor(ctx), input.teamId, input.status) };
+          }),
+        create: requireEmployeeTenantPermission("team_tasks.manage").input(teamLeaderSvc.teamTaskInput)
+          .mutation(async ({ ctx, input }) => teamLeaderSvc.createTeamTask(portalTeamsActor(ctx), input)),
+        updateStatus: requireEmployeeTenantPermission("team_tasks.manage").input(teamLeaderSvc.teamTaskStatusInput)
+          .mutation(async ({ ctx, input }) => teamLeaderSvc.updateTeamTaskStatus(portalTeamsActor(ctx), input)),
+      }),
+
+      // ── الأوردرات: view = كل أوردرات نشاط الفريق (ومنها غير المسندة)؛ assign = لعضو فعّال عبر المسار القائم.
+      orders: router({
+        list: requireEmployeeTenantPermission("team_orders.view").input(teamLeaderSvc.teamOrdersInput)
+          .query(async ({ ctx, input }) => {
+            if (!teamsSvc.teamsEnabled()) return { enabled: false as const };
+            return { enabled: true as const, ...(await teamLeaderSvc.listTeamOrders(portalTeamsActor(ctx), input)) };
+          }),
+        assign: requireEmployeeTenantPermission("team_orders.assign").input(teamLeaderSvc.teamAssignInput)
+          .mutation(async ({ ctx, input }) => {
+            if (!teamsSvc.teamsEnabled()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "نظام الفرق غير مفعّل" });
+            const r = await teamLeaderSvc.assignTeamOrder(portalTeamsActor(ctx), input, portalEventCtx(ctx, "employee_portal", input.operationId));
+            return { success: true as const, teamId: r.team.teamId };
+          }),
+      }),
     }),
 
     // ==================== مهامي — هوية البوابة فقط ====================

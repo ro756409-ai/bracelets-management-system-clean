@@ -367,12 +367,15 @@ const LEAVE_TYPES = new Set<CorrectionRequestType>(["absence_to_leave", "absence
  * مراجعة طلب تصحيح (اعتماد/رفض) — المراجع لا يعتمد طلبه، الرفض بسبب إلزامي، الإجازة/المأمورية تحتاج
  * manage_leaves والباقي approve_corrections. الاعتماد يكتب حدث تصحيح (أو إجازة/مأمورية) ثم يعيد حساب اليوم.
  */
-export async function reviewCorrection(actor: AttendanceActor, input: { requestId: number; decision: "approve" | "reject"; reviewReason?: string | null }, perms: { approveCorrections: boolean; manageLeaves: boolean }, allowedBusinessIds: number[]) {
+export async function reviewCorrection(actor: AttendanceActor, input: { requestId: number; decision: "approve" | "reject"; reviewReason?: string | null }, perms: { approveCorrections: boolean; manageLeaves: boolean }, allowedBusinessIds: number[],
+  /** نطاق القائد (الفرق): صاحب الطلب يجب أن يكون من هؤلاء — يحل محل فحص نشاط الموظف (الموظفة قد تكون في فريق نشاط آخر). */
+  scope?: { onlyEmployeeIds: number[] }) {
   return runAttendanceTx(async tx => {
     const req = await one(tx, sql`SELECT r.id, r.employeeId, r.status, r.requestType, r.targetEventId, r.requestedValueJson, DATE_FORMAT(r.workDate, '%Y-%m-%d') AS workDate, e.role, e.businessId, COALESCE(b.timezone, 'Africa/Cairo') AS tz
       FROM attendance_correction_requests r JOIN employees e ON e.id = r.employeeId LEFT JOIN businesses b ON b.id = e.businessId WHERE r.id = ${input.requestId} AND r.tenantId = ${actor.tenantId} FOR UPDATE`);
     if (!req) throw new TRPCError({ code: "NOT_FOUND", message: "الطلب غير موجود" });
-    if (req.businessId != null && !allowedBusinessIds.includes(Number(req.businessId))) throw forbidden("الطلب خارج نطاقك");
+    if (scope) { if (!scope.onlyEmployeeIds.includes(Number(req.employeeId))) throw forbidden("الطلب خارج نطاق فريقك"); }
+    else if (req.businessId != null && !allowedBusinessIds.includes(Number(req.businessId))) throw forbidden("الطلب خارج نطاقك");
     if (Number(req.employeeId) === actor.employeeId) throw forbidden("لا يمكنك مراجعة طلبك");
     if (LEAVE_TYPES.has(req.requestType) ? !perms.manageLeaves : !perms.approveCorrections) throw forbidden("ليس لديك صلاحية مراجعة هذا النوع");
     if (req.status !== "pending") throw conflict("تمت مراجعة الطلب بالفعل");
@@ -476,6 +479,23 @@ export async function teamDays(tenantId: number, businessIds: number[], fromDate
       FROM attendance_days d JOIN employees e ON e.id = d.employeeId WHERE d.tenantId = ${tenantId} AND e.businessId IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND d.workDate BETWEEN ${fromDate} AND ${toDate} ORDER BY d.workDate DESC, e.name`)),
     pending: rows(await tx.execute(sql`SELECT r.id, r.employeeId, e.name AS employeeName, DATE_FORMAT(r.workDate, '%Y-%m-%d') AS workDate, r.requestType, r.reason, r.requestedValueJson, UNIX_TIMESTAMP(r.createdAt) * 1000 AS createdMs
       FROM attendance_correction_requests r JOIN employees e ON e.id = r.employeeId WHERE r.tenantId = ${tenantId} AND e.businessId IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) AND r.status = 'pending' ORDER BY r.id`)),
+  }));
+}
+
+/**
+ * أيام وطلبات معلّقة لقائمة موظفين محددة (نطاق القائد) — قراءة فقط. المتصل يقرر أي يوم يخص الفريق بعضوية
+ * الموظف لحظة اليوم (anchorMs: أول حضور، وإلا بداية الوردية المجدولة).
+ */
+export async function daysForEmployees(tenantId: number, employeeIds: number[], fromDate: string, toDate: string) {
+  if (!ISO_DATE.test(fromDate) || !ISO_DATE.test(toDate)) throw bad("نطاق غير صالح");
+  const ids = employeeIds.length ? employeeIds : [-1];
+  const inIds = sql.join(ids.map(i => sql`${i}`), sql`, `);
+  return runAttendanceTx(async tx => ({
+    days: rows(await tx.execute(sql`SELECT d.id, d.employeeId, e.name AS employeeName, DATE_FORMAT(d.workDate, '%Y-%m-%d') AS workDate, d.status, d.workedMinutes, d.breakMinutes, d.excessBreakMinutes, d.lateMinutes, d.earlyLeaveMinutes, d.overtimeMinutes, d.requiresReview, d.reviewReason,
+      UNIX_TIMESTAMP(d.firstInAt) * 1000 AS firstInMs, UNIX_TIMESTAMP(d.lastOutAt) * 1000 AS lastOutMs, UNIX_TIMESTAMP(d.scheduledStartAt) * 1000 AS scheduledStartMs, d.timezone
+      FROM attendance_days d JOIN employees e ON e.id = d.employeeId AND e.tenantId = d.tenantId WHERE d.tenantId = ${tenantId} AND d.employeeId IN (${inIds}) AND d.workDate BETWEEN ${fromDate} AND ${toDate} ORDER BY d.workDate DESC, e.name`)),
+    pending: rows(await tx.execute(sql`SELECT r.id, r.employeeId, e.name AS employeeName, DATE_FORMAT(r.workDate, '%Y-%m-%d') AS workDate, r.requestType, r.reason, r.requestedValueJson, UNIX_TIMESTAMP(r.createdAt) * 1000 AS createdMs
+      FROM attendance_correction_requests r JOIN employees e ON e.id = r.employeeId AND e.tenantId = r.tenantId WHERE r.tenantId = ${tenantId} AND r.employeeId IN (${inIds}) AND r.status = 'pending' ORDER BY r.id`)),
   }));
 }
 

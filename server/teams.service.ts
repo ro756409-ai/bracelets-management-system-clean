@@ -424,6 +424,13 @@ async function leaderTeamsTx(tx: any, actor: TeamsActor, atMs?: number): Promise
     ORDER BY t.id`)).map(r => ({ teamId: Number(r.teamId), businessId: Number(r.businessId), name: r.name }));
 }
 
+/** نفس حارس القائد داخل معاملة قائمة (للكتابات التي تقفل صف الفريق أولًا ثم تتحقق من القيادة ذريًا). */
+export async function requireLeaderOfTx(tx: any, actor: TeamsActor, teamId: number): Promise<LeaderTeam> {
+  const t = (await leaderTeamsTx(tx, actor)).find(x => x.teamId === teamId);
+  if (!t) throw forbidden("لست قائدًا فعّالًا لهذا الفريق");
+  return t;
+}
+
 /** حارس القائد: قيادة فعّالة لهذا الفريق بالذات وإلا FORBIDDEN (لا نكشف وجود فرق الآخرين). */
 export async function requireLeaderOf(actor: TeamsActor, teamId: number): Promise<LeaderTeam> {
   const mine = await leaderTeams(actor);

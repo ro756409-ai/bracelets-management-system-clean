@@ -43,6 +43,18 @@ export function eventCountsForTeam(e: TeamEvent, team: { tenantId: number; busin
   return spans.some(s => s.employeeId === e.employeeId && isActiveAt(s, e.occurredAtMs));
 }
 
+/**
+ * أحداث الأداء ⇒ نطاق الفريق: المنسوب إليه يبقى فقط إن كان الحدث يُحسب له في هذا الفريق (eventCountsForTeam)،
+ * ونفس الشيء للمُسنَد إليه في أحداث الإسناد؛ الحدث الذي لا يبقى له أحد يُسقط. لا يُنقل حدث لموظف آخر.
+ */
+export function scopeEventsToTeam<E extends { businessId: number | null; attributedEmployeeId: number | null; assigneeEmployeeIdAtEvent: number | null; occurredAtMs: number }>(
+  events: E[], team: { tenantId: number; businessId: number }, spans: TeamMembershipSpan[], eventTenantId: number): E[] {
+  const keep = (e: E, employeeId: number | null) => employeeId != null && eventCountsForTeam({ tenantId: eventTenantId, businessId: e.businessId, employeeId, occurredAtMs: e.occurredAtMs }, team, spans) ? employeeId : null;
+  return events
+    .map(e => ({ ...e, attributedEmployeeId: keep(e, e.attributedEmployeeId), assigneeEmployeeIdAtEvent: keep(e, e.assigneeEmployeeIdAtEvent) }))
+    .filter(e => e.attributedEmployeeId != null || e.assigneeEmployeeIdAtEvent != null);
+}
+
 /** نفس التعبير الذي يُكتب في الملف (يُقارن بعد التطبيع مع information_schema). */
 export const TEAMS_GENERATED = {
   activeBusinessId: "CASE WHEN `isActive` = 1 THEN `businessId` END",
