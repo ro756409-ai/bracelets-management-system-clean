@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
@@ -341,6 +341,19 @@ describe("salesChannels — secret lifecycle", () => {
 });
 
 describe("salesChannels — connection test", () => {
+  // بلا شبكة حية: المزوّد الخارجي (api.easy-orders.net) مستبدل باستجابة ثابتة داخل الاختبار فقط — كان الاتصال
+  // الحي يتجاوز مهلة الاختبار (5s) تحت حمل الحزمة الكاملة. الاستجابة 401 **تُعيد التوكن في جسمها** (أسوأ مزوّد
+  // ممكن) لنثبت أن النتيجة لا تكشفه أبدًا. كود الإنتاج ومهلته كما هما.
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: any, init?: any) => {
+      const headers = Object.values((init?.headers ?? {}) as Record<string, string>).join(" ");
+      return new Response(`{"message":"Unauthorized","echo":"${headers}"}`, { status: 401, headers: { "Content-Type": "application/json" } });
+    });
+  });
+  afterEach(() => { fetchSpy.mockRestore(); });
+  const providerCalls = () => fetchSpy.mock.calls.map(([input]) => new URL(String(input)).host);
+
   it("is admin-only", async () => {
     const userCaller = appRouter.createCaller(createUserContext());
     const noUserCaller = appRouter.createCaller(createNoUserContext());
@@ -365,6 +378,7 @@ describe("salesChannels — connection test", () => {
     const result = await caller.salesChannels.testConnection({ id: created.id });
     expect(result.connected).toBe(false);
     expect(result.errorCode).toBe("NO_TOKEN");
+    expect(fetchSpy).not.toHaveBeenCalled(); // بلا توكن لا اتصال بالمزوّد أصلًا
 
     // The failed test must be recorded on the channel...
     const after = await caller.salesChannels.get({ id: created.id });
@@ -393,6 +407,9 @@ describe("salesChannels — connection test", () => {
     const result = await caller.salesChannels.testConnection({ id: created.id });
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(result).not.toHaveProperty("apiToken");
+    // المسار الحقيقي اشتغل: طلب للمزوّد الموثّق، والمزوّد أعاد التوكن في الخطأ، والنتيجة فشل اتصال بلا تسريب
+    expect(providerCalls()).toEqual(["api.easy-orders.net"]);
+    expect(result.connected).toBe(false);
   });
 
   it("does not create any order while testing a connection", async () => {
@@ -414,6 +431,7 @@ describe("salesChannels — connection test", () => {
     await caller.salesChannels.testConnection({ id: created.id });
     const after = (await caller.orders.list({ limit: 1 })).total;
     expect(after).toBe(before);
+    expect(providerCalls()).toEqual(["api.easy-orders.net"]); // اختبار الاتصال وحده — لا جلب أوردرات
   });
 });
 
