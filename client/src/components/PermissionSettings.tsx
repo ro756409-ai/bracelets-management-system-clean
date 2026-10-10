@@ -14,8 +14,9 @@ import { permissionLabel, roleLabel } from "@shared/permissionLabels";
  * المرحلة 7F (عرض فقط): نفس الاستعلام والحفظ (permissionConfiguration / rolePermissionSave) ونفس
  * invalidate لـauth.myPermissions فور الحفظ؛ صفوف 44px، حالات Loading/Error/Denied، وبلا ألوان خام.
  */
-// messages.view_private: اطلاع المالك على المحادثات الخاصة — مقفولة لكل دور غير المالك (السيرفر يرفض المنح).
-const OWNER_ONLY = new Set(["ledger.period.reopen", "ledger.activate", "messages.view_private"]);
+const OWNER_ONLY = new Set(["ledger.period.reopen", "ledger.activate"]);
+// اطلاع المالك على المحادثات الخاصة (messages.view_private) — مقفولة لكل دور غير المالك؛ السيرفر يرفض منحها ويتجاهله.
+OWNER_ONLY.add("messages.view_private");
 
 export function PermissionSettings() {
   const utils = trpc.useUtils();
