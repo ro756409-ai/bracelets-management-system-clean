@@ -553,6 +553,15 @@ export async function ackAnnouncement(actor: MessagingActor, input: { messageId:
 }
 
 // ==================== المحادثات الخاصة والمجموعات ====================
+/** دليل الزملاء لبدء محادثة خاصة: موظفو نفس الشركة النشطون فقط (اسم ودور، بلا بيانات اتصال). */
+export async function directory(actor: MessagingActor) {
+  return runMessagingTx(async tx => {
+    const me = await loadMe(tx, actor);
+    const list = rows(await tx.execute(sql`SELECT id, name, role, businessId FROM employees WHERE tenantId = ${actor.tenantId} AND isActive = 1 AND id <> ${me.id} ORDER BY name LIMIT 1000`));
+    return list.map(e => ({ id: Number(e.id), name: String(e.name), role: String(e.role), businessId: num(e.businessId) }));
+  });
+}
+
 /** محادثة خاصة مع أي موظف نشط في نفس الشركة — تُعاد نفس المحادثة لو موجودة. */
 export async function startDirect(actor: MessagingActor, input: { employeeId: number }) {
   const target = ID.parse(input.employeeId);

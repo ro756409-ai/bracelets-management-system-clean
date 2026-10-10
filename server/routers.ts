@@ -112,6 +112,7 @@ import {
 import { eq, and, gte, lte, desc, sql, inArray, or, isNull } from "drizzle-orm";
 import { orderEventsEnabled, type OrderEventContext } from "./orderEvents.service";
 import { loadPerformance } from "./employeePerformance.service";
+import { buildMessagingRouter, webMessagingIdentity, portalMessagingIdentity } from "./messagingRouter";
 import * as attendanceSvc from "./attendance.service";
 import { attendanceCsv } from "../shared/attendanceCalc";
 import { performanceCsv } from "../shared/employeePerformance";
@@ -4419,6 +4420,9 @@ export const appRouter = router({
       return tenantPermissionsForRole(requireTenantId(emp), emp.role);
     }),
 
+    // ==================== الرسائل (0043) — هوية كوكي البوابة فقط ====================
+    messages: buildMessagingRouter(employeePortalProcedure as unknown as typeof authenticatedProcedure, portalMessagingIdentity),
+
     // ==================== حضوري (0042) — هوية البوابة فقط ====================
     attendanceMine: requireEmployeeTenantPermission("attendance.view_self")
       .input(attendanceRange.strict())
@@ -6671,6 +6675,9 @@ export const appRouter = router({
       }).strict())
       .mutation(async ({ ctx, input: { punchType, ...rest } }) => attendanceSvc.adminCorrect(webAttendanceActor(ctx), { ...rest, eventType: punchType }, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
   }),
+
+  // ==================== مركز الرسائل (0043، خلف MESSAGING_ENABLED) — هوية جلسة الويب ====================
+  messages: buildMessagingRouter(authenticatedProcedure, webMessagingIdentity),
 
   // ==================== BROADCAST (Admin OAuth) ====================
   broadcast: router({
