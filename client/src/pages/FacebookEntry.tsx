@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
 import { trpc } from "@/lib/trpc";
 import { draftKey, readEmployeeScope, sanitizeDraftItems } from "@/lib/employeeScope";
 import { activeDraftKey } from "@/lib/activeBusiness";
@@ -627,6 +628,7 @@ export default function FacebookEntry() {
             <Button size="sm" variant="outline" className={TOUCH} onClick={() => setShowOrders(s => !s)} aria-expanded={showOrders}>
               {showOrders ? "إخفاء أوردراتي" : "أوردراتي"}
             </Button>
+            <MessagesEntryButton via="portal" />
             <Button data-readonly-safe size="sm" variant="ghost" className={`${TOUCH} min-w-11`} onClick={handleLogout} aria-label="خروج" title="خروج">
               <LogOut className="h-4 w-4" aria-hidden="true" />
             </Button>

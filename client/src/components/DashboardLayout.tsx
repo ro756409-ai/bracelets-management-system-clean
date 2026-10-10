@@ -24,6 +24,7 @@ import {
 } from "@/config/navigation";
 import { BusinessSwitcher } from "@/components/shell/BusinessSwitcher";
 import { MobileBottomNav } from "@/components/shell/MobileBottomNav";
+import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
 import { WorkspaceTabs } from "@/components/shell/WorkspaceTabs";
 import { CreateMenu } from "@/components/shell/CreateMenu";
 import { TopBarActions } from "@/components/shell/TopBar";
@@ -373,6 +374,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
             )}
             {!isMobile && <CreateMenu isAdmin={isAdmin} permissions={permissions} />}
           </div>
+          {/* الرسائل: لا يُرسم إلا والعلم مفعّل ومع messages.use (من السيرفر) */}
+          <MessagesEntryButton via="web" className="shrink-0 md:h-10 md:min-h-10 md:w-10 md:min-w-10" />
           <TopBarActions
             isMobile={isMobile}
             isAdmin={isAdmin}

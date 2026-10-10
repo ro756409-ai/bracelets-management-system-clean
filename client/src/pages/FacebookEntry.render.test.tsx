@@ -36,7 +36,7 @@ vi.mock("@/lib/trpc", () => ({
       entryConfig: { useQuery: mkQuery("entryConfig") }, catalog: { useQuery: mkQuery("catalog") }, myOrders: { useQuery: mkQuery("myOrders") },
       addOrder: { useMutation: mkMutation("addOrder") }, updateOrder: { useMutation: mkMutation("updateOrder") }, deleteOrder: { useMutation: mkMutation("deleteOrder") },
     },
-    employeePortal: { me: { useQuery: mkQuery("me") } },
+    employeePortal: { /* مدخل الرسائل في القشرة: العلم معطل (الافتراضي) */ messages: { status: { useQuery: () => ({ data: { enabled: false } }) }, conversations: { useQuery: () => ({ data: undefined, refetch: async () => ({}) }) } },  me: { useQuery: mkQuery("me") } },
     useUtils: () => ({ facebookEntry: { parsePaste: { fetch: vi.fn() } } }),
   },
 }));

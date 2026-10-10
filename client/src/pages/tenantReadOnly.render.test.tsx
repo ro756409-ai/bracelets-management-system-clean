@@ -24,7 +24,7 @@ vi.mock("@/lib/trpc", () => ({
     },
     performance: { status: { useQuery: () => q({ enabled: true }) }, team: { useQuery: () => q({ enabled: true, rows: [] }) }, mine: { useQuery: () => q({ enabled: true, rows: [] }) } },
     employees: { activeList: { useQuery: () => q([]) } },
-    employeePortal: {
+    employeePortal: { /* مدخل الرسائل في القشرة: العلم معطل (الافتراضي) */ messages: { status: { useQuery: () => ({ data: { enabled: false } }) }, conversations: { useQuery: () => ({ data: undefined, refetch: async () => ({}) }) } }, 
       attendanceMine: { useQuery: () => q({ enabled: true, days: [], requests: [{ id: 9, workDate: "2026-10-08", requestType: "other", status: "pending", reason: "x" }], open: null }) },
       attendanceMyDayEvents: { useQuery: () => q(undefined) },
       attendanceClock: m("clock"), attendanceRequestCorrection: m("request"), attendanceCancelRequest: m("cancelRequest"),

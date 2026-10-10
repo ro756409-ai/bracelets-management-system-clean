@@ -36,6 +36,8 @@ import Attendance from "./pages/Attendance";
 import { TenantAccessNotice } from "./components/TenantAccessNotice";
 import { TenantAccessProvider } from "./contexts/TenantAccessContext";
 import MyAttendance from "./pages/MyAttendance";
+import Messages from "./pages/Messages";
+import MyMessages from "./pages/MyMessages";
 import EmployeeLogin from "./pages/EmployeeLogin";
 import EmployeeDashboard from "./pages/EmployeeDashboard";
 import ManagerDashboard from "./pages/ManagerDashboard";
@@ -182,6 +184,15 @@ function Router() {
       </Route>
       {/* «حضوري» لموظف البوابة — هوية كوكي الموظف فقط (employeePortal.attendance*) */}
       <Route path={"/my-attendance"} component={MyAttendance} />
+      {/* مركز الرسائل (0043، خلف MESSAGING_ENABLED): المالك داخل DashboardLayout، والموظف داخل بوابته */}
+      <Route path={"/messages"}>
+        <ProtectedLayout><Messages /></ProtectedLayout>
+      </Route>
+      <Route path={"/messages/:id"}>
+        <ProtectedLayout><Messages /></ProtectedLayout>
+      </Route>
+      <Route path={"/my-messages"} component={MyMessages} />
+      <Route path={"/my-messages/:id"} component={MyMessages} />
       <Route path={"/employee-login"} component={EmployeeLogin} />
       {/* النظام المحاسبي مجمّد: /accountant وكل المسارات المحاسبية بتعرض صفحة «قيد التطوير»
           الآمنة لأي دور (بما فيهم المالك) — لا بيانات تشغيلية ولا مالية. */}

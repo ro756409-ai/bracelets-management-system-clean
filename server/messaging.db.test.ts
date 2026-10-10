@@ -306,6 +306,38 @@ describe.runIf(CAN)("💬 خدمات الرسائل", () => {
     expect(Number((await q("SELECT COUNT(*) n FROM msg_messages WHERE idempotencyKey = ?", [idempotencyKey]))[0].n)).toBe(1);
   });
 
+  it("«تمت القراءة» (الخاص فقط): مؤشر الطرف الآخر من msg_members — لا قبل قراءته، يتقدم بـmarkRead، والمطّلع لا يؤثر", async () => {
+    // محادثة جديدة بين e2 وmgr
+    const dm = (await msg.startDirect(a2, { employeeId: emp.mgr })).conversationId;
+    const m1 = (await msg.sendMessage(a2, BASIC, { conversationId: dm, body: "سؤال", idempotencyKey: op() })).messageId;
+    const m2 = (await msg.sendMessage(a2, BASIC, { conversationId: dm, body: "سؤال تاني", idempotencyKey: op() })).messageId;
+    // وصلت للسيرفر فقط — الطرف الآخر لم يقرأ
+    expect((await msg.readMessages(a2, BASIC, { conversationId: dm })).peerLastReadMessageId).toBeNull();
+    // المالك المطّلع يقرأ: لا مؤشر قراءة له ولا تغيير لمؤشر أحد
+    const mon = await msg.readMessages(boss, ALL, { conversationId: dm });
+    expect(mon.readOnly).toBe(true); expect(mon.peerLastReadMessageId).toBeNull();
+    expect(await msg.markRead(boss, { conversationId: dm, messageId: m2 }, ALL)).toEqual({ lastReadMessageId: null });
+    expect((await msg.readMessages(a2, BASIC, { conversationId: dm })).peerLastReadMessageId).toBeNull();
+    // الطرف الآخر قرأ الأولى فقط ثم الثانية
+    await msg.markRead(mgr, { conversationId: dm, messageId: m1 });
+    expect((await msg.readMessages(a2, BASIC, { conversationId: dm })).peerLastReadMessageId).toBe(m1);
+    await msg.markRead(mgr, { conversationId: dm, messageId: m2 });
+    expect((await msg.readMessages(a2, BASIC, { conversationId: dm })).peerLastReadMessageId).toBe(m2);
+    // markRead لا يرجع للخلف
+    await msg.markRead(mgr, { conversationId: dm, messageId: m1 });
+    expect((await msg.readMessages(a2, BASIC, { conversationId: dm })).peerLastReadMessageId).toBe(m2);
+    // التعديل والحذف لا يكسران المؤشر (المعرّف ثابت)
+    await msg.editMessage(a2, { messageId: m2, body: "سؤال تاني (معدّل)" });
+    await msg.deleteMessage(a2, { messageId: m1 });
+    expect((await msg.readMessages(a2, BASIC, { conversationId: dm })).peerLastReadMessageId).toBe(m2);
+    // كل طرف يرى مؤشر الآخر فقط
+    expect((await msg.readMessages(mgr, BASIC, { conversationId: dm })).peerLastReadMessageId).toBeGreaterThanOrEqual(m2); // مؤشر e2 (أرسل m2)
+    // المجموعات والقنوات: لا قراءة فردية
+    expect((await msg.readMessages(a2, BASIC, { conversationId: teamA })).peerLastReadMessageId).toBeNull();
+    // شركة أخرى: لا وصول أصلًا
+    expect(await code(() => msg.readMessages(bE, ALL, { conversationId: dm }))).toBe("NOT_FOUND");
+  });
+
   it("الصفحات: beforeId/afterId للـPolling + changesSince", async () => {
     const before = await msg.changesSince(a2, 0);
     const ids: number[] = [];

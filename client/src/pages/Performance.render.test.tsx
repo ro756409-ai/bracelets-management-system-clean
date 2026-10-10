@@ -11,7 +11,7 @@ vi.mock("@/lib/trpc", () => ({
       team: { useQuery: (_i: any, o: any) => q(o?.enabled ? { enabled: true, rows: st.team, minSample: 20 } : undefined) },
       mine: { useQuery: (_i: any, o: any) => q(o?.enabled ? { enabled: true, rows: st.mine, minSample: 20 } : undefined) },
     },
-    employeePortal: { myPerformance: { useQuery: () => q(st.enabled ? { enabled: true, rows: st.mine } : { enabled: false }) }, me: { useQuery: () => q({ name: "سارة" }) } },
+    employeePortal: { /* مدخل الرسائل في القشرة: العلم معطل (الافتراضي) */ messages: { status: { useQuery: () => ({ data: { enabled: false } }) }, conversations: { useQuery: () => ({ data: undefined, refetch: async () => ({}) }) } },  myPerformance: { useQuery: () => q(st.enabled ? { enabled: true, rows: st.mine } : { enabled: false }) }, me: { useQuery: () => q({ name: "سارة" }) } },
     useUtils: () => ({ performance: { exportCsv: { fetch: vi.fn() } } }),
   },
 }));

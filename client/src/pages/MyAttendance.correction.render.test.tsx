@@ -11,7 +11,7 @@ const st = vi.hoisted(() => ({ events: [] as any[], loading: false, calls: [] as
 const cairo = (hm: string) => Date.parse(`2026-10-10T${hm}:00+03:00`);
 vi.mock("@/lib/trpc", () => ({
   trpc: {
-    employeePortal: {
+    employeePortal: { /* مدخل الرسائل في القشرة: العلم معطل (الافتراضي) */ messages: { status: { useQuery: () => ({ data: { enabled: false } }) }, conversations: { useQuery: () => ({ data: undefined, refetch: async () => ({}) }) } }, 
       attendanceMine: { useQuery: () => ({ data: { enabled: true, days: [{ id: 1, workDate: "2026-10-10", timezone: "Africa/Cairo", status: "closed", firstInMs: cairo("12:16"), lastOutMs: cairo("12:19"), workedMinutes: 3 }], requests: [], open: null }, isLoading: false, isError: false }) },
       attendanceMyDayEvents: { useQuery: (input: any, opts: any) => { if (opts?.enabled) st.queried.push(input); return { data: opts?.enabled ? { enabled: true, timezone: "Africa/Cairo", events: st.events } : undefined, isLoading: !!opts?.enabled && st.loading, isError: false, refetch: vi.fn() }; } },
       attendanceClock: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },

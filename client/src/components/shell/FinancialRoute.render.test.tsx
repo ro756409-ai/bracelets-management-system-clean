@@ -21,7 +21,7 @@ vi.mock("wouter", () => ({ Redirect: ({ to }: { to: string }) => { st.redirects.
 vi.mock("@/pages/Home", () => ({ default: () => <div data-testid="home">Home</div> }));
 // DashboardLayout الحقيقي يُبقي بوابته: user = null → «يرجى تسجيل الدخول» (نفس نص المكوّن الحقيقي، مُثبَّت نصيًا أدناه)
 vi.mock("@/components/DashboardLayout", () => ({ default: ({ children }: any) => (st.user ? <div data-testid="dashboard-layout">{children}</div> : <div>يرجى تسجيل الدخول للوصول إلى المنصة</div>) }));
-vi.mock("@/lib/trpc", () => ({ trpc: { employeePortal: { me: { useQuery: () => ({ data: { name: "موظف المخزن" } }) } } } }));
+vi.mock("@/lib/trpc", () => ({ trpc: { employeePortal: { /* مدخل الرسائل في القشرة: العلم معطل (الافتراضي) */ messages: { status: { useQuery: () => ({ data: { enabled: false } }) }, conversations: { useQuery: () => ({ data: undefined, refetch: async () => ({}) }) } },  me: { useQuery: () => ({ data: { name: "موظف المخزن" } }) } } } }));
 
 import { FinancialRoute, homeForPermissions } from "./FinancialRoute";
 

@@ -23,6 +23,8 @@ export const EMPLOYEE_PATHS = [
   "/today-shipments",
   "/shipping-schedule",
   "/accountant",
+  // مركز رسائل الموظف (هوية البوابة) — 401 هنا لا يحوّل لدخول المالك.
+  "/my-messages",
 ];
 
 /** هل المسار مُعفى من تحويل الدخول (عام أو موظف)؟ مطابقة دقيقة أو بادئة مسار (`/x/…`). */
