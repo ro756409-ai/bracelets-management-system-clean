@@ -28,7 +28,7 @@ export function AttendanceTab({ team, perms }: { team: LedTeam; perms: LeaderPer
   const { days, pending } = q.data as unknown as { days: Day[]; pending: any[] };
   const columns: Column<Day>[] = [
     { id: "name", header: "العضو", cell: r => <span className="font-medium">{r.employeeName}</span> },
-    { id: "date", header: "اليوم", cell: r => <span className="tabular-nums" dir="ltr">{r.workDate}</span> },
+    { id: "date", header: "اليوم", cell: r => <bdi className="tabular-nums" dir="ltr">{r.workDate}</bdi> },
     { id: "status", header: "الحالة", cell: r => { const s = DAY_STATUS_LABELS[r.status as keyof typeof DAY_STATUS_LABELS]; return <StatusBadge status={r.status} label={s?.label ?? r.status} tone={s?.tone} size="sm" />; } },
     { id: "in", header: "حضور", numeric: true, cell: r => formatClock(r.firstInMs, r.timezone || TEAMS_TZ) },
     { id: "out", header: "انصراف", numeric: true, cell: r => formatClock(r.lastOutMs, r.timezone || TEAMS_TZ) },
@@ -52,7 +52,7 @@ export function AttendanceTab({ team, perms }: { team: LedTeam; perms: LeaderPer
               return (
                 <div className="space-y-1 rounded-[var(--radius-brand-md)] border border-border bg-card p-3">
                   <div className="flex items-center gap-2"><span className="min-w-0 flex-1 truncate font-medium">{r.employeeName}</span><StatusBadge status={r.status} label={s?.label ?? r.status} tone={s?.tone} size="sm" /></div>
-                  <p className="text-xs text-muted-foreground"><span className="tabular-nums" dir="ltr">{r.workDate}</span> · حضور <span className="tabular-nums">{formatClock(r.firstInMs, r.timezone || TEAMS_TZ)}</span> · انصراف <span className="tabular-nums">{formatClock(r.lastOutMs, r.timezone || TEAMS_TZ)}</span>{Number(r.lateMinutes) > 0 ? <> · تأخير {formatMinutes(r.lateMinutes)}</> : null}</p>
+                  <p className="text-xs text-muted-foreground"><bdi className="tabular-nums" dir="ltr">{r.workDate}</bdi> · حضور <span className="tabular-nums">{formatClock(r.firstInMs, r.timezone || TEAMS_TZ)}</span> · انصراف <span className="tabular-nums">{formatClock(r.lastOutMs, r.timezone || TEAMS_TZ)}</span>{Number(r.lateMinutes) > 0 ? <> · تأخير {formatMinutes(r.lateMinutes)}</> : null}</p>
                 </div>
               );
             }}
@@ -97,7 +97,7 @@ function PendingCorrections({ team, perms, pending }: { team: LedTeam; perms: Le
                   <span className="min-w-0 flex-1 truncate font-medium">{p.employeeName}</span>
                   <StatusBadge status="pending" label={REQUEST_TYPE_LABELS[p.requestType as keyof typeof REQUEST_TYPE_LABELS] ?? "طلب تصحيح"} tone="warning" size="sm" />
                 </div>
-                <p className="text-xs text-muted-foreground">يوم <span className="tabular-nums" dir="ltr">{p.workDate}</span> · قُدّم {formatMs(Number(p.createdMs))}</p>
+                <p className="text-xs text-muted-foreground">يوم <bdi className="tabular-nums" dir="ltr">{p.workDate}</bdi> · قُدّم {formatMs(Number(p.createdMs))}</p>
                 {p.reason && <p className="text-sm">{p.reason}</p>}
                 {p.isMine ? (
                   <p className="text-xs text-muted-foreground" data-testid={`pending-mine-${p.id}`}>طلبك أنت — يراجعه مسؤول آخر، ولا يمكنك اعتماده.</p>

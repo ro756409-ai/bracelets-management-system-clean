@@ -201,3 +201,15 @@ describe("🚩 بوابة flag — «الفرق» خلف TEAMS_ENABLED + teams.v
     expect(teamPaths(true, [], ["teams"])).not.toContain("/teams");
   });
 });
+
+describe("🚩 «فريقي» على الويب (المدير القائد) — teamLeader + teams.view_own", () => {
+  const paths = (perms: string[], flags: ("teams" | "teamLeader")[]) => {
+    const dest = visibleDestinations(true, perms, flags).find(d => d.key === "team");
+    return dest ? visibleChildren(dest, true, perms, flags).map(c => c.path) : [];
+  };
+  it("يظهر فقط مع قيادة فعّالة (flag teamLeader) والصلاحية", () => {
+    expect(paths(["teams.view_own"], ["teams", "teamLeader"])).toContain("/team-leader-dashboard");
+    expect(paths(["teams.view_own"], ["teams"])).not.toContain("/team-leader-dashboard"); // قائد سابق/غير قائد
+    expect(paths([], ["teams", "teamLeader"])).not.toContain("/team-leader-dashboard"); // صلاحية مسحوبة
+  });
+});

@@ -124,7 +124,7 @@ function CreateTask({ team, members }: { team: LedTeam; members: { employeeId: n
         <div className="space-y-1">
           <Label htmlFor="task-to">المستلم</Label>
           <Select value={to} onValueChange={setTo}>
-            <SelectTrigger id="task-to" className="min-h-11"><SelectValue /></SelectTrigger>
+            <SelectTrigger id="task-to" className="min-h-11 w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value={GENERAL} className="min-h-11">مهمة عامة للنشاط</SelectItem>
               {members.map(m => <SelectItem key={m.employeeId} value={String(m.employeeId)} className="min-h-11">{m.employeeName}</SelectItem>)}

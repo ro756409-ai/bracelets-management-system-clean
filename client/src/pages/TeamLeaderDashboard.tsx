@@ -27,7 +27,8 @@ export default function TeamLeaderDashboard() {
   const access = useLeaderAccess();
   const me = trpc.employeePortal.me.useQuery(undefined, { retry: false, staleTime: 5 * 60 * 1000 });
   return (
-    <EmployeeShell title="فريقي" icon={UsersRound}>
+    // المدير يعمل من الويب (/dashboard)؛ غيره من بوابة الموظف
+    <EmployeeShell title="فريقي" icon={UsersRound} backTo={me.data?.role === "manager" ? "/dashboard" : "/employee-dashboard"}>
       <div className="mx-auto max-w-5xl space-y-4" dir="rtl" data-testid="team-leader-dashboard">
         {access.permsLoading || (access.canViewOwn && access.myTeams.isLoading) ? <LoadingSkeleton variant="cards" rows={3} />
           : access.permsError ? <QueryError error={access.permsError} />

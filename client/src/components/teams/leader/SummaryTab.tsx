@@ -50,7 +50,7 @@ export function SummaryTab({ team, perms, leaderName }: { team: LedTeam; perms: 
           : <StatCard label="عدد الأعضاء الآن (مع القائد)" value={<span className="tabular-nums">{fmtNum(members.data?.enabled ? members.data.members.length : 0)}</span>} />}
       </SectionCard>
 
-      <SectionCard title={`الحضور اليوم (${today})`}>
+      <SectionCard title="الحضور اليوم" description={<bdi className="tabular-nums" dir="ltr">{today}</bdi>}>
         {!canAtt ? <p className="text-sm text-muted-foreground">لا تملك صلاحية «عرض حضور الفريق».</p>
           : att.isLoading ? <LoadingSkeleton variant="cards" rows={1} />
           : att.error ? <QueryError error={att.error} onRetry={() => att.refetch()} />

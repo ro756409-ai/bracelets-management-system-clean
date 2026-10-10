@@ -43,7 +43,7 @@ export function OrdersTab({ team, perms }: { team: LedTeam; perms: LeaderPerms }
   const who = (o: Order) => (o.assignedEmployeeId == null ? <span className="text-muted-foreground">غير مسند</span> : names.get(o.assignedEmployeeId) ?? <span className="text-muted-foreground">خارج الفريق</span>);
   const statusBadge = (o: Order) => <StatusBadge status={o.status} size="sm" />;
   const columns: Column<Order>[] = [
-    { id: "number", header: "الأوردر", cell: o => <span className="tabular-nums font-medium" dir="ltr">{o.orderNumber}</span> },
+    { id: "number", header: "الأوردر", cell: o => <bdi className="tabular-nums font-medium" dir="ltr">{o.orderNumber}</bdi> },
     { id: "customer", header: "العميل", cell: o => o.customerName },
     { id: "status", header: "الحالة", cell: statusBadge },
     { id: "assignee", header: "المسند إليه", cell: who },
@@ -59,14 +59,14 @@ export function OrdersTab({ team, perms }: { team: LedTeam; perms: LeaderPerms }
       <div className="grid gap-2 sm:grid-cols-3" data-readonly-safe data-testid="leader-orders-filters">
         <SearchInput value={search} onChange={setSearch} placeholder="بحث بالاسم أو الهاتف أو رقم الأوردر" />
         <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="min-h-11" aria-label="الحالة"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="min-h-11 w-full" aria-label="الحالة"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL} className="min-h-11">كل الحالات</SelectItem>
             {Object.entries(ORDER_STATUS).map(([k, v]) => <SelectItem key={k} value={k} className="min-h-11">{v.label}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={assignee} onValueChange={setAssignee}>
-          <SelectTrigger className="min-h-11" aria-label="المسند إليه"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="min-h-11 w-full" aria-label="المسند إليه"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL} className="min-h-11">كل الأوردرات</SelectItem>
             <SelectItem value="none" className="min-h-11">غير المسندة فقط</SelectItem>
@@ -83,7 +83,7 @@ export function OrdersTab({ team, perms }: { team: LedTeam; perms: LeaderPerms }
           empty={{ title: "لا أوردرات مطابقة", description: "غيّر الفلاتر أو البحث." }}
           mobileRow={o => (
             <div className="space-y-2 rounded-[var(--radius-brand-md)] border border-border bg-card p-3">
-              <div className="flex items-center gap-2"><span className="tabular-nums font-medium" dir="ltr">{o.orderNumber}</span><span className="min-w-0 flex-1 truncate text-sm">{o.customerName}</span>{statusBadge(o)}</div>
+              <div className="flex items-center gap-2"><bdi className="tabular-nums font-medium" dir="ltr">{o.orderNumber}</bdi><span className="min-w-0 flex-1 truncate text-sm">{o.customerName}</span>{statusBadge(o)}</div>
               <p className="text-xs text-muted-foreground">المسند إليه: {who(o)} · {formatMs(new Date(o.createdAt).getTime())}</p>
               {canAssign && <AssignControl team={team} order={o} members={memberList} />}
             </div>

@@ -9,7 +9,14 @@ const dash = fs.readFileSync("client/src/pages/EmployeeDashboard.tsx", "utf-8");
 const nav = fs.readFileSync("client/src/config/navigation.ts", "utf-8");
 const app = fs.readFileSync("client/src/App.tsx", "utf-8");
 
+const layout = fs.readFileSync("client/src/components/DashboardLayout.tsx", "utf-8");
+
 describe("🔗 «فريقي» و«الفرق» — المداخل", () => {
+  it("الويب: myTeams لجلسة موظف فقط + العلم + teams.view_own، و«فريقي» بـflag teamLeader", () => {
+    expect(layout).toContain('const isEmployeeSession = (user as { loginMethod?: string | null } | null)?.loginMethod === "employee";');
+    expect(layout).toContain('const canAskLeadership = Boolean(teamsStatus.data?.enabled) && isEmployeeSession && permissions.includes("teams.view_own");');
+    expect(layout).toContain("trpc.employeePortal.team.myTeams.useQuery(undefined, { enabled: canAskLeadership,");
+  });
   it("الشرط الثلاثي: الصلاحية + العلم + قيادة فعّالة، وبلا الصلاحية لا طلب", () => {
     expect(dash).toContain('const canViewOwnTeam = (portalPermissions ?? []).includes("teams.view_own");');
     expect(dash).toContain("trpc.employeePortal.team.myTeams.useQuery(undefined, { enabled: canViewOwnTeam,");

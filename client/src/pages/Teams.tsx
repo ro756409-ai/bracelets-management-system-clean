@@ -119,7 +119,7 @@ function CreateTeamDialog({ businesses, onClose, onCreated }: { businesses: any[
           <div className="space-y-1">
             <Label htmlFor="team-business">النشاط</Label>
             <Select value={businessId} onValueChange={setBusinessId}>
-              <SelectTrigger id="team-business" className="min-h-11" data-testid="team-business"><SelectValue placeholder="اختر النشاط" /></SelectTrigger>
+              <SelectTrigger id="team-business" className="min-h-11 w-full" data-testid="team-business"><SelectValue placeholder="اختر النشاط" /></SelectTrigger>
               <SelectContent>{businesses.map(b => <SelectItem key={b.id} value={String(b.id)} className="min-h-11">{b.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
@@ -245,17 +245,19 @@ function TeamDrawer({ teamId, canManage, canWrite, onClose }: { teamId: number; 
             {members.length === 0 ? <p className="text-sm text-muted-foreground">لا أعضاء حاليًا.</p> : (
               <ul className="divide-y divide-border" data-testid="team-members">
                 {members.map(m => (
-                  <li key={m.id} className="flex flex-wrap items-center gap-2 py-2">
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{m.employeeName}</span>
-                      <span className="block text-xs text-muted-foreground">منذ {formatMs(m.fromMs)}</span>
-                    </span>
-                    <StatusBadge status={m.membershipRole} label={m.membershipRole === "leader" ? "قائد" : "عضو"} tone={m.membershipRole === "leader" ? "primary" : "neutral"} icon={m.membershipRole === "leader" ? <Crown className="h-3 w-3" aria-hidden="true" /> : undefined} size="sm" />
+                  <li key={m.id} className="space-y-1 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{m.employeeName}</span>
+                        <span className="block text-xs text-muted-foreground">منذ {formatMs(m.fromMs)}</span>
+                      </span>
+                      <StatusBadge status={m.membershipRole} label={m.membershipRole === "leader" ? "قائد" : "عضو"} tone={m.membershipRole === "leader" ? "primary" : "neutral"} icon={m.membershipRole === "leader" ? <Crown className="h-3 w-3" aria-hidden="true" /> : undefined} size="sm" />
+                    </div>
                     {canManage && t.isActive && m.membershipRole !== "leader" && (
-                      <>
+                      <div className="flex flex-wrap gap-2">
                         <Button variant="ghost" size="sm" className={TOUCH} onClick={() => doLead(m.employeeId)} disabled={!writable || pending} data-testid={`team-lead-${m.employeeId}`}><Crown className="h-4 w-4" aria-hidden="true" /> {leader ? "تغيير القائد إليه" : "تعيين قائدًا"}</Button>
                         <Button variant="ghost" size="sm" className={`${TOUCH} text-destructive`} onClick={() => doEnd(m.id)} disabled={!writable || pending} data-testid={`team-end-${m.id}`}><UserMinus className="h-4 w-4" aria-hidden="true" /> إنهاء العضوية</Button>
-                      </>
+                      </div>
                     )}
                   </li>
                 ))}
@@ -266,14 +268,14 @@ function TeamDrawer({ teamId, canManage, canWrite, onClose }: { teamId: number; 
                 <div className="min-w-0 flex-1 space-y-1">
                   <Label htmlFor="team-add">إضافة عضو من موظفي النشاط</Label>
                   <Select value={newMember} onValueChange={setNewMember}>
-                    <SelectTrigger id="team-add" className="min-h-11" data-testid="team-add-select"><SelectValue placeholder={employees.isLoading ? "جارٍ التحميل…" : candidates.length ? "اختر موظفًا" : "لا موظفين متاحين"} /></SelectTrigger>
+                    <SelectTrigger id="team-add" className="min-h-11 w-full" data-testid="team-add-select"><SelectValue placeholder={employees.isLoading ? "جارٍ التحميل…" : candidates.length ? "اختر موظفًا" : "لا موظفين متاحين"} /></SelectTrigger>
                     <SelectContent>{candidates.map((e: any) => <SelectItem key={e.id} value={String(e.id)} className="min-h-11">{e.name}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <Button className={TOUCH} onClick={doAdd} disabled={!writable || !newMember || addMember.isPending} data-testid="team-add"><UserPlus className="h-4 w-4" aria-hidden="true" /> {addMember.isPending ? "جارٍ الإضافة…" : "إضافة"}</Button>
               </div>
             )}
-            <p className="mt-2 text-xs text-muted-foreground">كل إضافة/إنهاء/تعيين يسري من الآن، ولا تواريخ سابقة أو مستقبلية.</p>
+            {canManage && t.isActive && <p className="mt-2 text-xs text-muted-foreground">كل إضافة/إنهاء/تعيين يسري من الآن، ولا تواريخ سابقة أو مستقبلية.</p>}
           </SectionCard>
 
           <SectionCard title="الورديات والتحذيرات (قراءة فقط)">
@@ -288,6 +290,7 @@ function TeamDrawer({ teamId, canManage, canWrite, onClose }: { teamId: number; 
 
           <SectionCard title="سجل العضويات والقيادة">
             {history.isLoading ? <LoadingSkeleton variant="table" rows={3} /> : history.error ? <ErrorState message={serverErrorText(history.error)} onRetry={() => history.refetch()} /> : (
+              (history.data?.enabled ? history.data.history : []).length === 0 ? <p className="text-sm text-muted-foreground">لا سجل بعد.</p> :
               <ul className="space-y-2" data-testid="team-history">
                 {(history.data?.enabled ? history.data.history : []).map((h: any) => (
                   <li key={h.id} className="rounded-[var(--radius-brand-md)] border border-border p-2 text-sm">

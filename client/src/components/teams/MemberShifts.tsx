@@ -26,7 +26,7 @@ export function MemberShiftsList({ workDate, timeZone, members }: { workDate: st
   return (
     <div className="space-y-2" data-testid="member-shifts">
       <p className="text-xs text-muted-foreground">
-        اليوم <span className="tabular-nums" dir="ltr">{workDate}</span> بتوقيت <span dir="ltr">{timeZone}</span> ·
+        اليوم <bdi className="tabular-nums" dir="ltr">{workDate}</bdi> بتوقيت <bdi dir="ltr">{timeZone}</bdi> ·
         {warnings ? <> تحذيرات: <span className="tabular-nums">{warnings}</span></> : " لا تحذيرات"}
       </p>
       {members.length === 0 ? <p className="text-sm text-muted-foreground">لا أعضاء حاليًا.</p> : (
@@ -41,13 +41,13 @@ export function MemberShiftsList({ workDate, timeZone, members }: { workDate: st
                 </div>
                 {m.shift ? (
                   <p className="text-sm">
-                    {m.shift.name}: <span className="tabular-nums" dir="ltr">{m.shift.startTime}–{m.shift.endTime}</span>
+                    {m.shift.name}: <bdi className="tabular-nums" dir="ltr">{m.shift.startTime}–{m.shift.endTime}</bdi>
                     {m.shift.crossesMidnight && <span className="ms-2 inline-flex items-center gap-1 text-xs text-muted-foreground"><Moon className="h-3 w-3" aria-hidden="true" /> ليلية (تنتهي اليوم التالي)</span>}
                   </p>
                 ) : <p className="text-sm text-muted-foreground">لا وردية سارية اليوم — الحضور لن يحسب تأخيرًا أو انصرافًا مبكرًا.</p>}
                 {m.shift && (
                   <p className="text-xs text-muted-foreground">
-                    أيام العمل: {m.shift.workDays.map(d => DAY[d] ?? d).join("، ") || "—"} · {m.shift.worksOnDate ? "يعمل اليوم" : "ليس يوم عمله"}
+                    أيام العمل: {m.shift.workDays.length === 7 ? "كل الأيام" : m.shift.workDays.map(d => DAY[d] ?? d).join("، ") || "—"} · {m.shift.worksOnDate ? "يعمل اليوم" : "ليس يوم عمله"}
                   </p>
                 )}
                 {m.status === "conflict" && (

@@ -174,7 +174,16 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   // مصدر السيرفر (myPermissions) عبر canSeeNav — تعريف واحد، مش مبعتر.
   // مزايا خلف flag: رابط «الفرق» يظهر فقط لو TEAMS_ENABLED (status خفيف ومخزّن 5 دقائق).
   const teamsStatus = trpc.teams.status.useQuery(undefined, { retry: false, staleTime: 5 * 60 * 1000, enabled: Boolean(user) });
-  const navFlags = useMemo<NavFlag[]>(() => (teamsStatus.data?.enabled ? ["teams"] : []), [teamsStatus.data?.enabled]);
+  // «فريقي»: جلسة موظف فقط (المدير على الويب) + teams.view_own + قيادة فعّالة الآن — myTeams بهوية كوكي الموظف،
+  // ولا يُطلب لجلسة المالك أو بلا الصلاحية أو والعلم معطل.
+  const isEmployeeSession = (user as { loginMethod?: string | null } | null)?.loginMethod === "employee";
+  const canAskLeadership = Boolean(teamsStatus.data?.enabled) && isEmployeeSession && permissions.includes("teams.view_own");
+  const myLedTeams = trpc.employeePortal.team.myTeams.useQuery(undefined, { enabled: canAskLeadership, retry: false, staleTime: 60 * 1000 });
+  const leadsNow = canAskLeadership && myLedTeams.data?.enabled === true && myLedTeams.data.teams.length > 0;
+  const navFlags = useMemo<NavFlag[]>(
+    () => [...(teamsStatus.data?.enabled ? (["teams"] as NavFlag[]) : []), ...(leadsNow ? (["teamLeader"] as NavFlag[]) : [])],
+    [teamsStatus.data?.enabled, leadsNow]
+  );
   const navDestinations = useMemo(
     () => visibleDestinations(isAdmin, permissions, navFlags),
     [isAdmin, permissions, navFlags]

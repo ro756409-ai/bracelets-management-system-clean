@@ -36,7 +36,7 @@ export function PeriodPicker({ presets, state, testId }: { presets: Preset[]; st
           {!valid && <p className="w-full text-xs text-destructive" role="alert">تاريخ البداية يجب ألا يتجاوز النهاية.</p>}
         </form>
       )}
-      <p className="text-xs text-muted-foreground">الفترة: <span className="tabular-nums" dir="ltr">{state.period.dateFrom} → {state.period.dateTo}</span> (توقيت القاهرة)</p>
+      <p className="text-xs text-muted-foreground">الفترة: من <bdi className="tabular-nums" dir="ltr">{state.period.dateFrom}</bdi> إلى <bdi className="tabular-nums" dir="ltr">{state.period.dateTo}</bdi> (توقيت القاهرة)</p>
     </div>
   );
 }

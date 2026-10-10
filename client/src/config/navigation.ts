@@ -30,7 +30,7 @@ export type NavGate = {
 };
 
 /** مزايا خلف flag على السيرفر — الشل يمرّر المفعّل منها (من status endpoint الخاص بكل ميزة). */
-export type NavFlag = "teams";
+export type NavFlag = "teams" | "teamLeader";
 
 export type NavLink = NavGate & {
   label: string;
@@ -122,6 +122,8 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
     children: [
       { label: "الموظفين", path: "/employees", icon: Users, adminOnly: true },
       { label: "الفرق", path: "/teams", icon: UsersRound, permission: "teams.view_all", flag: "teams" },
+      // «فريقي» لجلسة موظف (المدير على الويب) يقود فريقًا الآن — flag teamLeader = myTeams غير فارغة (هوية الكوكي)
+      { label: "فريقي", path: "/team-leader-dashboard", icon: UsersRound, permission: "teams.view_own", flag: "teamLeader" },
     ],
   },
   {
