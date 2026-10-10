@@ -90,10 +90,39 @@ export function computePerformance(
   return rows.sort((x, y) => (x.rank ?? Infinity) - (y.rank ?? Infinity) || x.employeeId - y.employeeId);
 }
 
+/** أعمدة CSV الأداء — نفس الأعمدة الظاهرة في الشاشة (مصدر واحد للتصديرين). */
+export const PERFORMANCE_CSV_HEAD = ["الموظف", "القرارات المسجلة", "المؤكدة", "نسبة التأكيد من القرارات المسجلة %", "لم يرد (أوردرات)", "لم يرد (محاولات)", "مؤجل", "ملغي", "حجم العمل", "الإسنادات", "أيام النشاط", "الترتيب"] as const;
+/** قيم صف واحد بنفس ترتيب الأعمدة — أرقام كما هي، والترتيب «عينة أقل من الحد» تحت 20 قرارًا. */
+export function performanceCsvValues(r: EmployeePerformanceRow & { employeeName: string }): (string | number)[] {
+  return [r.employeeName, r.decisionEligibleOrders, r.confirmedOrders, r.confirmationRate ?? "", r.noAnswerOrders, r.noAnswerAttempts, r.postponedOrders, r.cancelledOrders, r.workloadOrders, r.assignedOrders, r.activeDays, r.rank ?? "عينة أقل من الحد"];
+}
+
 /** CSV للتصدير — نفس الأعمدة الظاهرة، أرقام كما هي. */
 export function performanceCsv(rows: (EmployeePerformanceRow & { employeeName: string })[]): string {
-  const head = ["الموظف", "القرارات المسجلة", "المؤكدة", "نسبة التأكيد من القرارات المسجلة %", "لم يرد (أوردرات)", "لم يرد (محاولات)", "مؤجل", "ملغي", "حجم العمل", "الإسنادات", "أيام النشاط", "الترتيب"];
   const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const lines = rows.map(r => [r.employeeName, r.decisionEligibleOrders, r.confirmedOrders, r.confirmationRate ?? "", r.noAnswerOrders, r.noAnswerAttempts, r.postponedOrders, r.cancelledOrders, r.workloadOrders, r.assignedOrders, r.activeDays, r.rank ?? "عينة أقل من الحد"].map(esc).join(","));
-  return "﻿" + [head.join(","), ...lines].join("\n");
+  const lines = rows.map(r => performanceCsvValues(r).map(esc).join(","));
+  return "\uFEFF" + [PERFORMANCE_CSV_HEAD.join(","), ...lines].join("\n");
+}
+
+/**
+ * خلية CSV آمنة من Formula Injection: النص الذي يبدأ (بعد مسافات) بـ= + - @ أو Tab/CR يُسبق بـ' فيُقرأ نصًا
+ * في Excel/Sheets، ثم الاقتباس القياسي. الأرقام تبقى أرقامًا كما هي.
+ */
+export function csvSafeCell(v: unknown): string {
+  if (v == null) return "";
+  let s = typeof v === "number" ? String(v) : String(v);
+  if (typeof v !== "number" && /^[\t\r]|^\s*[=+\-@]/.test(s)) s = `'${s}`;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** CSV أداء الفريق (للقائد): رأس بالفريق والفترة والمنطقة الزمنية ثم نفس أعمدة/قيم الشاشة، بخلايا آمنة. */
+export function teamPerformanceCsv(meta: { teamName: string; fromDate: string; toDate: string; timeZone: string; minSample: number }, rows: (EmployeePerformanceRow & { employeeName: string })[]): string {
+  const line = (cells: unknown[]) => cells.map(csvSafeCell).join(",");
+  return "\uFEFF" + [
+    line(["الفريق", meta.teamName]),
+    line(["الفترة", `${meta.fromDate} إلى ${meta.toDate}`, "المنطقة الزمنية", meta.timeZone, "حد الترتيب (قرارات)", meta.minSample]),
+    "",
+    line([...PERFORMANCE_CSV_HEAD]),
+    ...rows.map(r => line(performanceCsvValues(r))),
+  ].join("\n");
 }
