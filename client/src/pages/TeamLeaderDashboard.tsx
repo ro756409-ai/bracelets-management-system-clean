@@ -66,10 +66,10 @@ function LeaderBoard({ teams, has, leaderName }: { teams: LedTeam[]; has: (p: st
           <Label htmlFor="leader-team">الفريق</Label>
           <Select value={String(team.teamId)} onValueChange={v => setTeamId(Number(v))}>
             <SelectTrigger id="leader-team" className="min-h-11 w-full sm:w-72" data-testid="leader-team-select"><SelectValue /></SelectTrigger>
-            <SelectContent>{teams.map(t => <SelectItem key={t.teamId} value={String(t.teamId)} className="min-h-11">{t.name}</SelectItem>)}</SelectContent>
+            <SelectContent>{teams.map(t => <SelectItem key={t.teamId} value={String(t.teamId)} className="min-h-11">{t.businessName ? `${t.name} — ${t.businessName}` : t.name}</SelectItem>)}</SelectContent>
           </Select>
         </div>
-      ) : <p className="text-sm text-muted-foreground">الفريق: <span className="font-semibold text-foreground" data-testid="leader-team-name">{team.name}</span></p>}
+      ) : <p className="text-sm text-muted-foreground">الفريق: <span className="font-semibold text-foreground" data-testid="leader-team-name">{team.name}</span>{team.businessName ? <> · {team.businessName}</> : null}</p>}
       <UnderlineTabs tabs={tabs} value={tab} onChange={k => setTab(k as TabKey)} ariaLabel="أقسام الفريق" />
       <div role="tabpanel" key={`${team.teamId}:${tab}`}>
         {tab === "summary" && <SummaryTab team={team} perms={perms} leaderName={leaderName} />}

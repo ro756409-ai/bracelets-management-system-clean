@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
+import { XIcon } from "lucide-react";
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetDescription,
   SheetFooter,
@@ -62,10 +64,20 @@ export function Drawer({
         side="left"
         className={cn("flex w-full flex-col gap-0 p-0", WIDTH[width])}
         dir="rtl"
+        showClose={false}
       >
-        {/* pr-10 clears the sheet's absolutely-positioned close button (physical top-right). */}
-        <SheetHeader className="shrink-0 gap-1 border-b border-border px-4 py-3 pr-10">
+        {/* زر الإغلاق داخل صف الرأس (لا مطلقًا فوق العنوان): مساحته محجوزة في RTL، 44×44 على الهاتف و36×36 على
+            الديسكتوب، والأيقونة 16px. SheetClose = نفس إغلاق Radix (onOpenChange(false)) بلا أي سلوك جديد. */}
+        <SheetHeader className="shrink-0 gap-1 border-b border-border px-4 py-3">
           <div className="flex items-start justify-between gap-3">
+            <SheetClose
+              aria-label="إغلاق"
+              data-testid="drawer-close"
+              className="-ms-2 -mt-1.5 flex size-11 shrink-0 items-center justify-center rounded-[var(--radius-brand-md)] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:size-9"
+            >
+              <XIcon className="size-4" aria-hidden="true" />
+              <span className="sr-only">إغلاق</span>
+            </SheetClose>
             <div className="min-w-0 flex-1">
               <SheetTitle className="text-base">{title}</SheetTitle>
               {description && <SheetDescription>{description}</SheetDescription>}
