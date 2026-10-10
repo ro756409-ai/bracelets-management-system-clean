@@ -2,7 +2,8 @@
  * أدوات عامة لمواصفات الـMigrations المكتوبة يدويًا (0041 / 0042): لقطة information_schema → مقارنة بالمواصفة.
  * نفس منهج `shared/ledgerV3Spec.ts` لكن عامة (أي قائمة جداول)، ونقية (بلا قاعدة بيانات) لتُختبر بلقطات مكسورة.
  */
-export type ColumnSpec = { name: string; type: string; nullable: boolean };
+/** generated: تعبير عمود مولّد STORED كما يُكتب في الملف — يُقارن بعد التطبيع (normalizeGenerationExpression). */
+export type ColumnSpec = { name: string; type: string; nullable: boolean; generated?: string };
 export type ForeignKeySpec = { name: string; columns: string[]; refTable: string; refColumns: string[] };
 export type IndexSpec = { name: string; columns: string[] };
 export type TableSpec = {
@@ -17,7 +18,8 @@ export type TableSpec = {
 
 export type SchemaSnapshot = {
   tables: Set<string>;
-  columns: Record<string, Array<{ name: string; columnType: string; nullable: boolean }>>;
+  /** generated: «STORED|<التعبير>» أو «VIRTUAL|<التعبير>» للعمود المولّد فقط (من EXTRA/GENERATION_EXPRESSION) */
+  columns: Record<string, Array<{ name: string; columnType: string; nullable: boolean; generated?: string | null }>>;
   uniques: Record<string, Record<string, string[]>>;
   indexes: Record<string, Record<string, string[]>>;
   foreignKeys: Record<string, Record<string, { columns: string[]; refTable: string; refColumns: string[] }>>;
@@ -34,6 +36,13 @@ export function splitStatements(sqlText: string): string[] {
     .filter(chunk => chunk.length > 0);
 }
 
+/**
+ * تطبيع تعبير العمود المولّد للمقارنة: MySQL يعيد كتابته (أقواس، حروف صغيرة، `_utf8mb4\'x\'`)، فالمقارنة على
+ * الشكل المجرد: بلا مسافات/backticks/أقواس/مقدّمات charset/هروب، وبحروف صغيرة.
+ */
+export const normalizeGenerationExpression = (expr: string) =>
+  expr.toLowerCase().replace(/\\'/g, "'").replace(/_[a-z0-9]+'/g, "'").replace(/[\s`()]/g, "");
+
 const typeMatches = (spec: string, actual: string) =>
   spec === "enum" ? actual.startsWith("enum(") : actual.replace(/ unsigned$/, "") === spec.replace(/ unsigned$/, "") && (spec.endsWith(" unsigned") === actual.endsWith(" unsigned"));
 
@@ -47,6 +56,12 @@ export function verifyTable(table: string, spec: TableSpec, snapshot: SchemaSnap
     if (!actual) { issues.push({ table, kind: "column", detail: `العمود ${c.name} غير موجود` }); continue; }
     if (!typeMatches(c.type, actual.columnType)) issues.push({ table, kind: "column", detail: `${c.name}: النوع ${actual.columnType} ≠ ${c.type}` });
     if (actual.nullable !== c.nullable) issues.push({ table, kind: "column", detail: `${c.name}: nullable=${actual.nullable} ≠ ${c.nullable}` });
+    if (c.generated) {
+      const [kind, expr] = (actual.generated ?? "").split(/\|(.*)/s);
+      if (kind !== "STORED") issues.push({ table, kind: "column", detail: `${c.name}: ليس عمودًا مولّدًا STORED (${kind || "عمود عادي"})` });
+      else if (normalizeGenerationExpression(expr ?? "") !== normalizeGenerationExpression(c.generated))
+        issues.push({ table, kind: "column", detail: `${c.name}: تعبير التوليد ${expr} ≠ ${c.generated}` });
+    } else if (actual.generated) issues.push({ table, kind: "column", detail: `${c.name}: عمود مولّد غير موصوف` });
   }
   for (const extra of cols.keys()) if (!spec.columns.some(c => c.name === extra)) issues.push({ table, kind: "column", detail: `عمود زائد غير موصوف: ${extra}` });
   for (const u of spec.uniques) {

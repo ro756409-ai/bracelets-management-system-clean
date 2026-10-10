@@ -13,20 +13,21 @@ import {
 import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconciliation.service";
 
 /**
- * محرّك الـMigrations المكتوبة يدويًا 0041 / 0042 / 0043 — نفس انضباط 0040 (ledgerV3Migrate.service) بشكل عام:
+ * محرّك الـMigrations المكتوبة يدويًا 0041 / 0042 / 0043 / 0044 — نفس انضباط 0040 (ledgerV3Migrate.service) بشكل عام:
  *   • check (افتراضي، قراءة فقط): الحالة not_applied / applied / partial + جدول العبارات + فروق المواصفة + preflight.
  *   • apply: بوابات **قبل أي اتصال كتابة** (البيئة، الهدف ليس إنتاجًا، عبارة تأكيد فيها اسم القاعدة)، ثم:
  *     applied → replay بلا تغيير؛ partial → رفض بلا إكمال؛ not_applied → العبارات بالترتيب مع تحقق بعد كل واحدة.
  *   • rollback: نفس البوابات + عبارة مختلفة، وكل الجداول **فارغة**؛ الفهرسان المركّبان لا يُحذفان إلا بطلب صريح
  *     وبشرط ألا يعتمد عليهما أي FK آخر.
  *   • الفهرسان المركّبان (businesses_tenant_id / employees_tenant_id): كلاهما غائب → 0041 ينشئهما؛ كلاهما موجود
- *     بنفس الأعمدة والترتيب → skip؛ واحد فقط أو تعريف مختلف → partial ورفض. 0042 و0043 يشترطان وجودهما.
+ *     بنفس الأعمدة والترتيب → skip؛ واحد فقط أو تعريف مختلف → partial ورفض. 0042 و0043 و0044 تشترط وجودهما.
+ *   • الأعمدة المولّدة (0044): النوع STORED وتعبير التوليد جزء من المطابقة (بعد التطبيع)، لا الاسم والنوع فقط.
  *   • لا يُطبع ولا يُرجع أي رابط أو كلمة سر. DDL في MySQL غير معاملاتي — التوقف عند أول خطأ يترك partial ظاهرًا.
  *
  * البيئات المسموح فيها apply/rollback: DEPLOY_ENV=staging مع قاعدة غير إنتاجية باسم staging/stage/test (للـRunbook
  * لاحقًا — **ممنوع تشغيله في هذه المرحلة**)، أو DEPLOY_ENV=test/local على مضيف محلي (Docker مؤقت).
  */
-export type HandMigrationId = "0041" | "0042" | "0043";
+export type HandMigrationId = "0041" | "0042" | "0043" | "0044";
 export type HandMigrationDef = {
   id: HandMigrationId;
   title: string;
@@ -77,8 +78,8 @@ export function describeStatements(sqlText: string): DescribedStatement[] {
 export async function loadSchemaSnapshot(exec: ReadOnlyExecutor, tableNames: string[]): Promise<SchemaSnapshot> {
   const ph = tableNames.map(() => "?").join(",");
   const tables = await exec.query<{ TABLE_NAME: string }>(`SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph})`, tableNames);
-  const cols = await exec.query<{ TABLE_NAME: string; COLUMN_NAME: string; COLUMN_TYPE: string; IS_NULLABLE: string }>(
-    `SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph}) ORDER BY TABLE_NAME, ORDINAL_POSITION`, tableNames);
+  const cols = await exec.query<{ TABLE_NAME: string; COLUMN_NAME: string; COLUMN_TYPE: string; IS_NULLABLE: string; EXTRA: string | null; GENERATION_EXPRESSION: string | null }>(
+    `SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, EXTRA, GENERATION_EXPRESSION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph}) ORDER BY TABLE_NAME, ORDINAL_POSITION`, tableNames);
   const idx = await exec.query<{ TABLE_NAME: string; INDEX_NAME: string; COLUMN_NAME: string; NON_UNIQUE: number }>(
     `SELECT TABLE_NAME, INDEX_NAME, COLUMN_NAME, NON_UNIQUE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph}) ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`, tableNames);
   const fks = await exec.query<{ TABLE_NAME: string; CONSTRAINT_NAME: string; COLUMN_NAME: string; REFERENCED_TABLE_NAME: string; REFERENCED_COLUMN_NAME: string }>(
@@ -87,7 +88,12 @@ export async function loadSchemaSnapshot(exec: ReadOnlyExecutor, tableNames: str
   const checks = await exec.query<{ TABLE_NAME: string; CONSTRAINT_NAME: string }>(
     `SELECT TABLE_NAME, CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph}) AND CONSTRAINT_TYPE = 'CHECK'`, tableNames);
   const s: SchemaSnapshot = { tables: new Set(tables.map(t => t.TABLE_NAME)), columns: {}, uniques: {}, indexes: {}, foreignKeys: {}, checks: {} };
-  for (const c of cols) (s.columns[c.TABLE_NAME] ??= []).push({ name: c.COLUMN_NAME, columnType: c.COLUMN_TYPE, nullable: c.IS_NULLABLE === "YES" });
+  // EXTRA لأعمدة الوقت = «DEFAULT_GENERATED» — ليس عمودًا مولّدًا؛ المولّد فقط «STORED GENERATED» / «VIRTUAL GENERATED».
+  const generatedKind = (extra: string | null) => /\bSTORED GENERATED\b/i.test(extra ?? "") ? "STORED" : /\bVIRTUAL GENERATED\b/i.test(extra ?? "") ? "VIRTUAL" : null;
+  for (const c of cols) {
+    const kind = generatedKind(c.EXTRA);
+    (s.columns[c.TABLE_NAME] ??= []).push({ name: c.COLUMN_NAME, columnType: c.COLUMN_TYPE, nullable: c.IS_NULLABLE === "YES", generated: kind ? `${kind}|${c.GENERATION_EXPRESSION ?? ""}` : null });
+  }
   for (const i of idx) {
     const bucket = Number(i.NON_UNIQUE) === 0 ? s.uniques : s.indexes;
     ((bucket[i.TABLE_NAME] ??= {})[i.INDEX_NAME] ??= []).push(i.COLUMN_NAME);
