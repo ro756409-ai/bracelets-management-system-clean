@@ -183,6 +183,49 @@ describe.runIf(CAN)("🧭 مسارات القائد", () => {
     } finally { await ungrant("moderator", "attendance.approve_corrections"); await ungrant("moderator", "attendance.manage_leaves"); }
   });
 
+  it("الطلبات المعلّقة حالية لا تتبع نطاق العرض — قبل وبعد منتصف ليل القاهرة، داخل الفريق والشركة فقط، ولا طلبه الشخصي", async () => {
+    const mk = async (k: string) => { e[k] = insId(await createEmployee({ name: `${k}-ldr`, role: "moderator", isActive: true, tenantId: A.tenantId, businessId: A.businessId, username: `${k}_${tmp.name}`.slice(0, 50) } as any)); };
+    await mk("beforeMid"); await mk("afterMid");
+    // النطاق المعروض ينتهي 2026-09-09 (القاهرة) ⇒ نافذة العضوية القديمة (±يوم) تنتهي 2026-09-10 21:00Z = منتصف ليل القاهرة.
+    await rawMember(A.tenantId, T1, e.beforeMid, "2026-09-10T20:30:00Z", null); // 23:30 القاهرة — قبل منتصف الليل
+    await rawMember(A.tenantId, T1, e.afterMid, "2026-09-10T21:30:00Z", null);  // 00:30 القاهرة — بعد منتصف الليل
+    const req = async (id: number) => (await portal(id)).employeePortal.attendanceRequestCorrection({
+      workDate: "2026-10-08", requestType: "missing_clock_out" as any, requestedValue: { at: new Date("2026-10-08T17:00:00+03:00").toISOString() }, reason: "سبب الاختبار هنا", operationId: op() });
+    const rBefore = await req(e.beforeMid), rAfter = await req(e.afterMid), rOwn = await req(e.L1);
+    const rOut = await req(e.outsider), rB = await req(e.mB);
+    const view = async (leader: number, teamId: number, dateFrom: string, dateTo: string) => {
+      const r = await (await portal(leader)).employeePortal.team.attendance({ teamId, dateFrom, dateTo });
+      return r.enabled ? r : { days: [] as any[], pending: [] as any[] };
+    };
+    // نطاق قديم (قبل عضوية الاثنين) ونطاق حالي: نفس الطلبات المعلّقة في الحالتين
+    for (const [from, to] of [["2026-09-01", "2026-09-09"], ["2026-10-01", "2026-10-09"]] as const) {
+      const r = await view(e.L1, T1, from, to);
+      const ids = r.pending.map((p: any) => p.id);
+      expect(ids, `${from}..${to}`).toEqual(expect.arrayContaining([rBefore.id, rAfter.id, rOwn.id]));
+      expect(ids).not.toContain(rOut.id); // خارج الفريق
+      expect(ids).not.toContain(rB.id);   // شركة أخرى
+      expect(r.pending.find((p: any) => p.id === rOwn.id)?.isMine).toBe(true);
+      // isMine = طلب القائد نفسه فقط (له طلب آخر من الاختبار السابق)، وكل طلبات غيره isMine=false
+      expect(r.pending.every((p: any) => p.isMine === (Number(p.employeeId) === e.L1))).toBe(true);
+      // لا أيام خارج العضوية: الاثنان بلا أيام في النطاق القديم
+      expect(r.days.filter((d: any) => [e.beforeMid, e.afterMid].includes(Number(d.employeeId)))).toEqual([]);
+    }
+    // قائد فريق آخر (فرحات) لا يرى طلبات أعضاء أفندي
+    const r2 = await view(e.L2, T2, "2026-09-01", "2026-09-09");
+    expect(r2.pending.map((p: any) => p.id)).not.toContain(rBefore.id);
+    expect(r2.pending.map((p: any) => p.id)).not.toContain(rAfter.id);
+    // قائد شركة أخرى لا يصل لفريق A أصلًا
+    expect(await code(() => view(e.LB, T1, "2026-09-01", "2026-09-09"))).toBe("FORBIDDEN");
+    // الاعتماد: طلب «بعد منتصف الليل» يُعتمد من القائد، وطلبه الشخصي ممنوع
+    await grant("moderator", "attendance.approve_corrections", true);
+    try {
+      const review = (requestId: number) => portal(e.L1).then(c => c.employeePortal.team.reviewCorrection({ teamId: T1, requestId, decision: "approve", reviewReason: null }));
+      expect(await code(() => review(rOwn.id))).toBe("FORBIDDEN");
+      expect(await code(() => review(rAfter.id))).toBe("ok");
+      expect((await view(e.L1, T1, "2026-09-01", "2026-09-09")).pending.map((p: any) => p.id)).not.toContain(rAfter.id);
+    } finally { await ungrant("moderator", "attendance.approve_corrections"); }
+  });
+
   it("الأداء: نفس الشركة + نشاط الفريق + عضوية لحظة occurredAt؛ «فرحات» لا تظهر في «أفندي»؛ إعادة الإسناد لا تنقل التاريخ؛ حد 20؛ Backfill الجزئي خارج الحساب", async () => {
     const A1 = A.businessId;
     for (let i = 0; i < 20; i++) await event({ businessId: A1, orderId: 1000 + i, type: "confirm", by: e.m1, at: "2026-10-03T08:00:00Z" });

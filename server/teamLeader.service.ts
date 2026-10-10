@@ -49,7 +49,10 @@ export async function teamAttendance(actor: TeamsActor, teamId: number, fromDate
   const scope = await teamAttributionScope(actor.tenantId, teamId, r.fromMs - DAY_MS, r.toMs + DAY_MS);
   const ids = [...new Set(scope.intervals.map(i => i.employeeId))];
   const nowMembers = (await teamMembersAt(actor.tenantId, teamId)).map(m => m.employeeId);
-  const data = await daysForEmployees(actor.tenantId, ids, fromDate, toDate);
+  // الطلبات المعلّقة حالية — تُحمَّل لأعضاء الفريق الفعّالين **الآن** مهما كان نطاق العرض. كانت تُحمَّل فقط لمن تتقاطع
+  // عضويته مع النطاق (±يوم)، فعضو بدأت عضويته بعد نهاية النطاق (مثل القائد بعد منتصف ليل القاهرة) كانت طلباته تختفي.
+  // الأيام تبقى مقيّدة بالعضوية لحظة كل يوم (الفلتر أدناه)، فإضافة الأعضاء الحاليين لا تُظهر أيامًا خارج عضويتهم.
+  const data = await daysForEmployees(actor.tenantId, [...new Set([...ids, ...nowMembers])], fromDate, toDate);
   const anchor = (d: any) => num(d.firstInMs) ?? num(d.scheduledStartMs) ?? businessDayRange(d.workDate, d.timezone || DEFAULT_TZ).from.getTime();
   const days = data.days.filter(d => scope.intervals.some(i => i.employeeId === Number(d.employeeId) && isActiveAt(i, anchor(d))));
   const pending = data.pending.filter(p => nowMembers.includes(Number(p.employeeId))).map(p => ({ ...p, isMine: Number(p.employeeId) === actor.employeeId }));
