@@ -4467,6 +4467,39 @@ export const appRouter = router({
       .input(z.object({ requestId: z.number().int().positive() }).strict())
       .mutation(async ({ ctx, input }) => attendanceSvc.cancelCorrection(portalAttendanceActor(ctx), input.requestId)),
 
+    // ==================== مهامي — هوية البوابة فقط ====================
+    // مهامه هو + المهام العامة (بلا مستلم) لنشاطه، داخل نطاقه (tenant + نشاطه، fail-closed). قراءة وتحديث حالة
+    // فقط — لا إنشاء ولا حذف ولا employeeId من العميل. الملكية في نفس شرط الـUPDATE؛ 0 صفوف = NOT_FOUND
+    // (لا نكشف وجود مهمة زميل أو شركة أخرى).
+    tasks: router({
+      listMine: requireEmployeeTenantPermission("tasks.view_own")
+        .input(z.object({ status: z.enum(["all", "new", "in_progress", "done"]).optional() }).strict().optional())
+        .query(async ({ ctx, input }) => {
+          const emp = (ctx as any).employee;
+          const scope = await portalTeamScope(ctx);
+          const db = await getDb();
+          if (!db) return [];
+          const { tasks } = await import("../drizzle/schema");
+          const conditions: any[] = [taskScopeCondition(scope), or(eq(tasks.assignedTo, emp.id), isNull(tasks.assignedTo))];
+          if (input?.status && input.status !== "all") conditions.push(eq(tasks.status, input.status));
+          return db.select().from(tasks).where(and(...conditions)).orderBy(desc(tasks.createdAt)).limit(100);
+        }),
+      updateMyStatus: requireEmployeeTenantPermission("tasks.view_own")
+        .input(z.object({ taskId: z.number().int().positive(), status: z.enum(["new", "in_progress", "done"]) }).strict())
+        .mutation(async ({ ctx, input }) => {
+          const emp = (ctx as any).employee;
+          const scope = await portalTeamScope(ctx);
+          const db = await getDb();
+          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
+          const { tasks } = await import("../drizzle/schema");
+          const mine = and(eq(tasks.id, input.taskId), taskScopeCondition(scope), or(eq(tasks.assignedTo, emp.id), isNull(tasks.assignedTo)));
+          const [row] = await db.select({ id: tasks.id, status: tasks.status }).from(tasks).where(mine).limit(1);
+          if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "المهمة غير موجودة أو ليست لك" });
+          if (row.status !== input.status) await db.update(tasks).set({ status: input.status }).where(mine);
+          return { success: true };
+        }),
+    }),
+
     // ==================== فريقي (0044) — هوية البوابة فقط، قيادة فعّالة إلزامية ====================
     // الصلاحية وحدها لا تكفي: myTeams لغير القائد = [] (صفر بيانات)، وmembers لفريق لا يقوده = FORBIDDEN.
     // بلا teamId/tenantId/employeeId من العميل إلا teamId لاختيار فريق من فرقه هو (يُتحقق منه على السيرفر).
@@ -4540,39 +4573,6 @@ export const appRouter = router({
             return { success: true as const, teamId: r.team.teamId };
           }),
       }),
-    }),
-
-    // ==================== مهامي — هوية البوابة فقط ====================
-    // مهامه هو + المهام العامة (بلا مستلم) لنشاطه، داخل نطاقه (tenant + نشاطه، fail-closed). قراءة وتحديث حالة
-    // فقط — لا إنشاء ولا حذف ولا employeeId من العميل. الملكية في نفس شرط الـUPDATE؛ 0 صفوف = NOT_FOUND
-    // (لا نكشف وجود مهمة زميل أو شركة أخرى).
-    tasks: router({
-      listMine: requireEmployeeTenantPermission("tasks.view_own")
-        .input(z.object({ status: z.enum(["all", "new", "in_progress", "done"]).optional() }).strict().optional())
-        .query(async ({ ctx, input }) => {
-          const emp = (ctx as any).employee;
-          const scope = await portalTeamScope(ctx);
-          const db = await getDb();
-          if (!db) return [];
-          const { tasks } = await import("../drizzle/schema");
-          const conditions: any[] = [taskScopeCondition(scope), or(eq(tasks.assignedTo, emp.id), isNull(tasks.assignedTo))];
-          if (input?.status && input.status !== "all") conditions.push(eq(tasks.status, input.status));
-          return db.select().from(tasks).where(and(...conditions)).orderBy(desc(tasks.createdAt)).limit(100);
-        }),
-      updateMyStatus: requireEmployeeTenantPermission("tasks.view_own")
-        .input(z.object({ taskId: z.number().int().positive(), status: z.enum(["new", "in_progress", "done"]) }).strict())
-        .mutation(async ({ ctx, input }) => {
-          const emp = (ctx as any).employee;
-          const scope = await portalTeamScope(ctx);
-          const db = await getDb();
-          if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "قاعدة البيانات غير متاحة" });
-          const { tasks } = await import("../drizzle/schema");
-          const mine = and(eq(tasks.id, input.taskId), taskScopeCondition(scope), or(eq(tasks.assignedTo, emp.id), isNull(tasks.assignedTo)));
-          const [row] = await db.select({ id: tasks.id, status: tasks.status }).from(tasks).where(mine).limit(1);
-          if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "المهمة غير موجودة أو ليست لك" });
-          if (row.status !== input.status) await db.update(tasks).set({ status: input.status }).where(mine);
-          return { success: true };
-        }),
     }),
 
     // «أدائي» من سجل الأحداث — هوية البوابة فقط، نشاط الموظف فقط، بلا ترتيب.
