@@ -2,11 +2,11 @@ import mysql from "mysql2/promise";
 
 /**
  * قاعدة اختبار مؤقتة = نسخة مخطط المشروع الحقيقي من قاعدة الاختبار المشتركة (SHOW CREATE TABLE — نفس الأنواع
- * والـcollation)، **بلا** جداول ledger_* / order_activity_events / attendance_* وبلا الفهرسين المركّبين —
- * أي الحالة «قبل 0040/0041/0042» دائمًا، مهما طبّقت ملفات أخرى بالتوازي على قواعدها المؤقتة.
+ * والـcollation)، **بلا** جداول ledger_* / order_activity_events / attendance_* / msg_* وبلا الفهرسين المركّبين —
+ * أي الحالة «قبل 0040/0041/0042/0043» دائمًا، مهما طبّقت ملفات أخرى بالتوازي على قواعدها المؤقتة.
  * القاعدة المشتركة نفسها لا تُلمس (قراءة DDL فقط). الاسم يحتوي `_test_` (حارس المشروع).
  */
-const EXCLUDED = (n: string) => n.startsWith("ledger_") || n.startsWith("attendance_") || n === "order_activity_events" || n.startsWith("_");
+const EXCLUDED = (n: string) => n.startsWith("ledger_") || n.startsWith("attendance_") || n.startsWith("msg_") || n === "order_activity_events" || n.startsWith("_");
 const stripCompositeIndexes = (ddl: string) =>
   ddl.split("\n").filter(l => !/`(businesses|employees)_tenant_id`/.test(l)).join("\n").replace(/,\n\)/, "\n)");
 

@@ -13,20 +13,20 @@ import {
 import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconciliation.service";
 
 /**
- * محرّك الـMigrations المكتوبة يدويًا 0041 / 0042 — نفس انضباط 0040 (ledgerV3Migrate.service) بشكل عام:
+ * محرّك الـMigrations المكتوبة يدويًا 0041 / 0042 / 0043 — نفس انضباط 0040 (ledgerV3Migrate.service) بشكل عام:
  *   • check (افتراضي، قراءة فقط): الحالة not_applied / applied / partial + جدول العبارات + فروق المواصفة + preflight.
  *   • apply: بوابات **قبل أي اتصال كتابة** (البيئة، الهدف ليس إنتاجًا، عبارة تأكيد فيها اسم القاعدة)، ثم:
  *     applied → replay بلا تغيير؛ partial → رفض بلا إكمال؛ not_applied → العبارات بالترتيب مع تحقق بعد كل واحدة.
  *   • rollback: نفس البوابات + عبارة مختلفة، وكل الجداول **فارغة**؛ الفهرسان المركّبان لا يُحذفان إلا بطلب صريح
  *     وبشرط ألا يعتمد عليهما أي FK آخر.
  *   • الفهرسان المركّبان (businesses_tenant_id / employees_tenant_id): كلاهما غائب → 0041 ينشئهما؛ كلاهما موجود
- *     بنفس الأعمدة والترتيب → skip؛ واحد فقط أو تعريف مختلف → partial ورفض. 0042 يشترط وجودهما.
+ *     بنفس الأعمدة والترتيب → skip؛ واحد فقط أو تعريف مختلف → partial ورفض. 0042 و0043 يشترطان وجودهما.
  *   • لا يُطبع ولا يُرجع أي رابط أو كلمة سر. DDL في MySQL غير معاملاتي — التوقف عند أول خطأ يترك partial ظاهرًا.
  *
  * البيئات المسموح فيها apply/rollback: DEPLOY_ENV=staging مع قاعدة غير إنتاجية باسم staging/stage/test (للـRunbook
  * لاحقًا — **ممنوع تشغيله في هذه المرحلة**)، أو DEPLOY_ENV=test/local على مضيف محلي (Docker مؤقت).
  */
-export type HandMigrationId = "0041" | "0042";
+export type HandMigrationId = "0041" | "0042" | "0043";
 export type HandMigrationDef = {
   id: HandMigrationId;
   title: string;

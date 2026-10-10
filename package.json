@@ -6,7 +6,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx watch server/_core/index.ts",
-    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && esbuild scripts/verify-ledger-v3.ts scripts/activate-ledger-v3.ts scripts/verify-ledger-v3-runtime.ts scripts/migrate-0040-ledger-v3.ts scripts/disable-ledger-v3.ts scripts/migrate-0041-order-events.ts scripts/verify-order-events.ts scripts/preview-order-events-backfill.ts scripts/migrate-0042-attendance.ts scripts/verify-attendance.ts scripts/reconcile-attendance.ts scripts/preview-tenant-access.ts --platform=node --packages=external --bundle --format=esm --outdir=dist/scripts --out-extension:.js=.mjs",
+    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && esbuild scripts/verify-ledger-v3.ts scripts/activate-ledger-v3.ts scripts/verify-ledger-v3-runtime.ts scripts/migrate-0040-ledger-v3.ts scripts/disable-ledger-v3.ts scripts/migrate-0041-order-events.ts scripts/verify-order-events.ts scripts/preview-order-events-backfill.ts scripts/migrate-0042-attendance.ts scripts/verify-attendance.ts scripts/reconcile-attendance.ts scripts/migrate-0043-messaging.ts scripts/preview-tenant-access.ts --platform=node --packages=external --bundle --format=esm --outdir=dist/scripts --out-extension:.js=.mjs",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc --noEmit --incremental false",
     "format": "prettier --write .",
