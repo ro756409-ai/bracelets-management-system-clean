@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
 import { operationIdFor } from "@/lib/operationId";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
@@ -970,6 +971,8 @@ export default function EmployeeDashboard() {
 
             {/* التحديث والخروج مش أدوات تنقل — كانوا مدفونين كأيقونتين وسط ٦ زيهم بالظبط.
                 فاصل + نص على الشاشات الأوسع بيخليهم يتلقطوا من غير ما الموظف يخمّن. */}
+            {/* الرسائل (هوية البوابة): لا يظهر والعلم معطل أو بلا messages.use */}
+            <MessagesEntryButton via="portal" className="bg-primary-foreground/10 text-primary-foreground hover:bg-primary-foreground/20 md:h-8 md:min-h-8 md:w-8 md:min-w-8" />
             {canOpenMyAttendance && (
               <Button data-readonly-safe
                 variant="ghost"
