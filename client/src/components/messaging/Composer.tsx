@@ -89,7 +89,7 @@ export function Composer(props: {
 
   return (
     <form
-      className="border-t border-border bg-card/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 backdrop-blur md:pb-2"
+      className="relative border-t border-border bg-card/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 backdrop-blur md:pb-2"
       onSubmit={e => { e.preventDefault(); void submit(); }}
       aria-label="كتابة رسالة"
       data-testid="composer"
