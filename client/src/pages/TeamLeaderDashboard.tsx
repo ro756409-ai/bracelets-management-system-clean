@@ -12,6 +12,8 @@ import { SummaryTab } from "@/components/teams/leader/SummaryTab";
 import { MembersTab } from "@/components/teams/leader/MembersTab";
 import { AttendanceTab } from "@/components/teams/leader/AttendanceTab";
 import { PerformanceTab } from "@/components/teams/leader/PerformanceTab";
+import { OrdersTab } from "@/components/teams/leader/OrdersTab";
+import { TasksTab } from "@/components/teams/leader/TasksTab";
 
 /**
  * «فريقي» — لوحة قائد الفريق داخل بوابة الموظف (هوية كوكي الموظف فقط).
@@ -19,7 +21,7 @@ import { PerformanceTab } from "@/components/teams/leader/PerformanceTab";
  *  • كل تبويب يظهر بصلاحيته، وكل endpoint يتحقق من الصلاحية + القيادة الفعّالة؛ رفضه يظهر كـPermissionDenied.
  *  • العلم معطل ⇒ «غير متاح» بلا أي استعلام آخر.
  */
-type TabKey = "summary" | "members" | "attendance" | "performance";
+type TabKey = "summary" | "members" | "attendance" | "performance" | "orders" | "tasks";
 
 export default function TeamLeaderDashboard() {
   const access = useLeaderAccess();
@@ -49,8 +51,12 @@ function LeaderBoard({ teams, has, leaderName }: { teams: LedTeam[]; has: (p: st
     { key: "members", label: "الأعضاء والورديات" },
     ...(has("team_attendance.view") ? [{ key: "attendance", label: "الحضور" }] : []),
     ...(has("team_performance.view") ? [{ key: "performance", label: "الأداء" }] : []),
+    ...(has("team_orders.view") ? [{ key: "orders", label: "الأوردرات" }] : []),
+    ...(has("team_tasks.manage") ? [{ key: "tasks", label: "المهام" }] : []),
   ], [has]);
   const [tab, setTab] = useState<TabKey>("summary");
+  // سحب صلاحية تبويب مفتوح (يظهر في الطلب التالي لـmyPermissions) ⇒ نعود للملخص بدل لوحة فارغة
+  useEffect(() => { if (!tabs.some(t => t.key === tab)) setTab("summary"); }, [tabs, tab]);
   const perms = { has };
   return (
     <>
@@ -69,6 +75,8 @@ function LeaderBoard({ teams, has, leaderName }: { teams: LedTeam[]; has: (p: st
         {tab === "members" && <MembersTab team={team} perms={perms} />}
         {tab === "attendance" && has("team_attendance.view") && <AttendanceTab team={team} perms={perms} />}
         {tab === "performance" && has("team_performance.view") && <PerformanceTab team={team} perms={perms} />}
+        {tab === "orders" && has("team_orders.view") && <OrdersTab team={team} perms={perms} />}
+        {tab === "tasks" && has("team_tasks.manage") && <TasksTab team={team} />}
       </div>
     </>
   );
