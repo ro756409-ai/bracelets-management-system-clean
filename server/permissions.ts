@@ -119,6 +119,18 @@ export const ALL_PERMISSIONS = [
   "messages.announce",
   "messages.manage_groups",
   "messages.view_private",
+  // ==================== الفرق والقيادة المؤرخة (0044) ====================
+  // بلا Role جديد: القيادة = صف عضوية 'leader' فعّال. view_all/manage للمالك والأدمن افتراضيًا (المدير بالمنح).
+  // view_own و team_* للمشرف والمدير افتراضيًا — **لا أثر لها بدون قيادة فعّالة**: كل إجراء قائد يفرض الصلاحية
+  // **و** قيادة فعّالة لنفس الفريق في نفس الشركة (غير القائد = صفر بيانات أو FORBIDDEN).
+  "teams.view_own",
+  "teams.view_all",
+  "teams.manage",
+  "team_performance.view",
+  "team_attendance.view",
+  "team_tasks.manage",
+  "team_orders.view",
+  "team_orders.assign",
 ] as const;
 
 /** صلاحيات دفتر V3 التي يملكها المالك وحده افتراضيًا (لا يأخذها admin إلا بمنح صريح لكل tenant). */
@@ -148,6 +160,12 @@ export const MANAGER_GRANT_ONLY_PERMISSIONS: readonly Permission[] = [
   "attendance.approve_corrections",
   "attendance.manage_leaves",
   "attendance.export",
+  "teams.view_all",
+  "teams.manage",
+];
+/** صلاحيات القائد — تُفعَّل فقط مع قيادة فعّالة (المشرف والمدير افتراضيًا، غيرهما بالمنح). */
+export const TEAM_LEADER_PERMISSIONS: readonly Permission[] = [
+  "teams.view_own", "team_performance.view", "team_attendance.view", "team_tasks.manage", "team_orders.view", "team_orders.assign",
 ];
 /** «أدائي» + حضوري (تسجيل/عرض/طلب تصحيح) لكل دور تشغيلي (ما عدا viewer). */
 const SELF_PERFORMANCE: readonly Permission[] = [
@@ -292,7 +310,7 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     "orders.view", "orders.create", "orders.update", "orders.edit_items",
     "orders.confirm", "orders.cancel", "orders.export", "orders.import",
     "employees.view", "audit.view",
-    ...SELF_PERFORMANCE, ...MESSAGING_BASIC,
+    ...SELF_PERFORMANCE, ...MESSAGING_BASIC, ...TEAM_LEADER_PERMISSIONS,
   ],
   order_confirmation: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],
   agent: ["dashboard.view", "orders.view", "orders.confirm", "orders.cancel", "orders.update", "orders.edit_items", ...SELF_PERFORMANCE, ...MESSAGING_BASIC],

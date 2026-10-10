@@ -114,6 +114,7 @@ import { orderEventsEnabled, type OrderEventContext } from "./orderEvents.servic
 import { loadPerformance } from "./employeePerformance.service";
 import { buildMessagingRouter, webMessagingIdentity, portalMessagingIdentity } from "./messagingRouter";
 import * as attendanceSvc from "./attendance.service";
+import * as teamsSvc from "./teams.service";
 import { attendanceCsv } from "../shared/attendanceCalc";
 import { performanceCsv } from "../shared/employeePerformance";
 import {
@@ -1069,6 +1070,24 @@ function webAttendanceActor(ctx: any): attendanceSvc.AttendanceActor {
   if (!ctx.employee || ctx.tenantId == null) throw new TRPCError({ code: "FORBIDDEN", message: "تعذّر تحديد الموظف" });
   return { tenantId: ctx.tenantId, employeeId: ctx.employee.id, role: ctx.employee.role ?? null, businessId: ctx.employee.businessId ?? null, name: ctx.employee.name ?? null };
 }
+/** الفاعل في الفرق (ويب): tenant الجلسة + صف الموظف الحقيقي — الخدمة تتحقق أنه موجب ونشط في نفس الشركة. */
+function webTeamsActor(ctx: any): teamsSvc.TeamsActor {
+  if (!ctx.employee || ctx.tenantId == null) throw new TRPCError({ code: "FORBIDDEN", message: "تعذّر تحديد الموظف" });
+  return { tenantId: ctx.tenantId, employeeId: ctx.employee.id, role: ctx.employee.role ?? null };
+}
+/** الفاعل في الفرق لجلسة البوابة — كوكي الموظف فقط. */
+function portalTeamsActor(ctx: any): teamsSvc.TeamsActor {
+  const emp = ctx.employee;
+  return { tenantId: requireTenantId(emp), employeeId: emp.id, role: emp.role ?? null };
+}
+/**
+ * حارس القائد في البوابة: الصلاحية (بتجاوزات الشركة، هوية الكوكي فقط) **و** قيادة فعّالة لنفس الفريق في نفس
+ * الشركة — الصلاحية وحدها لا تكفي. غير القائد = FORBIDDEN لهذا الفريق.
+ */
+async function requireTeamLeader(ctx: any, teamId: number): Promise<teamsSvc.LeaderTeam> {
+  return teamsSvc.requireLeaderOf(portalTeamsActor(ctx), teamId);
+}
+
 /** الفاعل في الحضور لجلسة البوابة — كوكي الموظف فقط (لا صلاحيات جلسة مالك مفتوحة). */
 function portalAttendanceActor(ctx: any): attendanceSvc.AttendanceActor {
   const emp = ctx.employee;
@@ -4447,6 +4466,23 @@ export const appRouter = router({
       .input(z.object({ requestId: z.number().int().positive() }).strict())
       .mutation(async ({ ctx, input }) => attendanceSvc.cancelCorrection(portalAttendanceActor(ctx), input.requestId)),
 
+    // ==================== فريقي (0044) — هوية البوابة فقط، قيادة فعّالة إلزامية ====================
+    // الصلاحية وحدها لا تكفي: myTeams لغير القائد = [] (صفر بيانات)، وmembers لفريق لا يقوده = FORBIDDEN.
+    // بلا teamId/tenantId/employeeId من العميل إلا teamId لاختيار فريق من فرقه هو (يُتحقق منه على السيرفر).
+    team: router({
+      myTeams: requireEmployeeTenantPermission("teams.view_own").query(async ({ ctx }) => {
+        if (!teamsSvc.teamsEnabled()) return { enabled: false as const, teams: [] as teamsSvc.LeaderTeam[] };
+        return { enabled: true as const, teams: await teamsSvc.leaderTeams(portalTeamsActor(ctx)) };
+      }),
+      members: requireEmployeeTenantPermission("teams.view_own")
+        .input(z.object({ teamId: z.number().int().positive() }).strict())
+        .query(async ({ ctx, input }) => {
+          if (!teamsSvc.teamsEnabled()) return { enabled: false as const, members: [] as any[] };
+          await requireTeamLeader(ctx, input.teamId);
+          return { enabled: true as const, members: await teamsSvc.teamMembersAt(requireTenantId((ctx as any).employee), input.teamId) };
+        }),
+    }),
+
     // ==================== مهامي — هوية البوابة فقط ====================
     // مهامه هو + المهام العامة (بلا مستلم) لنشاطه، داخل نطاقه (tenant + نشاطه، fail-closed). قراءة وتحديث حالة
     // فقط — لا إنشاء ولا حذف ولا employeeId من العميل. الملكية في نفس شرط الـUPDATE؛ 0 صفوف = NOT_FOUND
@@ -6678,6 +6714,45 @@ export const appRouter = router({
 
   // ==================== مركز الرسائل (0043، خلف MESSAGING_ENABLED) — هوية جلسة الويب ====================
   messages: buildMessagingRouter(authenticatedProcedure, webMessagingIdentity),
+
+  // ==================== الفرق (0044) — المالك/الإدارة، خلف TEAMS_ENABLED ====================
+  // view_all/manage للمالك والأدمن افتراضيًا (المدير بالمنح فقط عبر permissionProcedure). النطاق = أنشطة الجلسة
+  // (الفارغ = صفر). كل كتابة بـoperationId (Replay/CONFLICT) وهوية الفاعل من الجلسة فقط.
+  teams: router({
+    status: authenticatedProcedure.query(() => ({ enabled: teamsSvc.teamsEnabled() })),
+    list: permissionProcedure("teams.view_all")
+      .input(z.object({ includeInactive: z.boolean().optional() }).strict().optional())
+      .query(async ({ ctx, input }) => {
+        if (!teamsSvc.teamsEnabled()) return { enabled: false as const, rows: [] as any[] };
+        return { enabled: true as const, rows: await teamsSvc.listTeams(ctx.tenantId, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []), input ?? {}) };
+      }),
+    get: permissionProcedure("teams.view_all")
+      .input(z.object({ teamId: z.number().int().positive() }).strict())
+      .query(async ({ ctx, input }) => {
+        if (!teamsSvc.teamsEnabled()) return { enabled: false as const };
+        return { enabled: true as const, ...(await teamsSvc.getTeam(ctx.tenantId, input.teamId, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))) };
+      }),
+    history: permissionProcedure("teams.view_all")
+      .input(z.object({ teamId: z.number().int().positive() }).strict())
+      .query(async ({ ctx, input }) => {
+        if (!teamsSvc.teamsEnabled()) return { enabled: false as const };
+        return { enabled: true as const, ...(await teamsSvc.teamHistory(ctx.tenantId, input.teamId, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))) };
+      }),
+    create: permissionProcedure("teams.manage").input(teamsSvc.createTeamInput)
+      .mutation(async ({ ctx, input }) => teamsSvc.createTeam(webTeamsActor(ctx), input, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
+    rename: permissionProcedure("teams.manage").input(teamsSvc.renameTeamInput)
+      .mutation(async ({ ctx, input }) => teamsSvc.renameTeam(webTeamsActor(ctx), input)),
+    deactivate: permissionProcedure("teams.manage").input(teamsSvc.deactivateTeamInput)
+      .mutation(async ({ ctx, input }) => teamsSvc.deactivateTeam(webTeamsActor(ctx), input)),
+    addMember: permissionProcedure("teams.manage").input(teamsSvc.addMemberInput)
+      .mutation(async ({ ctx, input }) => teamsSvc.addMember(webTeamsActor(ctx), input)),
+    endMembership: permissionProcedure("teams.manage").input(teamsSvc.endMembershipInput)
+      .mutation(async ({ ctx, input }) => teamsSvc.endMembership(webTeamsActor(ctx), input)),
+    setLeader: permissionProcedure("teams.manage").input(teamsSvc.setLeaderInput)
+      .mutation(async ({ ctx, input }) => teamsSvc.setLeader(webTeamsActor(ctx), input)),
+    endLeadership: permissionProcedure("teams.manage").input(teamsSvc.endLeadershipInput)
+      .mutation(async ({ ctx, input }) => teamsSvc.endLeadership(webTeamsActor(ctx), input)),
+  }),
 
   // ==================== BROADCAST (Admin OAuth) ====================
   broadcast: router({

@@ -30,6 +30,19 @@ export const isActiveAt = (iv: MembershipInterval, atMs: number) =>
 export const intervalsOverlap = (a: MembershipInterval, b: MembershipInterval) =>
   a.fromMs < (b.toMs ?? Number.POSITIVE_INFINITY) && b.fromMs < (a.toMs ?? Number.POSITIVE_INFINITY);
 
+export type TeamEvent = { tenantId: number; businessId: number | null; employeeId: number | null; occurredAtMs: number };
+export type TeamMembershipSpan = MembershipInterval & { employeeId: number };
+
+/**
+ * هل يُحسب الحدث لهذا الفريق؟ (قرار المالك) الشروط الثلاثة معًا: نفس tenantId، businessId الحدث = نشاط الفريق،
+ * والموظف عضو/قائد فعّال لحظة occurredAt بالضبط — لا businessDateKey ولا يوم كامل. إعادة الإسناد لا تنقل التاريخ.
+ * spans = فترات هذا الفريق فقط.
+ */
+export function eventCountsForTeam(e: TeamEvent, team: { tenantId: number; businessId: number }, spans: TeamMembershipSpan[]): boolean {
+  if (e.tenantId !== team.tenantId || e.businessId == null || e.businessId !== team.businessId || e.employeeId == null) return false;
+  return spans.some(s => s.employeeId === e.employeeId && isActiveAt(s, e.occurredAtMs));
+}
+
 /** نفس التعبير الذي يُكتب في الملف (يُقارن بعد التطبيع مع information_schema). */
 export const TEAMS_GENERATED = {
   activeBusinessId: "CASE WHEN `isActive` = 1 THEN `businessId` END",
