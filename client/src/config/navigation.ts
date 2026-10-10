@@ -2,7 +2,7 @@ import {
   LayoutDashboard, ShoppingCart, PackageCheck, Boxes, Users, LineChart, Settings,
   Briefcase, Truck, RotateCcw, AlertTriangle, Printer, QrCode, Clock, Activity,
   Package, PackagePlus, ClipboardCheck, Building2, Globe, Zap,
-  BarChart3, GitMerge, Wallet, Wrench, BookOpen, ShieldCheck,
+  BarChart3, GitMerge, Wallet, Wrench, BookOpen, ShieldCheck, UsersRound,
 } from "lucide-react";
 
 /**
@@ -25,7 +25,12 @@ export type NavGate = {
   permission?: string;
   /** لو true: للمالك/الأدمن الصناعي فقط. */
   adminOnly?: boolean;
+  /** لو موجود: البند يظهر فقط لما الميزة مفعّلة على السيرفر (مثل TEAMS_ENABLED) — مخفي افتراضيًا لو مفيش flags. */
+  flag?: NavFlag;
 };
+
+/** مزايا خلف flag على السيرفر — الشل يمرّر المفعّل منها (من status endpoint الخاص بكل ميزة). */
+export type NavFlag = "teams" | "teamLeader";
 
 export type NavLink = NavGate & {
   label: string;
@@ -116,6 +121,9 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
     adminOnly: true,
     children: [
       { label: "الموظفين", path: "/employees", icon: Users, adminOnly: true },
+      { label: "الفرق", path: "/teams", icon: UsersRound, permission: "teams.view_all", flag: "teams" },
+      // «فريقي» لجلسة موظف (المدير على الويب) يقود فريقًا الآن — flag teamLeader = myTeams غير فارغة (هوية الكوكي)
+      { label: "فريقي", path: "/team-leader-dashboard", icon: UsersRound, permission: "teams.view_own", flag: "teamLeader" },
     ],
   },
   {
@@ -171,26 +179,27 @@ export const MORE_ICON = Wrench;
  * فلترة بند حسب صلاحيات الجلسة — نفس منطق DashboardLayout القديم بالظبط، متمركز هنا.
  * `isAdmin` = user.role === "admin" (بيشمل المدير الصناعي). `permissions` = myPermissions.
  */
-export function canSeeNav(gate: NavGate, isAdmin: boolean, permissions: string[]): boolean {
+export function canSeeNav(gate: NavGate, isAdmin: boolean, permissions: string[], flags: readonly NavFlag[] = []): boolean {
+  if (gate.flag && !flags.includes(gate.flag)) return false;
   if (gate.permission) return permissions.includes(gate.permission);
   if (gate.adminOnly) return isAdmin;
   return true;
 }
 
 /** الأبناء المرئيون لوجهة (بعد فلترة الصلاحيات). */
-export function visibleChildren(dest: NavDestination, isAdmin: boolean, permissions: string[]): NavLink[] {
-  return (dest.children ?? []).filter(c => canSeeNav(c, isAdmin, permissions));
+export function visibleChildren(dest: NavDestination, isAdmin: boolean, permissions: string[], flags: readonly NavFlag[] = []): NavLink[] {
+  return (dest.children ?? []).filter(c => canSeeNav(c, isAdmin, permissions, flags));
 }
 
 /**
  * الوجهات المرئية: الوجهة تظهر لو بوابتها سمحت **و** عندها ابن مرئي واحد على الأقل
  * (أو مالهاش أبناء). كده وجهة كل أبناءها متحجوبين ماتظهرش فاضية.
  */
-export function visibleDestinations(isAdmin: boolean, permissions: string[]): NavDestination[] {
+export function visibleDestinations(isAdmin: boolean, permissions: string[], flags: readonly NavFlag[] = []): NavDestination[] {
   return PRIMARY_DESTINATIONS.filter(dest => {
-    if (!canSeeNav(dest, isAdmin, permissions)) return false;
+    if (!canSeeNav(dest, isAdmin, permissions, flags)) return false;
     if (!dest.children || dest.children.length === 0) return true;
-    return visibleChildren(dest, isAdmin, permissions).length > 0;
+    return visibleChildren(dest, isAdmin, permissions, flags).length > 0;
   });
 }
 

@@ -16,7 +16,7 @@ describe("🔑 Inventory Workspace — toolkit المرحلة A (مفيش أنم
     expect(src).not.toMatch(/<WorkspaceTabs\b/);
     const layout = fs.readFileSync("client/src/components/DashboardLayout.tsx", "utf-8");
     expect(layout).toContain("<WorkspaceTabs tabs={workspaceTabs} />");
-    expect(layout).toContain("visibleChildren(activeDest, isAdmin, permissions)");
+    expect(layout).toContain("visibleChildren(activeDest, isAdmin, permissions, navFlags)");
     // مفيش h1 يدوي مكرّر للرأس بعد التوحيد.
     expect(src).not.toContain('<h1 className="text-2xl font-bold text-foreground">المخزن والجرد</h1>');
   });

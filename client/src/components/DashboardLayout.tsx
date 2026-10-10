@@ -20,7 +20,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDashboard, PanelRight, ChevronDown } from "lucide-react";
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
-  MORE_ICON, activeDestinationKey, visibleChildren, visibleDestinations, visibleToolsLinks,
+  MORE_ICON, activeDestinationKey, visibleChildren, visibleDestinations, visibleToolsLinks, type NavFlag,
 } from "@/config/navigation";
 import { BusinessSwitcher } from "@/components/shell/BusinessSwitcher";
 import { MobileBottomNav } from "@/components/shell/MobileBottomNav";
@@ -172,13 +172,25 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   // التنقّل V2 كله بيتبني من المصدر الواحد (config/navigation): الوجهات الأساسية (قابلة للطي
   // فالسايدبار تفضل مختصرة) + مجموعة «المزيد» للأدوات والسجلّات. الفلترة بالصلاحيات من نفس
   // مصدر السيرفر (myPermissions) عبر canSeeNav — تعريف واحد، مش مبعتر.
+  // مزايا خلف flag: رابط «الفرق» يظهر فقط لو TEAMS_ENABLED (status خفيف ومخزّن 5 دقائق).
+  const teamsStatus = trpc.teams.status.useQuery(undefined, { retry: false, staleTime: 5 * 60 * 1000, enabled: Boolean(user) });
+  // «فريقي»: جلسة موظف فقط (المدير على الويب) + teams.view_own + قيادة فعّالة الآن — myTeams بهوية كوكي الموظف،
+  // ولا يُطلب لجلسة المالك أو بلا الصلاحية أو والعلم معطل.
+  const isEmployeeSession = (user as { loginMethod?: string | null } | null)?.loginMethod === "employee";
+  const canAskLeadership = Boolean(teamsStatus.data?.enabled) && isEmployeeSession && permissions.includes("teams.view_own");
+  const myLedTeams = trpc.employeePortal.team.myTeams.useQuery(undefined, { enabled: canAskLeadership, retry: false, staleTime: 60 * 1000 });
+  const leadsNow = canAskLeadership && myLedTeams.data?.enabled === true && myLedTeams.data.teams.length > 0;
+  const navFlags = useMemo<NavFlag[]>(
+    () => [...(teamsStatus.data?.enabled ? (["teams"] as NavFlag[]) : []), ...(leadsNow ? (["teamLeader"] as NavFlag[]) : [])],
+    [teamsStatus.data?.enabled, leadsNow]
+  );
   const navDestinations = useMemo(
-    () => visibleDestinations(isAdmin, permissions),
-    [isAdmin, permissions]
+    () => visibleDestinations(isAdmin, permissions, navFlags),
+    [isAdmin, permissions, navFlags]
   );
   const visibleGroups: MenuGroup[] = useMemo(() => {
     const groups: MenuGroup[] = navDestinations.map(dest => {
-      const items = visibleChildren(dest, isAdmin, permissions).map(c => ({
+      const items = visibleChildren(dest, isAdmin, permissions, navFlags).map(c => ({
         icon: c.icon, label: c.label, path: c.path,
       }));
       return {
@@ -201,7 +213,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
       });
     }
     return groups;
-  }, [navDestinations, isAdmin, permissions]);
+  }, [navDestinations, isAdmin, permissions, navFlags]);
   const allMenuItems = visibleGroups.flatMap(g => g.items);
   const activeMenuItem = allMenuItems.find(item => item.path === location);
 
@@ -209,7 +221,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   const activeKey = activeDestinationKey(location);
   const activeDest = navDestinations.find(d => d.key === activeKey);
   const workspaceTabs = activeDest
-    ? visibleChildren(activeDest, isAdmin, permissions)
+    ? visibleChildren(activeDest, isAdmin, permissions, navFlags)
     : [];
 
   useEffect(() => {
