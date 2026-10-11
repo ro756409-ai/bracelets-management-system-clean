@@ -30,7 +30,15 @@ export async function loadLedgerV3Snapshot(exec: ReadOnlyExecutor): Promise<Sche
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${ph}) AND CONSTRAINT_TYPE = 'CHECK'`, names
   );
 
-  const snapshot: SchemaSnapshot = { tables: new Set(tables.map(t => t.TABLE_NAME)), columns: {}, uniques: {}, foreignKeys: {}, checks: {} };
+  // فهارس غير فريدة بنفس اسمي الفهرسين المركّبين (تعريف مختلف ⇒ partial، لا «غائب»)
+  const oldNames = LEDGER_V3_OLD_TABLE_INDEXES.map(i => i.name);
+  const nonUnique = await exec.query<{ TABLE_NAME: string; INDEX_NAME: string }>(
+    `SELECT DISTINCT TABLE_NAME, INDEX_NAME FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND NON_UNIQUE = 1 AND INDEX_NAME IN (${oldNames.map(() => "?").join(",")})`, oldNames
+  );
+
+  const snapshot: SchemaSnapshot = { tables: new Set(tables.map(t => t.TABLE_NAME)), columns: {}, uniques: {}, foreignKeys: {}, checks: {}, nonUniqueIndexes: {} };
+  for (const r of nonUnique) (snapshot.nonUniqueIndexes![r.TABLE_NAME] ??= new Set()).add(r.INDEX_NAME);
   for (const c of cols) (snapshot.columns[c.TABLE_NAME] ??= []).push({ name: c.COLUMN_NAME, columnType: c.COLUMN_TYPE, nullable: c.IS_NULLABLE === "YES" });
   for (const i of idx) ((snapshot.uniques[i.TABLE_NAME] ??= {})[i.INDEX_NAME] ??= []).push(i.COLUMN_NAME);
   for (const f of fks) {

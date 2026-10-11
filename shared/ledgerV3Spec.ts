@@ -203,6 +203,8 @@ export function applicationState(snapshot: SchemaSnapshot): ApplicationState {
   const total = tables + oldIdx, max = LEDGER_V3_TABLES.length + LEDGER_V3_OLD_TABLE_INDEXES.length;
   // الفهرسان المركّبان قد يسبقان 0040 (ينشئهما 0041 إن كانا غائبين): وجودهما **بالتعريف الصحيح** بلا أي جدول ledger_*
   // = غير مطبَّقة (عبارتاهما تُتخطّيان عند التطبيق). واحد فقط أو تعريف مختلف = partial.
+  // فهرس بنفس اسم أحد الفهرسين المركّبين لكنه غير فريد = تعريف مختلف ⇒ partial دائمًا (رفض قبل أي DDL).
+  if (LEDGER_V3_OLD_TABLE_INDEXES.some(i => snapshot.nonUniqueIndexes?.[i.table]?.has(i.name))) return "partial";
   if (tables === 0 && oldIdx === LEDGER_V3_OLD_TABLE_INDEXES.length && compositeIndexesCorrect(snapshot)) return "not_applied";
   return total === 0 ? "not_applied" : total === max ? "applied" : "partial";
 }
@@ -221,6 +223,11 @@ export type SchemaSnapshot = {
   /** اسم القيد → {columns, refTable, refColumns} */
   foreignKeys: Record<string, Record<string, { columns: string[]; refTable: string; refColumns: string[] }>>;
   checks: Record<string, Set<string>>;
+  /**
+   * أسماء الفهارس **غير الفريدة** (NON_UNIQUE=1) على الجداول القديمة — لكشف فهرس بنفس اسم فهرس 0040 المركّب
+   * لكنه ليس Unique: لا يظهر في `uniques` فكان يُقرأ «غائبًا» ⇒ not_applied ثم يفشل ADD UNIQUE INDEX في منتصف التطبيق.
+   */
+  nonUniqueIndexes?: Record<string, Set<string>>;
 };
 
 /** يقارن اللقطة بالمواصفة — نقي، ويُختبر بلقطات مكسورة عمدًا. */
@@ -251,7 +258,8 @@ export function verifyLedgerV3(snapshot: SchemaSnapshot): VerifyIssue[] {
   }
   for (const oi of LEDGER_V3_OLD_TABLE_INDEXES) {
     const actual = snapshot.uniques[oi.table]?.[oi.name];
-    if (!actual) issues.push({ table: oi.table, kind: "old_index", detail: `الفهرس الفريد المركّب ${oi.name} غير موجود` });
+    if (!actual && snapshot.nonUniqueIndexes?.[oi.table]?.has(oi.name)) issues.push({ table: oi.table, kind: "old_index", detail: `${oi.name} موجود لكنه غير فريد (NON_UNIQUE) — المطلوب UNIQUE على (${oi.columns.join(",")})` });
+    else if (!actual) issues.push({ table: oi.table, kind: "old_index", detail: `الفهرس الفريد المركّب ${oi.name} غير موجود` });
     else if (actual.join(",") !== oi.columns.join(",")) issues.push({ table: oi.table, kind: "old_index", detail: `${oi.name}: الأعمدة (${actual.join(",")}) ≠ (${oi.columns.join(",")})` });
   }
   for (const chk of LEDGER_V3_CHECKS) {
