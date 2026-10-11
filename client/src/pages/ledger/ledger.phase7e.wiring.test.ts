@@ -60,7 +60,9 @@ describe("🎨 الهوية", () => {
   it("شعارات Bosta/Vodafone/InstaPay على حسابها الصحيح فقط (COD_BOSTA/VF_CASH/INSTAPAY)", () => {
     const daily = read("pages/ledger/LedgerDaily.tsx");
     expect(daily).toContain('const CARD_LOGOS: Record<string, PartnerId> = { VF_CASH: "vodafone_cash", INSTAPAY: "instapay", COD_BOSTA: "bosta" };');
-    expect((daily.match(/<PartnerLogo /g) ?? []).length).toBe(2); // البطاقة + قائمة الحسابات، كلاهما عبر CARD_LOGOS[a.code]
+    // بطاقات النقدية + بطاقة ذمة شركة الشحن (المرحلة 0: COD منفصل عن النقدية) + قائمة الحسابات — كلها عبر CARD_LOGOS[a.code]
+    expect((daily.match(/<PartnerLogo /g) ?? []).length).toBe(3);
+    expect(daily.match(/<PartnerLogo [^>]*>/g)?.every(t => t.includes("partner={logo}"))).toBe(true);
     expect(daily).not.toMatch(/partner="(bosta|vodafone_cash|instapay)"/); // لا شعار ثابت خارج الخريطة
   });
   it("كل DialogHeader يحفظ مساحة زر الإغلاق (لا px-4 يلغيها) في LedgerDaily/LedgerTransactions/DailyLedger", () => {
