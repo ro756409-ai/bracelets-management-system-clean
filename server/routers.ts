@@ -385,6 +385,21 @@ async function canViewProfit(ctx: { user?: { role?: string | null } | null; empl
   return hasTenantPermission(ctx.tenantId, ctx.employee?.role, "reports.view_profit");
 }
 
+/** مفاتيح الربح في إجماليات الإقفال — تُحجب لمن لا يملك reports.view_profit (باقي الأرقام التشغيلية تبقى). */
+const CLOSING_PROFIT_KEYS = ["grossProfit", "netProfit", "adjustedNetProfit", "profitMargin"] as const;
+function withoutProfitKeys<T extends Record<string, unknown> | null | undefined>(totals: T): T {
+  if (!totals || typeof totals !== "object") return totals;
+  const copy: Record<string, unknown> = { ...totals };
+  for (const k of CLOSING_PROFIT_KEYS) delete copy[k];
+  return copy as T;
+}
+/** صف إقفال (totalsJson نصي) بلا مفاتيح الربح. */
+function redactClosingRow<T extends { totalsJson?: string | null }>(row: T): T {
+  if (!row?.totalsJson) return row;
+  try { return { ...row, totalsJson: JSON.stringify(withoutProfitKeys(JSON.parse(row.totalsJson))) }; }
+  catch { return { ...row, totalsJson: null }; }
+}
+
 async function confirmOrderOrReject(orderId: number, updatedBy: number, confirmedByName?: string, eventCtx?: OrderEventContext) {
   try {
     return await confirmOrder(orderId, updatedBy, confirmedByName, eventCtx);
@@ -2641,20 +2656,19 @@ export const appRouter = router({
 
     closingList: permissionProcedure("closing.view")
       .input(z.object({ businessId: z.number() }))
-      .query(async ({ ctx, input }) =>
-        listClosings(
-          await requireScopedBusinessId(ctx, input.businessId)
-        )
-      ),
+      .query(async ({ ctx, input }) => {
+        const rows = await listClosings(await requireScopedBusinessId(ctx, input.businessId));
+        // الربح لمن يملك reports.view_profit فقط — الحجب من السيرفر
+        return (await canViewProfit(ctx)) ? rows : rows.map(redactClosingRow);
+      }),
 
     closingDetail: permissionProcedure("closing.view")
       .input(z.object({ businessId: z.number(), closingId: z.number() }))
-      .query(async ({ ctx, input }) =>
-        getClosingDetail(
-          await requireScopedBusinessId(ctx, input.businessId),
-          input.closingId
-        )
-      ),
+      .query(async ({ ctx, input }) => {
+        const detail = await getClosingDetail(await requireScopedBusinessId(ctx, input.businessId), input.closingId);
+        if (!detail || (await canViewProfit(ctx))) return detail;
+        return { ...redactClosingRow(detail), totals: withoutProfitKeys(detail.totals), profitHidden: true as const };
+      }),
 
     closingCreate: permissionProcedure("closing.create")
       .input(
@@ -8241,11 +8255,17 @@ export const appRouter = router({
           `${businessDateKey(new Date(), "Africa/Cairo").slice(0, 7)}-01`,
           "Africa/Cairo"
         ).from;
+        // ربح الشهر لمن يملك reports.view_profit فقط — بلا حساب أصلًا لغيره (الحجب من السيرفر)
+        if (!(await canViewProfit(ctx))) {
+          const summary = await getTreasurySummary(businessIds, 0);
+          return { ...summary, monthProfit: null as number | null, profitHidden: true as const };
+        }
         const dashboard = await getBusinessEventDashboard({
           businessIds: businessIds ?? [],
           dateFrom: cairoMonthStart,
         });
-        return getTreasurySummary(businessIds, dashboard.realized.netProfit);
+        const summary = await getTreasurySummary(businessIds, dashboard.realized.netProfit);
+        return { ...summary, monthProfit: summary.monthProfit as number | null, profitHidden: false as const };
       }),
 
     treasuryBalance: permissionProcedure("accounting.view")
@@ -8846,7 +8866,9 @@ export const appRouter = router({
   }),
 
   payroll: router({
-    summary: adminProcedure
+    // قراءة المرتبات بصلاحية payroll.view المالية — المدير العام (جلسة admin صناعية) يُرفض ببوابة المالي
+    // في permissionProcedure؛ المالك والمحاسب (payroll.view) يقرآن.
+    summary: permissionProcedure("payroll.view")
       .input(
         z
           .object({
@@ -8860,7 +8882,7 @@ export const appRouter = router({
       }),
 
     // ---------- الإعدادات ----------
-    settingsGet: adminProcedure
+    settingsGet: permissionProcedure("payroll.view")
       .input(z.object({ businessId: z.number() }))
       .query(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(

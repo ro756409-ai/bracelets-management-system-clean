@@ -1,3 +1,5 @@
+import { fromMinorUnits, toMinorUnits } from "@shared/accountingMoney";
+
 /**
  * منطق واجهة دفتر V3 — نقي (بلا React/tRPC) ليُختبر وحده:
  *   • العمليات اليومية الثلاث فقط (إيراد / مصروف / تحويل) وتكوين القيد الصحيح لكل منها — المستخدم
@@ -8,7 +10,11 @@ export type DailyOperation = "revenue" | "expense" | "transfer";
 
 export type UiAccount = { id: number; code: string; name: string; kind: string; normalSide: "debit" | "credit"; isActive: number | boolean; currentBalance: string; isSystem: boolean };
 
+/** حسابات يمكن أن تستقبل/تُخرج فلوسًا في العمليات اليومية (منها COD بوسطة كوجهة «إيراد تحصيل بوسطة»). */
 export const MONEY_KINDS = new Set(["cash", "bank", "wallet", "carrier_receivable"]);
+/** النقدية المتاحة فعلًا: خزنة + بنك + محافظ. COD بوسطة **ذمة على شركة الشحن** لا تُحسب ضمنها. */
+export const CASH_KINDS = new Set(["cash", "bank", "wallet"]);
+export const CARRIER_RECEIVABLE_KINDS = new Set(["carrier_receivable"]);
 /** بطاقات الأرصدة بالترتيب المطلوب. */
 export const BALANCE_CARD_CODES = ["OFFICE_CASH", "BANK_MAIN", "VF_CASH", "INSTAPAY", "COD_BOSTA"] as const;
 
@@ -27,6 +33,13 @@ export const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 
 export const isActiveAccount = (a: UiAccount) => a.isActive === 1 || a.isActive === true;
 export const moneyAccounts = (accounts: UiAccount[]) => accounts.filter(a => MONEY_KINDS.has(a.kind) && isActiveAccount(a));
+export const cashAccounts = (accounts: UiAccount[]) => accounts.filter(a => CASH_KINDS.has(a.kind) && isActiveAccount(a));
+export const carrierReceivables = (accounts: UiAccount[]) => accounts.filter(a => CARRIER_RECEIVABLE_KINDS.has(a.kind) && isActiveAccount(a));
+/** مجموع النقدية المتاحة (4 خانات، BigInt — بلا أخطاء float) من أرصدة الدفتر نفسها. */
+export function availableCash(accounts: UiAccount[]): string {
+  const total = cashAccounts(accounts).reduce((sum, a) => sum + toMinorUnits(a.currentBalance), 0n);
+  return fromMinorUnits(total);
+}
 export const revenueAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "revenue" && isActiveAccount(a));
 export const expenseAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "expense" && isActiveAccount(a));
 

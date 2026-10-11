@@ -58,7 +58,7 @@ async function guard<T>(fn: () => Promise<T>): Promise<T> {
       const code = err.code === "conflict" || err.code === "reversedAlready" || err.code === "alreadyEnabled" ? "CONFLICT"
         : err.code === "disabled" || err.code === "unavailable" ? "PRECONDITION_FAILED"
         : err.code === "transaction" || err.code === "account" || err.code === "periodNotFound" ? "NOT_FOUND"
-        : err.code === "grant" || err.code === "business" || err.code === "actorEmployee" || err.code === "reopenRole" ? "FORBIDDEN"
+        : err.code === "grant" || err.code === "outOfScope" || err.code === "business" || err.code === "actorEmployee" || err.code === "reopenRole" ? "FORBIDDEN"
         : "BAD_REQUEST";
       throw new TRPCError({ code, message: err.message });
     }
@@ -144,15 +144,21 @@ export function createLedgerRouter(deps: Deps) {
           const businessId = e.businessId === undefined ? undefined : await scopedBusiness(ctx, e.businessId);
           entries.push({ accountId: e.accountId, side: e.side, amount: e.amount, businessId });
         }
+        const scope = await deps.sessionBusinessIds(ctx);
         return guard(() => postLedgerTransaction({
           tenantId: tenantOf(ctx), sourceBusinessId, kind: input.kind as any, idempotencyKey: input.idempotencyKey, effectiveDate: input.effectiveDate,
           currency: input.currency.toUpperCase(), actor: actorOf(ctx), entries, description: input.description, sourceType: input.sourceType ?? null, sourceReference: input.sourceReference ?? null,
+          // نطاق الجلسة من السيرفر: يمنع الترحيل/التحويل على خزنة خارج النطاق حتى بقيد businessId=null
+          scope,
         }));
       }),
 
     reverse: ledgerProcedure("ledger.reverse")
       .input(z.object({ transactionId: z.number().int().positive(), idempotencyKey: idemKey, effectiveDate: dateStr, reason: z.string().trim().min(3).max(500) }))
-      .mutation(async ({ ctx, input }) => guard(() => reverseLedgerTransaction({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) }))),
+      .mutation(async ({ ctx, input }) => {
+        const scope = await deps.sessionBusinessIds(ctx);
+        return guard(() => reverseLedgerTransaction({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx), scope }));
+      }),
 
     periods: router({
       list: ledgerProcedure("ledger.view").query(async ({ ctx }) => guard(() => listLedgerPeriods(tenantOf(ctx)))),

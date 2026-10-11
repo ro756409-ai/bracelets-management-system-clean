@@ -41,11 +41,19 @@ describe("📱 الحسابات اليومية", () => {
     expect(screen.getByTestId("ledger-state").textContent).toContain("غير مفعّل");
     expect(screen.queryByTestId("ledger-balance-cards")).toBeNull();
   });
-  it("بطاقات الأرصدة الخمس بالترتيب، وصلاحية العرض فقط لا تُظهر أزرار التسجيل", () => {
+  it("بطاقات النقدية الأربع بالترتيب + النقدية المتاحة بدون COD؛ COD بوسطة ذمة منفصلة؛ وصلاحية العرض فقط لا تُظهر أزرار التسجيل", () => {
     render(<LedgerDaily />);
     const cards = screen.getByTestId("ledger-balance-cards").textContent ?? "";
-    for (const name of ["خزنة المكتب", "البنك", "فودافون كاش", "إنستا باي", "مستحقات بوسطة"]) expect(cards).toContain(name);
-    expect(cards.indexOf("خزنة المكتب")).toBeLessThan(cards.indexOf("مستحقات بوسطة"));
+    for (const name of ["خزنة المكتب", "البنك", "فودافون كاش", "إنستا باي"]) expect(cards).toContain(name);
+    expect(cards.indexOf("خزنة المكتب")).toBeLessThan(cards.indexOf("إنستا باي"));
+    // المرحلة 0: COD بوسطة ليس نقدية متاحة — خارج قسم النقدية وخارج المجموع (1000 + 5000 = 6000، لا 6750)
+    expect(cards).not.toContain("مستحقات بوسطة");
+    expect(cards).toContain("النقدية المتاحة");
+    expect(cards).toContain("٦٬٠٠٠٫٠٠");
+    expect(cards).not.toContain("٦٬٧٥٠");
+    const receivables = screen.getByTestId("ledger-carrier-receivables").textContent ?? "";
+    expect(receivables).toContain("ذمة على شركة الشحن");
+    expect(receivables).toContain("مستحقات بوسطة");
     expect(cards).not.toContain("إيرادات المبيعات");
     expect(screen.queryByTestId("ledger-actions")).toBeNull();
     expect(screen.getByTestId("ledger-no-post")).toBeTruthy();

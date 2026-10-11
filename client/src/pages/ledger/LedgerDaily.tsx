@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { PageHeader, StatCard, SectionCard, StatusBadge, EmptyState, ErrorState, LoadingSkeleton, OfflineState } from "@/components/shared";
 import { toast } from "sonner";
 import {
-  BALANCE_CARD_CODES, OPERATION_META, composeDailyPost, cairoToday, expenseAccounts, money, moneyAccounts, newOperationId, revenueAccounts, isActiveAccount, MONEY_KINDS,
+  BALANCE_CARD_CODES, OPERATION_META, composeDailyPost, cairoToday, expenseAccounts, money, moneyAccounts, newOperationId, revenueAccounts, isActiveAccount, MONEY_KINDS, CASH_KINDS, CARRIER_RECEIVABLE_KINDS, availableCash,
   type DailyOperation, type UiAccount,
 } from "./ledgerUi";
 
@@ -33,7 +33,9 @@ const CARD_ICONS: Record<string, typeof Wallet> = { OFFICE_CASH: Wallet, BANK_MA
 const CARD_LOGOS: Record<string, PartnerId> = { VF_CASH: "vodafone_cash", INSTAPAY: "instapay", COD_BOSTA: "bosta" };
 
 const KIND_GROUPS: { key: string; label: string; match: (a: UiAccount) => boolean }[] = [
-  { key: "money", label: "النقدية والخزن", match: a => MONEY_KINDS.has(a.kind) },
+  // النقدية المتاحة فقط؛ COD بوسطة ذمة على شركة الشحن في مجموعة مستقلة (ليست نقدية)
+  { key: "money", label: "النقدية والخزن", match: a => CASH_KINDS.has(a.kind) },
+  { key: "carrier", label: "ذمم على شركات الشحن (ليست نقدية متاحة)", match: a => CARRIER_RECEIVABLE_KINDS.has(a.kind) },
   { key: "revenue", label: "الإيرادات", match: a => a.kind === "revenue" },
   { key: "expense", label: "المصروفات", match: a => a.kind === "expense" },
   { key: "other", label: "حسابات أخرى", match: a => !MONEY_KINDS.has(a.kind) && a.kind !== "revenue" && a.kind !== "expense" },
@@ -49,6 +51,8 @@ export default function LedgerDaily() {
 
   const list = (accounts.data ?? []) as unknown as UiAccount[];
   const cards = BALANCE_CARD_CODES.map(code => list.find(a => a.code === code)).filter((a): a is UiAccount => Boolean(a));
+  const cashCards = cards.filter(a => CASH_KINDS.has(a.kind));
+  const receivableCards = cards.filter(a => CARRIER_RECEIVABLE_KINDS.has(a.kind));
   const canPost = has("ledger.post");
 
   const refresh = async () => { await Promise.all([utils.ledger.accounts.list.invalidate(), utils.ledger.transactions.list.invalidate(), utils.ledger.reconciliation.invalidate()]); };
@@ -72,7 +76,17 @@ export default function LedgerDaily() {
       <section aria-label="أرصدة الخزن والحسابات" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5" data-testid="ledger-balance-cards">
         {accounts.isLoading && cards.length === 0 && <LoadingSkeleton variant="cards" rows={5} className="col-span-full" />}
         {accounts.error && <ErrorState message={accounts.error.message} onRetry={() => accounts.refetch()} className="col-span-full" />}
-        {cards.map(a => {
+        {cashCards.length > 0 && (
+          <StatCard
+            key="available-cash"
+            label="النقدية المتاحة"
+            value={`${money(availableCash(list))} ج.م`}
+            hint="الخزنة + البنك + المحافظ — بدون مستحقات شركات الشحن"
+            icon={<Wallet className="h-5 w-5" aria-hidden="true" />}
+            tone={Number(availableCash(list)) < 0 ? "danger" : "success"}
+          />
+        )}
+        {cashCards.map(a => {
           const Icon = CARD_ICONS[a.code] ?? Wallet;
           const logo = CARD_LOGOS[a.code];
           return (
@@ -87,6 +101,24 @@ export default function LedgerDaily() {
           );
         })}
       </section>
+
+      {receivableCards.length > 0 && (
+        <section aria-label="مستحقات على شركات الشحن" className="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="ledger-carrier-receivables">
+          {receivableCards.map(a => {
+            const logo = CARD_LOGOS[a.code];
+            return (
+              <StatCard
+                key={a.code}
+                label={`ذمة على شركة الشحن — ${a.name}`}
+                value={`${money(a.currentBalance)} ج.م`}
+                hint="مستحق تحصيله من شركة الشحن عند التسوية — ليس نقدية متاحة"
+                icon={logo ? <PartnerLogo partner={logo} size="sm" decorative /> : <Truck className="h-5 w-5" aria-hidden="true" />}
+                tone={Number(a.currentBalance) < 0 ? "danger" : "default"}
+              />
+            );
+          })}
+        </section>
+      )}
 
       {canPost ? (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="ledger-actions">

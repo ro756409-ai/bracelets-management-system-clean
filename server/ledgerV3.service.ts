@@ -10,6 +10,7 @@ import {
   reconcileAccount, validateEntries, type LedgerActor, type LedgerEntryInput, type LedgerKind, type LedgerReconLine, type ValidatedEntry,
 } from "../shared/ledgerV3Core";
 import { getDb, withDeadlockRetry } from "./db";
+import { businessDateKey } from "../shared/businessTime";
 import { isOwnerRole } from "./permissions";
 
 /**
@@ -41,6 +42,8 @@ export type PostLedgerTransactionInput = {
   description: string;
   sourceType?: string | null;
   sourceReference?: string | null;
+  /** أنشطة الجلسة (من الراوتر). undefined = استدعاء داخلي؛ null = نطاق غير معروف ⇒ رفض. */
+  scope?: number[] | null;
 };
 export type PostResult = { transactionId: number; replay: boolean; postingPeriod: string; entries: { accountId: number; side: "debit" | "credit"; amount: string; balanceAfter: string }[] };
 
@@ -70,9 +73,18 @@ async function ledgerTransaction<T>(db: LedgerDb, fn: (tx: Tx) => Promise<T>): P
   }
 }
 
-async function assertEnabled(tx: Tx, tenantId: number): Promise<void> {
+async function assertEnabled(tx: Tx, tenantId: number): Promise<{ goLiveDate: string | null }> {
   const [flag] = await tx.select().from(ledgerTenantFlags).where(eq(ledgerTenantFlags.tenantId, tenantId)).for("share");
   if (!flag || flag.ledgerV3Enabled !== 1) throw new LedgerError("disabled");
+  return { goLiveDate: isoDateOf(flag.goLiveDate) };
+}
+
+/** تاريخ YYYY-MM-DD من عمود DATE (نص أو Date حسب الـdriver) — بلا تحويل منطقة زمنية. */
+function isoDateOf(v: unknown): string | null {
+  if (v == null) return null;
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}`;
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(v));
+  return m ? m[1] : null;
 }
 
 async function assertBusinessInTenant(tx: Tx, tenantId: number, businessId: number): Promise<void> {
@@ -113,6 +125,12 @@ type InternalPost = {
   tenantId: number; sourceBusinessId: number | null; kind: LedgerKind; idempotencyKey: string; effectiveDate: string; currency: string;
   actor: LedgerActor; entries: LedgerEntryInput[]; description: string; sourceType: string | null; sourceReference: string | null;
   reversalOfTransactionId: number | null;
+  /**
+   * أنشطة الجلسة المسموح بها (من السيرفر، لا من العميل). undefined = استدعاء داخلي موثوق (التفعيل)؛
+   * null = تعذّر تحديد النطاق ⇒ fail-closed. كل قيد بنشاط يجب أن يكون داخل النطاق، وكل قيد بلا نشاط
+   * (businessId=null — التحويل بين الخزن) يجب أن يكون حسابه ممنوحًا لنشاط واحد على الأقل داخل النطاق.
+   */
+  scope?: number[] | null;
 };
 
 async function loadResult(tx: Tx, transaction: LedgerTransaction, replay: boolean): Promise<PostResult> {
@@ -130,8 +148,9 @@ async function postInternal(tx: Tx, input: InternalPost): Promise<PostResult> {
   const postingPeriod = postingPeriodOf(input.effectiveDate);
   const entries: ValidatedEntry[] = validateEntries(input.entries, input.sourceBusinessId ?? null);
 
-  // 1) العلم  2) النشاط/الفاعل  3) الفترة
-  await assertEnabled(tx, input.tenantId);
+  // 1) العلم + حد Go-live (قبل إنشاء أي فترة)  2) النشاط/الفاعل  3) الفترة
+  const flag = await assertEnabled(tx, input.tenantId);
+  if (flag.goLiveDate && input.effectiveDate < flag.goLiveDate) throw new LedgerError("beforeGoLive", `${input.effectiveDate} < ${flag.goLiveDate}`);
   if (input.sourceBusinessId != null) await assertBusinessInTenant(tx, input.tenantId, input.sourceBusinessId);
   for (const b of new Set(entries.map(e => e.businessId).filter((x): x is number => x != null)))
     if (b !== input.sourceBusinessId) await assertBusinessInTenant(tx, input.tenantId, b);
@@ -179,12 +198,27 @@ async function postInternal(tx: Tx, input: InternalPost): Promise<PostResult> {
     if (a.currency !== input.currency) throw new LedgerError("currency", `${a.code}:${a.currency}`);
   }
   const pairs = [...new Set(entries.filter(e => e.businessId != null).map(e => `${e.accountId}:${e.businessId}`))];
-  if (pairs.length > 0) {
+  const nullBusinessAccounts = [...new Set(entries.filter(e => e.businessId == null).map(e => e.accountId))];
+  const scoped = input.scope !== undefined;
+  if (scoped) {
+    // نطاق الجلسة: لا نشاط مصدر ولا قيد بنشاط خارجه
+    const allowed = new Set(input.scope ?? []);
+    if (input.sourceBusinessId != null && !allowed.has(input.sourceBusinessId)) throw new LedgerError("outOfScope", `نشاط ${input.sourceBusinessId}`);
+    for (const e of entries) if (e.businessId != null && !allowed.has(e.businessId)) throw new LedgerError("outOfScope", `نشاط ${e.businessId}`);
+  }
+  if (pairs.length > 0 || (scoped && nullBusinessAccounts.length > 0)) {
     const grants = await tx.select().from(ledgerAccountBusinesses).where(and(
       eq(ledgerAccountBusinesses.tenantId, input.tenantId), inArray(ledgerAccountBusinesses.accountId, accountIds),
     ));
-    const granted = new Set(grants.filter((g: any) => g.canPost === 1).map((g: any) => `${g.accountId}:${g.businessId}`));
+    const postable = grants.filter((g: any) => g.canPost === 1);
+    const granted = new Set(postable.map((g: any) => `${g.accountId}:${g.businessId}`));
     for (const p of pairs) if (!granted.has(p)) throw new LedgerError("grant", `حساب ${byId.get(Number(p.split(":")[0]))?.code} / نشاط ${p.split(":")[1]}`);
+    if (scoped) {
+      // قيد بلا نشاط (businessId=null): الحساب يجب أن يكون ممنوحًا لنشاط داخل نطاق الجلسة — لا ثغرة «null يتخطى المنح»
+      const allowed = new Set(input.scope ?? []);
+      for (const accountId of nullBusinessAccounts)
+        if (!postable.some((g: any) => g.accountId === accountId && allowed.has(g.businessId))) throw new LedgerError("outOfScope", `حساب ${byId.get(accountId)?.code}`);
+    }
   }
 
   // 7) الأرصدة  8) القيود + currentBalance
@@ -212,12 +246,15 @@ export async function postLedgerTransaction(input: PostLedgerTransactionInput, d
     tenantId: input.tenantId, sourceBusinessId: input.sourceBusinessId ?? null, kind: input.kind, idempotencyKey: input.idempotencyKey,
     effectiveDate: input.effectiveDate, currency: input.currency, actor: input.actor, entries: input.entries,
     description: input.description ?? "", sourceType: input.sourceType ?? null, sourceReference: input.sourceReference ?? null, reversalOfTransactionId: null,
+    scope: input.scope,
   }));
 }
 
 /** عكس حركة: حركة جديدة بقيود معكوسة في فترة مفتوحة بتاريخ جديد؛ الأصل لا يُمس؛ مرة واحدة فقط. */
 export async function reverseLedgerTransaction(input: {
   tenantId: number; transactionId: number; idempotencyKey: string; effectiveDate: string; actor: LedgerActor; reason: string;
+  /** نفس قاعدة النطاق في الترحيل — العكس يحرّك نفس الخزن. */
+  scope?: number[] | null;
 }, db?: LedgerDb): Promise<PostResult> {
   if (!input.reason || !input.reason.trim()) throw new LedgerError("reason");
   const d = await resolveDb(db);
@@ -234,9 +271,20 @@ export async function reverseLedgerTransaction(input: {
       effectiveDate: input.effectiveDate, currency: original.currency, actor: input.actor,
       entries: rows.map((e: any) => ({ accountId: e.accountId, side: e.side === "debit" ? "credit" : "debit", amount: e.amount, businessId: e.businessId })),
       description: `عكس الحركة #${original.id}: ${input.reason.trim()}`, sourceType: "reversal", sourceReference: String(original.id),
-      reversalOfTransactionId: original.id,
+      reversalOfTransactionId: original.id, scope: input.scope,
     });
   });
+}
+
+/** الشهر الجاري YYYY-MM للشركة: الوقت من قاعدة البيانات، وأحدث شهر بين مناطق أنشطتها الزمنية (Africa/Cairo افتراضيًا). */
+async function currentCompanyPeriod(tx: Tx, tenantId: number): Promise<string> {
+  const nowRes: any = await tx.execute(sql`SELECT ROUND(UNIX_TIMESTAMP(NOW(3)) * 1000) AS ms`);
+  const nowRow = (Array.isArray(nowRes) ? (Array.isArray(nowRes[0]) ? nowRes[0] : nowRes) : nowRes?.rows ?? [])[0];
+  const now = new Date(Number(nowRow?.ms));
+  if (Number.isNaN(now.getTime())) throw new Error("تعذر قراءة الوقت من قاعدة البيانات");
+  const zones = await tx.selectDistinct({ tz: businesses.timezone }).from(businesses).where(eq(businesses.tenantId, tenantId));
+  const tzs = [...new Set([...zones.map((z: any) => z.tz).filter(Boolean), "Africa/Cairo"])] as string[];
+  return tzs.map(tz => businessDateKey(now, tz).slice(0, 7)).sort().at(-1)!;
 }
 
 export async function lockLedgerPeriod(input: { tenantId: number; period: string; actor: LedgerActor; reason?: string }, db?: LedgerDb): Promise<{ periodId: number; status: "locked"; replay: boolean }> {
@@ -245,6 +293,8 @@ export async function lockLedgerPeriod(input: { tenantId: number; period: string
     await assertEnabled(tx, input.tenantId);
     const actor = await resolveActor(tx, input.tenantId, input.actor);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period)) throw new LedgerError("periodNotFound", input.period);
+    // لا قفل لشهر لم يبدأ: «الآن» من ساعة قاعدة البيانات، والشهر الحالي بتوقيت أنشطة الشركة (الأبعد تقدّمًا)
+    if (input.period > await currentCompanyPeriod(tx, input.tenantId)) throw new LedgerError("futurePeriod", input.period);
     const read = async () => (await tx.select().from(ledgerPeriods).where(and(eq(ledgerPeriods.tenantId, input.tenantId), eq(ledgerPeriods.period, input.period))).limit(1).for("update"))[0];
     let row = await read();
     if (!row) { try { await tx.insert(ledgerPeriods).values({ tenantId: input.tenantId, period: input.period, status: "open" }); } catch (e) { if (!isMysqlError(e, "ER_DUP_ENTRY")) throw e; } row = await read(); }
