@@ -28,7 +28,7 @@ import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconcilia
  * البيئات المسموح فيها apply/rollback: DEPLOY_ENV=staging مع قاعدة غير إنتاجية باسم staging/stage/test (للـRunbook
  * لاحقًا — **ممنوع تشغيله في هذه المرحلة**)، أو DEPLOY_ENV=test/local على مضيف محلي (Docker مؤقت).
  */
-export type HandMigrationId = "0041" | "0042" | "0043" | "0044";
+export type HandMigrationId = "0041" | "0042" | "0043" | "0044" | "0045";
 export type HandMigrationDef = {
   id: HandMigrationId;
   title: string;
@@ -167,6 +167,11 @@ const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 const looksLikeStaging = (database: string) => /staging|stage|test/i.test(database);
 
 function gate(def: HandMigrationDef, mode: "apply" | "rollback", target: { host: string; database: string; production: boolean }, deployEnv: string | null | undefined, confirm: string | null | undefined): string | null {
+  return migrationGate(def.id, mode, target, deployEnv, confirm);
+}
+
+/** بوابات apply/rollback المشتركة (لا إنتاج، DEPLOY_ENV، عبارة تأكيد باسم القاعدة) — يعيد استخدامها 0045. */
+export function migrationGate(id: HandMigrationId, mode: "apply" | "rollback", target: { host: string; database: string; production: boolean }, deployEnv: string | null | undefined, confirm: string | null | undefined): string | null {
   if (target.production) return "القاعدة تبدو إنتاجًا — مرفوض دائمًا";
   const env = deployEnv ?? "";
   if (env === "staging") {
@@ -174,7 +179,7 @@ function gate(def: HandMigrationDef, mode: "apply" | "rollback", target: { host:
   } else if (env === "test" || env === "local") {
     if (!LOCAL_HOSTS.has(target.host)) return `DEPLOY_ENV=${env} مسموح على مضيف محلي فقط (الحالي: ${target.host})`;
   } else return `DEPLOY_ENV يجب أن يكون staging أو test/local (الحالي: ${env || "غير مضبوط"})`;
-  const expected = confirmPhrase(def.id, mode, target.database);
+  const expected = confirmPhrase(id, mode, target.database);
   if ((confirm ?? "") !== expected) return `عبارة التأكيد غير مطابقة — المطلوب حرفيًا: ${expected}`;
   return null;
 }

@@ -34,6 +34,7 @@ export const DEPLOY_SCRIPTS = [
   "migrate-0041-order-events", "verify-order-events", "preview-order-events-backfill",
   "migrate-0042-attendance", "verify-attendance", "reconcile-attendance",
   "migrate-0044-teams", "verify-teams",
+  "migrate-0045-roles",
   "preview-tenant-access",
 ] as const;
 
