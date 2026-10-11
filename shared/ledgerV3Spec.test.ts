@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import {
   LEDGER_V3_DROP_ORDER, LEDGER_V3_OLD_TABLE_INDEXES, LEDGER_V3_SPEC, LEDGER_V3_TABLES, applicationState,
-  splitMigrationStatements, verifyLedgerV3, type SchemaSnapshot,
+  compositeIndexesCorrect, splitMigrationStatements, verifyLedgerV3, type SchemaSnapshot,
 } from "./ledgerV3Spec";
 
 const sqlText = fs.readFileSync("drizzle/0040_ledger_v3.sql", "utf-8");
@@ -92,5 +92,42 @@ describe("🧪 verifyLedgerV3 / applicationState — يكتشف الانحراف
   });
   it("لا شيء مطبَّق → not_applied", () => {
     expect(applicationState({ tables: new Set(), columns: {}, uniques: {}, foreignKeys: {}, checks: {} })).toBe("not_applied");
+  });
+});
+
+describe("🧭 0040 على قاعدة طبّقت 0041/0042 أولًا (حالة Staging الحالية حرفيًا)", () => {
+  // matjarak_staging: لا أي جدول ledger_*، والفهرسان businesses_tenant_id/employees_tenant_id موجودان Unique على (tenantId,id)
+  const stagingNow = (): SchemaSnapshot => ({
+    tables: new Set(["businesses", "employees"]), columns: {},
+    uniques: { businesses: { PRIMARY: ["id"], businesses_tenant_id: ["tenantId", "id"] }, employees: { PRIMARY: ["id"], employees_tenant_id: ["tenantId", "id"] } },
+    foreignKeys: {}, checks: {},
+  });
+  it("الجداول السبعة غائبة والفهرسان مطابقان حرفيًا → not_applied (جاهزة للتطبيق، ليست partial)", () => {
+    const s = stagingNow();
+    expect(compositeIndexesCorrect(s)).toBe(true);
+    expect(applicationState(s)).toBe("not_applied");
+  });
+  it("فهرس بنفس الاسم لكن بترتيب أعمدة مختلف → partial", () => {
+    const s = stagingNow(); s.uniques.businesses.businesses_tenant_id = ["id", "tenantId"];
+    expect(applicationState(s)).toBe("partial");
+  });
+  it("فهرس بنفس الاسم لكن غير فريد (NON_UNIQUE=1) → partial، ويُبلَّغ كفرق في الفهرس القديم", () => {
+    const s = stagingNow(); delete s.uniques.employees.employees_tenant_id;
+    s.nonUniqueIndexes = { employees: new Set(["employees_tenant_id"]) };
+    expect(applicationState(s)).toBe("partial");
+    expect(verifyLedgerV3(s).some(i => i.kind === "old_index" && /غير فريد/.test(i.detail))).toBe(true);
+  });
+  it("الفهرسان بنفس الاسمين لكن غير فريدين، بلا أي جدول ledger_* → partial (لا not_applied يقود لفشل DDL في منتصف التطبيق)", () => {
+    const s = stagingNow(); delete s.uniques.businesses.businesses_tenant_id; delete s.uniques.employees.employees_tenant_id;
+    s.nonUniqueIndexes = { businesses: new Set(["businesses_tenant_id"]), employees: new Set(["employees_tenant_id"]) };
+    expect(applicationState(s)).toBe("partial");
+  });
+  it("فهرس واحد فقط موجود → partial", () => {
+    const s = stagingNow(); delete s.uniques.employees.employees_tenant_id;
+    expect(applicationState(s)).toBe("partial");
+  });
+  it("أي جدول ledger_* موجود جزئيًا مع الفهرسين → partial", () => {
+    const s = stagingNow(); s.tables.add("ledger_accounts");
+    expect(applicationState(s)).toBe("partial");
   });
 });
