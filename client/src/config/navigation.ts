@@ -216,6 +216,13 @@ export function visibleToolsLinks(isAdmin: boolean, permissions: string[]): NavL
   return TOOLS_LINKS.filter(l => canSeeNav(l, isAdmin, permissions));
 }
 
+/** رابط القائمة النشط: أطول مسار مطابق فقط — «/ledger» لا يُضاء مع «/ledger/periods» (بند واحد نشط). */
+export function activeLinkPath(location: string, paths: string[]): string | null {
+  let best: string | null = null;
+  for (const p of paths) if ((location === p || location.startsWith(p + "/")) && (!best || p.length > best.length)) best = p;
+  return best;
+}
+
 /** الوجهة اللي المسار الحالي تابع لها (للـactive state في الشل). */
 export function activeDestinationKey(location: string): string | null {
   // أطول تطابق يكسب — عشان /stocktake ما يطابقش /s مثلاً.

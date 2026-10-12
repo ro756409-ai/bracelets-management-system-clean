@@ -90,12 +90,21 @@ export default function LedgerPeriods() {
 
             <SectionCard title="حركة الحسابات في الشهر" testId="ledger-review-accounts">
               {r.accounts.length === 0 ? <EmptyState title="لا حركات في هذا الشهر ضمن نطاقك" /> : (
-                <div className="-mx-1 overflow-x-auto">
-                  <table className="w-full min-w-[420px] text-sm">
+                <>
+                  {/* الهاتف: صف لكل حساب بلا تمرير أفقي */}
+                  <ul className="divide-y divide-border text-sm sm:hidden">
+                    {r.accounts.map(a => (
+                      <li key={a.accountId} className="py-2" data-testid={`ledger-review-account-${a.code}`}>
+                        <div className="flex items-baseline justify-between gap-2"><span className="font-medium">{a.name}</span><span className="text-xs text-muted-foreground">{a.transactions} حركة</span></div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs tabular-nums text-muted-foreground"><span>مدين {money(a.debit)}</span><span>دائن {money(a.credit)}</span><span>{accountKindLabel(a.kind)}</span></div>
+                      </li>
+                    ))}
+                  </ul>
+                  <table className="hidden w-full text-sm sm:table">
                     <thead><tr className="border-b border-border text-xs text-muted-foreground"><th className="px-1 py-2 text-start font-medium">الحساب</th><th className="px-1 py-2 text-end font-medium">مدين</th><th className="px-1 py-2 text-end font-medium">دائن</th><th className="px-1 py-2 text-end font-medium">حركات</th></tr></thead>
                     <tbody>
                       {r.accounts.map(a => (
-                        <tr key={a.accountId} className="border-b border-border last:border-0" data-testid={`ledger-review-account-${a.code}`}>
+                        <tr key={a.accountId} className="border-b border-border last:border-0">
                           <td className="px-1 py-2"><span className="font-medium">{a.name}</span> <span className="text-xs text-muted-foreground">{accountKindLabel(a.kind)}</span></td>
                           <td className="whitespace-nowrap px-1 py-2 text-end tabular-nums">{money(a.debit)}</td>
                           <td className="whitespace-nowrap px-1 py-2 text-end tabular-nums">{money(a.credit)}</td>
@@ -104,7 +113,7 @@ export default function LedgerPeriods() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </>
               )}
             </SectionCard>
 

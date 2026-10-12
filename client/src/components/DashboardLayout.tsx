@@ -20,7 +20,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDashboard, PanelRight, ChevronDown } from "lucide-react";
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
-  MORE_ICON, activeDestinationKey, visibleChildren, visibleDestinations, visibleToolsLinks, type NavFlag,
+  MORE_ICON, activeDestinationKey, activeLinkPath, visibleChildren, visibleDestinations, visibleToolsLinks, type NavFlag,
 } from "@/config/navigation";
 import { BusinessSwitcher } from "@/components/shell/BusinessSwitcher";
 import { MobileBottomNav } from "@/components/shell/MobileBottomNav";
@@ -215,6 +215,8 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
     return groups;
   }, [navDestinations, isAdmin, permissions, navFlags]);
   const allMenuItems = visibleGroups.flatMap(g => g.items);
+  // بند واحد نشط: أطول مسار مطابق (لا يُضاء «/ledger» مع كل صفحات الدفتر الفرعية)
+  const activePath = activeLinkPath(location, allMenuItems.map(i => i.path));
   const activeMenuItem = allMenuItems.find(item => item.path === location);
 
   // تبويبات الـWorkspace للوجهة الحالية (التنقّل الثانوي) — من نفس NavConfig.
@@ -281,10 +283,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
 
           <SidebarContent className="gap-0 py-2">
             {visibleGroups.map(group => {
-              const holdsCurrent = group.items.some(
-                item =>
-                  location === item.path || location.startsWith(item.path + "/")
-              );
+              const holdsCurrent = group.items.some(item => item.path === activePath);
               const collapsed =
                 group.collapsible &&
                 !holdsCurrent &&
@@ -326,7 +325,7 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {group.items.map(item => {
-                      const isActive = location === item.path || location.startsWith(item.path + '/');
+                      const isActive = item.path === activePath;
                       const showBadge = item.path === '/inventory' && lowStockCount > 0;
                       return (
                         <SidebarMenuItem key={item.path}>
