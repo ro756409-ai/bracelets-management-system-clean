@@ -88,6 +88,8 @@ export default function LedgerPeriods() {
               </div>
             </div>
 
+            {canLock && <CloseChecklist period={r.period} />}
+
             <SectionCard title="حركة الحسابات في الشهر" testId="ledger-review-accounts">
               {r.accounts.length === 0 ? <EmptyState title="لا حركات في هذا الشهر ضمن نطاقك" /> : (
                 <>
@@ -163,5 +165,22 @@ export default function LedgerPeriods() {
 
       {dialog && r && <PeriodDialog period={r.period} action={dialog} onClose={() => setDialog(null)} onDone={async () => { await Promise.all([review.refetch(), periods.refetch()]); }} />}
     </div>
+  );
+}
+
+/** قائمة فحص الإقفال (قراءة فقط، المرحلة 7) — لا تُقفل شيئًا؛ الإقفال يبقى بملاحظة مراجعة إلزامية. */
+export function CloseChecklist({ period }: { period: string }) {
+  const c = trpc.ledger.period.checklist.useQuery({ period }, { retry: false });
+  if (!c.data) return c.error ? <p className="text-xs text-muted-foreground" data-testid="ledger-checklist-unavailable">قائمة فحص الإقفال: {c.error.message}</p> : null;
+  return (
+    <SectionCard title={c.data.ready ? "قائمة فحص الإقفال: جاهز" : "قائمة فحص الإقفال: يحتاج مراجعة"} testId="ledger-checklist">
+      <ul className="space-y-1.5 text-sm">
+        {c.data.checks.map(x => (
+          <li key={x.key} className={`flex items-start gap-2 ${x.ok ? "" : "text-destructive"}`} data-testid={`ledger-checklist-${x.key}`}>
+            <span aria-hidden="true">{x.ok ? "✓" : "✗"}</span><span>{x.label}</span>
+          </li>
+        ))}
+      </ul>
+    </SectionCard>
   );
 }

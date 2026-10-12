@@ -94,6 +94,8 @@ export default function LedgerAccounts() {
         </>
       )}
 
+      {accounts.length > 0 && <PositionSection />}
+
       {creating && <CreateAccountDialog onClose={() => setCreating(false)} onDone={async () => { await list.refetch(); }} />}
       {managing && <ManageAccountDialog account={managing} businesses={businesses} onClose={() => setManagingId(null)} onDone={async () => { await list.refetch(); }} />}
     </div>
@@ -223,5 +225,27 @@ export function ManageAccountDialog({ account, businesses, onClose, onDone }: { 
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** ما لنا وما علينا (المرحلة 7): النقدية منفصلة عن الذمم والالتزامات — المحجوب يبقى «محجوب عن نطاقك». */
+export function PositionSection() {
+  const position = trpc.ledger.reports.position.useQuery(undefined, { retry: false });
+  const p = position.data;
+  if (!p) return null;
+  const block = (title: string, g: { total: string | null; rows: { code: string; name: string; balance: string | null }[] }, testId: string) => (
+    <div className="rounded-[var(--radius-brand-md)] border border-border p-3" data-testid={testId}>
+      <p className="text-xs text-muted-foreground">{title}</p>
+      <p className="mt-1 font-bold tabular-nums">{g.rows.length === 0 ? "لا حسابات" : balanceText(g.total)}</p>
+    </div>
+  );
+  return (
+    <SectionCard title="ما لنا وما علينا" testId="ledger-position">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        {block("النقدية المتاحة", p.cash, "ledger-position-cash")}
+        {block("لنا عند الغير (ذمم — ليست نقدية)", p.receivables, "ledger-position-receivables")}
+        {block("علينا للغير (التزامات)", p.payables, "ledger-position-payables")}
+      </div>
+    </SectionCard>
   );
 }

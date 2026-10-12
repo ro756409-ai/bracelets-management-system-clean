@@ -4,6 +4,7 @@ import { router, authenticatedProcedure } from "./_core/trpc";
 import { openingDraftInput, validateOpeningDraft } from "./ledgerOpening.service";
 import { dailyAccountsStatus, dailyLedgerReport, ensureDailyAccounts } from "./ledgerDaily.service";
 import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpeningFromStocktake } from "./ledgerInventory.service";
+import { closeChecklist, incomeStatement, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
@@ -83,6 +84,9 @@ const idemKey = z.string().trim().min(8).max(191);
 export function createLedgerRouter(deps: Deps) {
   /** نطاق القراءة: null = الشركة كلها، وإلا أنشطة الجلسة (تعذّر التحديد = لا شيء). */
   const readScope = async (ctx: ScopeCtx): Promise<number[] | null> => ((await deps.fullLedgerScope(ctx)) ? null : (await deps.sessionBusinessIds(ctx)) ?? []);
+  const requireProfit = async (ctx: ScopeCtx) => {
+    if (!(await deps.canViewProfit?.(ctx))) throw new TRPCError({ code: "FORBIDDEN", message: "التقارير المالية للأرباح لمن يملك صلاحية «عرض الأرباح» فقط" });
+  };
   const scopedBusiness = async (ctx: ScopeCtx, businessId: number | null | undefined) => {
     if (businessId == null) return null;
     const scoped = await deps.scopeBusinessId(ctx, businessId);
@@ -191,6 +195,11 @@ export function createLedgerRouter(deps: Deps) {
       review: ledgerProcedure("ledger.view")
         .input(z.object({ period: periodStr }))
         .query(async ({ ctx, input }) => { const scope = await readScope(ctx); return guard(() => reviewLedgerPeriod(tenantOf(ctx), input.period, scope)); }),
+      // قائمة فحص الإقفال (قراءة فقط، مستوى الشركة) — للمالك ومدير الحسابات
+      checklist: ledgerProcedure("ledger.view").input(z.object({ period: periodStr })).query(async ({ ctx, input }) => {
+        if ((await readScope(ctx)) !== null) throw new TRPCError({ code: "FORBIDDEN", message: "قائمة فحص الإقفال على مستوى الشركة للمالك ومدير الحسابات" });
+        return guard(() => closeChecklist({ tenantId: tenantOf(ctx), period: input.period }));
+      }),
       reopen: ledgerProcedure("ledger.period.reopen")
         .input(z.object({ period: periodStr, reason: z.string().trim().min(3).max(500) }))
         .mutation(async ({ ctx, input }) => guard(() => reopenLedgerPeriod({ tenantId: tenantOf(ctx), period: input.period, reason: input.reason, actor: actorOf(ctx) }))),
@@ -207,6 +216,21 @@ export function createLedgerRouter(deps: Deps) {
 
     // المرحلة 2: التقرير اليومي داخل نطاق القراءة؛ الربح لمن يملك reports.view_profit فقط (null صريح لغيره).
     reports: router({
+      // المرحلة 7: قائمة الدخل والربح حسب النشاط/المنتج — أرباح بالكامل: reports.view_profit إلزامية (رفض لا أصفار).
+      incomeStatement: ledgerProcedure("ledger.view")
+        .input(z.object({ from: dateStr, to: dateStr, businessId: z.number().int().positive().optional() }))
+        .query(async ({ ctx, input }) => {
+          await requireProfit(ctx);
+          const businessId = await scopedBusiness(ctx, input.businessId);
+          const scope = await readScope(ctx);
+          return guard(() => incomeStatement({ tenantId: tenantOf(ctx), from: input.from, to: input.to, scope, businessId }));
+        }),
+      profitByBusiness: ledgerProcedure("ledger.view").input(z.object({ from: dateStr, to: dateStr }))
+        .query(async ({ ctx, input }) => { await requireProfit(ctx); const scope = await readScope(ctx); return guard(() => profitByBusiness({ tenantId: tenantOf(ctx), ...input, scope })); }),
+      profitByProduct: ledgerProcedure("ledger.view").input(z.object({ from: dateStr, to: dateStr }))
+        .query(async ({ ctx, input }) => { await requireProfit(ctx); const scope = await readScope(ctx); return guard(() => profitByProduct({ tenantId: tenantOf(ctx), ...input, scope })); }),
+      // ما لنا وما علينا الآن — نطاق القراءة والأرصدة المحجوبة كما هي
+      position: ledgerProcedure("ledger.view").query(async ({ ctx }) => { const scope = await readScope(ctx); return guard(() => positionSummary({ tenantId: tenantOf(ctx), scope })); }),
       daily: ledgerProcedure("ledger.view")
         .input(z.object({ date: dateStr, businessId: z.number().int().positive().optional(), page: z.number().int().min(1).default(1) }))
         .query(async ({ ctx, input }) => {

@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
   perms: [] as string[], user: { id: 1, tenantId: 10, role: "admin" } as any,
   accounts: [] as any[], review: null as any, periods: [] as any[],
   calls: { create: [] as any[], rename: [] as any[], setActive: [] as any[], grant: [] as any[], revoke: [] as any[], lock: [] as any[], reopen: [] as any[], validate: [] as any[] },
-  validateResult: null as any, ledgerEnabled: true,
+  validateResult: null as any, ledgerEnabled: true, position: undefined as any, checklist: undefined as any,
 }));
 const { slowMutation } = vi.hoisted(() => ({
   slowMutation: (key: string, result: () => any) => ({ useMutation: () => ({ mutateAsync: async (input: any) => { (state.calls as any)[key].push(input); await new Promise(r => setTimeout(r, 20)); return result(); }, isPending: false }) }),
@@ -23,7 +23,9 @@ vi.mock("@/lib/trpc", () => ({
       accounts: { list: { useQuery: () => ({ data: state.accounts, isLoading: false, error: null, refetch: async () => {} }) } },
       businesses: { list: { useQuery: () => ({ data: [{ id: 7, name: "براند A" }, { id: 8, name: "براند B" }], isLoading: false }) } },
       periods: { list: { useQuery: () => ({ data: state.periods, isLoading: false, error: null, refetch: async () => {} }) } },
+      reports: { position: { useQuery: () => ({ data: state.position }) } },
       period: {
+        checklist: { useQuery: () => ({ data: state.checklist, error: null }) },
         review: { useQuery: () => ({ data: state.review, isLoading: false, error: null, refetch: async () => {} }) },
         lock: slowMutation("lock", () => ({ periodId: 1, status: "locked", replay: false })),
         reopen: slowMutation("reopen", () => ({ periodId: 1, status: "open", replay: false })),
@@ -67,7 +69,7 @@ beforeEach(() => {
     reversals: [{ transactionId: 9, reversalOfTransactionId: 4, description: "عكس مصروف مكرر", effectiveDate: "2026-10-05", actorName: "مدير الحسابات كريم" }],
   };
   for (const k of Object.keys(state.calls) as (keyof typeof state.calls)[]) state.calls[k] = [];
-  state.validateResult = null; state.ledgerEnabled = true;
+  state.validateResult = null; state.ledgerEnabled = true; state.position = undefined; state.checklist = undefined;
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -250,5 +252,25 @@ describe("🧾 تجهيز الأرصدة الافتتاحية", () => {
     state.user = { id: 1, tenantId: 11, role: "admin" };
     rerender(<LedgerOpening />);
     expect((screen.getByTestId("ledger-opening-amount-OFFICE_CASH") as HTMLInputElement).value).toBe("");
+  });
+});
+
+describe("📈 المرحلة 7 — ما لنا وما علينا وقائمة فحص الإقفال", () => {
+  it("المركز: النقدية منفصلة عن الذمم والالتزامات، والمحجوب «محجوب عن نطاقك» لا صفر", () => {
+    state.position = { cash: { total: null, rows: [{ code: "OFFICE_CASH", name: "خزنة", balance: null }] }, receivables: { total: "1250.0000", rows: [{ code: "COD_BOSTA", name: "بوسطة", balance: "1250.0000" }] }, payables: { total: "0.0000", rows: [] } };
+    render(<LedgerAccounts />);
+    expect(screen.getByTestId("ledger-position-cash").textContent).toContain("محجوب عن نطاقك");
+    expect(screen.getByTestId("ledger-position-receivables").textContent).toContain("١٬٢٥٠");
+    expect(screen.getByTestId("ledger-position-payables").textContent).toContain("لا حسابات");
+  });
+  it("قائمة الفحص تظهر لمن يقفل فقط، وكل بند ببيانه الصريح", () => {
+    state.checklist = { period: "2026-10", ready: false, checks: [{ key: "previous_locked", ok: true, label: "الشهر السابق مقفل" }, { key: "deliveries_posted", ok: false, label: "1 أوردر مُسلَّم في الشهر بلا قيد في الدفتر" }] };
+    render(<LedgerPeriods />);
+    expect(screen.queryByTestId("ledger-checklist")).toBeNull(); // بلا ledger.period.lock
+    cleanup();
+    state.perms = ["ledger.view", "ledger.period.lock"];
+    render(<LedgerPeriods />);
+    expect(screen.getByTestId("ledger-checklist").textContent).toContain("يحتاج مراجعة");
+    expect(screen.getByTestId("ledger-checklist-deliveries_posted").textContent).toContain("بلا قيد");
   });
 });

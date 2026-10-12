@@ -77,6 +77,10 @@ export type DailyReport = {
 export async function dailyLedgerReport(input: { tenantId: number; date: string; scope: LedgerReadScope; businessId?: number | null; canViewProfit: boolean; page?: number }, db?: LedgerDb): Promise<DailyReport> {
   if (!DATE_RE.test(input.date)) throw new LedgerError("date", input.date);
   const d = await resolveDb(db);
+  // دفتر غير مفعّل = «غير متاح» صريح — لا تقرير بأصفار
+  const st0 = await getLedgerStatus(input.tenantId, d);
+  if (!st0.tablesPresent) throw new LedgerError("unavailable");
+  if (!st0.enabled) throw new LedgerError("disabled");
   const scoped = input.scope ? sql` AND ${scopeVisibleTx(input.scope)}` : sql``;
   const biz = input.businessId != null ? sql` AND t.sourceBusinessId = ${input.businessId}` : sql``;
   // حركة اليوم لكل حساب ونوع حركة فعلي (العكس يُنسب لنوع أصله فيُصافي المصروف/الشراء نفسه)

@@ -21,6 +21,7 @@ import LedgerAccounts from "./pages/ledger/LedgerAccounts";
 import LedgerPeriods from "./pages/ledger/LedgerPeriods";
 import LedgerOpening from "./pages/ledger/LedgerOpening";
 import LedgerReport from "./pages/ledger/LedgerReport";
+import LedgerStatements from "./pages/ledger/LedgerStatements";
 import PermissionsPage from "./pages/PermissionsPage";
 import GoodsReceipt from "./pages/GoodsReceipt";
 import StockTransfer from "./pages/StockTransfer";
@@ -281,6 +282,10 @@ function Router() {
       </Route>
       <Route path="/ledger/accounts">
         <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerAccounts /></LedgerLayout></FinancialRoute>
+      </Route>
+      {/* قائمة الدخل والأرباح — reports.view_profit (والسيرفر يرفض بدونها) */}
+      <Route path="/ledger/statements">
+        <FinancialRoute permission="reports.view_profit" bare><LedgerLayout><LedgerStatements /></LedgerLayout></FinancialRoute>
       </Route>
       <Route path="/ledger/report">
         <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerReport /></LedgerLayout></FinancialRoute>
