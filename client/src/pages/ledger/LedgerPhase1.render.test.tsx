@@ -147,6 +147,19 @@ describe("🗓️ مراجعة الشهر وإقفاله", () => {
     expect(document.body.textContent).not.toMatch(/معتمدة|لم تُراجع|غير مراجعة/);
     expect(screen.queryByTestId("ledger-review-lock")).toBeNull(); // بلا ledger.period.lock
   });
+  it("وقت الحدث يُعرض بتوقيت القاهرة مهما كان توقيت المتصفح: 21:30Z يوم 30/9 = 1/10 00:30 بالقاهرة", () => {
+    const prev = process.env.TZ; process.env.TZ = "UTC";
+    try {
+      const at = new Date("2026-09-30T21:30:00Z");
+      state.review = { ...state.review, events: [{ action: "lock", reason: "حد الشهر", actorName: "كريم", createdAt: at }] };
+      render(<LedgerPeriods />);
+      const fmt = (timeZone: string) => at.toLocaleString("ar-EG", { timeZone, dateStyle: "medium", timeStyle: "short" });
+      const text = screen.getByTestId("ledger-review-event-0").textContent ?? "";
+      expect(text).toContain(fmt("Africa/Cairo"));
+      expect(fmt("Africa/Cairo")).not.toBe(fmt("UTC"));
+      expect(text).not.toContain(fmt("UTC"));
+    } finally { if (prev === undefined) delete process.env.TZ; else process.env.TZ = prev; }
+  });
   it("الإقفال بملاحظة مراجعة إلزامية: فارغة = لا طلب؛ مع الملاحظة = طلب واحد بنفس الشهر", async () => {
     state.perms = ["ledger.view", "ledger.period.lock"];
     render(<LedgerPeriods />);

@@ -620,7 +620,7 @@ export async function reviewLedgerPeriod(tenantId: number, period: string, scope
     // نطاق محدود: نفس قاعدة سجل الحركات — حركات كل قيودها داخل النطاق فقط (لا أرقام نشاط آخر ولا قيود الشركة)
     const scoped = scope ? sql` AND ${scopeVisibleTx(scope)}` : sql``;
     const [row] = await d.select().from(ledgerPeriods).where(and(eq(ledgerPeriods.tenantId, tenantId), eq(ledgerPeriods.period, period))).limit(1);
-    const events = row ? rawRows(await d.execute(sql`SELECT ev.action, ev.reason, ev.createdAt, emp.name AS actorName FROM ledger_period_events ev
+    const events = row ? rawRows(await d.execute(sql`SELECT ev.action, ev.reason, ROUND(UNIX_TIMESTAMP(ev.createdAt) * 1000) AS createdAtMs, emp.name AS actorName FROM ledger_period_events ev
       LEFT JOIN employees emp ON emp.id = ev.actorEmployeeId AND emp.tenantId = ev.tenantId WHERE ev.tenantId = ${tenantId} AND ev.periodId = ${row.id} ORDER BY ev.id`)) : [];
     const accounts = rawRows(await d.execute(sql`SELECT a.id AS accountId, a.code, a.name, a.kind,
         SUM(CASE WHEN e.side = 'debit' THEN e.amount ELSE 0 END) AS debit, SUM(CASE WHEN e.side = 'credit' THEN e.amount ELSE 0 END) AS credit,
@@ -639,7 +639,8 @@ export async function reviewLedgerPeriod(tenantId: number, period: string, scope
     const money = (v: any) => (v == null ? "0.0000" : String(v));
     return {
       period, status: (row?.status ?? "open") as "open" | "locked",
-      events: events.map(ev => ({ action: ev.action, reason: String(ev.reason), actorName: ev.actorName ?? null, createdAt: ev.createdAt })),
+      // اللحظة المطلقة من القاعدة (UNIX_TIMESTAMP) → Date: لا نص «YYYY-MM-DD HH:MM:SS» بلا منطقة يقرؤه المتصفح بتوقيته المحلي
+      events: events.map(ev => ({ action: ev.action, reason: String(ev.reason), actorName: ev.actorName ?? null, createdAt: new Date(Number(ev.createdAtMs)) })),
       accounts: accounts.map(a => ({ accountId: Number(a.accountId), code: a.code, name: a.name, kind: a.kind, debit: money(a.debit), credit: money(a.credit), transactions: Number(a.transactions) })),
       businesses: byBusiness.map(b => ({ businessId: b.businessId == null ? null : Number(b.businessId), name: b.name ?? null, debit: money(b.debit), credit: money(b.credit) })),
       transactionsCount: Number(count?.n ?? 0),
