@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, authenticatedProcedure } from "./_core/trpc";
+import { openingDraftInput, validateOpeningDraft } from "./ledgerOpening.service";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
@@ -186,6 +187,14 @@ export function createLedgerRouter(deps: Deps) {
       reopen: ledgerProcedure("ledger.period.reopen")
         .input(z.object({ period: periodStr, reason: z.string().trim().min(3).max(500) }))
         .mutation(async ({ ctx, input }) => guard(() => reopenLedgerPeriod({ tenantId: tenantOf(ctx), period: input.period, reason: input.reason, actor: actorOf(ctx) }))),
+    }),
+
+    // تجهيز الأرصدة الافتتاحية (المالك فقط عبر ledger.activate) — تحقق قراءة فقط داخل معاملة READ ONLY يعيد ملف
+    // JSON مطابقًا لسكربت التفعيل؛ لا يكتب أي صف ولا يفعّل الدفتر ولا يقرأ أرقامًا من V1/V2.
+    opening: router({
+      validate: ledgerProcedure("ledger.activate")
+        .input(openingDraftInput)
+        .mutation(async ({ ctx, input }) => validateOpeningDraft({ tenantId: tenantOf(ctx), ownerEmployeeId: actorOf(ctx).employeeId!, draft: input })),
     }),
 
     account: router({
