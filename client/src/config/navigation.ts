@@ -60,6 +60,9 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
     children: [
       { label: "الحسابات اليومية", path: "/ledger", icon: BookOpen, permission: "ledger.view" },
       { label: "سجل الحركات", path: "/ledger/transactions", icon: Clock, permission: "ledger.view" },
+      { label: "الحسابات وأرصدتها", path: "/ledger/accounts", icon: Wallet, permission: "ledger.view" },
+      { label: "مراجعة الشهر وإقفاله", path: "/ledger/periods", icon: ClipboardCheck, permission: "ledger.view" },
+      { label: "الأرصدة الافتتاحية", path: "/ledger/opening", icon: ShieldCheck, permission: "ledger.activate" },
     ],
   },
   {
@@ -211,6 +214,13 @@ export function visibleDestinations(isAdmin: boolean, permissions: string[], fla
  */
 export function visibleToolsLinks(isAdmin: boolean, permissions: string[]): NavLink[] {
   return TOOLS_LINKS.filter(l => canSeeNav(l, isAdmin, permissions));
+}
+
+/** رابط القائمة النشط: أطول مسار مطابق فقط — «/ledger» لا يُضاء مع «/ledger/periods» (بند واحد نشط). */
+export function activeLinkPath(location: string, paths: string[]): string | null {
+  let best: string | null = null;
+  for (const p of paths) if ((location === p || location.startsWith(p + "/")) && (!best || p.length > best.length)) best = p;
+  return best;
 }
 
 /** الوجهة اللي المسار الحالي تابع لها (للـactive state في الشل). */

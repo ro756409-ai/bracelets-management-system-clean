@@ -41,6 +41,16 @@ describe("📱 الحسابات اليومية", () => {
     expect(screen.getByTestId("ledger-state").textContent).toContain("غير مفعّل");
     expect(screen.queryByTestId("ledger-balance-cards")).toBeNull();
   });
+  it("نطاق المحاسب: رصيد الخزنة المشتركة المحجوب يظهر «محجوب عن نطاقك» والنقدية المتاحة محجوبة — لا مجموع جزئي ولا صفر", () => {
+    state.accounts = ACCOUNTS.map(a => (a.code === "OFFICE_CASH" ? { ...a, currentBalance: null, balanceHidden: true } : a));
+    render(<LedgerDaily />);
+    const cards = screen.getByTestId("ledger-balance-cards").textContent ?? "";
+    expect(cards).toContain("محجوب عن نطاقك");
+    expect(cards.split("٥٬٠٠٠").length - 1).toBe(1); // البنك في بطاقته فقط — لا يتحول وحده إلى «النقدية المتاحة»
+    expect(cards).toContain("الإجمالي للمالك ومدير الحسابات");
+    expect(screen.getByTestId("ledger-account-OFFICE_CASH").textContent).toContain("محجوب عن نطاقك");
+    expect(screen.getByTestId("ledger-account-BANK_MAIN").textContent).toContain("٥٬٠٠٠");
+  });
   it("بطاقات النقدية الأربع بالترتيب + النقدية المتاحة بدون COD؛ COD بوسطة ذمة منفصلة؛ وصلاحية العرض فقط لا تُظهر أزرار التسجيل", () => {
     render(<LedgerDaily />);
     const cards = screen.getByTestId("ledger-balance-cards").textContent ?? "";

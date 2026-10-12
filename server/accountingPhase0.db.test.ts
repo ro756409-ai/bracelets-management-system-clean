@@ -132,10 +132,10 @@ describe.runIf(CAN)("🛡️ المرحلة 0 — أمان الدفتر والر
   describe("3) قفل شهر مستقبلي", () => {
     it("قفل شهر بعد الشهر الحالي مرفوض، والشهر الحالي/السابق مسموح", async () => {
       const o = await api(ownerA);
-      expect(await code(() => o.ledger.period.lock({ period: "2099-01" }))).toBe("BAD_REQUEST");
+      expect(await code(() => o.ledger.period.lock({ period: "2099-01", reason: "إقفال شهر مستقبلي" }))).toBe("BAD_REQUEST");
       const [[f]] = await raw.query("SELECT COUNT(*) n FROM ledger_periods WHERE tenantId = ? AND period = '2099-01'", [A.tenantId]) as any;
       expect(Number(f.n)).toBe(0);
-      expect((await o.ledger.period.lock({ period: "2026-10" })).status).toBe("locked");
+      expect((await o.ledger.period.lock({ period: "2026-10", reason: "مراجعة الشهر" })).status).toBe("locked");
     });
   });
 

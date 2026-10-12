@@ -14,7 +14,7 @@ const { mkQuery, mkMutation } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/trpc", () => ({
   trpc: {
-    employees: { list: { useQuery: mkQuery("list") }, allInventory: { useQuery: mkQuery("inv") }, create: { useMutation: mkMutation("create") }, update: { useMutation: mkMutation("update") }, setCredentials: { useMutation: mkMutation("cred") }, delete: { useMutation: mkMutation("delete") } },
+    employees: { roleSupport: { useQuery: () => ({ data: { accountsManager: false } }) }, list: { useQuery: mkQuery("list") }, allInventory: { useQuery: mkQuery("inv") }, create: { useMutation: mkMutation("create") }, update: { useMutation: mkMutation("update") }, setCredentials: { useMutation: mkMutation("cred") }, delete: { useMutation: mkMutation("delete") } },
     reports: { employeePerformance: { useQuery: mkQuery("perf") } },
     orders: { unassignEmployeeOrders: { useMutation: mkMutation("reclaim") } },
     useUtils: () => ({ employees: { list: { invalidate: vi.fn() }, allInventory: { invalidate: vi.fn() } } }),

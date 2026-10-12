@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
-import { BookOpen, History, LogOut } from "lucide-react";
+import { BookOpen, CalendarCheck, History, Landmark, LogOut } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
  * غلاف صفحات دفتر V3:
  *   • جلسة مالك/أدمن (`auth.me` يرجّع user) → لوحة التحكم الكاملة كما هي.
  *   • جلسة موظف غير إداري (المحاسب: `user` = null لكن صلاحياته من `auth.myPermissions`) → قشرة خفيفة
- *     Mobile-first: عنوان + تبويبان + خروج. بدون هذا كان `DashboardLayout` يعرض له «يرجى تسجيل الدخول»
+ *     Mobile-first: عنوان + أربعة تبويبات (يومية/حركات/حسابات/مراجعة الشهر — أيقونة فوق تسمية قصيرة على الهاتف) + خروج. بدون هذا كان `DashboardLayout` يعرض له «يرجى تسجيل الدخول»
  *     رغم أن الـendpoints تصرّح له. الحارس الحقيقي يبقى على السيرفر (`ledgerProcedure`).
  * المرحلة 7E (عرض فقط): القشرة على tokens الهوية، تبويبات 44px مع aria-current، و`--bottom-nav-h: 0`
  * لأن لا شريط سفلي هنا — نفس الاستعلام (employeePortal.me) ونفس الخروج.
@@ -23,9 +23,12 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
 }
 
 const TABS = [
-  { path: "/ledger", label: "الحسابات اليومية", icon: BookOpen },
-  { path: "/ledger/transactions", label: "سجل الحركات", icon: History },
+  { path: "/ledger", label: "الحسابات اليومية", short: "اليومية", icon: BookOpen },
+  { path: "/ledger/transactions", label: "سجل الحركات", short: "الحركات", icon: History },
+  { path: "/ledger/accounts", label: "الحسابات", short: "الحسابات", icon: Landmark },
+  { path: "/ledger/periods", label: "مراجعة الشهر", short: "مراجعة الشهر", icon: CalendarCheck },
 ] as const;
+const tabTestId = (path: string) => `ledger-tab-${path === "/ledger" ? "daily" : path.slice("/ledger/".length)}`;
 
 export function EmployeeLedgerShell({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
@@ -54,7 +57,7 @@ export function EmployeeLedgerShell({ children }: { children: React.ReactNode })
             </Button>
           </div>
         </div>
-        <nav className="mx-auto grid max-w-5xl grid-cols-2" aria-label="تبويبات الدفتر">
+        <nav className="mx-auto grid max-w-5xl grid-cols-4" aria-label="تبويبات الدفتر">
           {TABS.map(t => {
             const active = location === t.path;
             return (
@@ -62,10 +65,10 @@ export function EmployeeLedgerShell({ children }: { children: React.ReactNode })
                 key={t.path}
                 href={t.path}
                 aria-current={active ? "page" : undefined}
-                className={`flex min-h-11 items-center justify-center gap-1.5 border-b-2 text-sm transition-colors duration-[var(--duration-fast)] ${active ? "border-primary font-semibold text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                data-testid={`ledger-tab-${t.path === "/ledger" ? "daily" : "transactions"}`}
+                className={`flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 whitespace-nowrap border-b-2 px-1 py-1 text-xs sm:flex-row sm:gap-1.5 sm:text-sm transition-colors duration-[var(--duration-fast)] ${active ? "border-primary font-semibold text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                data-testid={tabTestId(t.path)}
               >
-                <t.icon className="h-4 w-4" aria-hidden="true" />{t.label}
+                <t.icon className="h-4 w-4 shrink-0" aria-hidden="true" /><span className="sm:hidden">{t.short}</span><span className="hidden sm:inline">{t.label}</span>
               </Link>
             );
           })}

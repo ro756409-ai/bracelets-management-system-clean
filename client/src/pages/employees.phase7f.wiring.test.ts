@@ -15,7 +15,7 @@ const hooks = (src: string) => [...src.matchAll(/trpc\.[a-zA-Z0-9.]+\.use(Query|
 describe("🔌 Queries/Mutations قبل = بعد", () => {
   it("Employees: نفس التسعة بالترتيب نفسه", () => {
     expect(hooks(read("pages/Employees.tsx"))).toEqual([
-      "trpc.employees.list.useQuery", "trpc.employees.allInventory.useQuery", "trpc.reports.employeePerformance.useQuery",
+      "trpc.employees.roleSupport.useQuery", "trpc.employees.list.useQuery", "trpc.employees.allInventory.useQuery", "trpc.reports.employeePerformance.useQuery",
       "trpc.employees.create.useMutation", "trpc.employees.update.useMutation", "trpc.employees.update.useMutation",
       "trpc.employees.setCredentials.useMutation", "trpc.employees.delete.useMutation", "trpc.orders.unassignEmployeeOrders.useMutation",
     ]);

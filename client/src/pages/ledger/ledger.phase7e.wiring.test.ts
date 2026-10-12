@@ -39,7 +39,8 @@ describe("🚫 الممنوعات", () => {
     expect(txs).toContain('has("ledger.reverse")');
     expect(txs).toContain("if (submitting || reverse.isPending) return;");
     expect(txs).toContain("if (pending) return;");
-    expect(txs).toContain('if (action === "reopen" && reason.trim().length < 3) return toast.error');
+    // الإقفال يحتاج ملاحظة مراجعة إلزامية (الاعتماد = مراجعة ثم إقفال)، وإعادة الفتح سببًا إلزاميًا — كلاهما 3 أحرف على الأقل
+    expect(txs).toContain('if (reason.trim().length < 3) return toast.error(action === "lock" ? "اكتب ملاحظة المراجعة قبل الإقفال');
   });
   it("القفل بـledger.period.lock وإعادة الفتح بـledger.period.reopen (للمالك على السيرفر)", () => {
     expect(txs).toContain('canLock={has("ledger.period.lock")}');

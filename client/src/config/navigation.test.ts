@@ -213,3 +213,15 @@ describe("🚩 «فريقي» على الويب (المدير القائد) — 
     expect(paths([], ["teams", "teamLeader"])).not.toContain("/team-leader-dashboard"); // صلاحية مسحوبة
   });
 });
+
+describe("🎯 بند القائمة النشط", () => {
+  it("أطول مسار مطابق فقط: /ledger لا يُضاء مع صفحات الدفتر الفرعية", async () => {
+    const { activeLinkPath } = await import("./navigation");
+    const paths = ["/ledger", "/ledger/transactions", "/ledger/accounts", "/ledger/periods", "/ledger/opening", "/orders"];
+    expect(activeLinkPath("/ledger", paths)).toBe("/ledger");
+    expect(activeLinkPath("/ledger/opening", paths)).toBe("/ledger/opening");
+    expect(activeLinkPath("/ledger/periods/x", paths)).toBe("/ledger/periods");
+    expect(activeLinkPath("/ledgerx", paths)).toBeNull();
+    expect(activeLinkPath("/orders/5", paths)).toBe("/orders");
+  });
+});

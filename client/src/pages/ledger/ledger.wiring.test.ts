@@ -15,7 +15,14 @@ describe("🔑 واجهة دفتر V3 — الربط", () => {
     expect(app).toContain('<FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerDaily /></LedgerLayout></FinancialRoute>');
     expect(app).toContain('<FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerTransactions /></LedgerLayout></FinancialRoute>');
     expect(app).toContain("<PermissionsPage />");
-    expect(app).not.toMatch(/activateLedger|ledger\.activate/);
+    // لا شاشة تفعيل: ledger.activate يظهر مرة واحدة فقط كبوابة مالك لصفحة «تجهيز الأرصدة الافتتاحية» (تحقق قراءة فقط)
+    expect(app).not.toMatch(/activateLedger/);
+    expect(app.match(/ledger\.activate/g)).toHaveLength(1);
+    expect(app).toContain('<FinancialRoute permission="ledger.activate" bare><LedgerLayout><LedgerOpening /></LedgerLayout></FinancialRoute>');
+    const opening = fs.readFileSync("client/src/pages/ledger/LedgerOpening.tsx", "utf-8");
+    expect(opening).toContain("trpc.ledger.opening.validate.useMutation()");
+    expect(opening).not.toMatch(/activateLedger|trpc\.ledger\.activate|localStorage\.|sessionStorage\.|indexedDB/);
+    for (const p of ["accounts", "periods"]) expect(app).toContain(`<Route path="/ledger/${p}">`);
     expect(daily + txs).not.toMatch(/activate/i);
     // المحاسب (جلسة موظف بلا user) يهبط على الدفتر، والحارس يحوّله لصفحة التجميد الآمنة لو بلا ledger.view
     const login = fs.readFileSync("client/src/pages/EmployeeLogin.tsx", "utf-8");

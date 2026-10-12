@@ -17,6 +17,9 @@ import Orders from "./pages/Orders";
 import LedgerDaily from "./pages/ledger/LedgerDaily";
 import LedgerTransactions from "./pages/ledger/LedgerTransactions";
 import LedgerLayout from "./pages/ledger/LedgerLayout";
+import LedgerAccounts from "./pages/ledger/LedgerAccounts";
+import LedgerPeriods from "./pages/ledger/LedgerPeriods";
+import LedgerOpening from "./pages/ledger/LedgerOpening";
 import PermissionsPage from "./pages/PermissionsPage";
 import GoodsReceipt from "./pages/GoodsReceipt";
 import StockTransfer from "./pages/StockTransfer";
@@ -274,6 +277,16 @@ function Router() {
       {/* دفتر الحسابات V3 — خلف ledger.view (الحكم الفعلي على السيرفر لكل إجراء). */}
       <Route path="/ledger/transactions">
         <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerTransactions /></LedgerLayout></FinancialRoute>
+      </Route>
+      <Route path="/ledger/accounts">
+        <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerAccounts /></LedgerLayout></FinancialRoute>
+      </Route>
+      <Route path="/ledger/periods">
+        <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerPeriods /></LedgerLayout></FinancialRoute>
+      </Route>
+      {/* تجهيز الأرصدة الافتتاحية — المالك فقط (والسيرفر يحكم صلاحية التفعيل أيضًا)؛ تحقق قراءة فقط بلا تفعيل */}
+      <Route path="/ledger/opening">
+        <FinancialRoute permission="ledger.activate" bare><LedgerLayout><LedgerOpening /></LedgerLayout></FinancialRoute>
       </Route>
       <Route path="/ledger">
         <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerDaily /></LedgerLayout></FinancialRoute>

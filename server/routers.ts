@@ -115,6 +115,8 @@ import { loadPerformance } from "./employeePerformance.service";
 import { buildMessagingRouter, webMessagingIdentity, portalMessagingIdentity } from "./messagingRouter";
 import * as attendanceSvc from "./attendance.service";
 import * as teamsSvc from "./teams.service";
+import { accountsManagerRoleSupported } from "./roleEnumMigration.service";
+import { ACCOUNTS_MANAGER_ROLE } from "../shared/employeeRoleEnumSpec";
 import * as teamLeaderSvc from "./teamLeader.service";
 import { attendanceCsv } from "../shared/attendanceCalc";
 import { performanceCsv } from "../shared/employeePerformance";
@@ -140,6 +142,7 @@ import {
   permissionsForRole,
   type Permission,
   LEDGER_OWNER_ONLY_PERMISSIONS,
+  isRoleRestrictedDenied,
   isLockedOwnerPermission,
   tenantPermissionsForRole,
 } from "./permissions";
@@ -687,7 +690,7 @@ function denyWhenEmpty(allowed: number[]): number[] {
 type ScopeCtx = {
   tenantId: number | null;
   user?: { role?: string | null } | null;
-  employee?: { businessId?: number | null } | null;
+  employee?: { businessId?: number | null; role?: string | null } | null;
 };
 
 /**
@@ -700,10 +703,12 @@ type ScopeCtx = {
  * `null` لسه معناها «الداتابيز مش متاحة» (زي getBusinessIdsForTenant) — بنقيّد الموظف
  * على نشاطه حتى ساعتها بدل ما نفتح.
  */
-async function sessionBusinessIds(ctx: ScopeCtx): Promise<number[] | null> {
+async function sessionBusinessIds(ctx: ScopeCtx, opts?: { ledgerTenantWide?: boolean }): Promise<number[] | null> {
   // tenantId مفقود = جلسة بلا تينانت — نتعامل معاها زي «مش قادر أتحقق» (null).
   const all = ctx.tenantId == null ? null : await getBusinessIdsForTenant(ctx.tenantId);
   if (ctx.user?.role === "admin") return all; // مالك/مدير: كل الأنشطة
+  // مدير الحسابات: كل أنشطة شركته **داخل دفتر V3 فقط** (الدفتر وحده يطلب ledgerTenantWide) — باقي النظام كالمعتاد.
+  if (opts?.ledgerTenantWide && ctx.employee?.role === ACCOUNTS_MANAGER_ROLE) return all;
   const bid = ctx.employee?.businessId ?? null;
   if (bid == null) return []; // موظف بلا نشاط → deny
   if (all == null) return [bid]; // DB مش متاحة → نثق في قيد الموظف
@@ -1043,6 +1048,46 @@ async function assertMayAssignOwnerRole(
     code: "FORBIDDEN",
     message: "صلاحية المالك لا يمنحها أو يسحبها إلا المالك",
   });
+}
+
+/**
+ * دور مدير الحسابات (0045): يعيّنه **ويديره** المالك فقط — منح الدور، أو سحبه، أو أي تعديل/حذف/تغيير بيانات دخول
+ * لموظف يحمله (حسابه يحرّك الدفتر). ومنحه يتطلب أن تقبل القاعدة القيمة (0045 مطبّقة)، وإلا رفض واضح بلا كتابة.
+ */
+async function assertMayManageAccountsManager(
+  ctx: { employee?: { role?: string | null } | null },
+  targetRole: string | undefined,
+  currentRole: string | null | undefined
+): Promise<void> {
+  const grants = targetRole === ACCOUNTS_MANAGER_ROLE;
+  const touches = currentRole === ACCOUNTS_MANAGER_ROLE;
+  if (!grants && !touches) return;
+  if (!isOwnerRole(ctx.employee?.role))
+    throw new TRPCError({ code: "FORBIDDEN", message: "دور مدير الحسابات يعيّنه ويديره المالك فقط" });
+  if (grants && !(await isAccountsManagerRoleSupported()))
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "دور مدير الحسابات غير متاح بعد في قاعدة البيانات (Migration 0045 غير مطبّقة) — لم يُحفظ شيء" });
+}
+
+/** هل عمود employees.role يقبل accounts_manager؟ (قراءة فقط من information_schema) */
+async function isAccountsManagerRoleSupported(): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  return accountsManagerRoleSupported({ query: (q: string) => db.execute(sql.raw(q)) });
+}
+
+/**
+ * نطاق دفتر V3 فقط: مدير الحسابات يرى ويعمل على **كل أنشطة شركته داخل الدفتر وحده** (المراجعة والإقفال على مستوى
+ * الشركة). لا يتغير نطاق جلسته في أي جزء آخر من النظام. باقي الأدوار: نطاق الجلسة المعتاد (المحاسب = نشاطه).
+ */
+async function ledgerSessionBusinessIds(ctx: ScopeCtx): Promise<number[] | null> {
+  return sessionBusinessIds(ctx, { ledgerTenantWide: true });
+}
+async function ledgerScopeBusinessId(ctx: ScopeCtx, businessId?: number | null): Promise<number | undefined> {
+  if (ctx.employee?.role !== ACCOUNTS_MANAGER_ROLE) return scopeBusinessId(ctx, businessId);
+  if (businessId == null) return undefined;
+  const allowed = await sessionBusinessIds(ctx, { ledgerTenantWide: true });
+  if (!allowed || !allowed.includes(businessId)) throw new TRPCError({ code: "FORBIDDEN", message: "النشاط خارج شركتك" });
+  return businessId;
 }
 
 // Helper: resolve the real employee ID for audit fields
@@ -1533,6 +1578,11 @@ export const appRouter = router({
         // الصلاحيات المقفولة للمالك (اطلاع المالك على المحادثات الخاصة) لا تُمنح لأي دور آخر.
         if (isLockedOwnerPermission(input.permission) && !isOwnerRole(input.role))
           throw new TRPCError({ code: "FORBIDDEN", message: "هذه الصلاحية للمالك فقط ولا يمكن منحها لأي دور آخر" });
+        // فتح الشهر والتفعيل للمالك الحقيقي فقط، وعكس الحركات للمالك ومدير الحسابات فقط — لا منح لغيرهم (السحب مسموح).
+        if (input.isAllowed && (LEDGER_OWNER_ONLY_PERMISSIONS as readonly string[]).includes(input.permission) && !isOwnerRole(input.role))
+          throw new TRPCError({ code: "FORBIDDEN", message: "فتح الشهر والتفعيل للمالك فقط ولا يُمنحان لأي دور آخر" });
+        if (input.isAllowed && isRoleRestrictedDenied(input.role, input.permission))
+          throw new TRPCError({ code: "FORBIDDEN", message: "عكس الحركات للمالك ومدير الحسابات فقط ولا يُمنح لهذا الدور" });
         const actor = await requireActor(ctx);
         const db = await getDb();
         if (!db)
@@ -2825,6 +2875,10 @@ export const appRouter = router({
         const businessIds = await scopeBusinessIds(ctx, input ?? {});
         return searchEmployees({ ...(input ?? {}), businessId: undefined, businessIds });
       }),
+    // هل يمكن تعيين «مدير الحسابات» الآن؟ للمالك فقط، وبشرط 0045 في القاعدة — الواجهة تخفي الخيار غير ذلك.
+    roleSupport: adminProcedure.query(async ({ ctx }) => ({
+      accountsManager: isOwnerRole(ctx.employee?.role) && (await isAccountsManagerRoleSupported()),
+    })),
     activeList: protectedProcedure
       .input(
         z
@@ -2858,6 +2912,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await assertMayAssignOwnerRole(ctx, input.role, null);
+        await assertMayManageAccountsManager(ctx, input.role, null);
         // النشاط لازم يتحدّد — مايرجعش null (منع تكرار businessId=NULL).
         const businessId = await resolveEmployeeBusinessId(
           ctx,
@@ -2895,6 +2950,7 @@ export const appRouter = router({
         }
 
         await assertMayAssignOwnerRole(ctx, data.role, target.role);
+        await assertMayManageAccountsManager(ctx, data.role, target.role);
 
         const revokesAdminAccess =
           data.isActive === false ||
@@ -2935,6 +2991,7 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الموظف غير موجود",
           });
+        await assertMayManageAccountsManager(ctx, undefined, target.role);
 
         if (isAdminTierRole(target.role) && target.isActive) {
           const actingEmployeeId = await resolveActingEmployeeId(ctx);
@@ -2966,6 +3023,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "employee", input.id);
+        await assertMayManageAccountsManager(ctx, undefined, (await getEmployeeById(input.id))?.role);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         // Check username uniqueness
@@ -2998,6 +3056,7 @@ export const appRouter = router({
         // كتابة `passwordHash` على موظف شركة تانية = دخول بهويته. الحارس هنا أهم
         // حارس في الملف كله.
         await requireOwned(ctx, "employee", input.id);
+        await assertMayManageAccountsManager(ctx, undefined, (await getEmployeeById(input.id))?.role);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
@@ -9499,7 +9558,11 @@ export const appRouter = router({
       }),
   }),
   // دفتر الحسابات V3 — خلف صلاحيات ledger.* ونطاق الجلسة؛ بلا تفعيل عام (داخلي حتى شاشة المالك).
-  ledger: createLedgerRouter({ scopeBusinessId, sessionBusinessIds }),
+  ledger: createLedgerRouter({
+    scopeBusinessId: ledgerScopeBusinessId, sessionBusinessIds: ledgerSessionBusinessIds,
+    // قراءة الشركة كلها: جلسة المالك/الأدمن (ونطاقها كل الأنشطة أصلًا) ومدير الحسابات؛ المحاسب = نشاطه فقط.
+    fullLedgerScope: (ctx: ScopeCtx) => ctx.user?.role === "admin" || ctx.employee?.role === ACCOUNTS_MANAGER_ROLE,
+  }),
 });
 
 export type AppRouter = typeof appRouter;

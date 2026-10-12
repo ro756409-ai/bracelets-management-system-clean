@@ -299,8 +299,11 @@ export async function lockLedgerPeriod(input: { tenantId: number; period: string
     let row = await read();
     if (!row) { try { await tx.insert(ledgerPeriods).values({ tenantId: input.tenantId, period: input.period, status: "open" }); } catch (e) { if (!isMysqlError(e, "ER_DUP_ENTRY")) throw e; } row = await read(); }
     if (row.status === "locked") return { periodId: row.id, status: "locked" as const, replay: true };
+    // الاعتماد = مراجعة الشهر ثم إقفاله بملاحظة مراجعة **إلزامية** (3 أحرف على الأقل) تُسجَّل مع الفاعل — لا نص افتراضي.
+    const note = input.reason?.trim() ?? "";
+    if (note.length < 3) throw new LedgerError("reason");
     await tx.update(ledgerPeriods).set({ status: "locked" }).where(eq(ledgerPeriods.id, row.id));
-    await tx.insert(ledgerPeriodEvents).values({ tenantId: input.tenantId, periodId: row.id, action: "lock", actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId, reason: input.reason?.trim() || "إقفال الفترة" });
+    await tx.insert(ledgerPeriodEvents).values({ tenantId: input.tenantId, periodId: row.id, action: "lock", actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId, reason: note });
     return { periodId: row.id, status: "locked" as const, replay: false };
   });
 }
@@ -518,7 +521,21 @@ export async function listLedgerAccounts(tenantId: number, db?: LedgerDb) {
   });
 }
 
-export type LedgerTransactionFilters = { page: number; limit: number; from?: string; to?: string; businessId?: number | null; accountId?: number; kind?: LedgerKind };
+/**
+ * scope (حراسة القراءة): null = نطاق الشركة كله (المالك/الأدمن/مدير الحسابات)؛ مصفوفة = أنشطة الجلسة فقط (المحاسب)
+ * — الحركة تظهر فقط لو **كل** قيودها داخل النطاق (scopeVisibleTx). المصفوفة الفارغة = لا شيء (fail-closed).
+ */
+export type LedgerReadScope = number[] | null;
+const scopeIds = (scope: number[]) => (scope.length ? scope : [-1]);
+/**
+ * رؤية حركة لنطاق محدود (SQL على الاسم المستعار `t`): كل قيودها بأنشطة داخل النطاق، ونشاطها المصدر داخله أو بلا نشاط.
+ * حركة مختلطة (قيد لنشاط آخر أو على مستوى الشركة) تُحجب كلها — لا تُعرض جزئيًا بأرقام نشاط آخر.
+ */
+const scopeVisibleTx = (scope: number[]) => {
+  const ids = sql.join(scopeIds(scope).map(b => sql`${b}`), sql`, `);
+  return sql`(t.sourceBusinessId IS NULL OR t.sourceBusinessId IN (${ids})) AND NOT EXISTS (SELECT 1 FROM ledger_entries x WHERE x.tenantId = t.tenantId AND x.transactionId = t.id AND (x.businessId IS NULL OR x.businessId NOT IN (${ids})))`;
+};
+export type LedgerTransactionFilters = { page: number; limit: number; from?: string; to?: string; businessId?: number | null; accountId?: number; kind?: LedgerKind; scope?: LedgerReadScope };
 export type LedgerTransactionRow = LedgerTransaction & {
   entries: { id: number; transactionId: number; accountId: number; businessId: number | null; side: "debit" | "credit"; amount: string; code: string; name: string; kind: string }[];
   actorName: string | null;
@@ -534,6 +551,11 @@ export async function listLedgerTransactions(tenantId: number, f: LedgerTransact
     if (f.businessId != null) conds.push(eq(ledgerTransactions.sourceBusinessId, f.businessId));
     if (f.kind) conds.push(eq(ledgerTransactions.kind, f.kind));
     if (f.accountId != null) conds.push(sql`${ledgerTransactions.id} IN (SELECT transactionId FROM ledger_entries WHERE tenantId = ${tenantId} AND accountId = ${f.accountId})`);
+    if (f.scope) {
+      const ids = sql.join(scopeIds(f.scope).map(b => sql`${b}`), sql`, `);
+      conds.push(sql`(${ledgerTransactions.sourceBusinessId} IS NULL OR ${ledgerTransactions.sourceBusinessId} IN (${ids}))`);
+      conds.push(sql`NOT EXISTS (SELECT 1 FROM ledger_entries x WHERE x.tenantId = ${tenantId} AND x.transactionId = ${ledgerTransactions.id} AND (x.businessId IS NULL OR x.businessId NOT IN (${ids})))`);
+    }
     const where = and(...conds);
     const [{ total }] = await d.select({ total: sql<number>`COUNT(*)` }).from(ledgerTransactions).where(where);
     const rows = await d.select().from(ledgerTransactions).where(where).orderBy(sql`${ledgerTransactions.effectiveDate} DESC`, sql`${ledgerTransactions.id} DESC`)
@@ -570,6 +592,94 @@ export async function getLedgerTransaction(tenantId: number, transactionId: numb
     const [reversal] = await d.select({ id: ledgerTransactions.id }).from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, tenantId), eq(ledgerTransactions.reversalOfTransactionId, tx.id))).limit(1);
     return { ...tx, entries, reversedByTransactionId: reversal?.id ?? null };
   });
+}
+
+const rawRows = (r: any): any[] => (Array.isArray(r) ? (Array.isArray(r[0]) ? r[0] : r) : r?.rows ?? []);
+
+export type LedgerPeriodReview = {
+  period: string;
+  status: "open" | "locked";
+  /** سجل الإقفال/الفتح بأسماء الفاعلين وأسبابهم (من ledger_period_events) */
+  events: { action: "lock" | "reopen"; reason: string; actorName: string | null; createdAt: Date }[];
+  /** حركة الشهر لكل حساب (مبالغ نصية عشرية من القاعدة، بلا تحويل float) */
+  accounts: { accountId: number; code: string; name: string; kind: string; debit: string; credit: string; transactions: number }[];
+  /** حركة الشهر لكل نشاط؛ businessId = null = قيود على مستوى الشركة (لنطاق الشركة فقط) */
+  businesses: { businessId: number | null; name: string | null; debit: string; credit: string }[];
+  transactionsCount: number;
+  reversals: { transactionId: number; reversalOfTransactionId: number | null; description: string; effectiveDate: string; actorName: string | null }[];
+};
+
+/**
+ * مراجعة شهر (قراءة فقط) داخل نطاق القراءة — أساس «الاعتماد = مراجعة ثم إقفال». الحركات تُرحّل فورًا عند إدخالها،
+ * فلا حالة «معتمدة» ولا «لم تُراجع» لكل حركة هنا؛ فقط ما تثبته البيانات: حركة الشهر، العكوس، وسجل الإقفال/الفتح.
+ */
+export async function reviewLedgerPeriod(tenantId: number, period: string, scope: LedgerReadScope, db?: LedgerDb): Promise<LedgerPeriodReview> {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new LedgerError("periodNotFound", period);
+  const d = await resolveDb(db);
+  return guardNoTable(async () => {
+    // نطاق محدود: نفس قاعدة سجل الحركات — حركات كل قيودها داخل النطاق فقط (لا أرقام نشاط آخر ولا قيود الشركة)
+    const scoped = scope ? sql` AND ${scopeVisibleTx(scope)}` : sql``;
+    const [row] = await d.select().from(ledgerPeriods).where(and(eq(ledgerPeriods.tenantId, tenantId), eq(ledgerPeriods.period, period))).limit(1);
+    const events = row ? rawRows(await d.execute(sql`SELECT ev.action, ev.reason, ROUND(UNIX_TIMESTAMP(ev.createdAt) * 1000) AS createdAtMs, emp.name AS actorName FROM ledger_period_events ev
+      LEFT JOIN employees emp ON emp.id = ev.actorEmployeeId AND emp.tenantId = ev.tenantId WHERE ev.tenantId = ${tenantId} AND ev.periodId = ${row.id} ORDER BY ev.id`)) : [];
+    const accounts = rawRows(await d.execute(sql`SELECT a.id AS accountId, a.code, a.name, a.kind,
+        SUM(CASE WHEN e.side = 'debit' THEN e.amount ELSE 0 END) AS debit, SUM(CASE WHEN e.side = 'credit' THEN e.amount ELSE 0 END) AS credit,
+        COUNT(DISTINCT e.transactionId) AS transactions
+      FROM ledger_entries e JOIN ledger_transactions t ON t.id = e.transactionId AND t.tenantId = e.tenantId JOIN ledger_accounts a ON a.id = e.accountId AND a.tenantId = e.tenantId
+      WHERE e.tenantId = ${tenantId} AND t.postingPeriod = ${period}${scoped} GROUP BY a.id, a.code, a.name, a.kind ORDER BY a.code`));
+    const byBusiness = rawRows(await d.execute(sql`SELECT e.businessId, b.name,
+        SUM(CASE WHEN e.side = 'debit' THEN e.amount ELSE 0 END) AS debit, SUM(CASE WHEN e.side = 'credit' THEN e.amount ELSE 0 END) AS credit
+      FROM ledger_entries e JOIN ledger_transactions t ON t.id = e.transactionId AND t.tenantId = e.tenantId LEFT JOIN businesses b ON b.id = e.businessId AND b.tenantId = e.tenantId
+      WHERE e.tenantId = ${tenantId} AND t.postingPeriod = ${period}${scoped} GROUP BY e.businessId, b.name ORDER BY b.name`));
+    const [count] = rawRows(await d.execute(sql`SELECT COUNT(DISTINCT t.id) AS n FROM ledger_transactions t JOIN ledger_entries e ON e.transactionId = t.id AND e.tenantId = t.tenantId
+      WHERE t.tenantId = ${tenantId} AND t.postingPeriod = ${period}${scoped}`));
+    const reversals = rawRows(await d.execute(sql`SELECT DISTINCT t.id AS transactionId, t.reversalOfTransactionId, t.description, DATE_FORMAT(t.effectiveDate, '%Y-%m-%d') AS effectiveDate, emp.name AS actorName
+      FROM ledger_transactions t JOIN ledger_entries e ON e.transactionId = t.id AND e.tenantId = t.tenantId LEFT JOIN employees emp ON emp.id = t.actorEmployeeId AND emp.tenantId = t.tenantId
+      WHERE t.tenantId = ${tenantId} AND t.postingPeriod = ${period} AND t.kind = 'reversal'${scoped} ORDER BY t.id`));
+    const money = (v: any) => (v == null ? "0.0000" : String(v));
+    return {
+      period, status: (row?.status ?? "open") as "open" | "locked",
+      // اللحظة المطلقة من القاعدة (UNIX_TIMESTAMP) → Date: لا نص «YYYY-MM-DD HH:MM:SS» بلا منطقة يقرؤه المتصفح بتوقيته المحلي
+      events: events.map(ev => ({ action: ev.action, reason: String(ev.reason), actorName: ev.actorName ?? null, createdAt: new Date(Number(ev.createdAtMs)) })),
+      accounts: accounts.map(a => ({ accountId: Number(a.accountId), code: a.code, name: a.name, kind: a.kind, debit: money(a.debit), credit: money(a.credit), transactions: Number(a.transactions) })),
+      businesses: byBusiness.map(b => ({ businessId: b.businessId == null ? null : Number(b.businessId), name: b.name ?? null, debit: money(b.debit), credit: money(b.credit) })),
+      transactionsCount: Number(count?.n ?? 0),
+      reversals: reversals.map(r => ({ transactionId: Number(r.transactionId), reversalOfTransactionId: r.reversalOfTransactionId == null ? null : Number(r.reversalOfTransactionId), description: r.description, effectiveDate: r.effectiveDate, actorName: r.actorName ?? null })),
+    };
+  });
+}
+
+/**
+ * الحسابات داخل نطاق القراءة: نطاق محدود = الحسابات المربوطة بأحد أنشطته فقط، وروابطها بأنشطته فقط.
+ * الرصيد: رصيد الحساب واحد على مستوى الشركة ولا يُقسَّم بين الأنشطة — فيُحجب (`currentBalance: null`، `balanceHidden`)
+ * عن النطاق المحدود متى كان الحساب مربوطًا (ولو سابقًا) بنشاط خارج النطاق، أو عليه أي قيد لنشاط خارجه أو على مستوى
+ * الشركة (مثل القيد الافتتاحي). لا نخترع رصيدًا خاصًا بالنشاط.
+ */
+export async function listLedgerAccountsScoped(tenantId: number, scope: LedgerReadScope, db?: LedgerDb) {
+  const all = await listLedgerAccounts(tenantId, db);
+  if (!scope) return all.map(a => ({ ...a, balanceHidden: false }));
+  const allowed = new Set(scopeIds(scope));
+  const visible = all.filter(a => a.businesses.some(b => allowed.has(b.businessId)));
+  if (visible.length === 0) return [];
+  const d = await resolveDb(db);
+  const ids = sql.join(scopeIds(scope).map(b => sql`${b}`), sql`, `);
+  const accIds = sql.join(visible.map(a => sql`${a.id}`), sql`, `);
+  const outside = new Set(rawRows(await d.execute(sql`SELECT DISTINCT accountId FROM ledger_entries
+    WHERE tenantId = ${tenantId} AND accountId IN (${accIds}) AND (businessId IS NULL OR businessId NOT IN (${ids}))`)).map((r: any) => Number(r.accountId)));
+  return visible.map(a => {
+    const hidden = a.businesses.some(b => !allowed.has(b.businessId)) || outside.has(a.id);
+    return { ...a, currentBalance: hidden ? null : a.currentBalance, balanceHidden: hidden, businesses: a.businesses.filter(b => allowed.has(b.businessId)) };
+  });
+}
+
+/** حركة واحدة داخل نطاق القراءة — خارجه = غير موجودة (لا نكشف وجودها). */
+export async function getLedgerTransactionScoped(tenantId: number, transactionId: number, scope: LedgerReadScope, db?: LedgerDb) {
+  const tx = await getLedgerTransaction(tenantId, transactionId, db);
+  if (!scope) return tx;
+  const allowed = new Set(scopeIds(scope));
+  const visible = (tx.sourceBusinessId == null || allowed.has(tx.sourceBusinessId)) && tx.entries.length > 0 && tx.entries.every(e => e.businessId != null && allowed.has(e.businessId));
+  if (!visible) throw new LedgerError("transaction", `#${transactionId}`);
+  return tx;
 }
 
 export async function listLedgerPeriods(tenantId: number, db?: LedgerDb) {

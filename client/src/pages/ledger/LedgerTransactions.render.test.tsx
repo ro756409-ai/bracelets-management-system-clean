@@ -129,12 +129,17 @@ describe("🔒 الفترات المحاسبية", () => {
     expect(state.reopenCalls).toEqual([{ period: "2026-09", reason: "تصحيح تاريخ" }]);
     expect(state.lockCalls).toHaveLength(0);
   });
-  it("قفل الفترة: السبب اختياري، double-click = طلب واحد بالفترة الصحيحة", async () => {
+  it("قفل الفترة: ملاحظة المراجعة إلزامية (بلا ملاحظة لا طلب)، double-click = طلب واحد بالفترة والملاحظة", async () => {
     const onClose = vi.fn();
     render(<PeriodDialog period="2026-10" action="lock" onClose={onClose} onDone={async () => {}} />);
     const btn = screen.getByTestId("ledger-period-confirm");
+    fireEvent.click(btn);
+    expect(state.lockCalls).toEqual([]);
+    expect(screen.getByText("ملاحظة المراجعة (إلزامية)")).toBeTruthy();
+    expect(screen.getByText(/الحركات تُرحّل فورًا/)).toBeTruthy();
+    fireEvent.change(screen.getByTestId("ledger-period-reason"), { target: { value: "راجعت حركة الشهر" } });
     fireEvent.click(btn); fireEvent.click(btn);
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(state.lockCalls).toEqual([{ period: "2026-10", reason: undefined }]);
+    expect(state.lockCalls).toEqual([{ period: "2026-10", reason: "راجعت حركة الشهر" }]);
   });
 });

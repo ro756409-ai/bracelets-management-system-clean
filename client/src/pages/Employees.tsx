@@ -26,7 +26,7 @@ import { createInFlightGuard } from "@/components/orders/confirmGuard";
 const EMPLOYEE_ROLES = [
   "agent", "warehouse", "manager", "facebook_entry", "scanner",
   "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
-  "moderator",
+  "moderator", "accounts_manager",
 ] as const;
 
 type EmployeeRoleValue = (typeof EMPLOYEE_ROLES)[number];
@@ -48,13 +48,14 @@ const ROLE_LABELS: Record<EmployeeRoleValue, string> = {
   accountant: "محاسب",
   viewer: "مشاهدة فقط",
   moderator: "مودريتور",
+  accounts_manager: "مدير الحسابات",
 };
 
 // نغمات الهوية بدل الألوان الخام (المرحلة 7F) — الدور نفسه لا يتغيّر
 const ROLE_TONES: Record<EmployeeRoleValue, StatusTone> = {
   agent: "info", warehouse: "purple", manager: "amber", facebook_entry: "cyan", scanner: "success",
   super_admin: "danger", admin: "amber", data_entry: "cyan", order_confirmation: "primary", shipping: "orange",
-  accountant: "success", viewer: "neutral", moderator: "purple",
+  accountant: "success", viewer: "neutral", moderator: "purple", accounts_manager: "success",
 };
 
 /**
@@ -149,6 +150,9 @@ export default function Employees() {
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
 
+  // «مدير الحسابات» يظهر كخيار للمالك فقط وبعد 0045 — والسيرفر يرفض غير ذلك على أي حال.
+  const { data: roleSupport } = trpc.employees.roleSupport.useQuery(undefined, { retry: false });
+  const assignableRoles: readonly EmployeeRoleValue[] = roleSupport?.accountsManager ? [...ASSIGNABLE_ROLES, "accounts_manager"] : ASSIGNABLE_ROLES;
   const { data: employees, isLoading, isError, error, refetch } = trpc.employees.list.useQuery({
     businessId: currentBusinessId ?? undefined,
     search: search.trim() ? search.trim() : undefined,
@@ -652,7 +656,7 @@ export default function Employees() {
                 </SelectTrigger>
                 <SelectContent>
                   {/* الأدوار الخمسة القياسية — وبنضيف دور الموظف الحالي لو كان قديمًا عشان مايتغيّرش بالغلط */}
-                  {[...ASSIGNABLE_ROLES, ...(ASSIGNABLE_ROLES.includes(form.role as any) ? [] : [form.role])]
+                  {[...assignableRoles, ...(assignableRoles.includes(form.role) ? [] : [form.role])]
                     .map(role => (
                       <SelectItem key={role} value={role}>{ROLE_LABELS[role as EmployeeRoleValue]}</SelectItem>
                     ))}

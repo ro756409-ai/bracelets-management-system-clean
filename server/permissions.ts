@@ -135,6 +135,18 @@ export const ALL_PERMISSIONS = [
 
 /** صلاحيات دفتر V3 التي يملكها المالك وحده افتراضيًا (لا يأخذها admin إلا بمنح صريح لكل tenant). */
 export const LEDGER_OWNER_ONLY_PERMISSIONS: readonly Permission[] = ["ledger.period.reopen", "ledger.activate"];
+/**
+ * صلاحيات دفتر V3 مقصورة على أدوار بعينها (قرار المالك 2026-10-11): لا يمنحها تجاوز الشركة لأي دور آخر،
+ * ولا يأخذها الأدمن افتراضيًا. عكس الحركة للمالك ومدير الحسابات فقط — لا للمحاسب ولا للأدمن ولا للمدير.
+ */
+export const LEDGER_ROLE_RESTRICTED: Readonly<Partial<Record<string, readonly string[]>>> = {
+  "ledger.reverse": ["super_admin", "accounts_manager"],
+};
+/** مرفوضة لهذا الدور مهما كانت التجاوزات؟ */
+export const isRoleRestrictedDenied = (role: string | null | undefined, permission: string) => {
+  const allowed = LEDGER_ROLE_RESTRICTED[permission];
+  return !!allowed && !allowed.includes(role ?? "");
+};
 const LEDGER_PERMISSIONS: readonly Permission[] = [
   "ledger.view", "ledger.post", "ledger.reverse", "ledger.manage_accounts", "ledger.period.lock", "ledger.period.reopen", "ledger.activate",
 ];
@@ -246,6 +258,9 @@ export const EMPLOYEE_ROLE_VALUES = [
   "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
   // مودريتور — مشرف تشغيلي أوسع من التأكيدات (بيوزّع أوردرات ويتابع)، لكن بدون أي صلاحية مالية.
   "moderator",
+  // مدير الحسابات (0045) — يراجع ويقفل الشهر ويعكس الحركات في دفتر V3 فقط، على كل أنشطة شركته داخل الدفتر وحده.
+  // جلسة موظف غير إدارية: لا أوردرات ولا موظفين ولا صلاحيات المالك. يعيّنه المالك فقط. يتطلب 0045 في القاعدة.
+  "accounts_manager",
 ] as const;
 
 export type EmployeeRole = (typeof EMPLOYEE_ROLE_VALUES)[number];
@@ -300,6 +315,15 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     // الاتنين دول (`accounting.approve` و`reports.view_profit`) بيمنحهم المالك يدويًا لو
     // حب — عن طريق tenant_role_permissions من غير أي Deploy.
     "accounting.create", "treasury.transfer", "settlements.create",
+    // دفتر V3: قراءة فقط داخل نطاقه (حسابات/أرصدة/حركات نشاطه — حراسة القراءة على السيرفر)؛ الترحيل بمنح صريح
+    // من المالك؛ ولا عكس أبدًا (LEDGER_ROLE_RESTRICTED).
+    "ledger.view",
+    ...SELF_PERFORMANCE, ...MESSAGING_BASIC,
+  ],
+  // مدير الحسابات: الدفتر فقط (قراءة وترحيل وعكس وإدارة الحسابات وإقفال الشهر). لا فتح الشهر ولا التفعيل (للمالك)،
+  // ولا الأرباح (reports.view_profit) ولا الأوردرات ولا الموظفين ولا الحسابات القديمة V1/V2.
+  accounts_manager: [
+    "ledger.view", "ledger.post", "ledger.reverse", "ledger.manage_accounts", "ledger.period.lock",
     ...SELF_PERFORMANCE, ...MESSAGING_BASIC,
   ],
   viewer: ["dashboard.view", "orders.view", ...MESSAGING_BASIC],
@@ -327,6 +351,7 @@ export function permissionsForRole(role: string | null | undefined): readonly Pe
 
 export function hasPermission(role: string | null | undefined, permission: Permission): boolean {
   if (isLockedOwnerPermission(permission)) return false; // مقفولة افتراضيًا للجميع
+  if (isRoleRestrictedDenied(role, permission)) return false;
   return permissionsForRole(role).includes(permission);
 }
 
@@ -341,6 +366,7 @@ export async function hasTenantPermission(
     import("drizzle-orm"),
   ]);
   if (isLockedOwnerPermission(permission) && !isOwnerRole(role)) return false; // لا تُمنح لغير المالك أبدًا
+  if (isRoleRestrictedDenied(role, permission)) return false; // لا يمنحها أي تجاوز لدور غير مسموح
   const db = await getDb();
   if (!db) return hasPermission(role, permission);
   const [override] = await db.select().from(tenantRolePermissions).where(and(
@@ -376,5 +402,6 @@ export async function tenantPermissionsForRole(
   }
   return ALL_PERMISSIONS.filter(p => (overrides.has(p) ? overrides.get(p)! : hasPermission(role, p)))
     .filter(p => !LEDGER_OWNER_ONLY_PERMISSIONS.includes(p) || isOwnerRole(role))
-    .filter(p => !isLockedOwnerPermission(p) || isOwnerRole(role));
+    .filter(p => !isLockedOwnerPermission(p) || isOwnerRole(role))
+    .filter(p => !isRoleRestrictedDenied(role, p));
 }

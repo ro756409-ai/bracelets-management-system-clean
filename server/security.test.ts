@@ -481,11 +481,12 @@ describe("Auth middleware module", () => {
 // ============================================================
 describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
   it("admin-tier roles (super_admin, admin, manager) can do everything, unchanged — except Ledger V3: owner-only (reopen/activate) off admin, all ledger.* off manager", async () => {
-    const { hasPermission, ALL_PERMISSIONS, LEDGER_OWNER_ONLY_PERMISSIONS, MANAGER_GRANT_ONLY_PERMISSIONS, isLockedOwnerPermission } = await import("./permissions");
+    const { hasPermission, ALL_PERMISSIONS, LEDGER_OWNER_ONLY_PERMISSIONS, MANAGER_GRANT_ONLY_PERMISSIONS, isLockedOwnerPermission, isRoleRestrictedDenied } = await import("./permissions");
     // المقفولة للمالك (اطلاع المالك على الخاص) خارج كل الأدوار افتراضيًا — حتى super_admin (منح صريح فقط)
     for (const permission of ALL_PERMISSIONS) expect(hasPermission("super_admin", permission), permission).toBe(!isLockedOwnerPermission(permission));
     for (const permission of ALL_PERMISSIONS) {
-      const expected = !LEDGER_OWNER_ONLY_PERMISSIONS.includes(permission) && !isLockedOwnerPermission(permission);
+      // وعكس حركات الدفتر للمالك ومدير الحسابات فقط (قرار المالك، المرحلة 1 للحسابات) — ليس للأدمن
+      const expected = !LEDGER_OWNER_ONLY_PERMISSIONS.includes(permission) && !isLockedOwnerPermission(permission) && !isRoleRestrictedDenied("admin", permission);
       expect(hasPermission("admin", permission), permission).toBe(expected);
     }
     for (const permission of ALL_PERMISSIONS) {
@@ -493,8 +494,8 @@ describe("Fix 3: employeePortal permission matrix (hasPermission)", () => {
       const expected = !permission.startsWith("ledger.") && !MANAGER_GRANT_ONLY_PERMISSIONS.includes(permission) && !isLockedOwnerPermission(permission);
       expect(hasPermission("manager", permission), permission).toBe(expected);
     }
-    // المحاسب: لا شيء على دفتر V3 افتراضيًا (يمنحه المالك view/post عبر tenant_role_permissions)
-    for (const permission of ALL_PERMISSIONS.filter(p => p.startsWith("ledger."))) expect(hasPermission("accountant", permission), permission).toBe(false);
+    // المحاسب: قراءة الدفتر فقط افتراضيًا (داخل نطاقه، محروسة على السيرفر) — الترحيل بمنح صريح، والعكس أبدًا
+    for (const permission of ALL_PERMISSIONS.filter(p => p.startsWith("ledger."))) expect(hasPermission("accountant", permission), permission).toBe(permission === "ledger.view");
   });
 
   it("order_confirmation employees can view, confirm, cancel and update orders", async () => {

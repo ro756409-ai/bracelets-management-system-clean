@@ -83,7 +83,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
 };
 
 export const ROLE_LABELS: Record<string, string> = {
-  super_admin: "المالك", admin: "أدمن", manager: "مدير", accountant: "محاسب", viewer: "مشاهد", moderator: "مشرف",
+  super_admin: "المالك", admin: "أدمن", manager: "مدير", accountant: "محاسب", accounts_manager: "مدير الحسابات", viewer: "مشاهد", moderator: "مشرف",
   order_confirmation: "تأكيد أوردرات", agent: "وكيل", data_entry: "إدخال بيانات", facebook_entry: "إدخال فيسبوك",
   shipping: "شحن", scanner: "مسح", warehouse: "مخزن",
 };
