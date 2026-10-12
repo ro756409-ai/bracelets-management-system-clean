@@ -66,7 +66,8 @@ describe.runIf(CAN)("📒 المرحلة 2 — الاستخدام اليومي �
     const runs = await Promise.all([owner.setup.ensureDailyAccounts(), owner.setup.ensureDailyAccounts(), owner.setup.ensureDailyAccounts()]);
     expect(runs.every(r => r.conflicts.includes("EXP_RENT"))).toBe(true);
     expect(runs.flatMap(r => r.created).sort()).toEqual(LEDGER_DAILY_ACCOUNTS.map(a => a.code).filter(c => c !== "EXP_RENT").sort()); // كل حساب أُنشئ مرة واحدة فقط
-    expect((await q("SELECT COUNT(*) n FROM ledger_accounts WHERE tenantId = ? AND code LIKE 'EXP\\_%'", [A.tenantId]))[0].n).toBe(7);
+    // عدد حسابات EXP_ من تعريف الحسابات القياسية نفسه (لا رقم ثابت يتقادم حين يُضاف تصنيف)
+    expect((await q("SELECT COUNT(*) n FROM ledger_accounts WHERE tenantId = ? AND code LIKE 'EXP\\_%'", [A.tenantId]))[0].n).toBe(LEDGER_DAILY_ACCOUNTS.filter(a => a.code.startsWith("EXP_")).length);
     expect((await q("SELECT kind FROM ledger_accounts WHERE tenantId = ? AND code = 'EXP_RENT'", [A.tenantId]))[0].kind).toBe("revenue"); // لم يُعدَّل
     const again = await owner.setup.ensureDailyAccounts();
     expect(again.created).toEqual([]);
