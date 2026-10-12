@@ -299,8 +299,11 @@ export async function lockLedgerPeriod(input: { tenantId: number; period: string
     let row = await read();
     if (!row) { try { await tx.insert(ledgerPeriods).values({ tenantId: input.tenantId, period: input.period, status: "open" }); } catch (e) { if (!isMysqlError(e, "ER_DUP_ENTRY")) throw e; } row = await read(); }
     if (row.status === "locked") return { periodId: row.id, status: "locked" as const, replay: true };
+    // الاعتماد = مراجعة الشهر ثم إقفاله بملاحظة مراجعة **إلزامية** (3 أحرف على الأقل) تُسجَّل مع الفاعل — لا نص افتراضي.
+    const note = input.reason?.trim() ?? "";
+    if (note.length < 3) throw new LedgerError("reason");
     await tx.update(ledgerPeriods).set({ status: "locked" }).where(eq(ledgerPeriods.id, row.id));
-    await tx.insert(ledgerPeriodEvents).values({ tenantId: input.tenantId, periodId: row.id, action: "lock", actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId, reason: input.reason?.trim() || "إقفال الفترة" });
+    await tx.insert(ledgerPeriodEvents).values({ tenantId: input.tenantId, periodId: row.id, action: "lock", actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId, reason: note });
     return { periodId: row.id, status: "locked" as const, replay: false };
   });
 }
@@ -579,6 +582,59 @@ export async function getLedgerTransaction(tenantId: number, transactionId: numb
     const entries = await d.select().from(ledgerEntries).where(eq(ledgerEntries.transactionId, tx.id)).orderBy(asc(ledgerEntries.id));
     const [reversal] = await d.select({ id: ledgerTransactions.id }).from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, tenantId), eq(ledgerTransactions.reversalOfTransactionId, tx.id))).limit(1);
     return { ...tx, entries, reversedByTransactionId: reversal?.id ?? null };
+  });
+}
+
+const rawRows = (r: any): any[] => (Array.isArray(r) ? (Array.isArray(r[0]) ? r[0] : r) : r?.rows ?? []);
+
+export type LedgerPeriodReview = {
+  period: string;
+  status: "open" | "locked";
+  /** سجل الإقفال/الفتح بأسماء الفاعلين وأسبابهم (من ledger_period_events) */
+  events: { action: "lock" | "reopen"; reason: string; actorName: string | null; createdAt: Date }[];
+  /** حركة الشهر لكل حساب (مبالغ نصية عشرية من القاعدة، بلا تحويل float) */
+  accounts: { accountId: number; code: string; name: string; kind: string; debit: string; credit: string; transactions: number }[];
+  /** حركة الشهر لكل نشاط؛ businessId = null = قيود على مستوى الشركة (لنطاق الشركة فقط) */
+  businesses: { businessId: number | null; name: string | null; debit: string; credit: string }[];
+  transactionsCount: number;
+  reversals: { transactionId: number; reversalOfTransactionId: number | null; description: string; effectiveDate: string; actorName: string | null }[];
+};
+
+/**
+ * مراجعة شهر (قراءة فقط) داخل نطاق القراءة — أساس «الاعتماد = مراجعة ثم إقفال». الحركات تُرحّل فورًا عند إدخالها،
+ * فلا حالة «معتمدة» ولا «لم تُراجع» لكل حركة هنا؛ فقط ما تثبته البيانات: حركة الشهر، العكوس، وسجل الإقفال/الفتح.
+ */
+export async function reviewLedgerPeriod(tenantId: number, period: string, scope: LedgerReadScope, db?: LedgerDb): Promise<LedgerPeriodReview> {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new LedgerError("periodNotFound", period);
+  const d = await resolveDb(db);
+  return guardNoTable(async () => {
+    const scoped = scope ? sql` AND e.businessId IN (${sql.join(scopeIds(scope).map(b => sql`${b}`), sql`, `)})` : sql``;
+    const [row] = await d.select().from(ledgerPeriods).where(and(eq(ledgerPeriods.tenantId, tenantId), eq(ledgerPeriods.period, period))).limit(1);
+    const events = row ? rawRows(await d.execute(sql`SELECT ev.action, ev.reason, ev.createdAt, emp.name AS actorName FROM ledger_period_events ev
+      LEFT JOIN employees emp ON emp.id = ev.actorEmployeeId AND emp.tenantId = ev.tenantId WHERE ev.tenantId = ${tenantId} AND ev.periodId = ${row.id} ORDER BY ev.id`)) : [];
+    const accounts = rawRows(await d.execute(sql`SELECT a.id AS accountId, a.code, a.name, a.kind,
+        SUM(CASE WHEN e.side = 'debit' THEN e.amount ELSE 0 END) AS debit, SUM(CASE WHEN e.side = 'credit' THEN e.amount ELSE 0 END) AS credit,
+        COUNT(DISTINCT e.transactionId) AS transactions
+      FROM ledger_entries e JOIN ledger_transactions t ON t.id = e.transactionId AND t.tenantId = e.tenantId JOIN ledger_accounts a ON a.id = e.accountId AND a.tenantId = e.tenantId
+      WHERE e.tenantId = ${tenantId} AND t.postingPeriod = ${period}${scoped} GROUP BY a.id, a.code, a.name, a.kind ORDER BY a.code`));
+    const byBusiness = rawRows(await d.execute(sql`SELECT e.businessId, b.name,
+        SUM(CASE WHEN e.side = 'debit' THEN e.amount ELSE 0 END) AS debit, SUM(CASE WHEN e.side = 'credit' THEN e.amount ELSE 0 END) AS credit
+      FROM ledger_entries e JOIN ledger_transactions t ON t.id = e.transactionId AND t.tenantId = e.tenantId LEFT JOIN businesses b ON b.id = e.businessId AND b.tenantId = e.tenantId
+      WHERE e.tenantId = ${tenantId} AND t.postingPeriod = ${period}${scoped} GROUP BY e.businessId, b.name ORDER BY b.name`));
+    const [count] = rawRows(await d.execute(sql`SELECT COUNT(DISTINCT t.id) AS n FROM ledger_transactions t JOIN ledger_entries e ON e.transactionId = t.id AND e.tenantId = t.tenantId
+      WHERE t.tenantId = ${tenantId} AND t.postingPeriod = ${period}${scoped}`));
+    const reversals = rawRows(await d.execute(sql`SELECT DISTINCT t.id AS transactionId, t.reversalOfTransactionId, t.description, DATE_FORMAT(t.effectiveDate, '%Y-%m-%d') AS effectiveDate, emp.name AS actorName
+      FROM ledger_transactions t JOIN ledger_entries e ON e.transactionId = t.id AND e.tenantId = t.tenantId LEFT JOIN employees emp ON emp.id = t.actorEmployeeId AND emp.tenantId = t.tenantId
+      WHERE t.tenantId = ${tenantId} AND t.postingPeriod = ${period} AND t.kind = 'reversal'${scoped} ORDER BY t.id`));
+    const money = (v: any) => (v == null ? "0.0000" : String(v));
+    return {
+      period, status: (row?.status ?? "open") as "open" | "locked",
+      events: events.map(ev => ({ action: ev.action, reason: String(ev.reason), actorName: ev.actorName ?? null, createdAt: ev.createdAt })),
+      accounts: accounts.map(a => ({ accountId: Number(a.accountId), code: a.code, name: a.name, kind: a.kind, debit: money(a.debit), credit: money(a.credit), transactions: Number(a.transactions) })),
+      businesses: byBusiness.map(b => ({ businessId: b.businessId == null ? null : Number(b.businessId), name: b.name ?? null, debit: money(b.debit), credit: money(b.credit) })),
+      transactionsCount: Number(count?.n ?? 0),
+      reversals: reversals.map(r => ({ transactionId: Number(r.transactionId), reversalOfTransactionId: r.reversalOfTransactionId == null ? null : Number(r.reversalOfTransactionId), description: r.description, effectiveDate: r.effectiveDate, actorName: r.actorName ?? null })),
+    };
   });
 }
 

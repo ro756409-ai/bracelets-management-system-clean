@@ -235,11 +235,11 @@ export function PeriodDialog({ period: initialPeriod, action, onClose, onDone }:
   const submit = async () => {
     if (pending) return; // double-click: طلب واحد
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) return toast.error("الفترة بصيغة YYYY-MM");
-    if (action === "reopen" && reason.trim().length < 3) return toast.error("اكتب سبب إعادة الفتح (3 أحرف على الأقل)");
+    if (reason.trim().length < 3) return toast.error(action === "lock" ? "اكتب ملاحظة المراجعة قبل الإقفال (3 أحرف على الأقل)" : "اكتب سبب إعادة الفتح (3 أحرف على الأقل)");
     setSubmitting(true);
     try {
       const r = action === "lock"
-        ? await lock.mutateAsync({ period, reason: reason.trim() || undefined })
+        ? await lock.mutateAsync({ period, reason: reason.trim() })
         : await reopen.mutateAsync({ period, reason: reason.trim() });
       toast.success(r.replay ? (action === "lock" ? "الفترة مقفلة بالفعل" : "الفترة مفتوحة بالفعل") : (action === "lock" ? `أُقفلت الفترة ${period}` : `أُعيد فتح الفترة ${period}`));
       await onDone();
@@ -252,11 +252,11 @@ export function PeriodDialog({ period: initialPeriod, action, onClose, onDone }:
       <DialogContent className="w-[calc(100vw-1.5rem)] max-w-md p-0" dir="rtl" data-testid={`ledger-period-dialog-${action}`}>
         <DialogHeader className="border-b py-3 pl-4 pr-16 text-start md:pr-14">
           <DialogTitle>{action === "lock" ? "قفل فترة محاسبية" : "إعادة فتح فترة محاسبية"}</DialogTitle>
-          <DialogDescription>{action === "lock" ? "بعد القفل لا تُسجَّل حركات بتاريخ داخل الفترة. إعادة الفتح للمالك فقط." : "إعادة الفتح تُسجَّل باسمك وسببك في سجل الفترة."}</DialogDescription>
+          <DialogDescription>{action === "lock" ? "الحركات تُرحّل فورًا عند إدخالها؛ الاعتماد هو مراجعة الشهر ثم إقفاله بملاحظة تُسجَّل باسمك. بعد القفل لا تُسجَّل حركات بتاريخ داخل الفترة، وإعادة الفتح للمالك فقط." : "إعادة الفتح تُسجَّل باسمك وسببك في سجل الفترة."}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3 px-4 py-4">
           <div><Label htmlFor="ledger-period-input">الفترة (YYYY-MM)</Label><Input id="ledger-period-input" type="month" value={period} onChange={e => setPeriod(e.target.value)} className="mt-1 min-h-11" dir="ltr" disabled={action === "reopen"} data-testid="ledger-period-input" /></div>
-          <div><Label htmlFor="ledger-period-reason">{action === "lock" ? "السبب (اختياري)" : "السبب (إلزامي)"}</Label><Textarea id="ledger-period-reason" value={reason} onChange={e => setReason(e.target.value)} rows={2} className="mt-1 min-h-11" placeholder={action === "lock" ? "مثال: إقفال الشهر" : "مثال: تصحيح حركة مسجّلة بتاريخ خاطئ"} data-testid="ledger-period-reason" /></div>
+          <div><Label htmlFor="ledger-period-reason">{action === "lock" ? "ملاحظة المراجعة (إلزامية)" : "السبب (إلزامي)"}</Label><Textarea id="ledger-period-reason" value={reason} onChange={e => setReason(e.target.value)} rows={2} className="mt-1 min-h-11" placeholder={action === "lock" ? "مثال: راجعت حركة الشهر والأرصدة وطابقت الخزنة" : "مثال: تصحيح حركة مسجّلة بتاريخ خاطئ"} data-testid="ledger-period-reason" /></div>
         </div>
         <div className="flex gap-2 border-t px-4 py-3">
           <Button variant={action === "lock" ? "default" : "destructive"} className="min-h-12 flex-1" onClick={submit} disabled={pending} data-testid="ledger-period-confirm">{pending ? "جارٍ التنفيذ…" : action === "lock" ? "تأكيد القفل" : "تأكيد إعادة الفتح"}</Button>

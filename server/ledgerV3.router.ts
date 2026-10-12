@@ -4,7 +4,7 @@ import { router, authenticatedProcedure } from "./_core/trpc";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
-  createLedgerAccount, getLedgerStatus, getLedgerTransactionScoped, listLedgerAccountsScoped, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerBusinesses, listLedgerPeriods,
+  createLedgerAccount, getLedgerStatus, getLedgerTransactionScoped, listLedgerAccountsScoped, reviewLedgerPeriod, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerBusinesses, listLedgerPeriods,
   listLedgerTransactions, lockLedgerPeriod, postLedgerTransaction, reconcileLedgerV3, renameLedgerAccount, reopenLedgerPeriod,
   reverseLedgerTransaction, revokeLedgerAccountBusiness, setLedgerAccountActive,
 } from "./ledgerV3.service";
@@ -175,9 +175,14 @@ export function createLedgerRouter(deps: Deps) {
       list: ledgerProcedure("ledger.view").query(async ({ ctx }) => guard(() => listLedgerPeriods(tenantOf(ctx)))),
     }),
     period: router({
+      // الاعتماد = مراجعة الشهر ثم إقفاله بملاحظة مراجعة إلزامية مسجّلة (الحركات نفسها تُرحّل فورًا).
       lock: ledgerProcedure("ledger.period.lock")
-        .input(z.object({ period: periodStr, reason: z.string().trim().max(500).optional() }))
+        .input(z.object({ period: periodStr, reason: z.string().trim().min(3, "ملاحظة المراجعة إلزامية (3 أحرف على الأقل)").max(500) }))
         .mutation(async ({ ctx, input }) => guard(() => lockLedgerPeriod({ tenantId: tenantOf(ctx), period: input.period, reason: input.reason, actor: actorOf(ctx) }))),
+      // مراجعة شهر (قراءة فقط) داخل نطاق القراءة: حركة كل حساب ونشاط، العكوس، وسجل الإقفال/الفتح بالأسماء.
+      review: ledgerProcedure("ledger.view")
+        .input(z.object({ period: periodStr }))
+        .query(async ({ ctx, input }) => { const scope = await readScope(ctx); return guard(() => reviewLedgerPeriod(tenantOf(ctx), input.period, scope)); }),
       reopen: ledgerProcedure("ledger.period.reopen")
         .input(z.object({ period: periodStr, reason: z.string().trim().min(3).max(500) }))
         .mutation(async ({ ctx, input }) => guard(() => reopenLedgerPeriod({ tenantId: tenantOf(ctx), period: input.period, reason: input.reason, actor: actorOf(ctx) }))),
