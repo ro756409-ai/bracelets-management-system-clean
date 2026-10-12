@@ -4,7 +4,7 @@
  *  • شراء البضاعة والخامات: حسابات kind=inventory (أصل) — ليست مصروفًا؛ تكلفة المبيعات COGS تُسجَّل عند البيع من لقطة
  *    تكلفة الأوردر (المرحلة 4)، فلا يُحسب الدفع مصروفًا ثم تتكرر التكلفة عند البيع.
  */
-export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" };
+export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue" | "carrier_receivable"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" | "carrier"; allowNegative?: boolean };
 
 export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "EXP_FLYERS", name: "فلاير ومطبوعات", kind: "expense", normalSide: "debit", group: "expense" },
@@ -21,4 +21,8 @@ export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "REV_SHIPPING", name: "إيراد شحن محصّل من العميل", kind: "revenue", normalSide: "credit", group: "revenue" },
   { code: "RETURN_LOSS", name: "خسائر المرتجعات", kind: "expense", normalSide: "debit", group: "expense" },
   { code: "INV_VARIANCE", name: "فروقات الجرد", kind: "expense", normalSide: "debit", group: "expense" },
+  // المرحلة 3: رسوم شركة الشحن الفعلية من كشف التسوية (لا تقدير)، و«مستحقات بوسطة قيد الصرف» بين التسوية والتحويل الفعلي
+  // (حساب تسوية مؤقت يُسمح بسالبه حين تزيد رسوم المرتجعات في الكشف عن الصافي)
+  { code: "EXP_CARRIER_FEES", name: "رسوم شركة الشحن", kind: "expense", normalSide: "debit", group: "expense" },
+  { code: "COD_PAYOUT", name: "مستحقات بوسطة قيد الصرف", kind: "carrier_receivable", normalSide: "debit", group: "carrier", allowNegative: true },
 ] as const;

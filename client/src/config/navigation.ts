@@ -62,6 +62,7 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
       { label: "سجل الحركات", path: "/ledger/transactions", icon: Clock, permission: "ledger.view" },
       { label: "التقرير اليومي", path: "/ledger/report", icon: BarChart3, permission: "ledger.view" },
       { label: "قائمة الدخل والأرباح", path: "/ledger/statements", icon: LineChart, permission: "reports.view_profit" },
+      { label: "تسوية شركة الشحن", path: "/ledger/carrier", icon: Truck, permission: "ledger.post" },
       { label: "الحسابات وأرصدتها", path: "/ledger/accounts", icon: Wallet, permission: "ledger.view" },
       { label: "مراجعة الشهر وإقفاله", path: "/ledger/periods", icon: ClipboardCheck, permission: "ledger.view" },
       { label: "الأرصدة الافتتاحية", path: "/ledger/opening", icon: ShieldCheck, permission: "ledger.activate" },

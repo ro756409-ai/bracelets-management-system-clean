@@ -5,6 +5,8 @@ import { openingDraftInput, validateOpeningDraft } from "./ledgerOpening.service
 import { dailyAccountsStatus, dailyLedgerReport, ensureDailyAccounts } from "./ledgerDaily.service";
 import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpeningFromStocktake } from "./ledgerInventory.service";
 import { closeChecklist, incomeStatement, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
+import { recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
+import { parseSettlementCsv } from "../shared/carrierSettlement";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
@@ -84,6 +86,9 @@ const idemKey = z.string().trim().min(8).max(191);
 export function createLedgerRouter(deps: Deps) {
   /** نطاق القراءة: null = الشركة كلها، وإلا أنشطة الجلسة (تعذّر التحديد = لا شيء). */
   const readScope = async (ctx: ScopeCtx): Promise<number[] | null> => ((await deps.fullLedgerScope(ctx)) ? null : (await deps.sessionBusinessIds(ctx)) ?? []);
+  const requireCompanyScope = async (ctx: ScopeCtx) => {
+    if ((await readScope(ctx)) !== null) throw new TRPCError({ code: "FORBIDDEN", message: "تسوية شركة الشحن على مستوى الشركة للمالك ومدير الحسابات" });
+  };
   const requireProfit = async (ctx: ScopeCtx) => {
     if (!(await deps.canViewProfit?.(ctx))) throw new TRPCError({ code: "FORBIDDEN", message: "التقارير المالية للأرباح لمن يملك صلاحية «عرض الأرباح» فقط" });
   };
@@ -239,6 +244,24 @@ export function createLedgerRouter(deps: Deps) {
           const canViewProfit = Boolean(await deps.canViewProfit?.(ctx));
           return guard(() => dailyLedgerReport({ tenantId: tenantOf(ctx), date: input.date, scope, businessId, canViewProfit, page: input.page }));
         }),
+    }),
+
+    // المرحلة 3: تسوية كشف شركة الشحن والتحويل الفعلي — أموال الشركة: نطاق الشركة فقط (المالك/مدير الحسابات) + ledger.post.
+    carrier: router({
+      settle: ledgerProcedure("ledger.post")
+        .input(z.object({ statementRef: z.string().trim().min(3).max(60), statementDate: dateStr, csv: z.string().min(1).max(500_000) }))
+        .mutation(async ({ ctx, input }) => {
+          await requireCompanyScope(ctx);
+          const parsed = parseSettlementCsv(input.csv);
+          if (parsed.lines.length === 0) return { statementRef: input.statementRef, parseErrors: parsed.errors, outcomes: [], expectedPayout: null, lines: 0, payoutTransactionId: null };
+          const r = await guard(() => settleCarrierStatement({ tenantId: tenantOf(ctx), statementRef: input.statementRef, statementDate: input.statementDate, lines: parsed.lines, actor: actorOf(ctx) }));
+          return { ...r, parseErrors: parsed.errors };
+        }),
+      status: ledgerProcedure("ledger.view").input(z.object({ statementRef: z.string().trim().min(3).max(60) }))
+        .query(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => statementStatus({ tenantId: tenantOf(ctx), statementRef: input.statementRef })); }),
+      payout: ledgerProcedure("ledger.post")
+        .input(z.object({ statementRef: z.string().trim().min(3).max(60), receivedOn: dateStr, amount: amountStr, accountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => recordCarrierPayout({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
     }),
 
     // المرحلة 4: قيمة المخزون الافتتاحية من جرد فعلي معتمد يوم Go-live (المالك فقط) — مرة واحدة لكل مخزن.

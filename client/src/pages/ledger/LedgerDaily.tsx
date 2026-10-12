@@ -140,6 +140,7 @@ export default function LedgerDaily() {
 
       <div className="flex flex-wrap gap-x-4 text-sm">
         <Link href="/ledger/report" className="inline-flex min-h-11 items-center gap-1.5 text-primary underline underline-offset-4 md:min-h-0" data-testid="ledger-link-report"><FileText className="h-4 w-4" aria-hidden="true" /> التقرير اليومي</Link>
+        {canPost && <Link href="/ledger/carrier" className="inline-flex min-h-11 items-center gap-1.5 text-primary underline underline-offset-4 md:min-h-0" data-testid="ledger-link-carrier"><Truck className="h-4 w-4" aria-hidden="true" /> تسوية شركة الشحن</Link>}
         <Link href="/ledger/transactions" className="inline-flex min-h-11 items-center gap-1.5 text-primary underline underline-offset-4 md:min-h-0"><History className="h-4 w-4" aria-hidden="true" /> سجل الحركات</Link>
       </div>
 

@@ -33,7 +33,7 @@ const KEYWORDS: Record<string, string[]> = {
   "/goods-receipt": ["goods", "استلام", "بضاعة"], "/stocktake": ["stocktake", "جرد"], "/workshop-returns": ["workshop", "ورشة"],
   "/employees": ["employees", "موظفين", "فريق"], "/reports": ["reports", "تقارير"], "/businesses": ["businesses", "انشطة", "براند"],
   "/permissions": ["permissions", "صلاحيات", "ادوار"], "/sales-channels": ["channels", "قنوات", "بيع", "تكامل"], "/webhook-settings": ["easy", "webhook", "ربط"],
-  "/ledger": ["ledger", "حسابات", "دفتر", "خزنة", "مصروف", "ايراد"], "/ledger/transactions": ["transactions", "حركات", "سجل"], "/ledger/report": ["report", "تقرير", "يومي", "مصروفات"], "/ledger/statements": ["income", "قائمة الدخل", "أرباح", "ربح"], "/ledger/accounts": ["accounts", "حسابات", "أرصدة", "ارصدة"], "/ledger/periods": ["periods", "إقفال", "اقفال", "مراجعة", "شهر"], "/ledger/opening": ["opening", "افتتاحي", "جرد"],
+  "/ledger": ["ledger", "حسابات", "دفتر", "خزنة", "مصروف", "ايراد"], "/ledger/transactions": ["transactions", "حركات", "سجل"], "/ledger/report": ["report", "تقرير", "يومي", "مصروفات"], "/ledger/statements": ["income", "قائمة الدخل", "أرباح", "ربح"], "/ledger/carrier": ["bosta", "بوسطة", "تسوية", "شحن"], "/ledger/accounts": ["accounts", "حسابات", "أرصدة", "ارصدة"], "/ledger/periods": ["periods", "إقفال", "اقفال", "مراجعة", "شهر"], "/ledger/opening": ["opening", "افتتاحي", "جرد"],
   "/print-logs": ["print", "طباعة", "سجل"], "/scan-logs": ["scan", "مسح", "سجل"], "/activity-log": ["activity", "سجل", "انشطة", "log"], "/merge-logs": ["merge", "دمج"],
 };
 

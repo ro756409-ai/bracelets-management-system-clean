@@ -22,6 +22,7 @@ import LedgerPeriods from "./pages/ledger/LedgerPeriods";
 import LedgerOpening from "./pages/ledger/LedgerOpening";
 import LedgerReport from "./pages/ledger/LedgerReport";
 import LedgerStatements from "./pages/ledger/LedgerStatements";
+import LedgerCarrier from "./pages/ledger/LedgerCarrier";
 import PermissionsPage from "./pages/PermissionsPage";
 import GoodsReceipt from "./pages/GoodsReceipt";
 import StockTransfer from "./pages/StockTransfer";
@@ -286,6 +287,10 @@ function Router() {
       {/* قائمة الدخل والأرباح — reports.view_profit (والسيرفر يرفض بدونها) */}
       <Route path="/ledger/statements">
         <FinancialRoute permission="reports.view_profit" bare><LedgerLayout><LedgerStatements /></LedgerLayout></FinancialRoute>
+      </Route>
+      {/* تسوية شركة الشحن — ledger.post ونطاق الشركة على السيرفر */}
+      <Route path="/ledger/carrier">
+        <FinancialRoute permission="ledger.post" bare><LedgerLayout><LedgerCarrier /></LedgerLayout></FinancialRoute>
       </Route>
       <Route path="/ledger/report">
         <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerReport /></LedgerLayout></FinancialRoute>

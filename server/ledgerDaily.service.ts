@@ -37,7 +37,7 @@ export async function ensureDailyAccounts(input: { tenantId: number; businessIds
     if (before.conflicts.includes(spec.code)) continue;
     let id: number;
     try {
-      const r = await createLedgerAccount({ tenantId: input.tenantId, code: spec.code, name: spec.name, kind: spec.kind, normalSide: spec.normalSide, actor: input.actor }, db);
+      const r = await createLedgerAccount({ tenantId: input.tenantId, code: spec.code, name: spec.name, kind: spec.kind, normalSide: spec.normalSide, allowNegative: spec.allowNegative, actor: input.actor }, db);
       id = r.id; if (!r.replay) created.push(spec.code);
     } catch (e) {
       if (e instanceof LedgerError && e.code === "conflict") { before.conflicts.push(spec.code); continue; }
