@@ -40,6 +40,10 @@ export function availableCash(accounts: UiAccount[]): string {
   const total = cashAccounts(accounts).reduce((sum, a) => sum + toMinorUnits(a.currentBalance), 0n);
   return fromMinorUnits(total);
 }
+/** ذمة COD على شركات الشحن (BigInt) — تُعرض منفصلة ولا تدخل في النقدية المتاحة. */
+export function codReceivableTotal(accounts: UiAccount[]): string {
+  return fromMinorUnits(carrierReceivables(accounts).reduce((sum, a) => sum + toMinorUnits(a.currentBalance), 0n));
+}
 export const revenueAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "revenue" && isActiveAccount(a));
 export const expenseAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "expense" && isActiveAccount(a));
 
@@ -120,4 +124,107 @@ export function newOperationId(): string {
   const c = (globalThis as any).crypto;
   const id = c?.randomUUID ? c.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   return `ui:${id}`;
+}
+
+/* ───────────── المرحلة 1: إدارة الحسابات ───────────── */
+
+/** أنواع الحسابات التي تُنشأ من الواجهة (الجانب الطبيعي مشتق من النوع — المستخدم لا يختار مدين/دائن). */
+export const CREATABLE_ACCOUNT_KINDS = [
+  { kind: "expense", label: "تصنيف مصروف", prefix: "EXP" },
+  { kind: "revenue", label: "نوع إيراد", prefix: "REV" },
+  { kind: "cash", label: "خزنة نقدية", prefix: "CASH" },
+  { kind: "bank", label: "حساب بنكي", prefix: "BANK" },
+  { kind: "wallet", label: "محفظة إلكترونية", prefix: "WALLET" },
+  { kind: "carrier_receivable", label: "مستحقات شركة شحن (COD)", prefix: "COD" },
+] as const;
+export type CreatableAccountKind = (typeof CREATABLE_ACCOUNT_KINDS)[number]["kind"];
+
+export const ACCOUNT_KIND_LABELS: Record<string, string> = {
+  cash: "خزنة نقدية", bank: "بنك", wallet: "محفظة", carrier_receivable: "ذمة شركة شحن (COD)", revenue: "إيراد", expense: "مصروف",
+  equity: "حقوق ملكية", suspense: "حساب معلّق", employee_receivable: "ذمم موظفين", supplier_payable: "موردون", customer_advance: "مقدمات عملاء",
+  owner_current: "جاري المالك", cogs: "تكلفة مبيعات", inventory: "مخزون",
+};
+export const accountKindLabel = (k: string) => ACCOUNT_KIND_LABELS[k] ?? k;
+
+/** الإيراد بطبيعته دائن؛ الأصول والمصروفات مدينة. */
+export const normalSideForKind = (kind: CreatableAccountKind): "debit" | "credit" => (kind === "revenue" ? "credit" : "debit");
+
+/** كود مقترح ثابت لكل فتح للنموذج (لاتيني كبير) — نفس الكود عند إعادة الإرسال = replay على السيرفر لا حساب مكرر. */
+export function suggestAccountCode(kind: CreatableAccountKind, rand: () => number = Math.random): string {
+  const prefix = CREATABLE_ACCOUNT_KINDS.find(k => k.kind === kind)?.prefix ?? "ACC";
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let tail = "";
+  for (let i = 0; i < 5; i++) tail += alphabet[Math.floor(rand() * alphabet.length) % alphabet.length];
+  return `${prefix}_${tail}`;
+}
+export const ACCOUNT_CODE_RE = /^[A-Z][A-Z0-9_]{1,49}$/;
+
+/** مجموعات صفحة الحسابات: النقدية المتاحة منفصلة عن ذمة COD (ليست نقدية). */
+export const ACCOUNT_GROUPS = [
+  { key: "cash", title: "النقدية المتاحة", kinds: ["cash", "bank", "wallet"] },
+  { key: "cod", title: "ذمة شركات الشحن (COD) — ليست نقدية", kinds: ["carrier_receivable"] },
+  { key: "revenue", title: "الإيرادات", kinds: ["revenue"] },
+  { key: "expense", title: "المصروفات", kinds: ["expense"] },
+] as const;
+export function groupAccounts<T extends { kind: string }>(accounts: T[]): { key: string; title: string; accounts: T[] }[] {
+  const known = new Set<string>(ACCOUNT_GROUPS.flatMap(g => g.kinds as readonly string[]));
+  const groups = ACCOUNT_GROUPS.map(g => ({ key: g.key as string, title: g.title as string, accounts: accounts.filter(a => (g.kinds as readonly string[]).includes(a.kind)) }));
+  const other = accounts.filter(a => !known.has(a.kind));
+  return [...groups, { key: "other", title: "حسابات أخرى", accounts: other }].filter(g => g.accounts.length > 0);
+}
+
+/* ───────────── المرحلة 1: الأرصدة الافتتاحية (مسودة الجلسة فقط) ───────────── */
+
+/** نفس حسابات الأرصدة الافتتاحية على السيرفر (OPENING_MONEY_ACCOUNTS) — اختبار عقد يمنع الانحراف. */
+export const OPENING_ACCOUNTS = [
+  { code: "OFFICE_CASH", name: "خزنة المكتب", group: "cash_available" },
+  { code: "BANK_MAIN", name: "البنك", group: "cash_available" },
+  { code: "VF_CASH", name: "فودافون كاش", group: "cash_available" },
+  { code: "INSTAPAY", name: "إنستا باي", group: "cash_available" },
+  { code: "COD_BOSTA", name: "مستحقات بوسطة", group: "cod_receivable" },
+] as const;
+export type OpeningRow = { amount: string; reference: string; countedBy: string; note: string };
+export const emptyOpeningRow = (): OpeningRow => ({ amount: "", reference: "", countedBy: "", note: "" });
+
+/**
+ * مسودة الواجهة → مدخل `ledger.opening.validate` (نفس عقد الخادم الصارم). المبلغ الفارغ لا يُرسل (= صفر في الملف)؛
+ * الدليل يُرسل لأي حساب كُتب له مرجع أو قائم بالعد. يرجّع أخطاء محلية واضحة قبل أي طلب.
+ */
+export function buildOpeningDraft(goLiveDate: string, rows: Record<string, OpeningRow>, acknowledgeV2Differences: boolean) {
+  const errors: string[] = [];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(goLiveDate)) errors.push("اختر تاريخ Go-live");
+  const balances: Record<string, string> = {};
+  const evidence: Record<string, { reference: string; countedBy: string; note?: string }> = {};
+  for (const a of OPENING_ACCOUNTS) {
+    const r = rows[a.code] ?? emptyOpeningRow();
+    const amount = r.amount.trim();
+    if (amount) {
+      if (!AMOUNT_RE.test(amount)) errors.push(`${a.name}: المبلغ رقم عشري موجب حتى 4 خانات (بلا فواصل)`);
+      else balances[a.code] = amount;
+    }
+    const hasEvidence = r.reference.trim() || r.countedBy.trim();
+    const nonZero = amount && AMOUNT_RE.test(amount) && toMinor(amount) !== 0n;
+    if (nonZero || hasEvidence) {
+      if (r.reference.trim().length < 2) errors.push(`${a.name}: اذكر مرجع الجرد أو الكشف`);
+      if (r.countedBy.trim().length < 2) errors.push(`${a.name}: اذكر القائم بالعد`);
+      evidence[a.code] = { reference: r.reference.trim(), countedBy: r.countedBy.trim(), ...(r.note.trim() ? { note: r.note.trim() } : {}) };
+    }
+  }
+  return { errors, draft: { goLiveDate, balances, evidence, acknowledgeV2Differences } };
+}
+
+/** مجموعات المسودة بالوحدات الصغرى (BigInt): النقدية المتاحة منفصلة عن ذمة COD. */
+export function openingGroupTotals(rows: Record<string, OpeningRow>): { cashAvailable: string; codReceivable: string } {
+  let cash = 0n, cod = 0n;
+  for (const a of OPENING_ACCOUNTS) {
+    const v = (rows[a.code]?.amount ?? "").trim();
+    if (!v || !AMOUNT_RE.test(v)) continue;
+    if (a.group === "cod_receivable") cod += toMinor(v); else cash += toMinor(v);
+  }
+  return { cashAvailable: fromMinor(cash), codReceivable: fromMinor(cod) };
+}
+
+/** ملف التنزيل = كائن الخادم كما هو (لا إعادة بناء على العميل) — اسم ثابت بتاريخ Go-live. */
+export function openingFileDownload(file: { goLiveDate: string } & Record<string, unknown>): { filename: string; json: string } {
+  return { filename: `ledger-v3-opening-${file.goLiveDate}.json`, json: `${JSON.stringify(file, null, 2)}\n` };
 }

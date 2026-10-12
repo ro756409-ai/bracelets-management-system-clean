@@ -1,0 +1,154 @@
+import { useState } from "react";
+import { ClipboardList, Download, ShieldCheck } from "lucide-react";
+import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { PageHeader, SectionCard } from "@/components/shared";
+import { toast } from "sonner";
+import { OPENING_ACCOUNTS, buildOpeningDraft, emptyOpeningRow, money, openingFileDownload, openingGroupTotals, type OpeningRow } from "./ledgerUi";
+
+/**
+ * «تجهيز الأرصدة الافتتاحية» (المالك فقط — ledger.activate على السيرفر).
+ *
+ *  • المسودة في حالة الصفحة فقط: لا localStorage ولا حفظ على السيرفر؛ تُمسح بالخروج من الصفحة أو تغيير الجلسة/الشركة
+ *    (المكوّن الداخلي مربوط بمفتاح الجلسة فيُعاد إنشاؤه فارغًا).
+ *  • الأرقام من جرد ومطابقة فعلية يوم Go-live فقط — لا تعبئة من V1/V2؛ كل مبلغ غير صفري يحتاج مرجعًا والقائم بالعد.
+ *  • ذمة COD منفصلة عن النقدية المتاحة.
+ *  • «تحقق» = ledger.opening.validate (قراءة فقط داخل معاملة READ ONLY) — لا يكتب صفًا ولا يفعّل الدفتر.
+ *  • التنزيل = ملف JSON كما أعاده السيرفر حرفيًا (عقد سكربت التفعيل)، ومتاح فقط لنتيجة تحقق ناجحة لنفس المسودة.
+ */
+export default function LedgerOpening() {
+  const { user } = useAuth();
+  const sessionKey = `${(user as any)?.id ?? "emp"}:${(user as any)?.tenantId ?? ""}`;
+  return <OpeningDraftForm key={sessionKey} />;
+}
+
+type ValidateResult = {
+  ok: boolean; errors: string[]; blockers: string[]; warnings: string[];
+  totals: { cashAvailable: string; codReceivable: string; openingEquity: string | null };
+  businessCoverage: { id: number; name: string; active: boolean; inPlan: boolean; result: string }[];
+  v2Reconciliation: { generatedAt: string; ok: boolean; differences: number } | null;
+  ledgerEnabled: boolean;
+  file: ({ goLiveDate: string } & Record<string, unknown>) | null;
+};
+
+function OpeningDraftForm() {
+  const [goLiveDate, setGoLiveDate] = useState("");
+  const [rows, setRows] = useState<Record<string, OpeningRow>>(() => Object.fromEntries(OPENING_ACCOUNTS.map(a => [a.code, emptyOpeningRow()])));
+  const [ack, setAck] = useState(false);
+  const [result, setResult] = useState<{ key: string; data: ValidateResult } | null>(null);
+  const [localErrors, setLocalErrors] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const validate = trpc.ledger.opening.validate.useMutation();
+  const pending = submitting || validate.isPending;
+  const built = buildOpeningDraft(goLiveDate, rows, ack);
+  const draftKey = JSON.stringify(built.draft);
+  const current = result && result.key === draftKey ? result.data : null; // أي تعديل بعد التحقق يُبطل النتيجة والتنزيل
+  const totals = openingGroupTotals(rows);
+
+  const setRow = (code: string, patch: Partial<OpeningRow>) => setRows(prev => ({ ...prev, [code]: { ...prev[code], ...patch } }));
+  const runValidate = async () => {
+    if (pending) return;
+    setLocalErrors(built.errors);
+    if (built.errors.length) return;
+    setSubmitting(true);
+    try {
+      const data = (await validate.mutateAsync(built.draft)) as unknown as ValidateResult;
+      setResult({ key: draftKey, data });
+      if (data.ok) toast.success("المسودة سليمة — يمكنك تنزيل ملف التفعيل"); else toast.error("المسودة تحتاج تصحيحًا — راجع الملاحظات");
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setSubmitting(false); }
+  };
+  const download = () => {
+    if (!current?.ok || !current.file) return;
+    const { filename, json } = openingFileDownload(current.file);
+    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.rel = "noopener";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const group = (g: "cash_available" | "cod_receivable") => OPENING_ACCOUNTS.filter(a => a.group === g);
+  // دالة عرض (لا مكوّن داخلي) كي لا يُعاد إنشاء الحقول ويضيع التركيز مع كل حرف
+  const accountFields = (code: string, name: string) => {
+    const r = rows[code];
+    return (
+      <fieldset key={code} className="space-y-2 rounded-[var(--radius-brand-md)] border border-border p-3" data-testid={`ledger-opening-row-${code}`}>
+        <legend className="px-1 text-sm font-medium">{name} <span className="font-mono text-xs text-muted-foreground" dir="ltr">{code}</span></legend>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div><Label htmlFor={`op-amount-${code}`} className="text-xs">المبلغ بعد الجرد (ج.م)</Label><Input id={`op-amount-${code}`} inputMode="decimal" value={r.amount} onChange={e => setRow(code, { amount: e.target.value.trim() })} className="mt-1 min-h-11 tabular-nums" dir="ltr" placeholder="0.00" data-testid={`ledger-opening-amount-${code}`} /></div>
+          <div><Label htmlFor={`op-ref-${code}`} className="text-xs">مرجع الجرد / الكشف</Label><Input id={`op-ref-${code}`} value={r.reference} onChange={e => setRow(code, { reference: e.target.value })} maxLength={160} className="mt-1 min-h-11" placeholder="مثال: محضر جرد الخزنة" data-testid={`ledger-opening-ref-${code}`} /></div>
+          <div><Label htmlFor={`op-by-${code}`} className="text-xs">القائم بالعد</Label><Input id={`op-by-${code}`} value={r.countedBy} onChange={e => setRow(code, { countedBy: e.target.value })} maxLength={100} className="mt-1 min-h-11" data-testid={`ledger-opening-by-${code}`} /></div>
+          <div><Label htmlFor={`op-note-${code}`} className="text-xs">ملاحظة (اختيارية)</Label><Input id={`op-note-${code}`} value={r.note} onChange={e => setRow(code, { note: e.target.value })} maxLength={300} className="mt-1 min-h-11" data-testid={`ledger-opening-note-${code}`} /></div>
+        </div>
+      </fieldset>
+    );
+  };
+
+  return (
+    <div className="space-y-4" dir="rtl" data-testid="ledger-opening">
+      <PageHeader title="تجهيز الأرصدة الافتتاحية" description="مسودة للمالك من جرد ومطابقة فعلية يوم Go-live — لا تفعيل ولا كتابة من هنا" icon={<ClipboardList className="h-5 w-5" aria-hidden="true" />} />
+
+      <ul className="list-disc space-y-1 rounded-[var(--radius-brand-md)] border border-border bg-muted/40 p-3 ps-6 text-xs leading-6 text-muted-foreground" data-testid="ledger-opening-rules">
+        <li>المسودة في هذه الصفحة فقط ولا تُحفظ في أي مكان — تُمسح عند الخروج أو تغيير الشركة.</li>
+        <li>الأرقام من جرد الخزن وكشوف البنك والمحافظ وكشف تسوية بوسطة يوم Go-live — لا أرقام من النظام القديم.</li>
+        <li>«تحقق» يقرأ فقط ولا يكتب أي صف ولا يفعّل الدفتر. التفعيل خطوة منفصلة بملف التنزيل يوم Go-live.</li>
+      </ul>
+
+      <div className="max-w-xs"><Label htmlFor="ledger-opening-date">تاريخ Go-live</Label><Input id="ledger-opening-date" type="date" value={goLiveDate} onChange={e => setGoLiveDate(e.target.value)} className="mt-1 min-h-11" dir="ltr" data-testid="ledger-opening-date" /></div>
+
+      <SectionCard title="النقدية المتاحة — خزن وبنوك ومحافظ" description={`الإجمالي: ${money(totals.cashAvailable)} ج.م`} testId="ledger-opening-cash">
+        <div className="space-y-3">{group("cash_available").map(a => accountFields(a.code, a.name))}</div>
+      </SectionCard>
+      <SectionCard title="ذمة COD على شركة الشحن — ليست نقدية متاحة" description={`الإجمالي: ${money(totals.codReceivable)} ج.م`} testId="ledger-opening-cod">
+        <div className="space-y-3">{group("cod_receivable").map(a => accountFields(a.code, a.name))}</div>
+      </SectionCard>
+
+      <label className="flex min-h-11 items-start gap-2 text-sm" htmlFor="ledger-opening-ack">
+        <input id="ledger-opening-ack" type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} className="mt-1 h-5 w-5 accent-[var(--primary)]" data-testid="ledger-opening-ack" />
+        <span>راجعت فروق تقرير مطابقة النظام القديم (للمقارنة فقط) وأعتمد أرقام الجرد الفعلي بدلًا منها.</span>
+      </label>
+
+      {localErrors.length > 0 && (
+        <ul className="space-y-1 rounded-[var(--radius-brand-md)] border border-destructive/40 p-3 text-sm text-destructive" role="alert" data-testid="ledger-opening-local-errors">
+          {localErrors.map(e => <li key={e}>{e}</li>)}
+        </ul>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <Button className="min-h-12 flex-1 sm:flex-none" onClick={runValidate} disabled={pending} data-testid="ledger-opening-validate"><ShieldCheck className="h-4 w-4 ml-1" aria-hidden="true" /> {pending ? "جارٍ التحقق…" : "تحقق من المسودة"}</Button>
+        <Button variant="outline" className="min-h-12 flex-1 sm:flex-none" onClick={download} disabled={!current?.ok || !current.file} data-testid="ledger-opening-download"><Download className="h-4 w-4 ml-1" aria-hidden="true" /> تنزيل ملف التفعيل (JSON)</Button>
+      </div>
+      {result && !current && <p className="text-xs text-muted-foreground" data-testid="ledger-opening-stale">عدّلت المسودة بعد آخر تحقق — تحقق مرة أخرى قبل التنزيل.</p>}
+
+      {current && (
+        <SectionCard title={current.ok ? "نتيجة التحقق: سليمة" : "نتيجة التحقق: تحتاج تصحيحًا"} testId="ledger-opening-result">
+          <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <p>النقدية المتاحة: <b className="tabular-nums">{money(current.totals.cashAvailable)}</b> ج.م</p>
+              <p>ذمة COD: <b className="tabular-nums">{money(current.totals.codReceivable)}</b> ج.م</p>
+              <p>رأس المال الافتتاحي: <b className="tabular-nums">{current.totals.openingEquity != null ? money(current.totals.openingEquity) : "—"}</b> ج.م</p>
+            </div>
+            {current.ledgerEnabled && <p className="text-[var(--warning)]">الدفتر مفعّل بالفعل لهذه الشركة.</p>}
+            {[...current.errors, ...current.blockers].length > 0 && (
+              <ul className="list-disc space-y-1 ps-5 text-destructive" data-testid="ledger-opening-errors">{[...current.errors, ...current.blockers].map(e => <li key={e}>{e}</li>)}</ul>
+            )}
+            {current.warnings.length > 0 && <ul className="list-disc space-y-1 ps-5 text-[var(--warning)]" data-testid="ledger-opening-warnings">{current.warnings.map(w => <li key={w}>{w}</li>)}</ul>}
+            {current.v2Reconciliation && (
+              <p className="text-xs text-muted-foreground" data-testid="ledger-opening-v2">تقرير مطابقة النظام القديم (للمقارنة فقط، لا تُؤخذ منه أرقام): {current.v2Reconciliation.ok ? "بلا فروق" : `${current.v2Reconciliation.differences} فرق`}.</p>
+            )}
+            {current.businessCoverage.length > 0 && (
+              <div>
+                <p className="text-xs text-muted-foreground">الأنشطة المشمولة بالتفعيل:</p>
+                <ul className="mt-1 flex flex-wrap gap-1 text-xs">{current.businessCoverage.map(b => <li key={b.id} className="rounded-[var(--radius-brand-pill)] bg-muted px-2 py-0.5">{b.name}{b.inPlan ? "" : " (خارج الخطة)"}</li>)}</ul>
+              </div>
+            )}
+          </div>
+        </SectionCard>
+      )}
+    </div>
+  );
+}

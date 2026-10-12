@@ -23,7 +23,7 @@ describe("🧭 LedgerLayout — المالك لوحة التحكم، المحا�
     expect(screen.getByTestId("dashboard-layout").textContent).toContain("المحتوى");
     expect(screen.queryByTestId("ledger-employee-shell")).toBeNull();
   });
-  it("جلسة موظف (user = null) → قشرة الدفتر: اسم الموظف، تبويبان، والمحتوى — لا «يرجى تسجيل الدخول»", () => {
+  it("جلسة موظف (user = null) → قشرة الدفتر: اسم الموظف، التبويبات، والمحتوى — لا «يرجى تسجيل الدخول»", () => {
     render(<LedgerLayout><p>المحتوى</p></LedgerLayout>);
     const shell = screen.getByTestId("ledger-employee-shell");
     expect(shell.textContent).toContain("المحتوى");
@@ -31,6 +31,9 @@ describe("🧭 LedgerLayout — المالك لوحة التحكم، المحا�
     expect(screen.getByTestId("ledger-shell-user").textContent).toBe("محاسب V3");
     expect(screen.getByTestId("ledger-tab-daily").getAttribute("href")).toBe("/ledger");
     expect(screen.getByTestId("ledger-tab-transactions").getAttribute("href")).toBe("/ledger/transactions");
+    expect(screen.getByTestId("ledger-tab-accounts").getAttribute("href")).toBe("/ledger/accounts");
+    expect(screen.getByTestId("ledger-tab-periods").getAttribute("href")).toBe("/ledger/periods");
+    expect(screen.queryByTestId("ledger-tab-opening")).toBeNull(); // الأرصدة الافتتاحية للمالك (لوحة التحكم) لا قشرة الموظف
     expect(screen.queryByTestId("dashboard-layout")).toBeNull();
   });
   it("خروج الموظف: يستدعي /api/employee/logout ثم يذهب لصفحة دخول الموظفين", async () => {

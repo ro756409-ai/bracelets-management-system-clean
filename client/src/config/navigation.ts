@@ -60,6 +60,9 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
     children: [
       { label: "الحسابات اليومية", path: "/ledger", icon: BookOpen, permission: "ledger.view" },
       { label: "سجل الحركات", path: "/ledger/transactions", icon: Clock, permission: "ledger.view" },
+      { label: "الحسابات وأرصدتها", path: "/ledger/accounts", icon: Wallet, permission: "ledger.view" },
+      { label: "مراجعة الشهر وإقفاله", path: "/ledger/periods", icon: ClipboardCheck, permission: "ledger.view" },
+      { label: "الأرصدة الافتتاحية", path: "/ledger/opening", icon: ShieldCheck, permission: "ledger.activate" },
     ],
   },
   {
