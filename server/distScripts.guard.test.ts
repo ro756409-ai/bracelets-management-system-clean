@@ -35,6 +35,11 @@ export const DEPLOY_SCRIPTS = [
   "migrate-0042-attendance", "verify-attendance", "reconcile-attendance",
   "migrate-0044-teams", "verify-teams",
   "migrate-0045-roles",
+  "migrate-0046-ledger-kinds",
+  "migrate-0047-ledger-carrier",
+  "migrate-0048-ledger-payroll",
+  "migrate-0049-ledger-suppliers",
+  "migrate-0050-ledger-snapshots",
   "preview-tenant-access",
 ] as const;
 

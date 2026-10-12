@@ -15,6 +15,8 @@ export const LEDGER_ACTOR_TYPES = ["employee", "system", "webhook"] as const;
 export const LEDGER_ACCOUNT_KINDS = [
   "cash", "bank", "wallet", "carrier_receivable", "employee_receivable", "supplier_payable", "customer_advance",
   "owner_current", "revenue", "expense", "cogs", "inventory", "equity", "suspense",
+  // 0046 (في الآخر): رواتب مستحقة، ودفعات مقدمة لموردين — لا تُستخدم قبل تطبيق 0046 (ledgerKindsSupported)
+  "payroll_payable", "supplier_advance",
 ] as const;
 
 export const ledgerAccounts = mysqlTable(

@@ -28,7 +28,7 @@ import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconcilia
  * البيئات المسموح فيها apply/rollback: DEPLOY_ENV=staging مع قاعدة غير إنتاجية باسم staging/stage/test (للـRunbook
  * لاحقًا — **ممنوع تشغيله في هذه المرحلة**)، أو DEPLOY_ENV=test/local على مضيف محلي (Docker مؤقت).
  */
-export type HandMigrationId = "0041" | "0042" | "0043" | "0044" | "0045";
+export type HandMigrationId = "0041" | "0042" | "0043" | "0044" | "0045" | "0046" | "0047" | "0048" | "0049" | "0050";
 export type HandMigrationDef = {
   id: HandMigrationId;
   title: string;
@@ -38,6 +38,8 @@ export type HandMigrationDef = {
   /** قيود FK تُضاف بـALTER بعد الإنشاء (كسر الدورة) */
   lateForeignKeys: { table: string; name: string }[];
   compositeIndexes: "create_if_absent" | "require_present";
+  /** جداول يجب وجودها قبل التطبيق (preflight) — مثل جداول 0040 لترحيلات الدفتر 0047–0050. اختياري. */
+  requiresTables?: string[];
 };
 
 export type StatementKind = "composite_index" | "table" | "late_fk";
@@ -160,6 +162,11 @@ export async function preflight(exec: ReadOnlyExecutor, def: HandMigrationDef): 
       ? { label: "الفهرسان المركّبان موجودان بالتعريف الصحيح (من 0040 أو 0041)", expected: "present", actual: ci.state }
       : { label: "الفهرسان المركّبان: غائبان (سيُنشآن) أو موجودان بالتعريف الصحيح (skip)", expected: ci.state === "partial" ? "absent|present" : ci.state, actual: ci.state },
   ];
+  if (def.requiresTables?.length) {
+    const present = await exec.query<{ t: string }>(`SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${def.requiresTables.map(() => "?").join(",")})`, def.requiresTables);
+    const have = new Set(present.map(r => r.t));
+    rows.push({ label: `الجداول المطلوبة مسبقًا (${def.requiresTables.join("/")})`, expected: "", actual: def.requiresTables.filter(t => !have.has(t)).join(",") });
+  }
   return rows.map(r => ({ ...r, ok: r.expected === r.actual }));
 }
 
