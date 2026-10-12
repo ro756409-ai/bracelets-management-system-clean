@@ -518,7 +518,13 @@ export async function listLedgerAccounts(tenantId: number, db?: LedgerDb) {
   });
 }
 
-export type LedgerTransactionFilters = { page: number; limit: number; from?: string; to?: string; businessId?: number | null; accountId?: number; kind?: LedgerKind };
+/**
+ * scope (حراسة القراءة): null = نطاق الشركة كله (المالك/الأدمن/مدير الحسابات)؛ مصفوفة = أنشطة الجلسة فقط (المحاسب)
+ * — الحركة تظهر لو نشاطها المصدر أو أي قيد فيها داخل النطاق. المصفوفة الفارغة = لا شيء (fail-closed).
+ */
+export type LedgerReadScope = number[] | null;
+const scopeIds = (scope: number[]) => (scope.length ? scope : [-1]);
+export type LedgerTransactionFilters = { page: number; limit: number; from?: string; to?: string; businessId?: number | null; accountId?: number; kind?: LedgerKind; scope?: LedgerReadScope };
 export type LedgerTransactionRow = LedgerTransaction & {
   entries: { id: number; transactionId: number; accountId: number; businessId: number | null; side: "debit" | "credit"; amount: string; code: string; name: string; kind: string }[];
   actorName: string | null;
@@ -534,6 +540,10 @@ export async function listLedgerTransactions(tenantId: number, f: LedgerTransact
     if (f.businessId != null) conds.push(eq(ledgerTransactions.sourceBusinessId, f.businessId));
     if (f.kind) conds.push(eq(ledgerTransactions.kind, f.kind));
     if (f.accountId != null) conds.push(sql`${ledgerTransactions.id} IN (SELECT transactionId FROM ledger_entries WHERE tenantId = ${tenantId} AND accountId = ${f.accountId})`);
+    if (f.scope) {
+      const ids = sql.join(scopeIds(f.scope).map(b => sql`${b}`), sql`, `);
+      conds.push(sql`(${ledgerTransactions.sourceBusinessId} IN (${ids}) OR ${ledgerTransactions.id} IN (SELECT transactionId FROM ledger_entries WHERE tenantId = ${tenantId} AND businessId IN (${ids})))`);
+    }
     const where = and(...conds);
     const [{ total }] = await d.select({ total: sql<number>`COUNT(*)` }).from(ledgerTransactions).where(where);
     const rows = await d.select().from(ledgerTransactions).where(where).orderBy(sql`${ledgerTransactions.effectiveDate} DESC`, sql`${ledgerTransactions.id} DESC`)
@@ -570,6 +580,26 @@ export async function getLedgerTransaction(tenantId: number, transactionId: numb
     const [reversal] = await d.select({ id: ledgerTransactions.id }).from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, tenantId), eq(ledgerTransactions.reversalOfTransactionId, tx.id))).limit(1);
     return { ...tx, entries, reversedByTransactionId: reversal?.id ?? null };
   });
+}
+
+/** الحسابات داخل نطاق القراءة: نطاق محدود = الحسابات المربوطة بأحد أنشطته فقط، وروابطها بأنشطته فقط. */
+export async function listLedgerAccountsScoped(tenantId: number, scope: LedgerReadScope, db?: LedgerDb) {
+  const all = await listLedgerAccounts(tenantId, db);
+  if (!scope) return all;
+  const allowed = new Set(scopeIds(scope));
+  return all
+    .map(a => ({ ...a, businesses: a.businesses.filter(b => allowed.has(b.businessId)) }))
+    .filter(a => a.businesses.length > 0);
+}
+
+/** حركة واحدة داخل نطاق القراءة — خارجه = غير موجودة (لا نكشف وجودها). */
+export async function getLedgerTransactionScoped(tenantId: number, transactionId: number, scope: LedgerReadScope, db?: LedgerDb) {
+  const tx = await getLedgerTransaction(tenantId, transactionId, db);
+  if (!scope) return tx;
+  const allowed = new Set(scopeIds(scope));
+  const visible = (tx.sourceBusinessId != null && allowed.has(tx.sourceBusinessId)) || tx.entries.some(e => e.businessId != null && allowed.has(e.businessId));
+  if (!visible) throw new LedgerError("transaction", `#${transactionId}`);
+  return tx;
 }
 
 export async function listLedgerPeriods(tenantId: number, db?: LedgerDb) {

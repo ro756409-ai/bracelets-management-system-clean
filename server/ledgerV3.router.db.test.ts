@@ -131,7 +131,10 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
     const s = await top(accountantA, "status")();
     expect(s).toMatchObject({ tablesPresent: true, enabled: true, goLiveDate: "2026-10-01" });
     const accounts = await caller(accountantA).accounts.list();
-    expect(accounts.map((a: any) => a.code).sort()).toEqual(["BANK_MAIN", "COD_BOSTA", "EXPENSE", "INSTAPAY", "OFFICE_CASH", "OPENING_EQUITY", "REVENUE", "SUSPENSE", "VF_CASH"]);
+    // حراسة القراءة (المرحلة 1): المحاسب يرى الحسابات المربوطة بنشاطه فقط — الخزن غير المربوطة بنشاطه في هذا التفعيل
+    // (INSTAPAY / VF_CASH: safeGrants هنا للخزن الثلاث فقط) خارج نطاقه؛ المالك يراها.
+    expect(accounts.map((a: any) => a.code).sort()).toEqual(["BANK_MAIN", "COD_BOSTA", "EXPENSE", "OFFICE_CASH", "OPENING_EQUITY", "REVENUE", "SUSPENSE"]);
+    expect((await caller(ownerA).accounts.list()).map((a: any) => a.code)).toEqual(expect.arrayContaining(["INSTAPAY", "VF_CASH"]));
     expect(accounts.find((a: any) => a.code === "OFFICE_CASH")).toMatchObject({ isSystem: true, currentBalance: "1000.0000", businesses: [{ businessId: A.businessId, canPost: true }] });
     const posted = await top(accountantA, "post")({
       sourceBusinessId: A.businessId, kind: "expense", idempotencyKey: `r-${tag}-acc-1`, effectiveDate: "2026-10-07", description: "نظافة",
@@ -145,7 +148,9 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
     expect(await code(() => caller(accountantA).account.create({ code: "RENT", name: "إيجار", kind: "expense", normalSide: "debit" }))).toBe("FORBIDDEN");
     expect(await code(() => caller(accountantA).account.updateName({ accountId: acc.EXPENSE, name: "x" }))).toBe("FORBIDDEN");
     expect(await code(() => caller(accountantA).account.grantBusiness({ accountId: acc.VF_CASH, businessId: A.businessId }))).toBe("FORBIDDEN");
-    expect((await top(accountantA, "reconciliation")()).ok).toBe(true);
+    // مطابقة أرصدة الشركة كلها خارج نطاق نشاط واحد (المرحلة 1) — للمالك ومدير الحسابات
+    expect(await code(() => top(accountantA, "reconciliation")())).toBe("FORBIDDEN");
+    expect((await top(ownerA, "reconciliation")()).ok).toBe(true);
   });
 
   it("🛠️ admin: يدير الحسابات ويقفل الفترة، لكنه لا يعيد الفتح؛ تصنيف مصروف = حساب إضافي kind=expense", async () => {

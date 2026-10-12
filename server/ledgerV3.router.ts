@@ -4,7 +4,7 @@ import { router, authenticatedProcedure } from "./_core/trpc";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
-  createLedgerAccount, getLedgerStatus, getLedgerTransaction, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerBusinesses, listLedgerPeriods,
+  createLedgerAccount, getLedgerStatus, getLedgerTransactionScoped, listLedgerAccountsScoped, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerBusinesses, listLedgerPeriods,
   listLedgerTransactions, lockLedgerPeriod, postLedgerTransaction, reconcileLedgerV3, renameLedgerAccount, reopenLedgerPeriod,
   reverseLedgerTransaction, revokeLedgerAccountBusiness, setLedgerAccountActive,
 } from "./ledgerV3.service";
@@ -22,6 +22,8 @@ type Deps = {
   scopeBusinessId: (ctx: ScopeCtx, businessId?: number | null) => Promise<number | undefined>;
   /** أنشطة الجلسة المسموح بها (null = تعذّر التحديد → لا شيء). */
   sessionBusinessIds: (ctx: ScopeCtx) => Promise<number[] | null>;
+  /** هل للجلسة نطاق الشركة كله في القراءة (المالك/الأدمن/مدير الحسابات)؟ غير ذلك = أنشطة الجلسة فقط. */
+  fullLedgerScope: (ctx: ScopeCtx) => Promise<boolean> | boolean;
 };
 
 const NO_PERMISSION = "ليست لديك صلاحية على دفتر الحسابات لهذا الإجراء";
@@ -74,6 +76,8 @@ const amountStr = z.string().regex(/^\d{1,14}(\.\d{1,4})?$/, "المبلغ رق�
 const idemKey = z.string().trim().min(8).max(191);
 
 export function createLedgerRouter(deps: Deps) {
+  /** نطاق القراءة: null = الشركة كلها، وإلا أنشطة الجلسة (تعذّر التحديد = لا شيء). */
+  const readScope = async (ctx: ScopeCtx): Promise<number[] | null> => ((await deps.fullLedgerScope(ctx)) ? null : (await deps.sessionBusinessIds(ctx)) ?? []);
   const scopedBusiness = async (ctx: ScopeCtx, businessId: number | null | undefined) => {
     if (businessId == null) return null;
     const scoped = await deps.scopeBusinessId(ctx, businessId);
@@ -89,7 +93,7 @@ export function createLedgerRouter(deps: Deps) {
     status: ledgerProcedure("ledger.view").query(async ({ ctx }) => getLedgerStatus(tenantOf(ctx))),
 
     accounts: router({
-      list: ledgerProcedure("ledger.view").query(async ({ ctx }) => guard(() => listLedgerAccounts(tenantOf(ctx)))),
+      list: ledgerProcedure("ledger.view").query(async ({ ctx }) => { const scope = await readScope(ctx); return guard(() => listLedgerAccountsScoped(tenantOf(ctx), scope)); }),
     }),
 
     // أنشطة الجلسة لواجهة الدفتر (المحاسب جلسة موظف بلا BusinessContext) — نطاق الجلسة على السيرفر، fail-closed.
@@ -110,17 +114,22 @@ export function createLedgerRouter(deps: Deps) {
         .query(async ({ ctx, input: raw }) => {
           const input = { page: 1, limit: 25, ...(raw ?? {}) };
           const businessId = await scopedBusiness(ctx, input.businessId);
-          return guard(() => listLedgerTransactions(tenantOf(ctx), { ...input, businessId }));
+          const scope = await readScope(ctx);
+          return guard(() => listLedgerTransactions(tenantOf(ctx), { ...input, businessId, scope }));
         }),
     }),
 
     transaction: router({
       get: ledgerProcedure("ledger.view")
         .input(z.object({ transactionId: z.number().int().positive() }))
-        .query(async ({ ctx, input }) => guard(() => getLedgerTransaction(tenantOf(ctx), input.transactionId))),
+        .query(async ({ ctx, input }) => { const scope = await readScope(ctx); return guard(() => getLedgerTransactionScoped(tenantOf(ctx), input.transactionId, scope)); }),
     }),
 
-    reconciliation: ledgerProcedure("ledger.view").query(async ({ ctx }) => guard(() => reconcileLedgerV3(tenantOf(ctx)))),
+    // المطابقة تفحص أرصدة الشركة كلها — لنطاق الشركة فقط (المالك/الأدمن/مدير الحسابات)، لا لنطاق نشاط واحد.
+    reconciliation: ledgerProcedure("ledger.view").query(async ({ ctx }) => {
+      if ((await readScope(ctx)) !== null) throw new TRPCError({ code: "FORBIDDEN", message: "مطابقة الأرصدة على مستوى الشركة للمالك ومدير الحسابات" });
+      return guard(() => reconcileLedgerV3(tenantOf(ctx)));
+    }),
 
     post: ledgerProcedure("ledger.post")
       .input(z.object({

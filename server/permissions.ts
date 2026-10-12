@@ -315,7 +315,9 @@ const ROLE_PERMISSIONS: Record<EmployeeRole, readonly Permission[]> = {
     // الاتنين دول (`accounting.approve` و`reports.view_profit`) بيمنحهم المالك يدويًا لو
     // حب — عن طريق tenant_role_permissions من غير أي Deploy.
     "accounting.create", "treasury.transfer", "settlements.create",
-    // دفتر V3: لا شيء افتراضيًا هنا — القراءة تُضاف مع حراسة نطاق القراءة على السيرفر، والترحيل بمنح صريح، ولا عكس أبدًا.
+    // دفتر V3: قراءة فقط داخل نطاقه (حسابات/أرصدة/حركات نشاطه — حراسة القراءة على السيرفر)؛ الترحيل بمنح صريح
+    // من المالك؛ ولا عكس أبدًا (LEDGER_ROLE_RESTRICTED).
+    "ledger.view",
     ...SELF_PERFORMANCE, ...MESSAGING_BASIC,
   ],
   // مدير الحسابات: الدفتر فقط (قراءة وترحيل وعكس وإدارة الحسابات وإقفال الشهر). لا فتح الشهر ولا التفعيل (للمالك)،

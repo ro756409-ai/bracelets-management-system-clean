@@ -9558,7 +9558,11 @@ export const appRouter = router({
       }),
   }),
   // دفتر الحسابات V3 — خلف صلاحيات ledger.* ونطاق الجلسة؛ بلا تفعيل عام (داخلي حتى شاشة المالك).
-  ledger: createLedgerRouter({ scopeBusinessId: ledgerScopeBusinessId, sessionBusinessIds: ledgerSessionBusinessIds }),
+  ledger: createLedgerRouter({
+    scopeBusinessId: ledgerScopeBusinessId, sessionBusinessIds: ledgerSessionBusinessIds,
+    // قراءة الشركة كلها: جلسة المالك/الأدمن (ونطاقها كل الأنشطة أصلًا) ومدير الحسابات؛ المحاسب = نشاطه فقط.
+    fullLedgerScope: (ctx: ScopeCtx) => ctx.user?.role === "admin" || ctx.employee?.role === ACCOUNTS_MANAGER_ROLE,
+  }),
 });
 
 export type AppRouter = typeof appRouter;
