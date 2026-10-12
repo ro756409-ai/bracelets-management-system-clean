@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildOpeningDraft, codReceivableTotal, availableCash, emptyOpeningRow, groupAccounts, normalSideForKind, openingFileDownload, openingGroupTotals, suggestAccountCode, ACCOUNT_CODE_RE, OPENING_ACCOUNTS, type UiAccount } from "./ledgerUi";
+import { buildOpeningDraft, codReceivableTotal, availableCash, balanceText, HIDDEN_BALANCE_LABEL, emptyOpeningRow, groupAccounts, normalSideForKind, openingFileDownload, openingGroupTotals, suggestAccountCode, ACCOUNT_CODE_RE, OPENING_ACCOUNTS, type UiAccount } from "./ledgerUi";
 
 const acc = (code: string, kind: string, bal: string, isActive = 1): UiAccount => ({ id: code.length, code, name: code, kind, normalSide: "debit", isActive, currentBalance: bal, isSystem: true });
 const rows = (o: Record<string, Partial<ReturnType<typeof emptyOpeningRow>>>) => Object.fromEntries(OPENING_ACCOUNTS.map(a => [a.code, { ...emptyOpeningRow(), ...(o[a.code] ?? {}) }]));
@@ -10,6 +10,15 @@ describe("🧮 منطق واجهة المرحلة 1", () => {
     expect(availableCash(list)).toBe("0.3000");
     expect(codReceivableTotal(list)).toBe("500.0001");
     expect(groupAccounts(list).map(g => g.key)).toEqual(["cash", "cod", "other"]);
+  });
+  it("رصيد محجوب عن نطاق المحاسب (null): لا إجمالي مخترع من الباقي، والعرض «محجوب» لا صفر", () => {
+    const hidden = { ...acc("OFFICE_CASH", "cash", "0"), currentBalance: null, balanceHidden: true };
+    const list = [hidden, acc("A1_PETTY", "cash", "5"), acc("COD_BOSTA", "carrier_receivable", "9")];
+    expect(availableCash(list)).toBeNull();
+    expect(codReceivableTotal(list)).toBe("9.0000");
+    expect(codReceivableTotal([{ ...acc("COD_BOSTA", "carrier_receivable", "0"), currentBalance: null }])).toBeNull();
+    expect(balanceText(null)).toBe(HIDDEN_BALANCE_LABEL);
+    expect(balanceText("5")).toContain("ج.م");
   });
   it("كود مقترح لاتيني صالح ببادئة النوع، والجانب الطبيعي مشتق من النوع", () => {
     for (let i = 0; i < 50; i++) expect(suggestAccountCode("expense")).toMatch(ACCOUNT_CODE_RE);

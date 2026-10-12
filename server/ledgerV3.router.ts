@@ -85,6 +85,9 @@ export function createLedgerRouter(deps: Deps) {
     if (scoped == null) throw new TRPCError({ code: "FORBIDDEN", message: "لا يمكنك الوصول لبيانات هذا النشاط" });
     return scoped;
   };
+  /** نتيجة الترحيل/العكس: «الرصيد بعد الحركة» رصيد شركة كامل — يُحجب عن النطاق المحدود (نفس قاعدة accounts.list). */
+  const maskBalances = async <T extends { entries: { balanceAfter: string }[] }>(ctx: ScopeCtx, r: T) =>
+    (await readScope(ctx)) === null ? r : { ...r, entries: r.entries.map(e => ({ ...e, balanceAfter: null })) };
   const tenantOf = (ctx: any): number => {
     if (ctx.tenantId == null) throw new TRPCError({ code: "UNAUTHORIZED", message: "جلسة بلا شركة" });
     return ctx.tenantId;
@@ -157,19 +160,19 @@ export function createLedgerRouter(deps: Deps) {
           entries.push({ accountId: e.accountId, side: e.side, amount: e.amount, businessId });
         }
         const scope = await deps.sessionBusinessIds(ctx);
-        return guard(() => postLedgerTransaction({
+        return maskBalances(ctx, await guard(() => postLedgerTransaction({
           tenantId: tenantOf(ctx), sourceBusinessId, kind: input.kind as any, idempotencyKey: input.idempotencyKey, effectiveDate: input.effectiveDate,
           currency: input.currency.toUpperCase(), actor: actorOf(ctx), entries, description: input.description, sourceType: input.sourceType ?? null, sourceReference: input.sourceReference ?? null,
           // نطاق الجلسة من السيرفر: يمنع الترحيل/التحويل على خزنة خارج النطاق حتى بقيد businessId=null
           scope,
-        }));
+        })));
       }),
 
     reverse: ledgerProcedure("ledger.reverse")
       .input(z.object({ transactionId: z.number().int().positive(), idempotencyKey: idemKey, effectiveDate: dateStr, reason: z.string().trim().min(3).max(500) }))
       .mutation(async ({ ctx, input }) => {
         const scope = await deps.sessionBusinessIds(ctx);
-        return guard(() => reverseLedgerTransaction({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx), scope }));
+        return maskBalances(ctx, await guard(() => reverseLedgerTransaction({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx), scope })));
       }),
 
     periods: router({

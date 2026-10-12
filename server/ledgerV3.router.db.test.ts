@@ -135,12 +135,15 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
     // (INSTAPAY / VF_CASH: safeGrants هنا للخزن الثلاث فقط) خارج نطاقه؛ المالك يراها.
     expect(accounts.map((a: any) => a.code).sort()).toEqual(["BANK_MAIN", "COD_BOSTA", "EXPENSE", "OFFICE_CASH", "OPENING_EQUITY", "REVENUE", "SUSPENSE"]);
     expect((await caller(ownerA).accounts.list()).map((a: any) => a.code)).toEqual(expect.arrayContaining(["INSTAPAY", "VF_CASH"]));
-    expect(accounts.find((a: any) => a.code === "OFFICE_CASH")).toMatchObject({ isSystem: true, currentBalance: "1000.0000", businesses: [{ businessId: A.businessId, canPost: true }] });
+    // الرصيد يحمل القيد الافتتاحي على مستوى الشركة (لا نشاط) → محجوب عن نطاق المحاسب؛ المالك يراه
+    expect(accounts.find((a: any) => a.code === "OFFICE_CASH")).toMatchObject({ isSystem: true, currentBalance: null, balanceHidden: true, businesses: [{ businessId: A.businessId, canPost: true }] });
+    expect((await caller(ownerA).accounts.list()).find((a: any) => a.code === "OFFICE_CASH")).toMatchObject({ currentBalance: "1000.0000", balanceHidden: false });
     const posted = await top(accountantA, "post")({
       sourceBusinessId: A.businessId, kind: "expense", idempotencyKey: `r-${tag}-acc-1`, effectiveDate: "2026-10-07", description: "نظافة",
       entries: [{ accountId: acc.EXPENSE, side: "debit", amount: "300" }, { accountId: acc.OFFICE_CASH, side: "credit", amount: "300" }],
     });
-    expect(posted.replay).toBe(false); expect(posted.entries[1].balanceAfter).toBe("700.0000");
+    expect(posted.replay).toBe(false); expect(posted.entries[1].balanceAfter).toBeNull(); // رصيد شركة — محجوب عن النطاق المحدود
+    expect((await caller(ownerA).accounts.list()).find((a: any) => a.code === "OFFICE_CASH").currentBalance).toBe("700.0000");
     const got = await caller(accountantA).transaction.get({ transactionId: posted.transactionId });
     expect(got.kind).toBe("expense"); expect(got.entries).toHaveLength(2); expect(got.actorEmployeeId).toBe(accountantA); expect(got.reversedByTransactionId).toBeNull();
     expect(await code(() => top(accountantA, "reverse")({ transactionId: posted.transactionId, idempotencyKey: `r-${tag}-acc-rev`, effectiveDate: "2026-10-08", reason: "خطأ" }))).toBe("FORBIDDEN");

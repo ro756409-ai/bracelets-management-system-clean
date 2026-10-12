@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { PageHeader, StatCard, SectionCard, StatusBadge, EmptyState, ErrorState, LoadingSkeleton, OfflineState } from "@/components/shared";
 import { toast } from "sonner";
 import {
-  BALANCE_CARD_CODES, OPERATION_META, composeDailyPost, cairoToday, expenseAccounts, money, moneyAccounts, newOperationId, revenueAccounts, isActiveAccount, MONEY_KINDS, CASH_KINDS, CARRIER_RECEIVABLE_KINDS, availableCash,
+  BALANCE_CARD_CODES, OPERATION_META, composeDailyPost, cairoToday, expenseAccounts, money, moneyAccounts, newOperationId, revenueAccounts, isActiveAccount, MONEY_KINDS, CASH_KINDS, CARRIER_RECEIVABLE_KINDS, availableCash, balanceText,
   type DailyOperation, type UiAccount,
 } from "./ledgerUi";
 
@@ -80,8 +80,8 @@ export default function LedgerDaily() {
           <StatCard
             key="available-cash"
             label="النقدية المتاحة"
-            value={`${money(availableCash(list))} ج.م`}
-            hint="الخزنة + البنك + المحافظ — بدون مستحقات شركات الشحن"
+            value={balanceText(availableCash(list))}
+            hint={availableCash(list) == null ? "خزن مشتركة مع أنشطة أخرى — الإجمالي للمالك ومدير الحسابات" : "الخزنة + البنك + المحافظ — بدون مستحقات شركات الشحن"}
             icon={<Wallet className="h-5 w-5" aria-hidden="true" />}
             tone={Number(availableCash(list)) < 0 ? "danger" : "success"}
           />
@@ -93,8 +93,8 @@ export default function LedgerDaily() {
             <StatCard
               key={a.code}
               label={a.name}
-              value={`${money(a.currentBalance)} ج.م`}
-              hint="الرصيد الحالي من الدفتر"
+              value={balanceText(a.currentBalance)}
+              hint={a.currentBalance == null ? "حساب مشترك — الرصيد للمالك ومدير الحسابات" : "الرصيد الحالي من الدفتر"}
               icon={logo ? <PartnerLogo partner={logo} size="sm" decorative /> : <Icon className="h-5 w-5" aria-hidden="true" />}
               tone={Number(a.currentBalance) < 0 ? "danger" : "primary"}
             />
@@ -110,7 +110,7 @@ export default function LedgerDaily() {
               <StatCard
                 key={a.code}
                 label={`ذمة على شركة الشحن — ${a.name}`}
-                value={`${money(a.currentBalance)} ج.م`}
+                value={balanceText(a.currentBalance)}
                 hint="مستحق تحصيله من شركة الشحن عند التسوية — ليس نقدية متاحة"
                 icon={logo ? <PartnerLogo partner={logo} size="sm" decorative /> : <Truck className="h-5 w-5" aria-hidden="true" />}
                 tone={Number(a.currentBalance) < 0 ? "danger" : "default"}
@@ -171,7 +171,7 @@ function AccountsSection({ accounts, loading }: { accounts: UiAccount[]; loading
                       </span>
                       <span className="flex shrink-0 items-center gap-2">
                         {!active && <StatusBadge status="inactive" label="موقوف" tone="neutral" size="sm" icon={null} />}
-                        <span className={`tabular-nums font-semibold ${Number(a.currentBalance) < 0 ? "text-destructive" : ""}`}>{money(a.currentBalance)} ج.م</span>
+                        <span className={`tabular-nums font-semibold ${Number(a.currentBalance) < 0 ? "text-destructive" : ""}`}>{balanceText(a.currentBalance)}</span>
                       </span>
                     </li>
                   );
@@ -268,7 +268,7 @@ export function DailyOperationDialog({ op, accounts, onClose, onDone, initial }:
             <Label htmlFor="ledger-field-money">{meta.money}</Label>
             <Select value={moneyId} onValueChange={setMoneyId}>
               <SelectTrigger id="ledger-field-money" className={`mt-1 ${field}`} data-testid="ledger-field-money"><SelectValue placeholder="اختر الخزنة / الحساب" /></SelectTrigger>
-              <SelectContent>{moneyList.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name} — {money(a.currentBalance)}</SelectItem>)}</SelectContent>
+              <SelectContent>{moneyList.map(a => <SelectItem key={a.id} value={String(a.id)}>{a.name}{a.currentBalance != null ? ` — ${money(a.currentBalance)}` : ""}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div>

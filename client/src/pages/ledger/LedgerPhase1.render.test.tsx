@@ -83,6 +83,14 @@ describe("🏦 الحسابات وأرصدتها", () => {
     expect(screen.queryByTestId("ledger-account-new")).toBeNull();
     expect(screen.queryByTestId("ledger-account-manage-RENT")).toBeNull();
   });
+  it("نطاق المحاسب: الرصيد المحجوب من السيرفر يظهر «محجوب عن نطاقك» والإجمالي محجوب — لا صفر ولا مجموع جزئي", () => {
+    state.accounts = state.accounts.map(a => (a.code === "OFFICE_CASH" ? { ...a, currentBalance: null, balanceHidden: true } : a));
+    render(<LedgerAccounts />);
+    expect(screen.getByTestId("ledger-account-balance-OFFICE_CASH").textContent).toBe("محجوب عن نطاقك");
+    expect(screen.getByTestId("ledger-accounts-cash-total").textContent).toBe("محجوب عن نطاقك");
+    expect(screen.getByTestId("ledger-accounts-cod-total").textContent).toContain("٧٠٠");
+    expect(screen.getByTestId("ledger-accounts-hidden-note").textContent).toContain("للمالك ومدير الحسابات فقط");
+  });
   it("إضافة حساب: الجانب مشتق من النوع، الكود ثابت داخل النافذة، وضغط مزدوج = طلب واحد", async () => {
     state.perms = ["ledger.view", "ledger.manage_accounts"];
     render(<LedgerAccounts />);

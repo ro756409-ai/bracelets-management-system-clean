@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { PageHeader, SectionCard, StatusBadge, EmptyState, LoadingSkeleton } from "@/components/shared";
 import { toast } from "sonner";
 import {
-  ACCOUNT_CODE_RE, CREATABLE_ACCOUNT_KINDS, accountKindLabel, availableCash, codReceivableTotal, groupAccounts, isActiveAccount, money, normalSideForKind, suggestAccountCode,
+  ACCOUNT_CODE_RE, CREATABLE_ACCOUNT_KINDS, accountKindLabel, availableCash, balanceText, codReceivableTotal, groupAccounts, isActiveAccount, normalSideForKind, suggestAccountCode,
   type CreatableAccountKind, type UiAccount,
 } from "./ledgerUi";
 
@@ -51,13 +51,18 @@ export default function LedgerAccounts() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" data-testid="ledger-accounts-totals">
             <div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-3">
               <p className="text-xs text-muted-foreground">النقدية المتاحة (خزن + بنوك + محافظ)</p>
-              <p className="mt-1 text-lg font-bold tabular-nums" data-testid="ledger-accounts-cash-total">{money(availableCash(accounts))} ج.م</p>
+              <p className="mt-1 text-lg font-bold tabular-nums" data-testid="ledger-accounts-cash-total">{balanceText(availableCash(accounts))}</p>
             </div>
             <div className="rounded-[var(--radius-brand-md)] border border-border bg-card p-3">
               <p className="text-xs text-muted-foreground">ذمة COD على شركات الشحن — ليست نقدية متاحة</p>
-              <p className="mt-1 text-lg font-bold tabular-nums" data-testid="ledger-accounts-cod-total">{money(codReceivableTotal(accounts))} ج.م</p>
+              <p className="mt-1 text-lg font-bold tabular-nums" data-testid="ledger-accounts-cod-total">{balanceText(codReceivableTotal(accounts))}</p>
             </div>
           </div>
+          {accounts.some(a => a.currentBalance == null) && (
+            <p className="rounded-[var(--radius-brand-md)] border border-border bg-muted/40 p-3 text-xs text-muted-foreground" data-testid="ledger-accounts-hidden-note">
+              بعض الحسابات مشتركة مع أنشطة خارج نطاقك أو عليها قيود على مستوى الشركة، فرصيدها وإجمالياتها تظهر للمالك ومدير الحسابات فقط.
+            </p>
+          )}
           {groupAccounts(accounts).map(g => (
             <SectionCard key={g.key} title={g.title} testId={`ledger-accounts-group-${g.key}`}>
               <ul className="divide-y divide-border">
@@ -78,7 +83,7 @@ export default function LedgerAccounts() {
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      <span className="font-semibold tabular-nums" data-testid={`ledger-account-balance-${a.code}`}>{money(a.currentBalance)} ج.م</span>
+                      <span className="font-semibold tabular-nums" data-testid={`ledger-account-balance-${a.code}`}>{balanceText(a.currentBalance)}</span>
                       {canManage && <Button variant="ghost" size="sm" className="min-h-11 md:min-h-9" onClick={() => setManagingId(a.id)} aria-label={`إدارة ${a.name}`} data-testid={`ledger-account-manage-${a.code}`}><Settings2 className="h-4 w-4" aria-hidden="true" /></Button>}
                     </div>
                   </li>

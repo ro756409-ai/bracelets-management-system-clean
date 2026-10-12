@@ -8,7 +8,8 @@ import { fromMinorUnits, toMinorUnits } from "@shared/accountingMoney";
  */
 export type DailyOperation = "revenue" | "expense" | "transfer";
 
-export type UiAccount = { id: number; code: string; name: string; kind: string; normalSide: "debit" | "credit"; isActive: number | boolean; currentBalance: string; isSystem: boolean };
+/** currentBalance = null حين يحجبه السيرفر عن نطاق المحاسب (حساب مشترك مع نشاط آخر أو عليه قيود الشركة). */
+export type UiAccount = { id: number; code: string; name: string; kind: string; normalSide: "debit" | "credit"; isActive: number | boolean; currentBalance: string | null; balanceHidden?: boolean; isSystem: boolean };
 
 /** حسابات يمكن أن تستقبل/تُخرج فلوسًا في العمليات اليومية (منها COD بوسطة كوجهة «إيراد تحصيل بوسطة»). */
 export const MONEY_KINDS = new Set(["cash", "bank", "wallet", "carrier_receivable"]);
@@ -35,14 +36,20 @@ export const isActiveAccount = (a: UiAccount) => a.isActive === 1 || a.isActive 
 export const moneyAccounts = (accounts: UiAccount[]) => accounts.filter(a => MONEY_KINDS.has(a.kind) && isActiveAccount(a));
 export const cashAccounts = (accounts: UiAccount[]) => accounts.filter(a => CASH_KINDS.has(a.kind) && isActiveAccount(a));
 export const carrierReceivables = (accounts: UiAccount[]) => accounts.filter(a => CARRIER_RECEIVABLE_KINDS.has(a.kind) && isActiveAccount(a));
-/** مجموع النقدية المتاحة (4 خانات، BigInt — بلا أخطاء float) من أرصدة الدفتر نفسها. */
-export function availableCash(accounts: UiAccount[]): string {
-  const total = cashAccounts(accounts).reduce((sum, a) => sum + toMinorUnits(a.currentBalance), 0n);
-  return fromMinorUnits(total);
+/** مجموع النقدية المتاحة (4 خانات، BigInt — بلا أخطاء float) من أرصدة الدفتر نفسها. null = أحد الأرصدة محجوب عن النطاق فلا إجمالي. */
+export function availableCash(accounts: UiAccount[]): string | null {
+  const list = cashAccounts(accounts);
+  if (list.some(a => a.currentBalance == null)) return null;
+  return fromMinorUnits(list.reduce((sum, a) => sum + toMinorUnits(a.currentBalance as string), 0n));
 }
+/** عرض رصيد/إجمالي: المحجوب يظهر «محجوب عن نطاقك» لا صفرًا. */
+export const HIDDEN_BALANCE_LABEL = "محجوب عن نطاقك";
+export const balanceText = (v: string | null) => (v == null ? HIDDEN_BALANCE_LABEL : `${money(v)} ج.م`);
 /** ذمة COD على شركات الشحن (BigInt) — تُعرض منفصلة ولا تدخل في النقدية المتاحة. */
-export function codReceivableTotal(accounts: UiAccount[]): string {
-  return fromMinorUnits(carrierReceivables(accounts).reduce((sum, a) => sum + toMinorUnits(a.currentBalance), 0n));
+export function codReceivableTotal(accounts: UiAccount[]): string | null {
+  const list = carrierReceivables(accounts);
+  if (list.some(a => a.currentBalance == null)) return null;
+  return fromMinorUnits(list.reduce((sum, a) => sum + toMinorUnits(a.currentBalance as string), 0n));
 }
 export const revenueAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "revenue" && isActiveAccount(a));
 export const expenseAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "expense" && isActiveAccount(a));

@@ -523,10 +523,18 @@ export async function listLedgerAccounts(tenantId: number, db?: LedgerDb) {
 
 /**
  * scope (حراسة القراءة): null = نطاق الشركة كله (المالك/الأدمن/مدير الحسابات)؛ مصفوفة = أنشطة الجلسة فقط (المحاسب)
- * — الحركة تظهر لو نشاطها المصدر أو أي قيد فيها داخل النطاق. المصفوفة الفارغة = لا شيء (fail-closed).
+ * — الحركة تظهر فقط لو **كل** قيودها داخل النطاق (scopeVisibleTx). المصفوفة الفارغة = لا شيء (fail-closed).
  */
 export type LedgerReadScope = number[] | null;
 const scopeIds = (scope: number[]) => (scope.length ? scope : [-1]);
+/**
+ * رؤية حركة لنطاق محدود (SQL على الاسم المستعار `t`): كل قيودها بأنشطة داخل النطاق، ونشاطها المصدر داخله أو بلا نشاط.
+ * حركة مختلطة (قيد لنشاط آخر أو على مستوى الشركة) تُحجب كلها — لا تُعرض جزئيًا بأرقام نشاط آخر.
+ */
+const scopeVisibleTx = (scope: number[]) => {
+  const ids = sql.join(scopeIds(scope).map(b => sql`${b}`), sql`, `);
+  return sql`(t.sourceBusinessId IS NULL OR t.sourceBusinessId IN (${ids})) AND NOT EXISTS (SELECT 1 FROM ledger_entries x WHERE x.tenantId = t.tenantId AND x.transactionId = t.id AND (x.businessId IS NULL OR x.businessId NOT IN (${ids})))`;
+};
 export type LedgerTransactionFilters = { page: number; limit: number; from?: string; to?: string; businessId?: number | null; accountId?: number; kind?: LedgerKind; scope?: LedgerReadScope };
 export type LedgerTransactionRow = LedgerTransaction & {
   entries: { id: number; transactionId: number; accountId: number; businessId: number | null; side: "debit" | "credit"; amount: string; code: string; name: string; kind: string }[];
@@ -545,7 +553,8 @@ export async function listLedgerTransactions(tenantId: number, f: LedgerTransact
     if (f.accountId != null) conds.push(sql`${ledgerTransactions.id} IN (SELECT transactionId FROM ledger_entries WHERE tenantId = ${tenantId} AND accountId = ${f.accountId})`);
     if (f.scope) {
       const ids = sql.join(scopeIds(f.scope).map(b => sql`${b}`), sql`, `);
-      conds.push(sql`(${ledgerTransactions.sourceBusinessId} IN (${ids}) OR ${ledgerTransactions.id} IN (SELECT transactionId FROM ledger_entries WHERE tenantId = ${tenantId} AND businessId IN (${ids})))`);
+      conds.push(sql`(${ledgerTransactions.sourceBusinessId} IS NULL OR ${ledgerTransactions.sourceBusinessId} IN (${ids}))`);
+      conds.push(sql`NOT EXISTS (SELECT 1 FROM ledger_entries x WHERE x.tenantId = ${tenantId} AND x.transactionId = ${ledgerTransactions.id} AND (x.businessId IS NULL OR x.businessId NOT IN (${ids})))`);
     }
     const where = and(...conds);
     const [{ total }] = await d.select({ total: sql<number>`COUNT(*)` }).from(ledgerTransactions).where(where);
@@ -608,7 +617,8 @@ export async function reviewLedgerPeriod(tenantId: number, period: string, scope
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) throw new LedgerError("periodNotFound", period);
   const d = await resolveDb(db);
   return guardNoTable(async () => {
-    const scoped = scope ? sql` AND e.businessId IN (${sql.join(scopeIds(scope).map(b => sql`${b}`), sql`, `)})` : sql``;
+    // نطاق محدود: نفس قاعدة سجل الحركات — حركات كل قيودها داخل النطاق فقط (لا أرقام نشاط آخر ولا قيود الشركة)
+    const scoped = scope ? sql` AND ${scopeVisibleTx(scope)}` : sql``;
     const [row] = await d.select().from(ledgerPeriods).where(and(eq(ledgerPeriods.tenantId, tenantId), eq(ledgerPeriods.period, period))).limit(1);
     const events = row ? rawRows(await d.execute(sql`SELECT ev.action, ev.reason, ev.createdAt, emp.name AS actorName FROM ledger_period_events ev
       LEFT JOIN employees emp ON emp.id = ev.actorEmployeeId AND emp.tenantId = ev.tenantId WHERE ev.tenantId = ${tenantId} AND ev.periodId = ${row.id} ORDER BY ev.id`)) : [];
@@ -638,14 +648,27 @@ export async function reviewLedgerPeriod(tenantId: number, period: string, scope
   });
 }
 
-/** الحسابات داخل نطاق القراءة: نطاق محدود = الحسابات المربوطة بأحد أنشطته فقط، وروابطها بأنشطته فقط. */
+/**
+ * الحسابات داخل نطاق القراءة: نطاق محدود = الحسابات المربوطة بأحد أنشطته فقط، وروابطها بأنشطته فقط.
+ * الرصيد: رصيد الحساب واحد على مستوى الشركة ولا يُقسَّم بين الأنشطة — فيُحجب (`currentBalance: null`، `balanceHidden`)
+ * عن النطاق المحدود متى كان الحساب مربوطًا (ولو سابقًا) بنشاط خارج النطاق، أو عليه أي قيد لنشاط خارجه أو على مستوى
+ * الشركة (مثل القيد الافتتاحي). لا نخترع رصيدًا خاصًا بالنشاط.
+ */
 export async function listLedgerAccountsScoped(tenantId: number, scope: LedgerReadScope, db?: LedgerDb) {
   const all = await listLedgerAccounts(tenantId, db);
-  if (!scope) return all;
+  if (!scope) return all.map(a => ({ ...a, balanceHidden: false }));
   const allowed = new Set(scopeIds(scope));
-  return all
-    .map(a => ({ ...a, businesses: a.businesses.filter(b => allowed.has(b.businessId)) }))
-    .filter(a => a.businesses.length > 0);
+  const visible = all.filter(a => a.businesses.some(b => allowed.has(b.businessId)));
+  if (visible.length === 0) return [];
+  const d = await resolveDb(db);
+  const ids = sql.join(scopeIds(scope).map(b => sql`${b}`), sql`, `);
+  const accIds = sql.join(visible.map(a => sql`${a.id}`), sql`, `);
+  const outside = new Set(rawRows(await d.execute(sql`SELECT DISTINCT accountId FROM ledger_entries
+    WHERE tenantId = ${tenantId} AND accountId IN (${accIds}) AND (businessId IS NULL OR businessId NOT IN (${ids}))`)).map((r: any) => Number(r.accountId)));
+  return visible.map(a => {
+    const hidden = a.businesses.some(b => !allowed.has(b.businessId)) || outside.has(a.id);
+    return { ...a, currentBalance: hidden ? null : a.currentBalance, balanceHidden: hidden, businesses: a.businesses.filter(b => allowed.has(b.businessId)) };
+  });
 }
 
 /** حركة واحدة داخل نطاق القراءة — خارجه = غير موجودة (لا نكشف وجودها). */
@@ -653,7 +676,7 @@ export async function getLedgerTransactionScoped(tenantId: number, transactionId
   const tx = await getLedgerTransaction(tenantId, transactionId, db);
   if (!scope) return tx;
   const allowed = new Set(scopeIds(scope));
-  const visible = (tx.sourceBusinessId != null && allowed.has(tx.sourceBusinessId)) || tx.entries.some(e => e.businessId != null && allowed.has(e.businessId));
+  const visible = (tx.sourceBusinessId == null || allowed.has(tx.sourceBusinessId)) && tx.entries.length > 0 && tx.entries.every(e => e.businessId != null && allowed.has(e.businessId));
   if (!visible) throw new LedgerError("transaction", `#${transactionId}`);
   return tx;
 }
