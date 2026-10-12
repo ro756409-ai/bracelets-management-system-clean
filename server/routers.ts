@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { handoverOrder, InventoryLedgerError, isInventoryLedgerActive, postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
+import type { LedgerActor } from "../shared/ledgerV3Core";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabledForBusiness, resolveShipmentImagesForOrder, toPublicImageUrl } from "./bosta.service";
 import { isPublicImageUrl, packageImageTenant, PACKAGE_IMAGE_URL_PREFIX } from "../shared/packageImages";
@@ -1233,7 +1235,32 @@ const positiveMoneyString = moneyString.refine(
   "القيمة يجب أن تكون أكبر من صفر"
 );
 
+/** فاعل Ledger V3 من الجلسة (الموظف الحقيقي) — بلا موظف = فاعل النظام. */
+function ledgerActorOf(ctx: any): LedgerActor {
+  const id = ctx.employee?.id ?? ctx.realEmployeeId;
+  return id ? { type: "employee", employeeId: Number(id) } : { type: "system" };
+}
+/** ربط V3 بعد إجراء تشغيلي معتمد: لا يُسقط الإجراء — يرجع نتيجة صريحة (posted/skipped/review). */
+async function ledgerHookSafely<T>(fn: () => Promise<T>): Promise<T | { status: "review"; reason: string }> {
+  try { return await fn(); } catch (e) { return { status: "review", reason: e instanceof Error ? e.message : String(e) }; }
+}
+
 export const appRouter = router({
+  // المرحلة 4: التسليم لمندوب الشحن بمسح QR — حجز (إن لزم) ثم خروج البضاعة وتثبيت لقطة التكلفة مرة واحدة.
+  // فقط لنشاط بتقييم مخزون وشركة دفترها مفعّل؛ الصلاحية inventory.adjust (موظف المخزن) ونطاق الجلسة.
+  inventoryLedger: router({
+    status: permissionProcedure("inventory.adjust")
+      .input(z.object({ businessId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => ({ active: await isInventoryLedgerActive(await requireScopedBusinessId(ctx, input.businessId)) })),
+    handover: permissionProcedure("inventory.adjust")
+      .input(z.object({ businessId: z.number().int().positive(), orderId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(ctx, input.businessId);
+        try { return await handoverOrder({ businessId, orderId: input.orderId, actor: await requireActor(ctx) }); }
+        catch (e) { throw new TRPCError({ code: e instanceof InventoryLedgerError ? "PRECONDITION_FAILED" : "BAD_REQUEST", message: (e as Error).message }); }
+      }),
+  }),
+
   system: systemRouter,
   // حالة وصول الشركة للواجهة (شاشة/شريط) — العلم معطل ⇒ enforced:false فلا تظهر أي شاشة قبل جاهزية الحارس.
   tenantAccess: router({
@@ -2354,15 +2381,19 @@ export const appRouter = router({
      */
     stocktakeApprove: permissionProcedure("inventory_costing.approve")
       .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
-      .mutation(async ({ ctx, input }) =>
-        approveStocktake({
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(ctx, input.businessId);
+        const result = await approveStocktake({
           stocktakeId: input.stocktakeId,
-          businessId: await requireScopedBusinessId(ctx, input.businessId),
+          businessId,
           actor: await requireActor(ctx),
           // نفس منطق approvePurchaseReceipt: المالك بس يقدر يعتمد جرد عمله بنفسه.
           allowSelfApproval: isOwnerRole(ctx.employee?.role),
-        })
-      ),
+        });
+        // Ledger V3 (المرحلة 4): فروق الجرد بعد الاعتماد — فقط لشركة دفترها مفعّل؛ الفشل يُعاد للواجهة ولا يُسقط الاعتماد.
+        const ledger = await ledgerHookSafely(() => postStocktakeVariance({ businessId, stocktakeId: input.stocktakeId, actor: ledgerActorOf(ctx) }));
+        return { ...(result as object), ledger };
+      }),
 
     returnInspectionSubmit: permissionProcedure("inventory_costing.manage")
       .input(
@@ -2403,16 +2434,13 @@ export const appRouter = router({
           occurredAt: z.date(),
         })
       )
-      .mutation(async ({ ctx, input }) =>
-        approveReturnInspection({
-          ...input,
-          businessId: await requireScopedBusinessId(
-            ctx,
-            input.businessId
-          ),
-          actor: await requireActor(ctx),
-        })
-      ),
+      .mutation(async ({ ctx, input }) => {
+        const businessId = await requireScopedBusinessId(ctx, input.businessId);
+        const result = await approveReturnInspection({ ...input, businessId, actor: await requireActor(ctx) });
+        // Ledger V3 (المرحلة 4): المرتجع المفحوص (إرجاع للمخزون/إعدام) — بلا تكلفة مكررة؛ الفشل يُعاد للواجهة.
+        const ledger = await ledgerHookSafely(() => postReturnInspection({ businessId, inspectionId: input.inspectionId, actor: ledgerActorOf(ctx) }));
+        return { ...(result as object), ledger };
+      }),
 
     shipmentCreate: permissionProcedure("shipping_finance.manage")
       .input(

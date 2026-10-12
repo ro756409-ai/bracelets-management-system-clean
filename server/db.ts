@@ -2440,7 +2440,7 @@ export async function confirmOrder(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  return db.transaction(async tx => {
+  const result = await db.transaction(async tx => {
     // 1) القفل أولًا — التأكيدات المتزامنة بتتسلسل هنا.
     const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
     if (!order) throw new Error("Order not found");
@@ -2591,6 +2591,9 @@ export async function confirmOrder(
       stockShortfall: false,
     };
   });
+  // Ledger V3 (المرحلة 4): حجز المخزون بعد اعتماد التأكيد — فقط لنشاط بتقييم مخزون وشركة دفترها مفعّل؛ الفشل مراجعة لا يُسقط التأكيد.
+  await (await import("./ledgerInventory.service")).afterOrderConfirmed(orderId);
+  return result;
 }
 
 /**
@@ -2658,7 +2661,7 @@ export async function cancelOrder(
   // الأوردر، ثم إرجاع **ما خُصم فعلًا** (حركات out للأوردر ناقص ما سبق إرجاعه) لنفس
   // productId/variantId — مرة واحدة مهما تكرر الإلغاء أو تزامن. ولو الأوردر اتألغى
   // وفيه حركات مرجعة بالفعل، الحركة المرجعة مش بتتكرر.
-  return runOrderTransaction(async tx => {
+  const result = await runOrderTransaction(async tx => {
     const [order] = await tx.select().from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
     if (!order) throw new Error("الأوردر غير موجود");
     // سجل الأحداث (العلم مفعّل فقط): Replay بنفس العملية، والأوردر الملغي أصلًا = لا تغيير ولا حدث.
@@ -2714,6 +2717,9 @@ export async function cancelOrder(
     }
     return { restoredQuantity: restored };
   });
+  // Ledger V3 (المرحلة 4): فك حجز المخزون بعد اعتماد الإلغاء — فقط لنشاط بتقييم مخزون وشركة دفترها مفعّل؛ لا يرمي أبدًا.
+  await (await import("./ledgerInventory.service")).afterOrderCancelled(orderId);
+  return result;
 }
 
 // ==================== DASHBOARD STATS ====================

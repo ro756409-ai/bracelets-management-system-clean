@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { HandoverPanel } from "@/components/inventory/HandoverPanel";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -322,6 +323,11 @@ export default function ScanOrders() {
                   <span className="font-bold text-[var(--success)]">{Number(scanResult.order.totalAmount).toLocaleString()} ج.م</span>
                 </div>
               </div>
+            )}
+
+            {/* المرحلة 4: التسليم لمندوب الشحن (خروج + تثبيت تكلفة مرة واحدة) — يظهر فقط حين يكون مفعّلًا للنشاط */}
+            {scanResult.order && (scanResult.result === "success" || scanResult.result === "duplicate") && scanResult.order.businessId != null && (
+              <HandoverPanel key={scanResult.order.id} order={scanResult.order} />
             )}
 
             <Button

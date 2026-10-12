@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { router, authenticatedProcedure } from "./_core/trpc";
 import { openingDraftInput, validateOpeningDraft } from "./ledgerOpening.service";
 import { dailyAccountsStatus, dailyLedgerReport, ensureDailyAccounts } from "./ledgerDaily.service";
+import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpeningFromStocktake } from "./ledgerInventory.service";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
@@ -213,6 +214,17 @@ export function createLedgerRouter(deps: Deps) {
           const scope = await readScope(ctx);
           const canViewProfit = Boolean(await deps.canViewProfit?.(ctx));
           return guard(() => dailyLedgerReport({ tenantId: tenantOf(ctx), date: input.date, scope, businessId, canViewProfit, page: input.page }));
+        }),
+    }),
+
+    // المرحلة 4: قيمة المخزون الافتتاحية من جرد فعلي معتمد يوم Go-live (المالك فقط) — مرة واحدة لكل مخزن.
+    inventory: router({
+      openingCandidates: ledgerProcedure("ledger.activate").query(async ({ ctx }) => listInventoryOpeningCandidates(tenantOf(ctx))),
+      openingFromStocktake: ledgerProcedure("ledger.activate")
+        .input(z.object({ stocktakeId: z.number().int().positive() }))
+        .mutation(async ({ ctx, input }) => {
+          try { return await guard(() => postInventoryOpeningFromStocktake({ tenantId: tenantOf(ctx), stocktakeId: input.stocktakeId, actor: actorOf(ctx) })); }
+          catch (e) { if (e instanceof InventoryLedgerError) throw new TRPCError({ code: "PRECONDITION_FAILED", message: e.message }); throw e; }
         }),
     }),
 

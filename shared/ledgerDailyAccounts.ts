@@ -20,4 +20,5 @@ export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   // المرحلة 3/4: الشحن الذي دفعه العميل منفصل عن إيراد المنتج؛ وخسارة المرتجع بعد التسليم منفصلة عن تكلفة المبيعات
   { code: "REV_SHIPPING", name: "إيراد شحن محصّل من العميل", kind: "revenue", normalSide: "credit", group: "revenue" },
   { code: "RETURN_LOSS", name: "خسائر المرتجعات", kind: "expense", normalSide: "debit", group: "expense" },
+  { code: "INV_VARIANCE", name: "فروقات الجرد", kind: "expense", normalSide: "debit", group: "expense" },
 ] as const;

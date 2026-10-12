@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
   perms: [] as string[], user: { id: 1, tenantId: 10, role: "admin" } as any,
   accounts: [] as any[], review: null as any, periods: [] as any[],
   calls: { create: [] as any[], rename: [] as any[], setActive: [] as any[], grant: [] as any[], revoke: [] as any[], lock: [] as any[], reopen: [] as any[], validate: [] as any[] },
-  validateResult: null as any,
+  validateResult: null as any, ledgerEnabled: true,
 }));
 const { slowMutation } = vi.hoisted(() => ({
   slowMutation: (key: string, result: () => any) => ({ useMutation: () => ({ mutateAsync: async (input: any) => { (state.calls as any)[key].push(input); await new Promise(r => setTimeout(r, 20)); return result(); }, isPending: false }) }),
@@ -19,7 +19,7 @@ vi.mock("@/lib/trpc", () => ({
   trpc: {
     useUtils: () => ({ ledger: { accounts: { list: { invalidate: async () => {} } } } }),
     ledger: {
-      status: { useQuery: () => ({ data: { tablesPresent: true, enabled: true }, isLoading: false }) },
+      status: { useQuery: () => ({ data: { tablesPresent: true, enabled: state.ledgerEnabled }, isLoading: false }) },
       accounts: { list: { useQuery: () => ({ data: state.accounts, isLoading: false, error: null, refetch: async () => {} }) } },
       businesses: { list: { useQuery: () => ({ data: [{ id: 7, name: "براند A" }, { id: 8, name: "براند B" }], isLoading: false }) } },
       periods: { list: { useQuery: () => ({ data: state.periods, isLoading: false, error: null, refetch: async () => {} }) } },
@@ -67,7 +67,7 @@ beforeEach(() => {
     reversals: [{ transactionId: 9, reversalOfTransactionId: 4, description: "عكس مصروف مكرر", effectiveDate: "2026-10-05", actorName: "مدير الحسابات كريم" }],
   };
   for (const k of Object.keys(state.calls) as (keyof typeof state.calls)[]) state.calls[k] = [];
-  state.validateResult = null;
+  state.validateResult = null; state.ledgerEnabled = true;
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -186,6 +186,7 @@ describe("🗓️ مراجعة الشهر وإقفاله", () => {
 });
 
 describe("🧾 تجهيز الأرصدة الافتتاحية", () => {
+  beforeEach(() => { state.ledgerEnabled = false; }); // التجهيز قبل التفعيل
   const fill = (code: string, amount: string, ref = "", by = "") => {
     fireEvent.change(screen.getByTestId(`ledger-opening-amount-${code}`), { target: { value: amount } });
     if (ref) fireEvent.change(screen.getByTestId(`ledger-opening-ref-${code}`), { target: { value: ref } });

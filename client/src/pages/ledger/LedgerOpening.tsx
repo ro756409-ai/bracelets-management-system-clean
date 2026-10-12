@@ -21,8 +21,59 @@ import { OPENING_ACCOUNTS, buildOpeningDraft, emptyOpeningRow, money, openingFil
  */
 export default function LedgerOpening() {
   const { user } = useAuth();
+  const status = trpc.ledger.status.useQuery(undefined, { retry: false });
   const sessionKey = `${(user as any)?.id ?? "emp"}:${(user as any)?.tenantId ?? ""}`;
+  // بعد التفعيل: الأرصدة النقدية سُجّلت بأداة التفعيل؛ يبقى المخزون الافتتاحي من جرد يوم Go-live (المرحلة 4)
+  if (status.data?.enabled) return <InventoryOpeningSection />;
   return <OpeningDraftForm key={sessionKey} />;
+}
+
+type Candidate = { stocktakeId: number; businessName: string; warehouseName: string; approvedDay: string; value: string | null; postedFromStocktakeId: number | null };
+
+/** المخزون الافتتاحي من جرد فعلي معتمد يوم Go-live (أو السابق) — مرة واحدة لكل مخزن؛ لا أرقام من أرصدة قديمة. */
+export function InventoryOpeningSection() {
+  const candidates = trpc.ledger.inventory.openingCandidates.useQuery(undefined, { retry: false });
+  const post = trpc.ledger.inventory.openingFromStocktake.useMutation();
+  const [busy, setBusy] = useState<number | null>(null);
+  const rows = (candidates.data?.rows ?? []) as Candidate[];
+  const run = async (stocktakeId: number) => {
+    if (busy != null || post.isPending) return;
+    setBusy(stocktakeId);
+    try {
+      const r = await post.mutateAsync({ stocktakeId });
+      toast.success(r.replay ? "مسجّل بالفعل — لم يتكرر" : "سُجّلت قيمة المخزون الافتتاحية من الجرد");
+      await candidates.refetch();
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setBusy(null); }
+  };
+  return (
+    <div className="space-y-4" dir="rtl" data-testid="ledger-inventory-opening">
+      <PageHeader title="المخزون الافتتاحي" description={`الدفتر مفعّل (بداية العمل ${candidates.data?.goLiveDate ?? "—"}). الأرصدة النقدية سُجّلت عند التفعيل؛ قيمة المخزون من جرد فعلي معتمد يوم Go-live فقط.`} icon={<ClipboardList className="h-5 w-5" aria-hidden="true" />} />
+      <SectionCard title="جرود يوم Go-live" testId="ledger-inventory-opening-list">
+        {candidates.isLoading ? <p className="text-sm text-muted-foreground">جارٍ التحميل…</p>
+          : candidates.error ? <p className="text-sm text-destructive" role="alert">{candidates.error.message}</p>
+          : rows.length === 0 ? <p className="text-sm text-muted-foreground" data-testid="ledger-inventory-opening-empty">لا جرد معتمد يوم Go-live أو اليوم السابق له. اعتمد جردًا فعليًا لكل مخزن أولًا.</p>
+          : (
+            <ul className="divide-y divide-border text-sm">
+              {rows.map(r => {
+                const posted = r.postedFromStocktakeId != null;
+                return (
+                  <li key={r.stocktakeId} className="flex flex-wrap items-center justify-between gap-2 py-2" data-testid={`ledger-inventory-opening-${r.stocktakeId}`}>
+                    <div className="min-w-0">
+                      <p className="font-medium">{r.businessName} — {r.warehouseName}</p>
+                      <p className="text-xs text-muted-foreground"><span dir="ltr">{r.approvedDay}</span> · {r.value == null ? "تكلفة بند غير مثبتة — لا يُعتمد" : `${money(r.value)} ج.م`}</p>
+                    </div>
+                    {posted
+                      ? <span className="text-xs text-muted-foreground">{r.postedFromStocktakeId === r.stocktakeId ? "مسجّل من هذا الجرد" : "مخزون هذا المخزن مسجّل من جرد آخر"}</span>
+                      : <Button className="min-h-11" disabled={r.value == null || busy != null || post.isPending} onClick={() => run(r.stocktakeId)} data-testid={`ledger-inventory-opening-post-${r.stocktakeId}`}>{busy === r.stocktakeId ? "جارٍ التسجيل…" : "اعتماد كمخزون افتتاحي"}</Button>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+      </SectionCard>
+    </div>
+  );
 }
 
 type ValidateResult = {
