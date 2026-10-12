@@ -95,6 +95,78 @@ export default function LedgerCarrier() {
           <Button className="mt-3 min-h-12 w-full sm:w-auto" onClick={runPayout} disabled={busy || payout.isPending || !payAmount.trim()} data-testid="carrier-pay-run">تسجيل التحويل</Button>
         </SectionCard>
       )}
+
+      <RefundsSection cashAccounts={cashAccounts} />
     </div>
+  );
+}
+
+/**
+ * «مبالغ مستحقة للعملاء» — أوردرات رجعت بعد تحصيل مبلغها (التزام رد من قيود الدفتر فقط، لا تخمين). لكل أوردر: رد فعلي من
+ * خزنة/بنك/محفظة مرة واحدة، و/أو احتجاز الباقي بسبب مكتوب — السيرفر يرفض أي مبلغ يتجاوز الالتزام القائم.
+ */
+function RefundsSection({ cashAccounts }: { cashAccounts: UiAccount[] }) {
+  const utils = trpc.useUtils();
+  const list = trpc.ledger.refunds.list.useQuery(undefined, { retry: false });
+  const pay = trpc.ledger.refunds.pay.useMutation();
+  const retain = trpc.ledger.refunds.retain.useMutation();
+  const [open, setOpen] = useState<{ orderId: number; mode: "pay" | "retain" } | null>(null);
+  const [amount, setAmount] = useState("");
+  const [account, setAccount] = useState("OFFICE_CASH");
+  const [reason, setReason] = useState("");
+  const [date, setDate] = useState(cairoToday());
+  const [busy, setBusy] = useState(false);
+  if (list.error) return null; // نطاق نشاط واحد: السيرفر يرفض — القسم للمالك ومدير الحسابات فقط
+  // الحساب المُرسَل = المعروض دائمًا (لا قيمة افتراضية غير موجودة في القائمة)
+  const fromAccount = cashAccounts.some(a => a.code === account) ? account : cashAccounts[0]?.code ?? "";
+  const rows = (list.data ?? []) as { orderId: number; orderNumber: string; outstanding: string }[];
+  const start = (orderId: number, mode: "pay" | "retain", outstanding: string) => { setOpen({ orderId, mode }); setAmount(outstanding); setReason(""); };
+  const run = async () => {
+    if (!open || busy) return;
+    setBusy(true);
+    try {
+      if (open.mode === "pay") await pay.mutateAsync({ orderId: open.orderId, accountCode: fromAccount, amount: amount.trim(), date });
+      else await retain.mutateAsync({ orderId: open.orderId, amount: amount.trim(), reason: reason.trim(), date });
+      toast.success(open.mode === "pay" ? "سُجّل رد المبلغ للعميل" : "سُجّل الاحتجاز بسببه");
+      setOpen(null); await utils.ledger.refunds.list.invalidate();
+    } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <SectionCard title="مبالغ مستحقة للعملاء (مرتجعات بعد التحصيل)" testId="refunds">
+      {rows.length === 0 ? <p className="text-sm text-muted-foreground" data-testid="refunds-empty">لا التزامات رد قائمة.</p> : (
+        <ul className="divide-y divide-border text-sm">
+          {rows.map(r => (
+            <li key={r.orderId} className="py-2" data-testid={`refund-${r.orderId}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span>أوردر <b dir="ltr">{r.orderNumber}</b> · قائم <b className="tabular-nums">{money(r.outstanding)} ج.م</b></span>
+                <span className="flex gap-2">
+                  <Button size="sm" variant="outline" className="min-h-10" onClick={() => start(r.orderId, "pay", r.outstanding)} data-testid={`refund-pay-${r.orderId}`}>رد للعميل</Button>
+                  <Button size="sm" variant="ghost" className="min-h-10" onClick={() => start(r.orderId, "retain", r.outstanding)} data-testid={`refund-retain-${r.orderId}`}>احتجاز بسبب</Button>
+                </span>
+              </div>
+              {open?.orderId === r.orderId && (
+                <div className="mt-2 grid grid-cols-1 gap-2 rounded-md border border-border p-3 sm:grid-cols-3">
+                  <div><Label htmlFor="rf-amount">المبلغ</Label><Input id="rf-amount" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} className="mt-1 min-h-11" dir="ltr" /></div>
+                  <div><Label htmlFor="rf-date">التاريخ</Label><Input id="rf-date" type="date" value={date} onChange={e => setDate(e.target.value)} className="mt-1 min-h-11" dir="ltr" /></div>
+                  {open.mode === "pay" ? (
+                    <div><Label htmlFor="rf-account">من</Label>
+                      <select id="rf-account" value={fromAccount} onChange={e => setAccount(e.target.value)} className="mt-1 block min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm">
+                        {cashAccounts.map(a => <option key={a.id} value={a.code}>{a.name}</option>)}
+                      </select>
+                    </div>
+                  ) : (
+                    <div><Label htmlFor="rf-reason">السبب (إلزامي)</Label><Input id="rf-reason" value={reason} onChange={e => setReason(e.target.value)} className="mt-1 min-h-11" placeholder="شحن المرتجع على العميل" /></div>
+                  )}
+                  <div className="sm:col-span-3 flex gap-2">
+                    <Button className="min-h-11" onClick={run} disabled={busy || !amount.trim() || (open.mode === "retain" && reason.trim().length < 3) || (open.mode === "pay" && !fromAccount)} data-testid="refund-run">{open.mode === "pay" ? "تسجيل الرد" : "تسجيل الاحتجاز"}</Button>
+                    <Button variant="ghost" className="min-h-11" onClick={() => setOpen(null)}>إلغاء</Button>
+                  </div>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </SectionCard>
   );
 }

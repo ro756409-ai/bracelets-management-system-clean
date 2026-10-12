@@ -98,7 +98,7 @@ describe.runIf(CAN)("🚚 أثر الأوردر المالي (تسليم/تكل�
     expect((await txs(id)).map((x: any) => x.kind)).toEqual(["revenue_cod", "cost_of_sales"]);
   });
 
-  it("المرتجع بعد التسليم: عكس الإيراد والذمة + تحويل التكلفة لخسائر المرتجعات (الربح لا يتضخم)؛ مكرر = replay؛ قبل التسليم بلا أثر", async () => {
+  it("المرتجع بعد التسليم وقبل التسوية: عكس الإيراد والذمة + التكلفة إلى «مرتجعات قيد الفحص» (لا خسارة قبل الفحص)؛ مكرر = replay؛ قبل التسليم بلا أثر", async () => {
     const id = await mkOrder(A, { total: "400", fees: "40", items: [{ qty: 1, snap: "100", out: 1 }] });
     await postOrderDelivered({ businessId: A.businessId, orderId: id, cod: 400, occurredAt: AT, actor: WEBHOOK });
     await q("UPDATE orders SET status = 'returned' WHERE id = ?", [id]);
@@ -108,10 +108,10 @@ describe.runIf(CAN)("🚚 أثر الأوردر المالي (تسليم/تكل�
     const t = await txs(id);
     const rev = t.find((x: any) => x.idempotencyKey === `order:${id}:returned`);
     expect(rev.reversalOfTransactionId).toBe(t.find((x: any) => x.idempotencyKey === `order:${id}:delivered`).id);
-    expect(await lines(t.find((x: any) => x.idempotencyKey === `order:${id}:return-loss`).id)).toEqual([["RETURN_LOSS", "debit", "100.0000"], ["COGS", "credit", "100.0000"]]);
-    // صافي الأوردر: إيراد 0، تكلفة مبيعات 0، خسارة مرتجع = التكلفة
+    expect(await lines(t.find((x: any) => x.idempotencyKey === `order:${id}:return-cost`).id)).toEqual([["RETURNS_PENDING", "debit", "100.0000"], ["COGS", "credit", "100.0000"]]);
+    // صافي الأوردر: إيراد 0، تكلفة مبيعات 0، لا خسارة قبل الفحص — التكلفة قيد الفحص
     const net = async (code: string) => (await q(`SELECT SUM(CASE WHEN e.side='debit' THEN e.amount ELSE -e.amount END) n FROM ledger_entries e JOIN ledger_accounts a ON a.id=e.accountId JOIN ledger_transactions t ON t.id=e.transactionId WHERE a.code=? AND t.idempotencyKey LIKE ?`, [code, `order:${id}:%`]))[0].n;
-    expect([await net("REVENUE"), await net("REV_SHIPPING"), await net("COGS"), await net("RETURN_LOSS"), await net("COD_BOSTA")]).toEqual(["0.0000", "0.0000", "0.0000", "100.0000", "0.0000"]);
+    expect([await net("REVENUE"), await net("REV_SHIPPING"), await net("COGS"), await net("RETURNS_PENDING"), await net("COD_BOSTA"), await net("RETURN_LOSS")]).toEqual(["0.0000", "0.0000", "0.0000", "100.0000", "0.0000", null]);
     const before = await mkOrder(A, { total: "200", status: "returned", items: [{ qty: 1, snap: "60", out: 1 }] });
     expect(await postOrderReturned({ businessId: A.businessId, orderId: before, occurredAt: AT, actor: WEBHOOK })).toMatchObject({ status: "skipped" });
     expect(await txs(before)).toEqual([]);
@@ -148,7 +148,7 @@ describe.runIf(CAN)("🚚 أثر الأوردر المالي (تسليم/تكل�
     expect((await q("SELECT DATE_FORMAT(effectiveDate, '%Y-%m-%d') d FROM ledger_transactions WHERE idempotencyKey = ?", [`order:${id}:delivered`]))[0].d).toBe("2026-10-16");
   });
 
-  it("الربط من webhook: حالة لم تنتقل فعلًا = لا شيء؛ ومسار webhook الحقيقي (إعادة معالجة صندوق الوارد) يسجّل التسليم مرة واحدة", async () => {
+  it("الربط من webhook: حالة لم تنتقل فعلًا = لا شيء؛ ومسار webhook الحقيقي (إعادة معالجة صندوق الوارد) يسجّل التسليم ثم المرتجع وفتح الفحص مرة واحدة", async () => {
     const id = await mkOrder(A, { total: "500", status: "shipped", items: [{ qty: 1, snap: "70", out: 1 }], shipment: `SHP-${tmp.name.slice(-6)}` });
     expect(await afterCarrierOrderUpdate({ businessId: A.businessId, orderId: id, orderStatus: "shipped", eventStatus: "delivered", cod: 500, occurredAt: AT })).toBeNull();
     const payload = { _id: `SHP-${tmp.name.slice(-6)}`, trackingNumber: 99887766, state: 45, type: "SEND", cod: 500, timeStamp: Date.parse("2026-10-15T12:00:00Z"), isConfirmedDelivery: true };
@@ -162,5 +162,17 @@ describe.runIf(CAN)("🚚 أثر الأوردر المالي (تسليم/تكل�
     await q("UPDATE carrier_webhook_inbox SET processingStatus = 'failed' WHERE id = ?", [inbox]);
     await reprocessBostaInboxEvent(inbox, A.businessId);
     expect((await txs(id)).length).toBe(2);
+    // مرتجع حقيقي من بوسطة (46) بعد التسليم: عكس + تكلفة قيد الفحص، وفتح فحص المخزن (نشاط بتقييم مخزون) — مرة واحدة مع إعادة الإرسال
+    await q("UPDATE businesses SET accountingGoLiveAt = ? WHERE id = ?", [new Date("2026-09-30T00:00:00Z"), A.businessId]);
+    const ret = { ...payload, state: 46, timeStamp: Date.parse("2026-10-17T12:00:00Z") };
+    const inbox2 = insId(await q("INSERT INTO carrier_webhook_inbox (tenantId, businessId, provider, shipmentId, eventKey, stateCode, processingStatus, payloadJson) VALUES (?, ?, 'bosta', ?, ?, 46, 'failed', ?)",
+      [A.tenantId, A.businessId, payload._id, `r-${tmp.name}`.slice(0, 64), JSON.stringify(ret)]));
+    expect((await reprocessBostaInboxEvent(inbox2, A.businessId)).ok).toBe(true);
+    await q("UPDATE carrier_webhook_inbox SET processingStatus = 'failed' WHERE id = ?", [inbox2]);
+    await reprocessBostaInboxEvent(inbox2, A.businessId);
+    expect((await q("SELECT status FROM orders WHERE id = ?", [id]))[0].status).toBe("returned");
+    expect((await txs(id)).map((x: any) => x.kind)).toEqual(["revenue_cod", "cost_of_sales", "reversal", "return_cost"]);
+    expect((await q("SELECT status FROM return_inspections WHERE orderId = ?", [id])).map((r: any) => r.status)).toEqual(["pending"]);
+    expect((await q("SELECT returnedQuantity n FROM order_items WHERE orderId = ?", [id]))[0].n).toBe(1);
   });
 });

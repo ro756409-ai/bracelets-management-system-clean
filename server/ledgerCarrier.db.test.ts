@@ -77,7 +77,7 @@ describe.runIf(CAN)("🚛 تسوية بوسطة والتحويل", () => {
     await order(A.businessId, sh("S3"), "180", "returned"); // مرتجع قبل التسليم — سطر رسوم فقط
     await order(A.businessId, sh("S9"), "100"); await order(A.businessId, sh("S9"), "100"); // نفس الشحنة لأوردرين
     const s4 = await order(A.businessId, sh("S4"), "120"); await postOrderDelivered({ businessId: A.businessId, orderId: s4, cod: 120, occurredAt: at, actor: W });
-    await q("UPDATE orders SET status = 'returned' WHERE id = ?", [s4]); await postOrderReturned({ businessId: A.businessId, orderId: s4, occurredAt: at, actor: W }); // قيد تسليم معكوس
+    await q("UPDATE orders SET status = 'returned' WHERE id = ?", [s4]); await postOrderReturned({ businessId: A.businessId, orderId: s4, occurredAt: at, actor: W }); // مرتجع بعد التسليم وقبل التسوية — قيد التسليم معكوس
   }, 300_000);
   afterAll(async () => { __setDbForTests(null); await tmp?.drop(); }, 120_000);
 
@@ -90,13 +90,17 @@ describe.runIf(CAN)("🚛 تسوية بوسطة والتحويل", () => {
     expect([by[sh("S1")].status, by[sh("S2")].status, by[sh("S3")].status]).toEqual(["posted", "posted", "posted"]);
     expect(by[sh("S9")].reason).toMatch(/أكثر من أوردر/);
     expect(by[`UNKNOWN-${tag()}`].reason).toMatch(/لا أوردر مطابق/);
-    expect(by[sh("S4")].reason).toMatch(/لا قيد تسليم قائم/);
+    // S4 رجع بعد التسليم وقبل التسوية ثم ظهر تحصيله في الكشف ⇒ التحصيل التزام رد للعميل، لا ذمة بوسطة ولا إيراد
+    expect(by[sh("S4")].status).toBe("posted");
+    const s4l = (await q("SELECT a.code, e.side, e.amount FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.accountId WHERE e.transactionId = ? ORDER BY e.id", [by[sh("S4")].transactionId])).map((x: any) => [x.code, x.side, x.amount]);
+    expect(s4l).toEqual([["REFUND_PAYABLE", "credit", "120.0000"], ["EXP_CARRIER_FEES", "debit", "10.0000"], ["COD_PAYOUT", "debit", "110.0000"]]);
     expect(by[sh("S5")].reason).toMatch(/≠ المسجّل عند التسليم/);
     expect(r.parseErrors.map((x: any) => x.row)).toEqual([9]); // S2 مكرر في نفس الكشف
-    expect(r.expectedPayout).toBe("940.0000"); // 700 + 280 − 40
+    expect(r.expectedPayout).toBe("1050.0000"); // 700 + 280 − 40 + 110
     const s1 = (await q("SELECT a.code, e.side, e.amount FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.accountId WHERE e.transactionId = ? ORDER BY e.id", [by[sh("S1")].transactionId])).map((x: any) => [x.code, x.side, x.amount]);
     expect(s1).toEqual([["COD_BOSTA", "credit", "750.0000"], ["EXP_CARRIER_FEES", "debit", "50.0000"], ["COD_PAYOUT", "debit", "700.0000"]]);
-    expect(await bal("COD_PAYOUT")).toBe("940.0000");
+    expect(await bal("COD_PAYOUT")).toBe("1050.0000");
+    expect(await bal("COD_BOSTA")).toBe("200.0000"); // S1+S2 سُوّيا؛ S5 (مبلغ مخالف) باقٍ للمراجعة؛ S4 لم يعد ذمة بعد عكس التسليم
   });
 
   it("لا تسوية مرتين: نفس الكشف = replay؛ كشف آخر بنفس الشحنة = «مسوّاة من قبل في ST-1»؛ والتزامن = قيد واحد", async () => {
@@ -117,11 +121,11 @@ describe.runIf(CAN)("🚛 تسوية بوسطة والتحويل", () => {
   it("التحويل: مبلغ ≠ صافي الكشف مرفوض؛ الصحيح لبنك مرة واحدة ويُصفّر «قيد الصرف» للكشف", async () => {
     const am = await call(e.amA);
     expect(await code(() => am.carrier.payout({ statementRef: "ST-1", receivedOn: "2026-10-20", amount: "900", accountCode: "BANK_MAIN" }))).toBe("CONFLICT");
-    expect(await code(() => am.carrier.payout({ statementRef: "ST-1", receivedOn: "2026-10-20", amount: "940", accountCode: "EXP_ADS" }))).toBe("NOT_FOUND");
-    const p = await am.carrier.payout({ statementRef: "ST-1", receivedOn: "2026-10-20", amount: "940", accountCode: "BANK_MAIN" });
+    expect(await code(() => am.carrier.payout({ statementRef: "ST-1", receivedOn: "2026-10-20", amount: "1050", accountCode: "EXP_ADS" }))).toBe("NOT_FOUND");
+    const p = await am.carrier.payout({ statementRef: "ST-1", receivedOn: "2026-10-20", amount: "1050", accountCode: "BANK_MAIN" });
     expect(p.replay).toBe(false);
-    expect((await am.carrier.payout({ statementRef: "ST-1", receivedOn: "2026-10-20", amount: "940", accountCode: "BANK_MAIN" })).replay).toBe(true);
-    expect(await bal("BANK_MAIN")).toBe("940.0000");
+    expect((await am.carrier.payout({ statementRef: "ST-1", receivedOn: "2026-10-20", amount: "1050", accountCode: "BANK_MAIN" })).replay).toBe(true);
+    expect(await bal("BANK_MAIN")).toBe("1050.0000");
     expect((await am.carrier.status({ statementRef: "ST-1" })).payoutTransactionId).toBe(p.transactionId);
   });
 

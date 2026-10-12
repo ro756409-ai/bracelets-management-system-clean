@@ -6,6 +6,7 @@ import { dailyAccountsStatus, dailyLedgerReport, ensureDailyAccounts } from "./l
 import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpeningFromStocktake } from "./ledgerInventory.service";
 import { closeChecklist, incomeStatement, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
 import { recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
+import { listRefundLiabilities, payCustomerRefund, retainRefundRemainder } from "./ledgerOrders.service";
 import { parseSettlementCsv } from "../shared/carrierSettlement";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
@@ -262,6 +263,17 @@ export function createLedgerRouter(deps: Deps) {
       payout: ledgerProcedure("ledger.post")
         .input(z.object({ statementRef: z.string().trim().min(3).max(60), receivedOn: dateStr, amount: amountStr, accountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/) }))
         .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => recordCarrierPayout({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+    }),
+
+    // المرتجع بعد التحصيل: التزام الرد للعميل — رد مرة واحدة أو احتجاز الباقي بسبب معلن (نطاق الشركة + ledger.post)
+    refunds: router({
+      list: ledgerProcedure("ledger.view").query(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => listRefundLiabilities(tenantOf(ctx))); }),
+      pay: ledgerProcedure("ledger.post")
+        .input(z.object({ orderId: z.number().int().positive(), accountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/), amount: amountStr, date: dateStr }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => payCustomerRefund({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      retain: ledgerProcedure("ledger.post")
+        .input(z.object({ orderId: z.number().int().positive(), amount: amountStr, reason: z.string().trim().min(3).max(300), date: dateStr }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => retainRefundRemainder({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
     }),
 
     // المرحلة 4: قيمة المخزون الافتتاحية من جرد فعلي معتمد يوم Go-live (المالك فقط) — مرة واحدة لكل مخزن.

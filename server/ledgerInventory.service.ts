@@ -5,7 +5,7 @@ import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import { businessDateKey } from "../shared/businessTime";
 import { LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import { dispatchOrderInventory, reserveOrderInventory } from "./inventoryV2.service";
-import { getLedgerStatus, postLedgerTransaction, resolveDb, type LedgerDb } from "./ledgerV3.service";
+import { getLedgerStatus, postLedgerTransaction, rawRows, resolveDb, type LedgerDb } from "./ledgerV3.service";
 import { flagOrderLedgerReview } from "./ledgerOrders.service";
 
 /**
@@ -213,10 +213,43 @@ export async function postStocktakeVariance(input: { businessId: number; stockta
 }
 
 /**
- * مرتجع مفحوص ومعتمد → V3 بلا تكلفة مكررة:
- *  • بعد تسليم مسجّل (التكلفة نُقلت لخسائر المرتجعات): «إرجاع للمخزون» = مدين مخزون / دائن خسائر المرتجعات؛ «إعدام/مفقود» = لا شيء.
- *  • قبل التسليم (لا تكلفة مسجّلة بعد): «إعدام/مفقود» = مدين خسائر المرتجعات / دائن مخزون؛ «إرجاع» = لا شيء.
+ * مرتجع مفحوص ومعتمد → V3 بلا تكلفة مكررة ولا استلام مرتين (قيد واحد بمفتاح `return-inspection:<id>`):
+ *  • بعد التسليم (تكلفته نُقلت لـ«مرتجعات قيد الفحص» عند المرتجع): السليم المُستلم فعليًا ⇒ مخزون، والتالف/الفاقد ⇒ خسائر
+ *    المرتجعات — كلاهما من «قيد الفحص»؛ وقيمة الفحص لا تتجاوز المتبقي قيد الفحص لنفس الأوردر (لا استلام مرتين).
+ *  • قبل التسليم (لا تكلفة مبيعات مسجّلة، والقيمة ما زالت في المخزون): التالف/الفاقد ⇒ خسائر من المخزون؛ السليم بلا قيد.
  */
+/**
+ * فتح فحص المرتجع لأوردر رجع من شركة الشحن (مسار بوسطة لا يمر بـshippingV2 الذي كان يفتحه وحده): الكمية المرتجعة لكل بند
+ * = ما خرج فعلًا من المخزن (stockOutQuantity) — ما لم يخرج لا يُفحص؛ وفحص «pending» واحد للأوردر. كتابة كميات V2 فقط بلا أي
+ * أثر مالي؛ القيمة لا تعود للمخزون إلا بعد الفحص والاعتماد (postReturnInspection). مرة واحدة تحت التزامن (قفل الأوردر)،
+ * ولشركة دفترها مفعّل فقط — بلا تغيير لسلوك الشركات الأخرى.
+ */
+export async function openReturnInspection(input: { businessId: number; orderId: number }) {
+  const d = await resolveDb();
+  const ctx = await activeContext(d, input.businessId);
+  if (!ctx) return { status: "skipped" as const, reason: "الدفتر أو تقييم المخزون غير مفعّل" };
+  return d.transaction(async (tx: any) => {
+    const [order] = await tx.select({ id: orders.id, status: orders.status }).from(orders)
+      .where(and(eq(orders.id, input.orderId), eq(orders.businessId, input.businessId))).limit(1).for("update");
+    if (!order) return { status: "skipped" as const, reason: "الأوردر خارج هذا النشاط" };
+    if (order.status !== "returned") return { status: "skipped" as const, reason: "الأوردر ليس مرتجعًا" };
+    const items = await tx.select({ id: orderItems.id, out: orderItems.stockOutQuantity, returned: orderItems.returnedQuantity }).from(orderItems)
+      .where(eq(orderItems.orderId, order.id)).for("update");
+    let toInspect = 0;
+    for (const it of items) {
+      const out = Number(it.out ?? 0), ret = Number(it.returned ?? 0);
+      if (ret < out) await tx.update(orderItems).set({ returnedQuantity: out }).where(eq(orderItems.id, it.id));
+      toInspect += Math.max(out, ret);
+    }
+    if (toInspect === 0) return { status: "skipped" as const, reason: "لم يخرج شيء من المخزن — لا فحص" };
+    const existing = await tx.select({ id: returnInspections.id, status: returnInspections.status }).from(returnInspections)
+      .where(and(eq(returnInspections.businessId, input.businessId), eq(returnInspections.orderId, order.id)));
+    if (existing.length > 0) return { status: "exists" as const, inspectionId: existing[0].id };
+    const r: any = await tx.insert(returnInspections).values({ businessId: input.businessId, orderId: order.id, status: "pending" });
+    return { status: "opened" as const, inspectionId: Number(r?.insertId ?? r?.[0]?.insertId) };
+  });
+}
+
 export async function postReturnInspection(input: { businessId: number; inspectionId: number; actor: LedgerActor }) {
   const d = await resolveDb();
   const ctx = await activeContext(d, input.businessId);
@@ -227,29 +260,49 @@ export async function postReturnInspection(input: { businessId: number; inspecti
   if (date < ctx.ledgerGoLive) return { status: "skipped" as const, reason: "قبل بداية الدفتر" };
   const items = await d.select({ quantity: returnInspectionItems.quantity, unitCostSnapshot: returnInspectionItems.unitCostSnapshot, disposition: returnInspectionItems.disposition })
     .from(returnInspectionItems).where(eq(returnInspectionItems.inspectionId, insp.id));
+  let restock = 0n, loss = 0n;
+  for (const it of items) {
+    if (it.unitCostSnapshot == null) throw new InventoryLedgerError("بند مرتجع بلا تكلفة مثبتة");
+    const v = toMinorUnits(String(it.unitCostSnapshot)) * BigInt(it.quantity);
+    if (it.disposition === "restock") restock += v; else loss += v;
+  }
+  const key = `return-inspection:${insp.id}`;
   const [delivered] = await d.select({ id: ledgerTransactions.id }).from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, ctx.tenantId), eq(ledgerTransactions.idempotencyKey, `order:${insp.orderId}:delivered`))).limit(1);
   const afterDelivery = Boolean(delivered);
+  const acc = await accountIds(d, ctx.tenantId, afterDelivery ? ["INV_GOODS", "RETURN_LOSS", "RETURNS_PENDING"] : ["INV_GOODS", "RETURN_LOSS"]);
+  type E = { accountId: number; side: "debit" | "credit"; amount: string; businessId: number };
+  const entries: E[] = [];
+  let guard: ((tx: any) => Promise<void>) | undefined;
   if (afterDelivery) {
-    // الإرجاع للمخزون بعد التسليم يعكس جزءًا من «خسائر المرتجعات» — فلا بد أن يكون المرتجع المالي مسجّلًا أولًا
-    const [loss] = await d.select({ id: ledgerTransactions.id }).from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, ctx.tenantId), eq(ledgerTransactions.idempotencyKey, `order:${insp.orderId}:return-loss`))).limit(1);
-    if (!loss) return { status: "skipped" as const, reason: "المرتجع المالي للأوردر لم يُسجَّل بعد (حدث الإرجاع من شركة الشحن) — أعد المحاولة بعده" };
+    const [moved] = rawRows(await d.execute(sql`SELECT (SELECT SUM(e.amount) FROM ledger_entries e WHERE e.transactionId = t.id AND e.side = 'debit') AS amount
+      FROM ledger_transactions t WHERE t.tenantId = ${ctx.tenantId} AND t.idempotencyKey = ${`order:${insp.orderId}:return-cost`}`));
+    if (!moved) return { status: "skipped" as const, reason: "المرتجع المالي للأوردر لم يُسجَّل بعد (حدث الإرجاع من شركة الشحن) — أعد المحاولة بعده" };
+    // ما استُهلك من «قيد الفحص» لنفس الأوردر بفحوص أخرى — يُفحص داخل transaction الترحيل بعد قفل الحسابات (guard)
+    const siblingRefs = (await d.select({ id: returnInspections.id }).from(returnInspections)
+      .where(and(eq(returnInspections.businessId, input.businessId), eq(returnInspections.orderId, insp.orderId)))).map(r => String(r.id)).filter(r => r !== String(insp.id));
+    const pendingMoved = toMinorUnits(String(moved.amount ?? "0"));
+    guard = async (tx: any) => {
+      if (restock + loss === 0n) return;
+      let used = 0n;
+      if (siblingRefs.length > 0) {
+        const [row] = rawRows(await tx.execute(sql`SELECT COALESCE(SUM(e.amount), 0) AS amount FROM ledger_transactions t
+          JOIN ledger_entries e ON e.transactionId = t.id AND e.side = 'credit' AND e.accountId = ${acc.RETURNS_PENDING}
+          WHERE t.tenantId = ${ctx.tenantId} AND t.sourceType = 'return_inspection' AND t.sourceReference IN (${sql.join(siblingRefs.map(r => sql`${r}`), sql`, `)})
+          FOR SHARE`));
+        used = toMinorUnits(String(row?.amount ?? "0"));
+      }
+      const remaining = pendingMoved - used;
+      if (restock + loss > remaining) throw new InventoryLedgerError(`قيمة الفحص ${fromMinorUnits(restock + loss)} أكبر من المتبقي قيد الفحص للأوردر ${fromMinorUnits(remaining)} — لا استلام مرتين`);
+    };
+    if (restock > 0n) entries.push({ accountId: acc.INV_GOODS, side: "debit", amount: fromMinorUnits(restock), businessId: input.businessId });
+    if (loss > 0n) entries.push({ accountId: acc.RETURN_LOSS, side: "debit", amount: fromMinorUnits(loss), businessId: input.businessId });
+    if (restock + loss > 0n) entries.push({ accountId: acc.RETURNS_PENDING, side: "credit", amount: fromMinorUnits(restock + loss), businessId: input.businessId });
+  } else if (loss > 0n) {
+    entries.push({ accountId: acc.RETURN_LOSS, side: "debit", amount: fromMinorUnits(loss), businessId: input.businessId }, { accountId: acc.INV_GOODS, side: "credit", amount: fromMinorUnits(loss), businessId: input.businessId });
   }
-  const pick = afterDelivery ? "restock" : "loss";
-  let value = 0n;
-  for (const it of items) {
-    const isRestock = it.disposition === "restock";
-    if ((pick === "restock") !== isRestock) continue;
-    if (it.unitCostSnapshot == null) throw new InventoryLedgerError("بند مرتجع بلا تكلفة مثبتة");
-    value += toMinorUnits(String(it.unitCostSnapshot)) * BigInt(it.quantity);
-  }
-  if (value === 0n) return { status: "skipped" as const, reason: afterDelivery ? "لا بنود مُرجعة للمخزون" : "لا بنود معدومة/مفقودة" };
-  const acc = await accountIds(d, ctx.tenantId, ["INV_GOODS", "RETURN_LOSS"]);
-  const amount = fromMinorUnits(value);
-  const entries = afterDelivery
-    ? [{ accountId: acc.INV_GOODS, side: "debit" as const, amount, businessId: input.businessId }, { accountId: acc.RETURN_LOSS, side: "credit" as const, amount, businessId: input.businessId }]
-    : [{ accountId: acc.RETURN_LOSS, side: "debit" as const, amount, businessId: input.businessId }, { accountId: acc.INV_GOODS, side: "credit" as const, amount, businessId: input.businessId }];
-  const r = await postLedgerTransaction({ tenantId: ctx.tenantId, sourceBusinessId: input.businessId, kind: afterDelivery ? "adjustment" : "return_loss",
-    idempotencyKey: `return-inspection:${insp.id}:${afterDelivery ? "restock" : "loss"}`, effectiveDate: date, currency: "EGP", actor: input.actor,
-    description: afterDelivery ? `إرجاع مرتجع للمخزون — فحص #${insp.id}` : `إعدام/فقد مرتجع قبل التسليم — فحص #${insp.id}`, sourceType: "return_inspection", sourceReference: String(insp.id), entries } as any);
-  return { status: r.replay ? "replay" as const : "posted" as const, transactionId: r.transactionId, amount, afterDelivery };
+  if (entries.length === 0) return { status: "skipped" as const, reason: afterDelivery ? "لا بنود في الفحص" : "مرتجع قبل التسليم سليم — القيمة في المخزون أصلًا" };
+  const r = await postLedgerTransaction({ tenantId: ctx.tenantId, sourceBusinessId: input.businessId, kind: afterDelivery ? "adjustment" : "return_loss", idempotencyKey: key, effectiveDate: date, currency: "EGP", actor: input.actor,
+    description: afterDelivery ? `فحص مرتجع #${insp.id}: سليم للمخزون ${fromMinorUnits(restock)} · تالف/فاقد ${fromMinorUnits(loss)}` : `تالف/فاقد مرتجع قبل التسليم — فحص #${insp.id}`,
+    sourceType: "return_inspection", sourceReference: String(insp.id), entries, guard } as any);
+  return { status: r.replay ? "replay" as const : "posted" as const, transactionId: r.transactionId, restock: fromMinorUnits(restock), loss: fromMinorUnits(loss), afterDelivery };
 }

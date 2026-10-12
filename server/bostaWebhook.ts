@@ -18,6 +18,7 @@
  */
 import { Request, Response, Express } from "express";
 import { afterCarrierOrderUpdate } from "./ledgerOrders.service";
+import { openReturnInspection } from "./ledgerInventory.service";
 import { timingSafeEqual } from "crypto";
 import { getDb, runOrderTransaction } from "./db";
 import { orderEventsEnabled, prepareOrderEvent } from "./orderEvents.service";
@@ -165,6 +166,9 @@ async function processAndMark(businessId: number, tenantId: number | null, event
     // ولا يرمي أبدًا (الفشل = مراجعة على الأوردر). بعد اعتماد تغيير الأوردر نفسه.
     if (result.status === "processed" && result.orderId != null)
       await afterCarrierOrderUpdate({ businessId, orderId: result.orderId, orderStatus: result.orderStatus ?? null, eventStatus: event.orderStatus ?? null, cod: event.cod, occurredAt: event.timeStamp != null ? new Date(event.timeStamp) : new Date() });
+    // المرتجع الفعلي: فتح فحص المخزن (كميات فقط، بلا أثر مالي) — لا يرمي؛ الفشل لا يُسقط الـwebhook.
+    if (result.status === "processed" && result.orderId != null && event.orderStatus === "returned" && result.orderStatus === "returned")
+      await openReturnInspection({ businessId, orderId: result.orderId }).catch(() => null);
     return result;
   } catch (err) {
     if (inboxId != null)

@@ -44,6 +44,11 @@ export type PostLedgerTransactionInput = {
   sourceReference?: string | null;
   /** أنشطة الجلسة (من الراوتر). undefined = استدعاء داخلي؛ null = نطاق غير معروف ⇒ رفض. */
   scope?: number[] | null;
+  /**
+   * داخلي فقط (لا يُمرَّر من العميل): فحص يعمل **داخل نفس الـtransaction بعد قفل الحسابات FOR UPDATE** —
+   * الترحيلات المتزامنة على نفس الحساب تتسلسل، فيرى الفحص آخر التزام (بقراءات مقفولة) ويرمي لرفض الحركة كلها.
+   */
+  guard?: (tx: Tx) => Promise<void>;
 };
 export type PostResult = { transactionId: number; replay: boolean; postingPeriod: string; entries: { accountId: number; side: "debit" | "credit"; amount: string; balanceAfter: string }[] };
 
@@ -131,6 +136,7 @@ type InternalPost = {
    * (businessId=null — التحويل بين الخزن) يجب أن يكون حسابه ممنوحًا لنشاط واحد على الأقل داخل النطاق.
    */
   scope?: number[] | null;
+  guard?: (tx: Tx) => Promise<void>;
 };
 
 async function loadResult(tx: Tx, transaction: LedgerTransaction, replay: boolean): Promise<PostResult> {
@@ -198,6 +204,7 @@ async function postInternal(tx: Tx, input: InternalPost): Promise<PostResult> {
     if (a.currency !== input.currency) throw new LedgerError("currency", `${a.code}:${a.currency}`);
   }
   assertKindShape(input.kind, entries, id => byId.get(id)?.kind);
+  if (input.guard) await input.guard(tx);
   const pairs = [...new Set(entries.filter(e => e.businessId != null).map(e => `${e.accountId}:${e.businessId}`))];
   const nullBusinessAccounts = [...new Set(entries.filter(e => e.businessId == null).map(e => e.accountId))];
   const scoped = input.scope !== undefined;
@@ -247,7 +254,7 @@ export async function postLedgerTransaction(input: PostLedgerTransactionInput, d
     tenantId: input.tenantId, sourceBusinessId: input.sourceBusinessId ?? null, kind: input.kind, idempotencyKey: input.idempotencyKey,
     effectiveDate: input.effectiveDate, currency: input.currency, actor: input.actor, entries: input.entries,
     description: input.description ?? "", sourceType: input.sourceType ?? null, sourceReference: input.sourceReference ?? null, reversalOfTransactionId: null,
-    scope: input.scope,
+    scope: input.scope, guard: input.guard,
   }));
 }
 

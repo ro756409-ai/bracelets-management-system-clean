@@ -10,8 +10,8 @@ import { runRoleEnumMigration } from "./roleEnumMigration.service";
 import { activateLedgerV3 } from "./ledgerV3.service";
 import { ensureDailyAccounts } from "./ledgerDaily.service";
 import { postOrderDelivered, postOrderReturned } from "./ledgerOrders.service";
-import { postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
-import { makeInventoryKey } from "./inventoryV2.service";
+import { openReturnInspection, postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
+import { makeInventoryKey, submitReturnInspection } from "./inventoryV2.service";
 import { createTempSchema, type TempSchema } from "./testTempSchema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { splitMigrationStatements } from "../shared/ledgerV3Spec";
@@ -133,7 +133,7 @@ describe.runIf(CAN)("📦 المرحلة 4 — المخزون وتكلفة ال�
     expect((await postStocktakeVariance({ businessId: A.businessId, stocktakeId: Number(opening), actor: { type: "system" } })).status).toBe("skipped");
   });
 
-  it("المرتجع المفحوص: بعد التسليم إرجاع للمخزون = مخزون/خسائر مرتجعات؛ قبل التسليم إعدام = خسائر/مخزون؛ بلا تكرار", async () => {
+  it("المرتجع المفحوص: بعد التسليم السليم للمخزون والتالف للخسائر من «قيد الفحص»؛ فحص ثانٍ يتجاوز المتبقي مرفوض؛ قبل التسليم التالف = خسائر/مخزون", async () => {
     // بعد التسليم: أوردر سُلّم وارتد ثم فُحص وأُرجع 1 من 2 للمخزون
     const delivered = await mkOrder("delivered", 2);
     const item = (await q("SELECT id FROM order_items WHERE orderId = ?", [delivered]))[0].id;
@@ -148,14 +148,58 @@ describe.runIf(CAN)("📦 المرحلة 4 — المخزون وتكلفة ال�
     const a1 = await postReturnInspection({ businessId: A.businessId, inspectionId: insp, actor: { type: "system" } });
     const a2 = await postReturnInspection({ businessId: A.businessId, inspectionId: insp, actor: { type: "system" } });
     expect([a1.status, a2.status]).toEqual(["posted", "replay"]);
-    expect(await lines(`return-inspection:${insp}:restock`)).toEqual([["INV_GOODS", "debit", "40.0000"], ["RETURN_LOSS", "credit", "40.0000"]]);
+    expect(await lines(`return-inspection:${insp}`)).toEqual([["INV_GOODS", "debit", "40.0000"], ["RETURN_LOSS", "debit", "40.0000"], ["RETURNS_PENDING", "credit", "80.0000"]]);
+    // فحص ثانٍ لنفس الأوردر = استلام مرتين — مرفوض (المتبقي قيد الفحص صفر)
+    const insp3 = insId(await q("INSERT INTO return_inspections (businessId, orderId, status, approvedAt) VALUES (?, ?, 'approved', ?)", [A.businessId, delivered, new Date("2026-10-15T10:00:00Z")]));
+    await q("INSERT INTO return_inspection_items (inspectionId, businessId, orderItemId, quantity, unitCostSnapshot, disposition) VALUES (?, ?, ?, 1, '40.0000', 'restock')", [insp3, A.businessId, item]);
+    await expect(postReturnInspection({ businessId: A.businessId, inspectionId: insp3, actor: { type: "system" } })).rejects.toThrow(/لا استلام مرتين/);
     // قبل التسليم: إعدام قطعة لم تُسجَّل تكلفتها كمبيعات
     const shipped = await mkOrder("returned", 1);
     const item2 = (await q("SELECT id FROM order_items WHERE orderId = ?", [shipped]))[0].id;
     const insp2 = insId(await q("INSERT INTO return_inspections (businessId, orderId, status, approvedAt) VALUES (?, ?, 'approved', ?)", [A.businessId, shipped, new Date("2026-10-14T10:00:00Z")]));
     await q("INSERT INTO return_inspection_items (inspectionId, businessId, orderItemId, quantity, unitCostSnapshot, disposition) VALUES (?, ?, ?, 1, '40.0000', 'scrap')", [insp2, A.businessId, item2]);
     expect((await postReturnInspection({ businessId: A.businessId, inspectionId: insp2, actor: { type: "system" } })).status).toBe("posted");
-    expect(await lines(`return-inspection:${insp2}:loss`)).toEqual([["RETURN_LOSS", "debit", "40.0000"], ["INV_GOODS", "credit", "40.0000"]]);
+    expect(await lines(`return-inspection:${insp2}`)).toEqual([["RETURN_LOSS", "debit", "40.0000"], ["INV_GOODS", "credit", "40.0000"]]);
     expect(await txKinds(`order:${shipped}:%`)).toEqual([]); // لا إيراد ولا تكلفة لأوردر لم يُسلَّم
+  });
+
+  it("محرك V2 للكمية والمتوسط فقط: دورة كاملة (تأكيد → مسح متزامن → تسليم → مرتجع → فحص معتمد عبر الراوتر) بلا أي كتابة مالية في V1/V2، وخروج وتكلفة مرة واحدة", async () => {
+    const tables: string[] = (await q("SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME")).map((r: any) => r.t);
+    const snapshot = async () => {
+      const out: Record<string, string> = {};
+      for (const t of tables) { const [row] = await q(`CHECKSUM TABLE \`${t}\``); out[t] = String(row.Checksum); }
+      return out;
+    };
+    const before = await snapshot();
+    const o = await mkOrder("new", 2);
+    await confirmOrder(o, e.ownerA, "مالك");
+    const wh1 = await caller(e.whA);
+    await Promise.allSettled([1, 2, 3].map(() => wh1.inventoryLedger.handover({ businessId: A.businessId, orderId: o })));
+    await q("UPDATE orders SET status = 'delivered' WHERE id = ?", [o]);
+    await postOrderDelivered({ businessId: A.businessId, orderId: o, cod: 500, occurredAt: new Date("2026-10-16T10:00:00Z"), actor: { type: "webhook" } });
+    await q("UPDATE orders SET status = 'returned' WHERE id = ?", [o]);
+    await postOrderReturned({ businessId: A.businessId, orderId: o, occurredAt: new Date("2026-10-17T10:00:00Z"), actor: { type: "webhook" } });
+    const item = (await q("SELECT id FROM order_items WHERE orderId = ?", [o]))[0].id;
+    // مسار بوسطة: فتح الفحص مرة واحدة تحت التزامن، والكمية المرتجعة = ما خرج فعلًا
+    const opened = await Promise.all([1, 2, 3].map(() => openReturnInspection({ businessId: A.businessId, orderId: o })));
+    expect(opened.filter(r => r.status === "opened")).toHaveLength(1);
+    expect((await q("SELECT returnedQuantity n FROM order_items WHERE id = ?", [item]))[0].n).toBe(2);
+    const insp = (opened.find(r => r.status === "opened") as any).inspectionId;
+    expect((await q("SELECT COUNT(*) n FROM return_inspections WHERE orderId = ?", [o]))[0].n).toBe(1);
+    await submitReturnInspection({ businessId: A.businessId, inspectionId: insp, receivedAt: new Date("2026-10-18T09:00:00Z"), actor: { id: e.amA, name: "مدير حسابات" } as any,
+      items: [{ orderItemId: item, quantity: 1, disposition: "restock" }, ] });
+    const approved = await (await caller(e.ownerA)).accountingV2.returnInspectionApprove({ businessId: A.businessId, inspectionId: insp, warehouseId: wh, occurredAt: new Date("2026-10-18T10:00:00Z") });
+    expect((approved as any).ledger).toMatchObject({ status: "posted" });
+    const after = await snapshot();
+    const changed = tables.filter(t => before[t] !== after[t]);
+    // المسموح: الأوردر وبنوده، كميات ومتوسط V2، الفحص، أحداث العمل (مفتاح منع تكرار الخروج)، سجلات التدقيق، وجداول V3 فقط
+    const allowed = /^(orders|order_items|order_status_history|inventory_(balances|transactions|movements|reservations)|return_inspections|return_inspection_items|business_events|audit_logs?|activity_logs?|ledger_(transactions|entries|accounts|periods))$/;
+    expect(changed.filter(t => !allowed.test(t))).toEqual([]);
+    for (const t of ["expenses", "expense_payments", "treasury_transactions", "employee_advances"]) expect(changed).not.toContain(t);
+    // خروج واحد وتكلفة واحدة رغم 3 مسحات متزامنة؛ المرتجع: قيد عكس واحد ونقل تكلفة واحد؛ الفحص: استلام واحد بالسليم فقط
+    expect((await q("SELECT COUNT(*) n FROM inventory_transactions WHERE sourceType = 'order_item' AND sourceId = ?", [item]))[0].n).toBe(1);
+    expect(await txKinds(`order:${o}:%`)).toEqual(["revenue_cod", "cost_of_sales", "reversal", "return_cost"]);
+    expect(await lines(`order:${o}:cogs`)).toEqual([["COGS", "debit", "80.0000"], ["INV_GOODS", "credit", "80.0000"]]);
+    expect(await lines(`return-inspection:${insp}`)).toEqual([["INV_GOODS", "debit", "40.0000"], ["RETURNS_PENDING", "credit", "40.0000"]]);
   });
 });

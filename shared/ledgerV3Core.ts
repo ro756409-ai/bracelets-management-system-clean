@@ -13,6 +13,8 @@ export const LEDGER_KINDS = [
   "inventory_purchase",
   // المرحلة 3/4: تكلفة المبيعات عند التسليم من لقطة تكلفة الأوردر، وخسارة مرتجع بعد التسليم (لا تضخيم للربح)
   "cost_of_sales", "return_loss",
+  // مرتجع بعد التسليم: التزام رد للعميل (بعد التحصيل)، ونقل التكلفة لـ«مرتجعات قيد الفحص»، ورد المبلغ للعميل
+  "return_refund", "return_cost", "customer_refund",
 ] as const;
 export type LedgerKind = (typeof LEDGER_KINDS)[number];
 export type LedgerSide = "debit" | "credit";

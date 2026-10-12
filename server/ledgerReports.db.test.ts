@@ -83,10 +83,10 @@ describe.runIf(CAN)("📈 المرحلة 7 — التقارير والإقفال
     // الإيراد: 500 + 300 + 400 (+200 − 200 بالعكس) ؛ الشحن 50
     expect(s.revenue.total).toBe("1250.0000");
     expect(s.revenue.lines.map((l: any) => [l.code, l.amount]).sort()).toEqual([["REVENUE", "1200.0000"], ["REV_SHIPPING", "50.0000"]]);
-    expect(s.cogs).toBe("280.0000"); // 100 + 100 + 80 (+70 − 70 نُقلت لخسارة المرتجع)
+    expect(s.cogs).toBe("280.0000"); // 100 + 100 + 80 (+70 − 70 نُقلت لـ«مرتجعات قيد الفحص» — أصل لا مصروف قبل الفحص)
     expect(s.grossProfit).toBe("970.0000");
-    expect(s.expenses.lines.map((l: any) => [l.code, l.amount])).toEqual([["EXP_ADS", "80.0000"], ["EXP_RENT", "120.0000"], ["RETURN_LOSS", "70.0000"]]);
-    expect(s.netProfit).toBe("700.0000");
+    expect(s.expenses.lines.map((l: any) => [l.code, l.amount])).toEqual([["EXP_ADS", "80.0000"], ["EXP_RENT", "120.0000"]]); // لا خسارة مرتجع قبل الفحص
+    expect(s.netProfit).toBe("770.0000");
     // فلتر النشاط
     expect((await (await call(e.ownerA)).reports.incomeStatement({ ...RANGE, businessId: A2 })).netProfit).toBe("240.0000"); // 400 − 80 − 80
   });
@@ -94,7 +94,7 @@ describe.runIf(CAN)("📈 المرحلة 7 — التقارير والإقفال
   it("الربح حسب النشاط وحسب المنتج: بلا توزيع مخمّن (أوردر متعدد البنود بلا أسعار = غير قابل للتوزيع)", async () => {
     const owner = await call(e.ownerA);
     const byBiz = await owner.reports.profitByBusiness(RANGE);
-    expect(byBiz.map((b: any) => [b.businessId, b.netProfit])).toEqual([[A.businessId, "460.0000"], [A2, "240.0000"]]);
+    expect(byBiz.map((b: any) => [b.businessId, b.netProfit])).toEqual([[A.businessId, "530.0000"], [A2, "240.0000"]]);
     const byProd = await owner.reports.profitByProduct(RANGE);
     // o1: أسورة 500/100؛ o2: أسورة 200/60 + سلسلة 100/40؛ o4 معكوس = مستبعد؛ o3 غير قابل للتوزيع
     expect(byProd.products.map((p: any) => [p.productId, p.quantity, p.revenue, p.cogs])).toEqual([[P1, 2, "700.0000", "160.0000"], [P2, 1, "100.0000", "40.0000"]]);
@@ -110,7 +110,7 @@ describe.runIf(CAN)("📈 المرحلة 7 — التقارير والإقفال
     try {
       // المحاسب بنطاقه: ربح نشاطه فقط (لا أرقام النشاط الثاني ولا المختلط)
       const s = await (await call(e.accA)).reports.incomeStatement(RANGE);
-      expect(s.netProfit).toBe("460.0000");
+      expect(s.netProfit).toBe("530.0000");
       expect(JSON.stringify(s)).not.toMatch(/"400\.0000"|"80\.0000"/);
     } finally { await q("DELETE FROM tenant_role_permissions WHERE tenantId = ? AND role = 'accountant' AND permission = 'reports.view_profit'", [A.tenantId]); }
   });

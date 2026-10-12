@@ -12,6 +12,7 @@ import { getLedgerStatus, postLedgerTransaction, rawRows, resolveDb, type Ledger
  *    مرفوض، نفس الكشف = replay). سطر التحصيل: دائن ذمة COD بالتحصيل، مدين رسوم الشحن بالرسوم، والصافي إلى «قيد الصرف».
  *    سطر رسوم فقط (مرتجع): مدين الرسوم / دائن «قيد الصرف».
  *  • لا تخمين: شحنة بلا أوردر، أو بأكثر من أوردر، أو بلا قيد تسليم، أو بمبلغ تحصيل ≠ المسجّل عند التسليم = مراجعة بلا قيد.
+ *  • أوردر ارتد قبل التسوية (عُكس تسليمه) والكشف يثبت التحصيل ⇒ السطر يُسوّى مقابل «مبالغ مستحقة للعملاء» (التزام رد).
  *  • التحويل الفعلي (`bosta-payout:<ref>`) خطوة منفصلة بتاريخها، ويُقبل فقط إن ساوى صافي الكشف المسجّل حرفيًا.
  */
 export type SettleOutcome = { row: number; shipment: string; status: "posted" | "replay" | "already_settled" | "review"; reason?: string; transactionId?: number };
@@ -55,14 +56,22 @@ export async function settleCarrierStatement(input: { tenantId: number; statemen
     let key: string;
     if (cod > 0n) {
       // التحصيل يجب أن يطابق ذمة التسليم المسجّلة لهذا الأوردر (لم تُعكس)
-      const [del] = rawRows(await d.execute(sql`SELECT t.id, (SELECT SUM(e.amount) FROM ledger_entries e WHERE e.transactionId = t.id AND e.side = 'debit' AND e.accountId = ${acc.COD_BOSTA}) AS cod
-        FROM ledger_transactions t WHERE t.tenantId = ${input.tenantId} AND t.idempotencyKey = ${`order:${o.id}:delivered`}
-          AND NOT EXISTS (SELECT 1 FROM ledger_transactions r WHERE r.reversalOfTransactionId = t.id)`));
-      if (!del) { out.push({ row: l.row, shipment: l.shipment, status: "review", reason: `لا قيد تسليم قائم للأوردر ${o.orderNumber} — لا تسوية لتحصيل غير مسجّل` }); continue; }
+      const [del] = rawRows(await d.execute(sql`SELECT t.id, (SELECT SUM(e.amount) FROM ledger_entries e WHERE e.transactionId = t.id AND e.side = 'debit' AND e.accountId = ${acc.COD_BOSTA}) AS cod,
+          (SELECT r.idempotencyKey FROM ledger_transactions r WHERE r.reversalOfTransactionId = t.id) AS reversedBy
+        FROM ledger_transactions t WHERE t.tenantId = ${input.tenantId} AND t.idempotencyKey = ${`order:${o.id}:delivered`}`));
+      if (!del) { out.push({ row: l.row, shipment: l.shipment, status: "review", reason: `لا قيد تسليم للأوردر ${o.orderNumber} — لا تسوية لتحصيل غير مسجّل` }); continue; }
+      // مرتجع قبل التسوية (عُكس التسليم بمرتجعنا) لكن الكشف يثبت أن التحصيل تم ⇒ المبلغ التزام رد للعميل لا ذمة
+      const returnedBeforeSettlement = del.reversedBy === `order:${o.id}:returned`;
+      if (del.reversedBy && !returnedBeforeSettlement) { out.push({ row: l.row, shipment: l.shipment, status: "review", reason: `قيد تسليم الأوردر ${o.orderNumber} معكوس بحركة أخرى — راجع يدويًا` }); continue; }
       if (toMinorUnits(String(del.cod ?? "0")) !== cod) { out.push({ row: l.row, shipment: l.shipment, status: "review", reason: `التحصيل في الكشف ${l.cod} ≠ المسجّل عند التسليم ${fromMinorUnits(toMinorUnits(String(del.cod ?? "0")))}` }); continue; }
+      let refundAcc: number | null = null;
+      if (returnedBeforeSettlement) {
+        try { refundAcc = (await ids(d, input.tenantId, ["REFUND_PAYABLE"])).REFUND_PAYABLE; }
+        catch (e) { out.push({ row: l.row, shipment: l.shipment, status: "review", reason: e instanceof Error ? e.message : String(e) }); continue; }
+      }
       key = `bosta-settle:${l.shipment}:cod`;
       entries = [
-        { accountId: acc.COD_BOSTA, side: "credit", amount: fromMinorUnits(cod), businessId: o.businessId },
+        { accountId: refundAcc ?? acc.COD_BOSTA, side: "credit", amount: fromMinorUnits(cod), businessId: o.businessId },
         ...(fees > 0n ? [{ accountId: acc.EXP_CARRIER_FEES, side: "debit" as const, amount: fromMinorUnits(fees), businessId: o.businessId }] : []),
         ...(net > 0n ? [{ accountId: acc.COD_PAYOUT, side: "debit" as const, amount: fromMinorUnits(net), businessId: o.businessId }] : []),
         ...(net < 0n ? [{ accountId: acc.COD_PAYOUT, side: "credit" as const, amount: fromMinorUnits(-net), businessId: o.businessId }] : []),
