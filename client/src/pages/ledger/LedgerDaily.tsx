@@ -1,7 +1,8 @@
 import { PartnerLogo, type PartnerId } from "@/components/brand/PartnerLogo";
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
-import { Wallet, Landmark, Smartphone, CreditCard, Truck, ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, RefreshCw, BookOpen, History, Lock } from "lucide-react";
+import { Wallet, Landmark, Smartphone, CreditCard, Truck, ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, RefreshCw, BookOpen, History, Lock, PackagePlus, FileText, ListChecks } from "lucide-react";
+import { LEDGER_DAILY_ACCOUNTS } from "@shared/ledgerDailyAccounts";
 import { trpc } from "@/lib/trpc";
 import { usePermissions } from "@/hooks/usePermission";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
@@ -15,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { PageHeader, StatCard, SectionCard, StatusBadge, EmptyState, ErrorState, LoadingSkeleton, OfflineState } from "@/components/shared";
 import { toast } from "sonner";
 import {
-  BALANCE_CARD_CODES, OPERATION_META, composeDailyPost, cairoToday, expenseAccounts, money, moneyAccounts, newOperationId, revenueAccounts, isActiveAccount, MONEY_KINDS, CASH_KINDS, CARRIER_RECEIVABLE_KINDS, availableCash, balanceText,
+  BALANCE_CARD_CODES, OPERATION_META, composeDailyPost, cairoToday, expenseAccounts, money, moneyAccounts, newOperationId, revenueAccounts, isActiveAccount, MONEY_KINDS, CASH_KINDS, CARRIER_RECEIVABLE_KINDS, availableCash, balanceText, cashAccounts, inventoryAccounts,
   type DailyOperation, type UiAccount,
 } from "./ledgerUi";
 
@@ -38,7 +39,8 @@ const KIND_GROUPS: { key: string; label: string; match: (a: UiAccount) => boolea
   { key: "carrier", label: "ذمم على شركات الشحن (ليست نقدية متاحة)", match: a => CARRIER_RECEIVABLE_KINDS.has(a.kind) },
   { key: "revenue", label: "الإيرادات", match: a => a.kind === "revenue" },
   { key: "expense", label: "المصروفات", match: a => a.kind === "expense" },
-  { key: "other", label: "حسابات أخرى", match: a => !MONEY_KINDS.has(a.kind) && a.kind !== "revenue" && a.kind !== "expense" },
+  { key: "stock", label: "المخزون وتكلفة المبيعات (أصل — ليس مصروفًا)", match: a => a.kind === "inventory" || a.kind === "cogs" },
+  { key: "other", label: "حسابات أخرى", match: a => !MONEY_KINDS.has(a.kind) && !["revenue", "expense", "inventory", "cogs"].includes(a.kind) },
 ];
 
 export default function LedgerDaily() {
@@ -121,10 +123,11 @@ export default function LedgerDaily() {
       )}
 
       {canPost ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="ledger-actions">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="ledger-actions">
           <Button className="min-h-12 text-base" onClick={() => setOp("revenue")} data-testid="ledger-action-revenue"><ArrowDownCircle className="h-5 w-5 ml-2" aria-hidden="true" /> تسجيل إيراد</Button>
           <Button className="min-h-12 text-base" variant="secondary" onClick={() => setOp("expense")} data-testid="ledger-action-expense"><ArrowUpCircle className="h-5 w-5 ml-2" aria-hidden="true" /> تسجيل مصروف</Button>
           <Button className="min-h-12 text-base" variant="outline" onClick={() => setOp("transfer")} data-testid="ledger-action-transfer"><ArrowLeftRight className="h-5 w-5 ml-2" aria-hidden="true" /> تحويل بين الخزن</Button>
+          <Button className="min-h-12 text-base" variant="outline" onClick={() => setOp("purchase")} data-testid="ledger-action-purchase"><PackagePlus className="h-5 w-5 ml-2" aria-hidden="true" /> شراء بضاعة/خامات</Button>
         </div>
       ) : (
         <p className="flex items-start gap-2 rounded-[var(--radius-brand-md)] border border-dashed border-border bg-card p-3 text-sm text-muted-foreground" data-testid="ledger-no-post">
@@ -133,7 +136,10 @@ export default function LedgerDaily() {
         </p>
       )}
 
-      <div className="text-sm">
+      {has("ledger.manage_accounts") && <DailySetupCard />}
+
+      <div className="flex flex-wrap gap-x-4 text-sm">
+        <Link href="/ledger/report" className="inline-flex min-h-11 items-center gap-1.5 text-primary underline underline-offset-4 md:min-h-0" data-testid="ledger-link-report"><FileText className="h-4 w-4" aria-hidden="true" /> التقرير اليومي</Link>
         <Link href="/ledger/transactions" className="inline-flex min-h-11 items-center gap-1.5 text-primary underline underline-offset-4 md:min-h-0"><History className="h-4 w-4" aria-hidden="true" /> سجل الحركات</Link>
       </div>
 
@@ -185,6 +191,42 @@ function AccountsSection({ accounts, loading }: { accounts: UiAccount[]; loading
   );
 }
 
+/**
+ * تجهيز الحسابات القياسية (تصنيفات المصروفات + المخزون/التكلفة) — لصاحب ledger.manage_accounts فقط، ويختفي حين يكتمل.
+ * idempotent على السيرفر: الضغط المزدوج أو التكرار لا ينشئ حسابًا مرتين، والكود الموجود بنوع مختلف لا يُلمس.
+ */
+export function DailySetupCard() {
+  const status = trpc.ledger.setup.dailyAccountsStatus.useQuery(undefined, { retry: false });
+  const ensure = trpc.ledger.setup.ensureDailyAccounts.useMutation();
+  const utils = trpc.useUtils();
+  const [busy, setBusy] = useState(false);
+  const missing = status.data?.missing ?? [];
+  const conflicts = status.data?.conflicts ?? [];
+  if (!status.data || (missing.length === 0 && conflicts.length === 0)) return null;
+  const nameOf = (code: string) => LEDGER_DAILY_ACCOUNTS.find(a => a.code === code)?.name ?? code;
+  const run = async () => {
+    if (busy || ensure.isPending) return;
+    setBusy(true);
+    try {
+      const r = await ensure.mutateAsync();
+      toast.success(r.created.length ? `جُهّز ${r.created.length} حساب` : "الحسابات جاهزة بالفعل");
+      await Promise.all([status.refetch(), utils.ledger.accounts.list.invalidate()]);
+    } catch (e) { toast.error((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <SectionCard title={<span className="inline-flex items-center gap-2"><ListChecks className="h-4 w-4" aria-hidden="true" /> تصنيفات المصروفات وحسابات المخزون</span>} testId="ledger-daily-setup">
+      {missing.length > 0 && (
+        <>
+          <p className="text-sm text-muted-foreground">ناقص: {missing.map(nameOf).join("، ")}. الشراء يُسجَّل على حساب مخزون (أصل) لا كمصروف.</p>
+          <Button className="mt-3 min-h-11" onClick={run} disabled={busy || ensure.isPending} data-testid="ledger-daily-setup-run">{busy || ensure.isPending ? "جارٍ التجهيز…" : "تجهيز الحسابات"}</Button>
+        </>
+      )}
+      {conflicts.length > 0 && <p className="mt-2 text-xs text-destructive" role="alert" data-testid="ledger-daily-setup-conflicts">كود موجود بنوع مختلف ولم يُعدَّل: {conflicts.join("، ")} — راجعه من صفحة الحسابات.</p>}
+    </SectionCard>
+  );
+}
+
 function StateCard({ title, text, onRetry }: { title: string; text: string; onRetry?: () => void }) {
   return (
     <div className="m-4 rounded-[var(--radius-brand-md)] border border-border bg-card p-5 text-center shadow-[var(--shadow-card)]" dir="rtl" data-testid="ledger-state" role={onRetry ? "alert" : undefined}>
@@ -216,8 +258,9 @@ export function DailyOperationDialog({ op, accounts, onClose, onDone, initial }:
   const utils = trpc.useUtils();
   const post = trpc.ledger.post.useMutation();
 
-  const moneyList = useMemo(() => moneyAccounts(accounts), [accounts]);
-  const counterList = useMemo(() => op === "revenue" ? revenueAccounts(accounts) : op === "expense" ? expenseAccounts(accounts) : moneyAccounts(accounts), [accounts, op]);
+  // الشراء يُدفع نقدًا فقط (خزنة/بنك/محفظة) — ليس من ذمة شركة الشحن
+  const moneyList = useMemo(() => op === "purchase" ? cashAccounts(accounts) : moneyAccounts(accounts), [accounts, op]);
+  const counterList = useMemo(() => op === "revenue" ? revenueAccounts(accounts) : op === "expense" ? expenseAccounts(accounts) : op === "purchase" ? inventoryAccounts(accounts) : moneyAccounts(accounts), [accounts, op]);
   const moneyAccount = moneyList.find(a => String(a.id) === moneyId);
   const counterAccount = counterList.find(a => String(a.id) === counterId);
 

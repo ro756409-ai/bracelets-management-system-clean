@@ -20,6 +20,7 @@ import LedgerLayout from "./pages/ledger/LedgerLayout";
 import LedgerAccounts from "./pages/ledger/LedgerAccounts";
 import LedgerPeriods from "./pages/ledger/LedgerPeriods";
 import LedgerOpening from "./pages/ledger/LedgerOpening";
+import LedgerReport from "./pages/ledger/LedgerReport";
 import PermissionsPage from "./pages/PermissionsPage";
 import GoodsReceipt from "./pages/GoodsReceipt";
 import StockTransfer from "./pages/StockTransfer";
@@ -280,6 +281,9 @@ function Router() {
       </Route>
       <Route path="/ledger/accounts">
         <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerAccounts /></LedgerLayout></FinancialRoute>
+      </Route>
+      <Route path="/ledger/report">
+        <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerReport /></LedgerLayout></FinancialRoute>
       </Route>
       <Route path="/ledger/periods">
         <FinancialRoute permission="ledger.view" bare><LedgerLayout><LedgerPeriods /></LedgerLayout></FinancialRoute>

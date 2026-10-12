@@ -6,7 +6,7 @@ import { fromMinorUnits, toMinorUnits } from "@shared/accountingMoney";
  *     لا يرى مدين/دائن ولا يختار kind؛ لا owner_drawing ولا أي نوع آخر من هنا.
  *   • عرض الحركة: المبلغ (مجموع المدين)، من/إلى من القيود، تسميات الأنواع.
  */
-export type DailyOperation = "revenue" | "expense" | "transfer";
+export type DailyOperation = "revenue" | "expense" | "transfer" | "purchase";
 
 /** currentBalance = null حين يحجبه السيرفر عن نطاق المحاسب (حساب مشترك مع نشاط آخر أو عليه قيود الشركة). */
 export type UiAccount = { id: number; code: string; name: string; kind: string; normalSide: "debit" | "credit"; isActive: number | boolean; currentBalance: string | null; balanceHidden?: boolean; isSystem: boolean };
@@ -23,12 +23,14 @@ export const OPERATION_META: Record<DailyOperation, { label: string; money: stri
   revenue: { label: "تسجيل إيراد", money: "يدخل إلى", counter: "نوع الإيراد", kind: "revenue_prepaid" },
   expense: { label: "تسجيل مصروف", money: "يُدفع من", counter: "تصنيف المصروف", kind: "expense" },
   transfer: { label: "تحويل بين الخزن", money: "من", counter: "إلى", kind: "transfer" },
+  // المرحلة 2: شراء بضاعة/خامات = أصل مخزون (ليس مصروفًا) — التكلفة تُعترف بها عند البيع
+  purchase: { label: "شراء بضاعة/خامات", money: "يُدفع من", counter: "نوع المخزون", kind: "inventory_purchase" },
 };
 
 export const KIND_LABELS: Record<string, string> = {
   opening_balance: "رصيد افتتاحي", revenue_cod: "إيراد تحصيل بوسطة", revenue_prepaid: "إيراد", expense: "مصروف", payroll: "رواتب",
   advance: "سلفة", transfer: "تحويل", bosta_settlement: "تسوية بوسطة", owner_drawing: "مسحوبات المالك", owner_contribution: "إيداع المالك",
-  adjustment: "تسوية", reversal: "عكس حركة",
+  adjustment: "تسوية", reversal: "عكس حركة", inventory_purchase: "شراء بضاعة/خامات",
 };
 export const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 
@@ -53,11 +55,12 @@ export function codReceivableTotal(accounts: UiAccount[]): string | null {
 }
 export const revenueAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "revenue" && isActiveAccount(a));
 export const expenseAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "expense" && isActiveAccount(a));
+export const inventoryAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "inventory" && isActiveAccount(a));
 
 export const AMOUNT_RE = /^\d{1,14}(\.\d{1,4})?$/;
 
 export type ComposedPost = {
-  kind: "revenue_cod" | "revenue_prepaid" | "expense" | "transfer";
+  kind: "revenue_cod" | "revenue_prepaid" | "expense" | "transfer" | "inventory_purchase";
   sourceBusinessId: number | null;
   entries: { accountId: number; side: "debit" | "credit"; amount: string; businessId?: number | null }[];
 };
@@ -81,6 +84,13 @@ export function composeDailyPost(
     if (input.businessId == null) throw new Error("اختر النشاط");
     return { kind: moneyAccount.code === "COD_BOSTA" ? "revenue_cod" : "revenue_prepaid", sourceBusinessId: input.businessId,
       entries: [{ accountId: moneyAccount.id, side: "debit", amount }, { accountId: counterAccount.id, side: "credit", amount }] };
+  }
+  if (op === "purchase") {
+    if (counterAccount.kind !== "inventory") throw new Error("اختر حساب مخزون (بضاعة أو خامات)");
+    if (moneyAccount.kind === "carrier_receivable") throw new Error("الشراء يُدفع من خزنة أو بنك أو محفظة");
+    if (input.businessId == null) throw new Error("اختر النشاط");
+    return { kind: "inventory_purchase", sourceBusinessId: input.businessId,
+      entries: [{ accountId: counterAccount.id, side: "debit", amount }, { accountId: moneyAccount.id, side: "credit", amount }] };
   }
   if (op === "expense") {
     if (counterAccount.kind !== "expense") throw new Error("اختر تصنيف مصروف");

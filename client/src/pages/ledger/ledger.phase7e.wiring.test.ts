@@ -13,8 +13,12 @@ const read = (p: string) => strip(readFileSync(path.join(root, p), "utf8"));
 const hooks = (src: string) => [...src.matchAll(/trpc\.[a-zA-Z0-9.]+\.use(Query|Mutation)/g)].map(m => m[0]);
 
 describe("🔌 Queries/Mutations قبل → بعد", () => {
-  it("LedgerDaily: نفس الثلاثة (status / accounts.list / post) — قسم الحسابات يقرأ من accounts.list نفسه", () => {
-    expect(hooks(read("pages/ledger/LedgerDaily.tsx"))).toEqual(["trpc.ledger.status.useQuery", "trpc.ledger.accounts.list.useQuery", "trpc.ledger.post.useMutation"]);
+  it("LedgerDaily: الثلاثة الأصلية (status / accounts.list / post) + تجهيز الحسابات القياسية في المرحلة 2 (حالة للقراءة + إجراء خلف ledger.manage_accounts)", () => {
+    expect(hooks(read("pages/ledger/LedgerDaily.tsx"))).toEqual([
+      "trpc.ledger.status.useQuery", "trpc.ledger.accounts.list.useQuery",
+      "trpc.ledger.setup.dailyAccountsStatus.useQuery", "trpc.ledger.setup.ensureDailyAccounts.useMutation",
+      "trpc.ledger.post.useMutation",
+    ]);
   });
   it("LedgerTransactions: قبل = status/transactions.list/businesses.list/reverse؛ بعد + periods.list (قراءة) و period.lock/reopen (موجودان على السيرفر بصلاحيتهما)", () => {
     const h = hooks(read("pages/ledger/LedgerTransactions.tsx"));

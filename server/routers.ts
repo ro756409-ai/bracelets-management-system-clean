@@ -9562,6 +9562,7 @@ export const appRouter = router({
     scopeBusinessId: ledgerScopeBusinessId, sessionBusinessIds: ledgerSessionBusinessIds,
     // قراءة الشركة كلها: جلسة المالك/الأدمن (ونطاقها كل الأنشطة أصلًا) ومدير الحسابات؛ المحاسب = نشاطه فقط.
     fullLedgerScope: (ctx: ScopeCtx) => ctx.user?.role === "admin" || ctx.employee?.role === ACCOUNTS_MANAGER_ROLE,
+    canViewProfit: (ctx: ScopeCtx) => canViewProfit(ctx as any),
   }),
 });
 

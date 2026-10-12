@@ -6,7 +6,7 @@ import {
 } from "../drizzle/ledgerV3.schema";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import {
-  LEDGER_KINDS, LedgerError, applyToBalance, assertActorShape, assertCurrency, assertEffectiveDate, canonicalPayloadHash, normalizeDescription, postingPeriodOf,
+  LEDGER_KINDS, LedgerError, applyToBalance, assertKindShape, assertActorShape, assertCurrency, assertEffectiveDate, canonicalPayloadHash, normalizeDescription, postingPeriodOf,
   reconcileAccount, validateEntries, type LedgerActor, type LedgerEntryInput, type LedgerKind, type LedgerReconLine, type ValidatedEntry,
 } from "../shared/ledgerV3Core";
 import { getDb, withDeadlockRetry } from "./db";
@@ -57,7 +57,7 @@ const isMysqlError = (err: unknown, code: string, needle?: string): boolean => {
 const isNoSuchTable = (err: unknown) => isMysqlError(err, "ER_NO_SUCH_TABLE");
 const insertId = (r: any): number => Number((Array.isArray(r) ? r[0] : r)?.insertId ?? 0);
 
-async function resolveDb(db?: LedgerDb): Promise<LedgerDb> {
+export async function resolveDb(db?: LedgerDb): Promise<LedgerDb> {
   const d = db ?? (await getDb());
   if (!d) throw new Error("قاعدة البيانات غير متاحة");
   return d;
@@ -197,6 +197,7 @@ async function postInternal(tx: Tx, input: InternalPost): Promise<PostResult> {
     if (a.isActive !== 1) throw new LedgerError("accountInactive", a.code);
     if (a.currency !== input.currency) throw new LedgerError("currency", `${a.code}:${a.currency}`);
   }
+  assertKindShape(input.kind, entries, id => byId.get(id)?.kind);
   const pairs = [...new Set(entries.filter(e => e.businessId != null).map(e => `${e.accountId}:${e.businessId}`))];
   const nullBusinessAccounts = [...new Set(entries.filter(e => e.businessId == null).map(e => e.accountId))];
   const scoped = input.scope !== undefined;
@@ -526,12 +527,12 @@ export async function listLedgerAccounts(tenantId: number, db?: LedgerDb) {
  * — الحركة تظهر فقط لو **كل** قيودها داخل النطاق (scopeVisibleTx). المصفوفة الفارغة = لا شيء (fail-closed).
  */
 export type LedgerReadScope = number[] | null;
-const scopeIds = (scope: number[]) => (scope.length ? scope : [-1]);
+export const scopeIds = (scope: number[]) => (scope.length ? scope : [-1]);
 /**
  * رؤية حركة لنطاق محدود (SQL على الاسم المستعار `t`): كل قيودها بأنشطة داخل النطاق، ونشاطها المصدر داخله أو بلا نشاط.
  * حركة مختلطة (قيد لنشاط آخر أو على مستوى الشركة) تُحجب كلها — لا تُعرض جزئيًا بأرقام نشاط آخر.
  */
-const scopeVisibleTx = (scope: number[]) => {
+export const scopeVisibleTx = (scope: number[]) => {
   const ids = sql.join(scopeIds(scope).map(b => sql`${b}`), sql`, `);
   return sql`(t.sourceBusinessId IS NULL OR t.sourceBusinessId IN (${ids})) AND NOT EXISTS (SELECT 1 FROM ledger_entries x WHERE x.tenantId = t.tenantId AND x.transactionId = t.id AND (x.businessId IS NULL OR x.businessId NOT IN (${ids})))`;
 };
@@ -594,7 +595,7 @@ export async function getLedgerTransaction(tenantId: number, transactionId: numb
   });
 }
 
-const rawRows = (r: any): any[] => (Array.isArray(r) ? (Array.isArray(r[0]) ? r[0] : r) : r?.rows ?? []);
+export const rawRows = (r: any): any[] => (Array.isArray(r) ? (Array.isArray(r[0]) ? r[0] : r) : r?.rows ?? []);
 
 export type LedgerPeriodReview = {
   period: string;

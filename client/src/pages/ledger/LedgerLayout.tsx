@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
-import { BookOpen, CalendarCheck, History, Landmark, LogOut } from "lucide-react";
+import { BookOpen, CalendarCheck, FileText, History, Landmark, LogOut } from "lucide-react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
  * غلاف صفحات دفتر V3:
  *   • جلسة مالك/أدمن (`auth.me` يرجّع user) → لوحة التحكم الكاملة كما هي.
  *   • جلسة موظف غير إداري (المحاسب: `user` = null لكن صلاحياته من `auth.myPermissions`) → قشرة خفيفة
- *     Mobile-first: عنوان + أربعة تبويبات (يومية/حركات/حسابات/مراجعة الشهر — أيقونة فوق تسمية قصيرة على الهاتف) + خروج. بدون هذا كان `DashboardLayout` يعرض له «يرجى تسجيل الدخول»
+ *     Mobile-first: عنوان + خمسة تبويبات (يومية/حركات/تقرير/حسابات/الشهر — أيقونة فوق تسمية قصيرة على الهاتف) + خروج. بدون هذا كان `DashboardLayout` يعرض له «يرجى تسجيل الدخول»
  *     رغم أن الـendpoints تصرّح له. الحارس الحقيقي يبقى على السيرفر (`ledgerProcedure`).
  * المرحلة 7E (عرض فقط): القشرة على tokens الهوية، تبويبات 44px مع aria-current، و`--bottom-nav-h: 0`
  * لأن لا شريط سفلي هنا — نفس الاستعلام (employeePortal.me) ونفس الخروج.
@@ -25,8 +25,9 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
 const TABS = [
   { path: "/ledger", label: "الحسابات اليومية", short: "اليومية", icon: BookOpen },
   { path: "/ledger/transactions", label: "سجل الحركات", short: "الحركات", icon: History },
+  { path: "/ledger/report", label: "التقرير اليومي", short: "التقرير", icon: FileText },
   { path: "/ledger/accounts", label: "الحسابات", short: "الحسابات", icon: Landmark },
-  { path: "/ledger/periods", label: "مراجعة الشهر", short: "مراجعة الشهر", icon: CalendarCheck },
+  { path: "/ledger/periods", label: "مراجعة الشهر", short: "الشهر", icon: CalendarCheck },
 ] as const;
 const tabTestId = (path: string) => `ledger-tab-${path === "/ledger" ? "daily" : path.slice("/ledger/".length)}`;
 
@@ -57,7 +58,7 @@ export function EmployeeLedgerShell({ children }: { children: React.ReactNode })
             </Button>
           </div>
         </div>
-        <nav className="mx-auto grid max-w-5xl grid-cols-4" aria-label="تبويبات الدفتر">
+        <nav className="mx-auto grid max-w-5xl grid-cols-5" aria-label="تبويبات الدفتر">
           {TABS.map(t => {
             const active = location === t.path;
             return (

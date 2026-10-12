@@ -9,6 +9,8 @@ import { fromMinorUnits, toMinorUnits } from "./accountingMoney";
 export const LEDGER_KINDS = [
   "opening_balance", "revenue_cod", "revenue_prepaid", "expense", "payroll", "advance", "transfer",
   "bosta_settlement", "owner_drawing", "owner_contribution", "adjustment", "reversal",
+  // المرحلة 2: شراء بضاعة/خامات = أصل مخزون (لا مصروف) — التكلفة تُعترف بها عند البيع من لقطة التكلفة
+  "inventory_purchase",
 ] as const;
 export type LedgerKind = (typeof LEDGER_KINDS)[number];
 export type LedgerSide = "debit" | "credit";
@@ -50,6 +52,7 @@ export const LEDGER_MESSAGES = {
   activationInput: "التفعيل يتطلب اعتماد تقرير المطابقة وأرصدة افتتاحية صريحة",
   // التفعيل على مستوى الشركة كلها (العلم في ledger_tenant_flags): كل نشاط فعّال يجب أن يكون في الخطة
   activationScope: "لا يمكن تفعيل دفتر الشركة",
+  kindShape: "بنية القيد لا تطابق نوع الحركة",
 } as const;
 
 export class LedgerError extends Error {
@@ -176,4 +179,27 @@ export function reconcileAccount(
     stored: fromMinorUnits(stored), computed: fromMinorUnits(computed), difference: fromMinorUnits(stored - computed),
     entries: entries.length, lastEntryAt: lastAt ? lastAt.toISOString() : null, ok: stored === computed,
   };
+}
+
+/** حسابات المخزون/التكلفة لا تُستخدم إلا بأنواع حركة محددة — يمنع تسجيل الشراء كمصروف أو المصروف كمخزون. */
+const STOCK_KINDS = new Set(["inventory", "cogs"]);
+const PURCHASE_CREDIT_KINDS = new Set(["cash", "bank", "wallet", "supplier_payable"]);
+
+/**
+ * فحص بنية القيد حسب نوع الحركة (على السيرفر، بعد تحميل الحسابات):
+ *  • expense: لا يلمس مخزونًا ولا تكلفة مبيعات — شراء البضاعة/الخامات ليس مصروفًا تشغيليًا.
+ *  • inventory_purchase: كل المدين على حسابات مخزون، وكل الدائن من خزن/بنوك/محافظ أو مستحقات مورد؛ بلا مصروف أو إيراد.
+ * لا يمس الأنواع الأخرى (عكس/افتتاحي/تحويل…) — قواعدها كما هي.
+ */
+export function assertKindShape(kind: string, entries: { accountId: number; side: LedgerSide }[], kindOf: (accountId: number) => string | undefined): void {
+  if (kind === "expense") {
+    for (const e of entries) if (STOCK_KINDS.has(kindOf(e.accountId) ?? "")) throw new LedgerError("kindShape", "المصروف لا يُسجَّل على حساب مخزون أو تكلفة — استخدم «شراء بضاعة/خامات»");
+  }
+  if (kind === "inventory_purchase") {
+    for (const e of entries) {
+      const k = kindOf(e.accountId) ?? "";
+      if (e.side === "debit" && k !== "inventory") throw new LedgerError("kindShape", "الشراء يُسجَّل مدينًا على حساب مخزون فقط");
+      if (e.side === "credit" && !PURCHASE_CREDIT_KINDS.has(k)) throw new LedgerError("kindShape", "الشراء يُدفع من خزنة/بنك/محفظة أو يُسجَّل مستحقًا لمورد");
+    }
+  }
 }

@@ -4,6 +4,7 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 
 const state = vi.hoisted(() => ({
   perms: [] as string[], status: null as any, accounts: [] as any[], mutateAsync: null as any, postInputs: [] as any[],
+  setupStatus: null as any, ensureCalls: 0,
 }));
 vi.mock("@/lib/trpc", () => ({
   trpc: {
@@ -14,6 +15,10 @@ vi.mock("@/lib/trpc", () => ({
       // أنشطة الجلسة من الدفتر نفسه (لا BusinessContext) — نشاط واحد → يُختار تلقائيًا
       businesses: { list: { useQuery: () => ({ data: [{ id: 7, name: "براند A" }], isLoading: false }) } },
       post: { useMutation: () => ({ mutateAsync: state.mutateAsync, isPending: false }) },
+      setup: {
+        dailyAccountsStatus: { useQuery: () => ({ data: state.setupStatus, refetch: async () => {} }) },
+        ensureDailyAccounts: { useMutation: () => ({ mutateAsync: async () => { state.ensureCalls++; await new Promise(r => setTimeout(r, 20)); return { created: ["EXP_ADS"], conflicts: [] }; }, isPending: false }) },
+      },
     },
   },
 }));
@@ -26,8 +31,9 @@ const ACCOUNTS = [
   acc(1, "OFFICE_CASH", "خزنة المكتب", "cash", "1000.0000"), acc(2, "BANK_MAIN", "البنك", "bank", "5000.0000"), acc(3, "VF_CASH", "فودافون كاش", "wallet", "0.0000"),
   acc(4, "INSTAPAY", "إنستا باي", "wallet", "0.0000"), acc(5, "COD_BOSTA", "مستحقات بوسطة", "carrier_receivable", "750.0000"),
   acc(6, "REVENUE", "إيرادات المبيعات", "revenue", "750.0000", "credit"), acc(7, "EXPENSE", "مصروفات عامة", "expense", "0.0000"),
+  acc(8, "INV_GOODS", "مخزون بضاعة جاهزة", "inventory", "0.0000"), acc(9, "INV_RAW", "مخزون خامات", "inventory", "0.0000"),
 ];
-beforeEach(() => { state.perms = ["ledger.view"]; state.status = { tablesPresent: true, enabled: true, goLiveDate: "2026-10-01" }; state.accounts = ACCOUNTS; state.postInputs = []; state.mutateAsync = vi.fn(async (input: any) => { state.postInputs.push(input); await new Promise(r => setTimeout(r, 30)); return { transactionId: 1, replay: false }; }); });
+beforeEach(() => { state.setupStatus = { present: [], missing: ["EXP_ADS", "INV_GOODS"], conflicts: ["EXP_RENT"] }; state.ensureCalls = 0; state.perms = ["ledger.view"]; state.status = { tablesPresent: true, enabled: true, goLiveDate: "2026-10-01" }; state.accounts = ACCOUNTS; state.postInputs = []; state.mutateAsync = vi.fn(async (input: any) => { state.postInputs.push(input); await new Promise(r => setTimeout(r, 30)); return { transactionId: 1, replay: false }; }); });
 afterEach(() => cleanup());
 
 describe("📱 الحسابات اليومية", () => {
@@ -116,5 +122,36 @@ describe("📱 الحسابات اليومية", () => {
     fireEvent.click(screen.getByTestId("ledger-save"));
     await new Promise(r => setTimeout(r, 20));
     expect(state.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("شراء بضاعة/خامات: زر رابع، الطرف المقابل حسابات مخزون فقط، والدفع من نقدية لا من COD؛ القيد مدين مخزون/دائن خزنة", async () => {
+    state.perms = ["ledger.view", "ledger.post"];
+    render(<LedgerDaily />);
+    expect(screen.getByTestId("ledger-action-purchase").textContent).toContain("شراء بضاعة/خامات");
+    cleanup();
+    const onClose = vi.fn();
+    render(<DailyOperationDialog op="purchase" accounts={ACCOUNTS as any} onClose={onClose} onDone={async () => {}} initial={{ businessId: 7, moneyId: 1, counterId: 9 }} />);
+    expect(screen.getByTestId("ledger-form-purchase").textContent).not.toMatch(/مدين|دائن/);
+    fireEvent.change(screen.getByTestId("ledger-field-amount"), { target: { value: "300" } });
+    fireEvent.change(screen.getByTestId("ledger-field-description"), { target: { value: "خامات نحاس" } });
+    fireEvent.click(screen.getByTestId("ledger-save"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(state.postInputs[0]).toMatchObject({ kind: "inventory_purchase", sourceBusinessId: 7, entries: [{ accountId: 9, side: "debit", amount: "300" }, { accountId: 1, side: "credit", amount: "300" }] });
+  });
+  it("تجهيز التصنيفات: يظهر لصاحب ledger.manage_accounts فقط، يعرض الناقص والتعارض، وضغط مزدوج = طلب واحد", async () => {
+    render(<LedgerDaily />);
+    expect(screen.queryByTestId("ledger-daily-setup")).toBeNull();
+    cleanup();
+    state.perms = ["ledger.view", "ledger.manage_accounts"];
+    render(<LedgerDaily />);
+    expect(screen.getByTestId("ledger-daily-setup").textContent).toContain("إعلانات");
+    expect(screen.getByTestId("ledger-daily-setup-conflicts").textContent).toContain("EXP_RENT");
+    const btn = screen.getByTestId("ledger-daily-setup-run");
+    fireEvent.click(btn); fireEvent.click(btn);
+    await waitFor(() => expect(state.ensureCalls).toBe(1));
+    cleanup();
+    state.setupStatus = { present: ["EXP_ADS"], missing: [], conflicts: [] };
+    render(<LedgerDaily />);
+    expect(screen.queryByTestId("ledger-daily-setup")).toBeNull(); // يختفي حين يكتمل
   });
 });

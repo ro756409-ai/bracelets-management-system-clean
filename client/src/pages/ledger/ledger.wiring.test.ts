@@ -22,7 +22,7 @@ describe("🔑 واجهة دفتر V3 — الربط", () => {
     const opening = fs.readFileSync("client/src/pages/ledger/LedgerOpening.tsx", "utf-8");
     expect(opening).toContain("trpc.ledger.opening.validate.useMutation()");
     expect(opening).not.toMatch(/activateLedger|trpc\.ledger\.activate|localStorage\.|sessionStorage\.|indexedDB/);
-    for (const p of ["accounts", "periods"]) expect(app).toContain(`<Route path="/ledger/${p}">`);
+    for (const p of ["accounts", "periods", "report"]) expect(app).toContain(`<Route path="/ledger/${p}">`);
     expect(daily + txs).not.toMatch(/activate/i);
     // المحاسب (جلسة موظف بلا user) يهبط على الدفتر، والحارس يحوّله لصفحة التجميد الآمنة لو بلا ledger.view
     const login = fs.readFileSync("client/src/pages/EmployeeLogin.tsx", "utf-8");

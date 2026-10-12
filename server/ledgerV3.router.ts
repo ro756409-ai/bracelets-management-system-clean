@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, authenticatedProcedure } from "./_core/trpc";
 import { openingDraftInput, validateOpeningDraft } from "./ledgerOpening.service";
+import { dailyAccountsStatus, dailyLedgerReport, ensureDailyAccounts } from "./ledgerDaily.service";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
@@ -25,6 +26,8 @@ type Deps = {
   sessionBusinessIds: (ctx: ScopeCtx) => Promise<number[] | null>;
   /** هل للجلسة نطاق الشركة كله في القراءة (المالك/الأدمن/مدير الحسابات)؟ غير ذلك = أنشطة الجلسة فقط. */
   fullLedgerScope: (ctx: ScopeCtx) => Promise<boolean> | boolean;
+  /** reports.view_profit (نفس قاعدة canViewProfit في routers) — الربح null لمن لا يملكها. */
+  canViewProfit?: (ctx: ScopeCtx) => Promise<boolean> | boolean;
 };
 
 const NO_PERMISSION = "ليست لديك صلاحية على دفتر الحسابات لهذا الإجراء";
@@ -190,6 +193,27 @@ export function createLedgerRouter(deps: Deps) {
       reopen: ledgerProcedure("ledger.period.reopen")
         .input(z.object({ period: periodStr, reason: z.string().trim().min(3).max(500) }))
         .mutation(async ({ ctx, input }) => guard(() => reopenLedgerPeriod({ tenantId: tenantOf(ctx), period: input.period, reason: input.reason, actor: actorOf(ctx) }))),
+    }),
+
+    // المرحلة 2: تجهيز الحسابات القياسية (تصنيفات المصروفات + المخزون/التكلفة) — idempotent؛ ربطها بأنشطة الجلسة.
+    setup: router({
+      dailyAccountsStatus: ledgerProcedure("ledger.view").query(async ({ ctx }) => guard(() => dailyAccountsStatus(tenantOf(ctx)))),
+      ensureDailyAccounts: ledgerProcedure("ledger.manage_accounts").mutation(async ({ ctx }) => {
+        const businessIds = (await deps.sessionBusinessIds(ctx)) ?? [];
+        return guard(() => ensureDailyAccounts({ tenantId: tenantOf(ctx), businessIds, actor: actorOf(ctx) }));
+      }),
+    }),
+
+    // المرحلة 2: التقرير اليومي داخل نطاق القراءة؛ الربح لمن يملك reports.view_profit فقط (null صريح لغيره).
+    reports: router({
+      daily: ledgerProcedure("ledger.view")
+        .input(z.object({ date: dateStr, businessId: z.number().int().positive().optional(), page: z.number().int().min(1).default(1) }))
+        .query(async ({ ctx, input }) => {
+          const businessId = await scopedBusiness(ctx, input.businessId);
+          const scope = await readScope(ctx);
+          const canViewProfit = Boolean(await deps.canViewProfit?.(ctx));
+          return guard(() => dailyLedgerReport({ tenantId: tenantOf(ctx), date: input.date, scope, businessId, canViewProfit, page: input.page }));
+        }),
     }),
 
     // تجهيز الأرصدة الافتتاحية (المالك فقط عبر ledger.activate) — تحقق قراءة فقط داخل معاملة READ ONLY يعيد ملف
