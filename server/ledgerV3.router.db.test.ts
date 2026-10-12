@@ -229,7 +229,7 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
     expect((await caller(ownerA).accounts.list()).find((a: any) => a.code === "OFFICE_CASH").name).toBe("خزنة المكتب");
   });
 
-  it("🧑‍💼 manager: بلا منح FORBIDDEN؛ بعد منح view/post/reverse/manage_accounts/period.lock تنجح كلها؛ إزالة المنح تسري فورًا", async () => {
+  it("🧑‍💼 manager: بلا منح FORBIDDEN؛ بعد منح view/post/manage_accounts/period.lock تنجح، والعكس يبقى للمالك ومدير الحسابات فقط حتى مع المنح؛ إزالة المنح تسري فورًا", async () => {
     const d = (await getDb())!;
     const grant = async (role: string, perms: string[]) => { for (const permission of perms) await d.insert(tenantRolePermissions).values({ tenantId: A.tenantId, role, permission, isAllowed: true, updatedBy: ownerA }); };
     const revoke = async (role: string, perms: string[]) => { for (const permission of perms) await d.delete(tenantRolePermissions).where(and(eq(tenantRolePermissions.tenantId, A.tenantId), eq(tenantRolePermissions.role, role), eq(tenantRolePermissions.permission, permission))); };
@@ -240,7 +240,8 @@ describe.runIf(CAN)("🛣️ Ledger V3 routers — صلاحيات وعزل عل�
     expect((await top(managerA, "status")()).enabled).toBe(true);
     const posted = await top(managerA, "post")({ sourceBusinessId: A.businessId, kind: "expense", idempotencyKey: `r-${tag}-mgr-1`, effectiveDate: "2026-10-12", description: "مصروف المدير", entries: [{ accountId: acc.EXPENSE, side: "debit", amount: "10" }, { accountId: acc.OFFICE_CASH, side: "credit", amount: "10" }] });
     expect(posted.replay).toBe(false);
-    expect((await top(managerA, "reverse")({ transactionId: posted.transactionId, idempotencyKey: `r-${tag}-mgr-rev`, effectiveDate: "2026-10-12", reason: "تصحيح المدير" })).replay).toBe(false);
+    // قرار المالك (المرحلة 1 للحسابات): عكس الحركات للمالك ومدير الحسابات فقط — منح المدير لا يكفي
+    expect(await code(() => top(managerA, "reverse")({ transactionId: posted.transactionId, idempotencyKey: `r-${tag}-mgr-rev`, effectiveDate: "2026-10-12", reason: "تصحيح المدير" }))).toBe("FORBIDDEN");
     const created = await caller(managerA).account.create({ code: "ADS", name: "إعلانات", kind: "expense", normalSide: "debit" });
     expect(created.replay).toBe(false);
     expect((await caller(managerA).period.lock({ period: "2026-08", reason: "إقفال" })).status).toBe("locked");

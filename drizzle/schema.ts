@@ -290,6 +290,8 @@ export const employees = mysqlTable("employees", {
     "viewer",
     // مودريتور — مشرف تشغيلي بدون أي صلاحية مالية (additive only)
     "moderator",
+    // مدير الحسابات — Migration 0045 (آخر القائمة فقط)
+    "accounts_manager",
   ])
     .default("agent")
     .notNull(),

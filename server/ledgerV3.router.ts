@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, authenticatedProcedure } from "./_core/trpc";
-import { hasTenantPermission, isOwnerRole, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
+import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
   createLedgerAccount, getLedgerStatus, getLedgerTransaction, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerBusinesses, listLedgerPeriods,
@@ -37,6 +37,8 @@ function ledgerProcedure(permission: Permission) {
     const role = ctx.employee?.role ?? (ctx.user?.role === "admin" ? "super_admin" : null);
     if (LEDGER_OWNER_ONLY_PERMISSIONS.includes(permission) && !isOwnerRole(role))
       throw new TRPCError({ code: "FORBIDDEN", message: "هذا الإجراء للمالك فقط" });
+    if (isRoleRestrictedDenied(role, permission))
+      throw new TRPCError({ code: "FORBIDDEN", message: "عكس الحركات للمالك ومدير الحسابات فقط" });
     if (!(await hasTenantPermission(ctx.tenantId, role, permission))) throw new TRPCError({ code: "FORBIDDEN", message: NO_PERMISSION });
     return next({ ctx });
   });

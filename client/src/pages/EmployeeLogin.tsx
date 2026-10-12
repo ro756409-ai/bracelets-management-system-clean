@@ -63,6 +63,9 @@ export default function EmployeeLogin() {
         // المحاسب → دفتر الحسابات V3؛ لو مش ممنوح `ledger.view` حارس المسار بيحوّله لصفحة
         // «قيد إعادة التطوير» الآمنة (النظام المحاسبي القديم مجمّد).
         setLocation("/ledger");
+      } else if (data.employee.role === 'accounts_manager') {
+        // مدير الحسابات → دفتر الحسابات V3 (مراجعة الشهر والإقفال وإدارة الحسابات).
+        setLocation("/ledger");
       } else if (
         data.employee.role === 'facebook_entry' ||
         data.employee.role === 'data_entry'
