@@ -59,8 +59,10 @@ describe("🔑 الكشف مشتق — مفيش رصيد متخزّن", () => {
 
   it("🔑 ومفيش migration جديدة", () => {
     const sql = fs.readdirSync("drizzle").filter(f => f.endsWith(".sql"));
+    // الاستثناء الوحيد: 0049 الخاصة بـLedger V3 (جداول ledger_* جديدة، معتمدة صراحةً، ولا تلمس جداول الموردين القديمة).
     expect(sql.filter(f => /supplier/i.test(f))).toEqual([
       "0034_supplier_ledger.sql",
+      "0049_ledger_suppliers.sql",
     ]);
     // و0034 لسه مربوطتش — الحاجز بتاعها لسه شغّال.
     expect(fs.existsSync("server/preDeploy0034.test.ts")).toBe(true);

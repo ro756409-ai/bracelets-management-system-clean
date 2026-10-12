@@ -141,7 +141,9 @@ describe("🔑 لا حذف بيانات/جداول/كود داخلي", () => {
   it("🔑 التجميد نفسه بلا migration/تعديل schema (flag فقط)", () => {
     // التجميد code-only (flag + توجيه). مفيش أي migration محاسبية. لو موجود 0036 فهو مهمة
     // منفصلة (عمود مُنشئ الأوردر لموظف الإدخال)، مش تغيير schema محاسبي.
-    const migrations = fs.readdirSync("drizzle").filter(f => f.endsWith(".sql"));
+    // الاستثناء الوحيد: Migrations دفتر V3 المعتمدة صراحةً (جداول ledger_* جديدة فقط، لا تلمس جداول المحاسبة المجمّدة).
+    const APPROVED_LEDGER_V3 = new Set(["0048_ledger_payroll.sql"]);
+    const migrations = fs.readdirSync("drizzle").filter(f => f.endsWith(".sql") && !APPROVED_LEDGER_V3.has(f));
     const accountingMigration = migrations.some(
       f => /accounting|expense|payroll|closing|treasury|financial/i.test(f)
     );
