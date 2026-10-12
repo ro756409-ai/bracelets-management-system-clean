@@ -1,5 +1,6 @@
 /**
- * Bosta Webhook Handler — استقبال حالات الشحن فقط (بلا أي أثر محاسبي أو مخزني).
+ * Bosta Webhook Handler — استقبال حالات الشحن (بلا أي أثر V1/V2 أو مخزني). الأثر المالي الوحيد: قيد Ledger V3 للتسليم/المرتجع
+ * الفعلي عبر ledgerOrders.service — فقط لشركة دفترها مفعّل، مرة واحدة بمفتاح دائم، والفشل مراجعة على الأوردر.
  *
  * Webhook URL: POST /api/webhooks/bosta
  * Header: x-bosta-secret: <سر حساب الشحن الخاص بالنشاط>
@@ -16,6 +17,7 @@
  * الحالة الحقيقية كانت هتفعّله لأول مرة وتولّد أثرًا ماليًا — وده خارج نطاق استقبال الحالات.
  */
 import { Request, Response, Express } from "express";
+import { afterCarrierOrderUpdate } from "./ledgerOrders.service";
 import { timingSafeEqual } from "crypto";
 import { getDb, runOrderTransaction } from "./db";
 import { orderEventsEnabled, prepareOrderEvent } from "./orderEvents.service";
@@ -159,6 +161,10 @@ async function processAndMark(businessId: number, tenantId: number | null, event
     const result = await applyBostaEvent(businessId, event, inboxId ?? undefined);
     if (inboxId != null)
       await markInboxEvent(inboxId, { status: result.status, failureReason: result.reason ?? null, orderId: result.orderId ?? null, businessId, tenantId, bumpAttempts });
+    // Ledger V3 (المرحلة 3/4): التسليم/المرتجع الفعلي فقط → قيد مرة واحدة بمفتاح دائم؛ لا يعمل إلا لشركة دفترها مفعّل،
+    // ولا يرمي أبدًا (الفشل = مراجعة على الأوردر). بعد اعتماد تغيير الأوردر نفسه.
+    if (result.status === "processed" && result.orderId != null)
+      await afterCarrierOrderUpdate({ businessId, orderId: result.orderId, orderStatus: result.orderStatus ?? null, eventStatus: event.orderStatus ?? null, cod: event.cod, occurredAt: event.timeStamp != null ? new Date(event.timeStamp) : new Date() });
     return result;
   } catch (err) {
     if (inboxId != null)

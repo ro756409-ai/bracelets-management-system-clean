@@ -4,7 +4,7 @@
  *  • شراء البضاعة والخامات: حسابات kind=inventory (أصل) — ليست مصروفًا؛ تكلفة المبيعات COGS تُسجَّل عند البيع من لقطة
  *    تكلفة الأوردر (المرحلة 4)، فلا يُحسب الدفع مصروفًا ثم تتكرر التكلفة عند البيع.
  */
-export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs"; normalSide: "debit"; group: "expense" | "stock" };
+export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" };
 
 export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "EXP_FLYERS", name: "فلاير ومطبوعات", kind: "expense", normalSide: "debit", group: "expense" },
@@ -17,4 +17,7 @@ export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "INV_GOODS", name: "مخزون بضاعة جاهزة", kind: "inventory", normalSide: "debit", group: "stock" },
   { code: "INV_RAW", name: "مخزون خامات", kind: "inventory", normalSide: "debit", group: "stock" },
   { code: "COGS", name: "تكلفة البضاعة المباعة", kind: "cogs", normalSide: "debit", group: "stock" },
+  // المرحلة 3/4: الشحن الذي دفعه العميل منفصل عن إيراد المنتج؛ وخسارة المرتجع بعد التسليم منفصلة عن تكلفة المبيعات
+  { code: "REV_SHIPPING", name: "إيراد شحن محصّل من العميل", kind: "revenue", normalSide: "credit", group: "revenue" },
+  { code: "RETURN_LOSS", name: "خسائر المرتجعات", kind: "expense", normalSide: "debit", group: "expense" },
 ] as const;

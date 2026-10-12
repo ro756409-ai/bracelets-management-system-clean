@@ -11,6 +11,8 @@ export const LEDGER_KINDS = [
   "bosta_settlement", "owner_drawing", "owner_contribution", "adjustment", "reversal",
   // المرحلة 2: شراء بضاعة/خامات = أصل مخزون (لا مصروف) — التكلفة تُعترف بها عند البيع من لقطة التكلفة
   "inventory_purchase",
+  // المرحلة 3/4: تكلفة المبيعات عند التسليم من لقطة تكلفة الأوردر، وخسارة مرتجع بعد التسليم (لا تضخيم للربح)
+  "cost_of_sales", "return_loss",
 ] as const;
 export type LedgerKind = (typeof LEDGER_KINDS)[number];
 export type LedgerSide = "debit" | "credit";
