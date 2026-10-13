@@ -97,7 +97,7 @@ export function SettingsSection() {
   const { settings, businesses } = list.data as any;
   const scopes = (def: any) => (def.scope === "company" ? [{ id: 0, name: "الشركة" }] : businesses);
   const valueOf = (def: any, scopeId: number) => def.values.find((v: any) => v.scopeBusinessId === scopeId)?.value ?? null;
-  const shown = (def: any, v: any) => (v == null ? "غير مُدخل" : def.type === "weekdays" ? weekdaysText(Number(v)) : def.type === "percent" ? `${money(v)}٪` : `${money(v)} ج.م`);
+  const shown = (def: any, v: any) => (v == null ? "غير مُدخل" : def.type === "weekdays" ? weekdaysText(Number(v)) : def.type === "percent" ? `${money(v)}٪` : def.type === "minutes" ? `${v} دقيقة` : `${money(v)} ج.م`);
   const save = async () => {
     if (!edit || busy) return;
     const def = settings.find((s: any) => s.key === edit.key);

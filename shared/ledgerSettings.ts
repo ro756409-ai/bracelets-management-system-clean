@@ -8,7 +8,7 @@ export type LedgerSettingDef = {
   key: string;
   label: string;
   hint: string;
-  type: "decimal" | "percent" | "weekdays";
+  type: "decimal" | "percent" | "weekdays" | "minutes";
   /** company = للشركة كلها (scopeBusinessId = 0)؛ business = لكل نشاط. */
   scope: "company" | "business";
 };
@@ -19,6 +19,7 @@ export const LEDGER_SETTINGS: readonly LedgerSettingDef[] = [
   { key: "carrier.bosta.return_fee", label: "رسوم الشحنة المرتجعة", hint: "رسوم الشحنة التي ترجع", type: "decimal", scope: "company" },
   { key: "carrier.bosta.cod_fee_percent", label: "نسبة رسوم التحصيل %", hint: "نسبة من مبلغ التحصيل (إن وُجدت في العقد)", type: "percent", scope: "company" },
   { key: "carrier.bosta.vat_percent", label: "ضريبة على الرسوم %", hint: "ضريبة القيمة المضافة على رسوم الشحن", type: "percent", scope: "company" },
+  { key: "payroll.late_grace_minutes", label: "سماح التأخير الشهري (دقيقة)", hint: "وجوده يفعّل خصم التأخير بعد السماح؛ غيابه = لا خصم تأخير", type: "minutes", scope: "business" },
   { key: "packaging.cost_per_order", label: "تكلفة التغليف للأوردر", hint: "تُحمَّل عند تسليم الأوردر لمندوب الشحن، من مخزون التغليف", type: "decimal", scope: "business" },
 ] as const;
 
@@ -30,6 +31,11 @@ const DECIMAL_RE = /^\d{1,14}(\.\d{1,4})?$/;
 
 /** تحقق قيمة إعداد → { valueDecimal } أو { valueInt }، أو رسالة خطأ عربية. */
 export function validateSettingValue(def: LedgerSettingDef, raw: string | number): { valueDecimal: string | null; valueInt: number | null } | { error: string } {
+  if (def.type === "minutes") {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0 || n > 10000) return { error: "عدد دقائق صحيح من 0 إلى 10000" };
+    return { valueDecimal: null, valueInt: n };
+  }
   if (def.type === "weekdays") {
     const n = Number(raw);
     if (!Number.isInteger(n) || n < 1 || n > 127) return { error: "اختر يومًا واحدًا على الأقل" };

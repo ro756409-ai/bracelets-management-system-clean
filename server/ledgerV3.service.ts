@@ -48,8 +48,10 @@ export type PostLedgerTransactionInput = {
    * داخلي فقط (لا يُمرَّر من العميل): فحص يعمل **داخل نفس الـtransaction بعد قفل الحسابات FOR UPDATE** —
    * الترحيلات المتزامنة على نفس الحساب تتسلسل، فيرى الفحص آخر التزام (بقراءات مقفولة) ويرمي لرفض الحركة كلها.
    */
-  guard?: (tx: Tx) => Promise<void>;
+  guard?: LedgerPostGuard;
 };
+/** فحص/تحديث داخل transaction الترحيل بعد قفل الحسابات، ومعه معرّف الحركة الجديدة — أي رمي يلغي الحركة كلها. */
+export type LedgerPostGuard = (tx: Tx, info: { transactionId: number }) => Promise<void>;
 export type PostResult = { transactionId: number; replay: boolean; postingPeriod: string; entries: { accountId: number; side: "debit" | "credit"; amount: string; balanceAfter: string }[] };
 
 type Tx = any;
@@ -136,7 +138,7 @@ type InternalPost = {
    * (businessId=null — التحويل بين الخزن) يجب أن يكون حسابه ممنوحًا لنشاط واحد على الأقل داخل النطاق.
    */
   scope?: number[] | null;
-  guard?: (tx: Tx) => Promise<void>;
+  guard?: LedgerPostGuard;
 };
 
 async function loadResult(tx: Tx, transaction: LedgerTransaction, replay: boolean): Promise<PostResult> {
@@ -204,7 +206,7 @@ async function postInternal(tx: Tx, input: InternalPost): Promise<PostResult> {
     if (a.currency !== input.currency) throw new LedgerError("currency", `${a.code}:${a.currency}`);
   }
   assertKindShape(input.kind, entries, id => byId.get(id)?.kind);
-  if (input.guard) await input.guard(tx);
+  if (input.guard) await input.guard(tx, { transactionId });
   const pairs = [...new Set(entries.filter(e => e.businessId != null).map(e => `${e.accountId}:${e.businessId}`))];
   const nullBusinessAccounts = [...new Set(entries.filter(e => e.businessId == null).map(e => e.accountId))];
   const scoped = input.scope !== undefined;
@@ -263,6 +265,8 @@ export async function reverseLedgerTransaction(input: {
   tenantId: number; transactionId: number; idempotencyKey: string; effectiveDate: string; actor: LedgerActor; reason: string;
   /** نفس قاعدة النطاق في الترحيل — العكس يحرّك نفس الخزن. */
   scope?: number[] | null;
+  /** داخلي فقط: تحديث الحالة المرتبطة بالعكس داخل نفس الـtransaction (مثل إلغاء دورة مرتب). */
+  guard?: LedgerPostGuard;
 }, db?: LedgerDb): Promise<PostResult> {
   if (!input.reason || !input.reason.trim()) throw new LedgerError("reason");
   const d = await resolveDb(db);
@@ -279,7 +283,7 @@ export async function reverseLedgerTransaction(input: {
       effectiveDate: input.effectiveDate, currency: original.currency, actor: input.actor,
       entries: rows.map((e: any) => ({ accountId: e.accountId, side: e.side === "debit" ? "credit" : "debit", amount: e.amount, businessId: e.businessId })),
       description: `عكس الحركة #${original.id}: ${input.reason.trim()}`, sourceType: "reversal", sourceReference: String(original.id),
-      reversalOfTransactionId: original.id, scope: input.scope,
+      reversalOfTransactionId: original.id, scope: input.scope, guard: input.guard,
     });
   });
 }
@@ -704,7 +708,7 @@ const IMMUTABLE_BASE = new Set<string>(LEDGER_BASE_ACCOUNTS.map(a => a.code));
 
 /** حساب إضافي (مثل تصنيف مصروف) — كود مستقل، لا يمس حسابات النظام. */
 export async function createLedgerAccount(input: {
-  tenantId: number; code: string; name: string; kind: (typeof LEDGER_BASE_ACCOUNTS)[number]["kind"] | "cogs" | "inventory" | "employee_receivable" | "supplier_payable" | "customer_advance" | "owner_current";
+  tenantId: number; code: string; name: string; kind: (typeof LEDGER_BASE_ACCOUNTS)[number]["kind"] | "cogs" | "inventory" | "employee_receivable" | "supplier_payable" | "customer_advance" | "owner_current" | "payroll_payable" | "supplier_advance";
   normalSide: "debit" | "credit"; allowNegative?: boolean; actor: LedgerActor;
 }, db?: LedgerDb): Promise<{ id: number; replay: boolean }> {
   const d = await resolveDb(db);

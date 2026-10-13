@@ -10,6 +10,7 @@ import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpen
 import { closeChecklist, incomeStatement, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
 import { listCarrierStatements, recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
 import { clearLedgerSetting, listCarrierReviews, listLedgerSettings, resolveCarrierReview, setLedgerSetting } from "./ledgerCarrierOps.service";
+import { approvePayrollRun, cancelAdvance, cancelPayrollRun, createPayrollRun, ensurePayrollAccounts, getPayrollRun, issueAdvance, listAdvances, listPayrollRuns, payPayrollRun, recomputePayrollRun, setPayrollAdjustments } from "./ledgerPayroll.service";
 import { listRefundLiabilities, payCustomerRefund, retainRefundRemainder } from "./ledgerOrders.service";
 import { parseSettlementCsv } from "../shared/carrierSettlement";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
@@ -285,6 +286,42 @@ export function createLedgerRouter(deps: Deps) {
         resolve: ledgerProcedure("ledger.post")
           .input(z.object({ id: z.number().int().positive(), status: z.enum(["resolved", "dismissed"]), note: z.string().trim().min(3).max(500) }))
           .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => resolveCarrierReview({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      }),
+    }),
+
+    // المرحلة 5 (بعد 0046 + 0048): المرتبات والسلف — على مستوى الشركة فقط (المالك ومدير الحسابات؛ المحاسب لا يرى المرتبات).
+    payroll: router({
+      runs: ledgerProcedure("ledger.view").query(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => listPayrollRuns(tenantOf(ctx))); }),
+      run: ledgerProcedure("ledger.view").input(z.object({ runId: z.number().int().positive() }))
+        .query(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => getPayrollRun(tenantOf(ctx), input.runId)); }),
+      ensureAccounts: ledgerProcedure("ledger.manage_accounts").mutation(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => ensurePayrollAccounts({ tenantId: tenantOf(ctx), actor: actorOf(ctx) })); }),
+      create: ledgerProcedure("ledger.post").input(z.object({ period: periodStr, operationId: idemKey }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => createPayrollRun({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      recompute: ledgerProcedure("ledger.post").input(z.object({ runId: z.number().int().positive() }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => recomputePayrollRun({ tenantId: tenantOf(ctx), runId: input.runId })); }),
+      adjust: ledgerProcedure("ledger.post")
+        .input(z.object({ runId: z.number().int().positive(), employeeId: z.number().int().positive(),
+          bonuses: z.array(z.object({ label: z.string().trim().min(3).max(120), amount: amountStr })).max(20),
+          deductions: z.array(z.object({ label: z.string().trim().min(3).max(120), amount: amountStr })).max(20) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); await guard(() => setPayrollAdjustments({ tenantId: tenantOf(ctx), ...input })); return { ok: true }; }),
+      approve: ledgerProcedure("ledger.period.lock").input(z.object({ runId: z.number().int().positive() }))
+        .mutation(async ({ ctx, input }) => {
+          await requireCompanyScope(ctx);
+          const role = (ctx as any).employee?.role ?? ((ctx as any).user?.role === "admin" ? "super_admin" : null);
+          return guard(() => approvePayrollRun({ tenantId: tenantOf(ctx), runId: input.runId, actor: actorOf(ctx), isOwner: isOwnerRole(role) }));
+        }),
+      pay: ledgerProcedure("ledger.post").input(z.object({ runId: z.number().int().positive(), paidOn: dateStr, fromAccountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => payPayrollRun({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      cancel: ledgerProcedure("ledger.reverse").input(z.object({ runId: z.number().int().positive(), reason: z.string().trim().min(3).max(500) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => cancelPayrollRun({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      advances: router({
+        list: ledgerProcedure("ledger.view").query(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => listAdvances(tenantOf(ctx))); }),
+        issue: ledgerProcedure("ledger.post")
+          .input(z.object({ employeeId: z.number().int().positive(), principal: amountStr, issuedOn: dateStr, installmentsCount: z.number().int().min(1).max(60), firstDueMonth: periodStr,
+            fromAccountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/), operationId: idemKey, note: z.string().trim().max(200).optional() }))
+          .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => issueAdvance({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+        cancel: ledgerProcedure("ledger.reverse").input(z.object({ advanceId: z.number().int().positive(), reason: z.string().trim().min(3).max(500) }))
+          .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => cancelAdvance({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
       }),
     }),
 

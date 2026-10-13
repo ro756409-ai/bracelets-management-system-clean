@@ -4,7 +4,7 @@
  *  • شراء البضاعة والخامات: حسابات kind=inventory (أصل) — ليست مصروفًا؛ تكلفة المبيعات COGS تُسجَّل عند البيع من لقطة
  *    تكلفة الأوردر (المرحلة 4)، فلا يُحسب الدفع مصروفًا ثم تتكرر التكلفة عند البيع.
  */
-export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue" | "carrier_receivable" | "customer_advance"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" | "carrier" | "liability"; allowNegative?: boolean;
+export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue" | "carrier_receivable" | "customer_advance" | "employee_receivable" | "payroll_payable"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" | "carrier" | "liability"; allowNegative?: boolean;
   /** يُرحَّل آليًا فقط (تسليم/تسوية/مرتجع/جرد/تغليف) — ممنوع في الإدخال اليدوي، وإلا تتكرر القيمة. */
   systemPosted?: true };
 
@@ -37,5 +37,16 @@ export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "COGS_PACKAGING", name: "تكلفة تغليف الأوردرات", kind: "cogs", normalSide: "debit", group: "stock", systemPosted: true },
 ] as const;
 
+/**
+ * المرحلة 5 — حسابات المرتبات والسلف، تُنشأ منفصلة بعد 0046 (نوع payroll_payable). كلها آلية: المرتبات والعمولات من
+ * اعتماد دورة المرتب فقط، والسلف من شاشة السلف فقط، والرواتب المستحقة بين الاعتماد والدفع — لا إدخال يدوي يكررها.
+ */
+export const LEDGER_PAYROLL_ACCOUNTS: readonly DailyAccountSpec[] = [
+  { code: "EXP_SALARIES", name: "مرتبات وأجور", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
+  { code: "EXP_COMMISSIONS", name: "عمولات الموظفين", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
+  { code: "EMP_ADVANCES", name: "سلف الموظفين", kind: "employee_receivable", normalSide: "debit", group: "liability", systemPosted: true },
+  { code: "PAYROLL_PAYABLE", name: "رواتب مستحقة", kind: "payroll_payable", normalSide: "credit", group: "liability", systemPosted: true },
+] as const;
+
 /** أكواد الحسابات التي تُرحَّل آليًا فقط — يرفضها مسار الإدخال اليدوي. */
-export const SYSTEM_POSTED_CODES: ReadonlySet<string> = new Set(LEDGER_DAILY_ACCOUNTS.filter(a => a.systemPosted).map(a => a.code));
+export const SYSTEM_POSTED_CODES: ReadonlySet<string> = new Set([...LEDGER_DAILY_ACCOUNTS, ...LEDGER_PAYROLL_ACCOUNTS].filter(a => a.systemPosted).map(a => a.code));
