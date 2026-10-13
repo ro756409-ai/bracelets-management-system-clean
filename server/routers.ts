@@ -1175,6 +1175,12 @@ function portalEventCtx(ctx: any, source: "employee_portal" | "bulk", operationI
   return { actor: { type: "employee", employeeId: emp?.id ?? 0, role: emp?.role ?? null, name: emp?.name ?? null }, source, operationId: operationId ?? null };
 }
 
+/** Ledger V3 (المرحلة 4): حركة لنفس أصناف الجرد بعد لقطته = رفض الاعتماد قبل أي تغيير (لا فرق مكرر). */
+async function stocktakeMovementGuard(businessId: number, stocktakeId: number) {
+  try { await assertNoMovementDuringStocktake({ businessId, stocktakeId }); }
+  catch (e) { if (e instanceof InventoryLedgerError) throw new TRPCError({ code: "PRECONDITION_FAILED", message: e.message }); throw e; }
+}
+
 async function requireActor(ctx: any): Promise<{ id: number; name: string }> {
   const actor = await resolveActingEmployeeIdAndName(ctx);
   const id = actor.id ?? ctx.user?.id;
@@ -2383,9 +2389,7 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(ctx, input.businessId);
-        // Ledger V3 (المرحلة 4): حركة لنفس الأصناف أثناء العدّ = رفض قبل أي تغيير (لا فرق مكرر)
-        try { await assertNoMovementDuringStocktake({ businessId, stocktakeId: input.stocktakeId }); }
-        catch (e) { if (e instanceof InventoryLedgerError) throw new TRPCError({ code: "PRECONDITION_FAILED", message: e.message }); throw e; }
+        await stocktakeMovementGuard(businessId, input.stocktakeId); // V3: حركة أثناء العدّ = رفض
         const result = await approveStocktake({
           stocktakeId: input.stocktakeId,
           businessId,
