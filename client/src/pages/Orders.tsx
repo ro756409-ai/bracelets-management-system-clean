@@ -573,14 +573,24 @@ export default function Orders() {
     utils.orders.orderItems.invalidate({ orderId });
   }
 
+  // منع التكرار على السيرفر (0052): معرّف ثابت لعملية «تكرار هذا الأوردر» (نطاقه = نوع العملية + هوية الجلسة + الأوردر الأصلي،
+  // ولكل تبويب معرّفه) حتى النجاح — الضغط المزدوج أو إعادة المحاولة بعد انقطاع الشبكة/إعادة التحميل يعيد نفس الأوردر الجديد.
+  // لا يتغيّر تلقائيًا عند CONFLICT؛ بدء عملية جديدة بإجراء صريح من رسالة الخطأ.
+  const duplicateScope = (orderId: number) => `order.duplicate|${sessionFingerprint()}|o${orderId}`;
   const duplicateOrderMutation = trpc.orders.duplicate.useMutation({
     onSuccess: (data) => {
-      toast.success(`تم تكرار الأوردر — أوردر جديد #${data.newOrderNumber}`);
+      toast.success(data.replay ? `التكرار محفوظ بالفعل — أوردر #${data.newOrderNumber}` : `تم تكرار الأوردر — أوردر جديد #${data.newOrderNumber}`);
       utils.orders.list.invalidate();
       utils.orders.todayConfirmed.invalidate();
       utils.orders.statusCounts.invalidate();
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e, vars) => {
+      if (e.data?.code === "CONFLICT") {
+        toast.error(e.message, { action: { label: "بدء عملية جديدة", onClick: () => discardOperation(duplicateScope(vars.orderId)) } });
+        return;
+      }
+      toast.error(e.message);
+    },
   });
 
   const returnMutation = trpc.returns.markAsReturned.useMutation({
@@ -689,7 +699,7 @@ export default function Orders() {
     if (!pendingConfirm) return;
     if (pendingConfirm.type === "deleteOrder") deleteMutation.mutate({ orderId: pendingConfirm.orderId });
     else if (pendingConfirm.type === "bulkDelete") bulkDeleteMutation.mutate({ orderIds: selectedOrderIds });
-    else if (pendingConfirm.type === "duplicateOrder") duplicateOrderMutation.mutate({ orderId: pendingConfirm.orderId });
+    else if (pendingConfirm.type === "duplicateOrder") duplicateOrderMutation.mutate({ orderId: pendingConfirm.orderId, operationId: persistentOperationIdFor(duplicateScope(pendingConfirm.orderId)) });
     else if (pendingConfirm.type === "convertNoAnswer") convertNoAnswerMutation.mutate();
     else if (pendingConfirm.type === "convertPostponed") convertPostponedMutation.mutate();
     setPendingConfirm(null);

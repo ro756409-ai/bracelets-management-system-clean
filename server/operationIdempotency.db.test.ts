@@ -228,6 +228,100 @@ describe.runIf(CAN)("🔁 0052 — منع تكرار الإنشاء على ال�
     });
   });
 
+  describe("تكرار أوردر (orders.duplicate) وبوابة المدير (employeePortal.createOrder)", () => {
+    const session = async (emp: number) => appRouter.createCaller(await createContext({ req: { protocol: "https", headers: {}, cookies: { employee_token: jwt.sign({ employeeId: emp }, process.env.JWT_SECRET as string) } }, res: { cookie: () => {}, clearCookie: () => {} } } as any));
+    const original = async (emp: string, who: "A" | "B", tag: string) => {
+      const r = await (await session(e[emp])).orders.create({ customerName: `عميل ${tag}`, customerPhone: "01012345678", customerAddress: `شارع ${tag} رقم 10`, governorate: "القاهرة",
+        productId: P[who].productId, productName: "أسورة", variantId: P[who].variants[0], quantity: 2, totalAmount: "300", source: "facebook", businessId: (who === "A" ? A : B).businessId } as any);
+      return Number((await q("SELECT id FROM orders WHERE orderNumber = ?", [r.orderNumber]))[0].id);
+    };
+    const dup = async (emp: string, orderId: number, operationId?: string) => (await session(e[emp])).orders.duplicate({ orderId, ...(operationId ? { operationId } : {}) } as any);
+    const dupLogs = (orderId: number) => n("SELECT COUNT(*) n FROM activity_logs WHERE action = 'duplicate_order' AND entityId = ?", [orderId]);
+    const copies = (orderNumber: string) => n("SELECT COUNT(*) n FROM orders WHERE notes LIKE ?", [`تكرار من أوردر #${orderNumber}%`]);
+    const numberOf = async (id: number) => String((await q("SELECT orderNumber n FROM orders WHERE id = ?", [id]))[0].n);
+
+    it("تكرار: فقدان الرد ثم إعادتان بنفس المعرّف = نسخة واحدة وسجل نشاط واحد؛ معرّف جديد = تكرار مستقل", async () => {
+      const id = await original("ownerA", "A", "dup-1"); const num = await numberOf(id);
+      const k = op();
+      const r1 = await dup("ownerA", id, k);
+      const r2 = await dup("ownerA", id, k), r3 = await dup("ownerA", id, k);
+      expect([r1.replay, r2.newOrderNumber, r2.replay, r3.newOrderNumber]).toEqual([false, r1.newOrderNumber, true, r1.newOrderNumber]);
+      expect([await copies(num), await keys(k), await dupLogs(id)]).toEqual([1, 1, 1]);
+      expect(await n("SELECT COUNT(*) n FROM order_items i JOIN orders o ON o.id = i.orderId WHERE o.orderNumber = ?", [r1.newOrderNumber])).toBe(1);
+      const r4 = await dup("ownerA", id, op()); // عملية تكرار جديدة صريحة
+      expect([r4.replay, r4.newOrderNumber === r1.newOrderNumber, await copies(num)]).toEqual([false, false, 2]);
+    });
+
+    it("تكرار: نفس المعرّف لأوردر آخر = CONFLICT بلا كتابة؛ 4 طلبات متزامنة = نسخة واحدة", async () => {
+      const id1 = await original("ownerA", "A", "dup-2"), id2 = await original("ownerA", "A", "dup-3");
+      const k = op();
+      await dup("ownerA", id1, k);
+      const before = await allCounts();
+      expect((await errOf(dup("ownerA", id2, k)))?.code).toBe("CONFLICT");
+      expect(await allCounts()).toEqual(before);
+      const kc = op(); const num = await numberOf(id2);
+      const res = await Promise.allSettled(Array.from({ length: 4 }, () => dup("ownerA", id2, kc)));
+      expect(res.filter(r => r.status === "rejected").map(r => String((r as PromiseRejectedResult).reason?.message).slice(0, 100))).toEqual([]);
+      expect(new Set(res.map(r => (r as PromiseFulfilledResult<any>).value.newOrderNumber)).size).toBe(1);
+      expect([await copies(num), await keys(kc), await dupLogs(id2)]).toEqual([1, 1, 1]);
+    });
+
+    it("تكرار: مدير آخر بنفس المعرّف = CONFLICT بلا كشف الرقم؛ شركة أخرى بنفس المعرّف = مستقلة؛ بلا مفتاح = غير محمي", async () => {
+      const id = await original("ownerA", "A", "dup-4"); const k = op();
+      const mine = await dup("ownerA", id, k);
+      const err = await errOf(dup("ownerA_2", id, k));
+      expect(err?.code).toBe("CONFLICT");
+      expect(String(err?.message)).not.toContain(mine.newOrderNumber);
+      const idB = await original("ownerB", "B", "dup-4b");
+      expect((await dup("ownerB", idB, k)).replay).toBe(false);
+      const num = await numberOf(id);
+      const l1 = await dup("ownerA", id), l2 = await dup("ownerA", id);
+      expect([l1.idempotency, l2.idempotency, await copies(num)]).toEqual(["none", "none", 3]);
+    });
+
+    const portal = (emp: string, tag: string, operationId?: string, extra: Record<string, unknown> = {}) => caller(e[emp]).employeePortal.createOrder({
+      customerName: `عميل ${tag}`, customerPhone: "01012345678", customerAddress: `شارع ${tag} رقم 10`, governorate: "القاهرة",
+      productId: P.A.productId, productName: "أسورة", quantity: 2, totalAmount: "300", source: "facebook", businessId: A.businessId,
+      ...(operationId ? { operationId } : {}), ...extra } as any);
+
+    it("بوابة المدير: فقدان الرد ثم إعادتان = أوردر واحد؛ بيانات مختلفة = CONFLICT؛ 4 متزامنة = أوردر واحد", async () => {
+      const k = op();
+      const r1 = await portal("ownerA", "pt-1", k);
+      const r2 = await portal("ownerA", "pt-1", k), r3 = await portal("ownerA", "pt-1", k);
+      expect([r1.replay, r1.idempotency, r2.orderNumber, r2.replay, r3.orderNumber]).toEqual([false, "protected", r1.orderNumber, true, r1.orderNumber]);
+      expect([await ordersNamed("pt-1"), await keys(k)]).toEqual([1, 1]);
+      const before = await allCounts();
+      const err = await errOf(portal("ownerA", "pt-1", k, { quantity: 3, totalAmount: "450" }));
+      expect([err?.code, String(err?.message)]).toEqual(["CONFLICT", expect.stringContaining(r1.orderNumber)]);
+      expect(await allCounts()).toEqual(before);
+      const kc = op();
+      const res = await Promise.allSettled(Array.from({ length: 4 }, () => portal("ownerA", "pt-2", kc)));
+      expect(res.filter(r => r.status === "rejected").map(r => String((r as PromiseRejectedResult).reason?.message).slice(0, 100))).toEqual([]);
+      expect([await ordersNamed("pt-2"), await keys(kc)]).toEqual([1, 1]);
+    });
+
+    it("بوابة المدير: مدير آخر بنفس المعرّف = CONFLICT بلا كشف الرقم؛ بلا مفتاح = غير محمي؛ الإيقاف التشغيلي يرفضها", async () => {
+      const k = op();
+      const mine = await portal("ownerA", "pt-3", k);
+      const err = await errOf(portal("ownerA_2", "pt-3", k));
+      expect(err?.code).toBe("CONFLICT");
+      expect(String(err?.message)).not.toContain(mine.orderNumber);
+      const l1 = await portal("ownerA", "pt-4"), l2 = await portal("ownerA", "pt-4");
+      expect([l1.idempotency, l2.idempotency, await ordersNamed("pt-4")]).toEqual(["none", "none", 2]);
+      const prev = process.env.OPERATION_CREATION_PAUSED;
+      process.env.OPERATION_CREATION_PAUSED = "true";
+      try {
+        const before = await allCounts();
+        expect((await errOf(portal("ownerA", "pt-5", op())))?.code).toBe("PRECONDITION_FAILED");
+        const id = await (async () => { delete process.env.OPERATION_CREATION_PAUSED; const x = await original("ownerA", "A", "pt-6"); process.env.OPERATION_CREATION_PAUSED = "true"; return x; })();
+        const mid = await allCounts();
+        expect((await errOf(dup("ownerA", id, op())))?.code).toBe("PRECONDITION_FAILED");
+        expect(await allCounts()).toEqual(mid);
+        expect(mid.orders).toBe(before.orders + 1);
+      } finally { if (prev === undefined) delete process.env.OPERATION_CREATION_PAUSED; else process.env.OPERATION_CREATION_PAUSED = prev; }
+    });
+  });
+
   describe("إرسال الورشة", () => {
     const W: Record<string, { office: number; workshop: number; product: number }> = {};
     const bal = async (wh: number, product: number) => Number((await q("SELECT onHandQuantity n FROM inventory_balances WHERE warehouseId = ? AND inventoryKey = ?", [wh, makeInventoryKey(product)]))[0]?.n ?? 0);

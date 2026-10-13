@@ -4250,6 +4250,11 @@ export const appRouter = router({
       .input(
         z.object({
           orderId: z.number(),
+          /**
+           * منع تكرار الإنشاء (0052): معرّف ثابت لعملية «تكرار هذا الأوردر» من الواجهة — الضغط المزدوج أو إعادة المحاولة بعد
+           * انقطاع الشبكة بنفس المعرّف تعيد نفس الأوردر الجديد. اختياري للعملاء القدامى (بدونه غير محمي).
+           */
+          operationId: z.string().regex(OPERATION_ID_RE).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -4260,74 +4265,109 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الأوردر غير موجود",
           });
-        const newOrderNumber = await generateOrderNumber();
         const actingEmpId = await resolveActingEmployeeId(ctx);
+        const actor = await requireActor(ctx);
+        const acting = await resolveActingEmployeeIdAndName(ctx);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { orders } = await import("../drizzle/schema");
+        const businessId = originalOrder.businessId;
+        const [biz] = await db.select({ tenantId: businessesTable.tenantId }).from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
         // البنود بتتنسخ مع الأوردر. من غير كده الأوردر المكرّر كان بيطلع بهيدر بس،
         // فأوردر فيه تلات نقوش مختلفة بيتكرّر من غير أي نقش — وبوسطة بتستلم سطر
         // مجمّع مكان القطع.
         const originalItems = await getOrderItems(input.orderId);
-        await createOrderWithItems(
-          {
-          orderNumber: newOrderNumber,
-          businessId: originalOrder.businessId,
-          customerName: originalOrder.customerName,
-          customerPhone: originalOrder.customerPhone,
-          customerAddress: originalOrder.customerAddress,
-          governorate: originalOrder.governorate,
-          productId: originalOrder.productId,
-          productName: originalOrder.productName,
-          quantity: originalOrder.quantity ?? 1,
-          totalAmount: originalOrder.totalAmount,
-          projectedShippingProviderId:
-            originalOrder.projectedShippingProviderId,
-          projectedShippingType: originalOrder.projectedShippingType,
-          projectedPaymentType: originalOrder.projectedPaymentType,
-          source: originalOrder.source,
-          notes: originalOrder.notes
-            ? `تكرار من أوردر #${originalOrder.orderNumber} — ${originalOrder.notes}`
-            : `تكرار من أوردر #${originalOrder.orderNumber}`,
-          pageName: originalOrder.pageName,
-          adName: originalOrder.adName,
-          lastUpdatedBy: actingEmpId,
-          } as any,
-          originalItems.length > 0
-            ? originalItems.map(item => ({
-                productId: item.productId ?? undefined,
-                productName: item.productName,
-                variantId: item.variantId ?? undefined,
-                quantity: item.quantity,
-                unitPrice: item.unitPrice != null ? Number(item.unitPrice) : undefined,
-                size: item.size ?? undefined,
-                color: item.color ?? undefined,
-              }))
-            : [
-                // أوردر قديم مالوش بنود — الهيدر بيتحوّل لبند واحد، فالنسخة الجديدة
-                // تبدأ بمصدر حقيقة واحد بدل ما تورّث الفراغ.
+        const duplicateOrder = async (record: IdemRecord | null) => {
+          // رقم «MAX+1» غير ذرّي — نفس إعادة المحاولة المحدودة عند تصادم الرقم في orders.create
+          let newOrderNumber = "";
+          for (let attempt = 1; ; attempt++) {
+            newOrderNumber = await generateOrderNumber();
+            try {
+              await createOrderWithItems(
                 {
-                  productId: originalOrder.productId ?? undefined,
+                  orderNumber: newOrderNumber,
+                  businessId: originalOrder.businessId,
+                  customerName: originalOrder.customerName,
+                  customerPhone: originalOrder.customerPhone,
+                  customerAddress: originalOrder.customerAddress,
+                  governorate: originalOrder.governorate,
+                  productId: originalOrder.productId,
                   productName: originalOrder.productName,
-                  variantId: originalOrder.variantId ?? undefined,
                   quantity: originalOrder.quantity ?? 1,
-                  size: originalOrder.size ?? undefined,
-                  color: originalOrder.color ?? undefined,
-                },
-              ]
-        );
-        await addActivityLog({
-          action: "duplicate_order",
-          entityType: "order",
-          entityId: input.orderId,
-          description: `تكرار أوردر #${originalOrder.orderNumber} → أوردر جديد #${newOrderNumber}`,
-          metadata: {
-            originalOrderId: input.orderId,
-            originalOrderNumber: originalOrder.orderNumber,
-            newOrderNumber,
+                  totalAmount: originalOrder.totalAmount,
+                  projectedShippingProviderId:
+                    originalOrder.projectedShippingProviderId,
+                  projectedShippingType: originalOrder.projectedShippingType,
+                  projectedPaymentType: originalOrder.projectedPaymentType,
+                  source: originalOrder.source,
+                  notes: originalOrder.notes
+                    ? `تكرار من أوردر #${originalOrder.orderNumber} — ${originalOrder.notes}`
+                    : `تكرار من أوردر #${originalOrder.orderNumber}`,
+                  pageName: originalOrder.pageName,
+                  adName: originalOrder.adName,
+                  lastUpdatedBy: actingEmpId,
+                } as any,
+                originalItems.length > 0
+                  ? originalItems.map(item => ({
+                      productId: item.productId ?? undefined,
+                      productName: item.productName,
+                      variantId: item.variantId ?? undefined,
+                      quantity: item.quantity,
+                      unitPrice: item.unitPrice != null ? Number(item.unitPrice) : undefined,
+                      size: item.size ?? undefined,
+                      color: item.color ?? undefined,
+                    }))
+                  : [
+                      // أوردر قديم مالوش بنود — الهيدر بيتحوّل لبند واحد، فالنسخة الجديدة
+                      // تبدأ بمصدر حقيقة واحد بدل ما تورّث الفراغ.
+                      {
+                        productId: originalOrder.productId ?? undefined,
+                        productName: originalOrder.productName,
+                        variantId: originalOrder.variantId ?? undefined,
+                        quantity: originalOrder.quantity ?? 1,
+                        size: originalOrder.size ?? undefined,
+                        color: originalOrder.color ?? undefined,
+                      },
+                    ],
+                // مفتاح منع التكرار داخل نفس معاملة الهيدر والبنود
+                record ? (tx, id) => record(tx, { id, reference: newOrderNumber }) : undefined
+              );
+              break;
+            } catch (err) {
+              if (!isOrderNumberCollision(err) || attempt >= 3) throw err;
+              await new Promise(r => setTimeout(r, 10 * attempt + Math.random() * 20));
+            }
+          }
+          await addActivityLog({
+            action: "duplicate_order",
+            entityType: "order",
+            entityId: input.orderId,
+            description: `تكرار أوردر #${originalOrder.orderNumber} → أوردر جديد #${newOrderNumber}`,
+            metadata: {
+              originalOrderId: input.orderId,
+              originalOrderNumber: originalOrder.orderNumber,
+              newOrderNumber,
+            },
+            performedBy: ctx.user.id,
+            performedByName: ctx.user.name ?? "مدير",
+            performedByRole: ctx.user.role ?? "admin",
+          });
+          return { success: true as const, newOrderNumber };
+        };
+        return runIdempotent({
+          db,
+          scope: input.operationId && biz?.tenantId != null ? { tenantId: biz.tenantId, businessId, operation: "order.create", operationId: input.operationId } : null,
+          payload: { route: "orders.duplicate", orderId: input.orderId },
+          actor: acting.id != null ? { type: "employee", id: acting.id } : { type: "user", id: actor.id },
+          // الإعادة بنطاق النشاط: الأوردر المكرَّر لازم يكون لسه موجود، وإلا رفض (لا تكرار جديد بنفس المعرّف)
+          replay: async row => {
+            const [o] = await db.select({ orderNumber: orders.orderNumber }).from(orders)
+              .where(and(eq(orders.id, row.resultId), eq(orders.businessId, businessId))).limit(1);
+            if (!o) throw new TRPCError({ code: "CONFLICT", message: `هذا التكرار نُفّذ سابقًا (${row.resultReference}) والأوردر لم يعد موجودًا — لن يُنشأ تكرار جديد بنفس المعرّف` });
+            return { success: true as const, newOrderNumber: o.orderNumber };
           },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
+          execute: duplicateOrder,
         });
-        return { success: true, newOrderNumber };
       }),
 
     convertNoAnswerToNew: adminProcedure.mutation(async ({ ctx }) => {
@@ -5501,11 +5541,16 @@ export const appRouter = router({
               })
             )
             .optional(),
+          /**
+           * منع تكرار الإنشاء (0052) — نفس عقد orders.create: معرّف ثابت للعملية من العميل. اختياري للعملاء القدامى (بدونه غير
+           * محمي ولا يُولَّد له معرّف على السيرفر).
+           */
+          operationId: z.string().regex(OPERATION_ID_RE).optional(),
         })
       )
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ ctx, input: rawInput }) => {
+        const { operationId, ...input } = rawInput;
         const emp = (ctx as any).employee;
-        const orderNumber = await generateOrderNumber();
         const tenantId = requireTenantId(emp);
         const effectiveBusinessId =
           input.businessId != null
@@ -5539,35 +5584,67 @@ export const appRouter = router({
         await requireAllOwned(empScope(ctx), "product", items.map(p => p.productId));
         if (input.variantId != null)
           await requireOwned(empScope(ctx), "variant", input.variantId);
-        const newOrderId = await createOrderWithItems(
-          {
-            customerName: input.customerName,
-            customerPhone: input.customerPhone,
-            customerAddress: input.customerAddress,
-            governorate: input.governorate,
-            productId: firstProductId,
-            productName: productNames,
-            quantity: totalQty,
-            totalAmount: input.totalAmount,
-            source: input.source,
-            notes: input.notes,
-            orderNumber,
-            lastUpdatedBy: emp.id,
-            businessId: effectiveBusinessId,
-            websiteId: input.websiteId ?? null,
-            variantId: input.variantId ?? null,
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { orders } = await import("../drizzle/schema");
+        const createPortalOrder = async (record: IdemRecord | null) => {
+          // رقم «MAX+1» غير ذرّي — نفس إعادة المحاولة المحدودة عند تصادم الرقم في orders.create
+          let orderNumber = "";
+          for (let attempt = 1; ; attempt++) {
+            orderNumber = await generateOrderNumber();
+            try {
+              await createOrderWithItems(
+                {
+                  customerName: input.customerName,
+                  customerPhone: input.customerPhone,
+                  customerAddress: input.customerAddress,
+                  governorate: input.governorate,
+                  productId: firstProductId,
+                  productName: productNames,
+                  quantity: totalQty,
+                  totalAmount: input.totalAmount,
+                  source: input.source,
+                  notes: input.notes,
+                  orderNumber,
+                  lastUpdatedBy: emp.id,
+                  businessId: effectiveBusinessId,
+                  websiteId: input.websiteId ?? null,
+                  variantId: input.variantId ?? null,
+                },
+                items.map(p => ({
+                  productId: p.productId,
+                  productName: p.productName,
+                  quantity: p.quantity,
+                  variantId:
+                    p.productId === firstProductId
+                      ? (input.variantId ?? undefined)
+                      : undefined,
+                })),
+                // مفتاح منع التكرار داخل نفس معاملة الهيدر والبنود
+                record ? (tx, id) => record(tx, { id, reference: orderNumber }) : undefined
+              );
+              break;
+            } catch (err) {
+              if (!isOrderNumberCollision(err) || attempt >= 3) throw err;
+              await new Promise(r => setTimeout(r, 10 * attempt + Math.random() * 20));
+            }
+          }
+          return { success: true as const, orderNumber };
+        };
+        return runIdempotent({
+          db,
+          scope: operationId ? { tenantId, businessId: effectiveBusinessId, operation: "order.create", operationId } : null,
+          payload: { route: "employeePortal.createOrder", ...input, businessId: effectiveBusinessId },
+          actor: { type: "employee", id: emp.id },
+          // الإعادة بنطاق النشاط: الأوردر لازم يكون لسه موجود في نفس النشاط، وإلا رفض (لا إنشاء جديد بنفس المعرّف)
+          replay: async row => {
+            const [o] = await db.select({ orderNumber: orders.orderNumber }).from(orders)
+              .where(and(eq(orders.id, row.resultId), eq(orders.businessId, effectiveBusinessId))).limit(1);
+            if (!o) throw new TRPCError({ code: "CONFLICT", message: `هذه العملية نُفّذت سابقًا (${row.resultReference}) والأوردر لم يعد موجودًا — لن يُنشأ أوردر جديد بنفس المعرّف` });
+            return { success: true as const, orderNumber: o.orderNumber };
           },
-          items.map(p => ({
-            productId: p.productId,
-            productName: p.productName,
-            quantity: p.quantity,
-            variantId:
-              p.productId === firstProductId
-                ? (input.variantId ?? undefined)
-                : undefined,
-          }))
-        );
-        return { success: true, orderNumber };
+          execute: createPortalOrder,
+        });
       }),
 
     // Products list

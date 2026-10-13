@@ -8,7 +8,9 @@ import { toast as sonnerToast } from "sonner";
  */
 export const toast = {
   success: (message: string) => sonnerToast.success(message),
-  error: (message: string) => sonnerToast.error(message),
+  /** `action` اختياري: زر إجراء صريح داخل الرسالة (مثل «بدء عملية جديدة» عند CONFLICT في منع التكرار). */
+  error: (message: string, opts?: { action?: { label: string; onClick: () => void } }) =>
+    sonnerToast.error(message, opts?.action ? { action: opts.action } : undefined),
   warning: (message: string) => sonnerToast.warning(message),
   info: (message: string) => sonnerToast.info(message),
   /**

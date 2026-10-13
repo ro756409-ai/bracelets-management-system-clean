@@ -24,3 +24,14 @@ describe("🔁 /orders — إضافة أوردر بمعرّف عملية", () =>
     expect(dialog).toContain("الأوردر محفوظ بالفعل — رقم");
   });
 });
+
+describe("🔁 /orders — تكرار أوردر بمعرّف عملية", () => {
+  it("المعرّف محفوظ بنطاق نوع العملية + هوية الجلسة + الأوردر الأصلي، ويُرسل مع الطلب", () => {
+    expect(page).toContain("const duplicateScope = (orderId: number) => `order.duplicate|${sessionFingerprint()}|o${orderId}`;");
+    expect(page).toContain("duplicateOrderMutation.mutate({ orderId: pendingConfirm.orderId, operationId: persistentOperationIdFor(duplicateScope(pendingConfirm.orderId)) });");
+  });
+  it("CONFLICT لا يغيّر المعرّف تلقائيًا — بدء عملية جديدة بزر صريح داخل الرسالة؛ والإعادة تُعرض بوضوح", () => {
+    expect(page).toContain('toast.error(e.message, { action: { label: "بدء عملية جديدة", onClick: () => discardOperation(duplicateScope(vars.orderId)) } });');
+    expect(page).toContain("التكرار محفوظ بالفعل — أوردر #");
+  });
+});
