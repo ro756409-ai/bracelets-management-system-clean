@@ -9,6 +9,7 @@ import { PageHeader, SectionCard, EmptyState, StatusBadge } from "@/components/s
 import { toast } from "sonner";
 import { parseSettlementCsv } from "@shared/carrierSettlement";
 import { cairoToday, money, type UiAccount } from "./ledgerUi";
+import { ReviewsSection, SettingsSection, StatementsSection } from "./LedgerCarrierOps";
 
 /**
  * «تسوية شركة الشحن» (المرحلة 3) — للمالك ومدير الحسابات (السيرفر يرفض نطاق النشاط الواحد):
@@ -72,7 +73,7 @@ export default function LedgerCarrier() {
             {result.outcomes.map((o: any) => (
               <li key={o.row} className="flex flex-wrap items-center justify-between gap-2 py-2" data-testid={`carrier-line-${o.row}`}>
                 <span className="font-mono text-xs" dir="ltr">{o.shipment}</span>
-                <span className="flex items-center gap-2"><StatusBadge status={o.status} label={STATUS_LABEL[o.status]?.label ?? o.status} tone={STATUS_LABEL[o.status]?.tone ?? "info"} size="sm" icon={null} />{o.reason && <span className="text-xs text-muted-foreground">{o.reason}</span>}</span>
+                <span className="flex items-center gap-2"><StatusBadge status={o.status} label={STATUS_LABEL[o.status]?.label ?? o.status} tone={STATUS_LABEL[o.status]?.tone ?? "info"} size="sm" icon={null} />{o.reason && <span className="text-xs text-muted-foreground">{o.reason}</span>}{o.feeNote && <span className="text-xs text-warning" data-testid={`carrier-fee-note-${o.row}`}>{o.feeNote}</span>}</span>
               </li>
             ))}
           </ul>
@@ -96,7 +97,10 @@ export default function LedgerCarrier() {
         </SectionCard>
       )}
 
+      <ReviewsSection />
+      <StatementsSection />
       <RefundsSection cashAccounts={cashAccounts} />
+      <SettingsSection />
     </div>
   );
 }
@@ -140,8 +144,8 @@ function RefundsSection({ cashAccounts }: { cashAccounts: UiAccount[] }) {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span>أوردر <b dir="ltr">{r.orderNumber}</b> · قائم <b className="tabular-nums">{money(r.outstanding)} ج.م</b></span>
                 <span className="flex gap-2">
-                  <Button size="sm" variant="outline" className="min-h-10" onClick={() => start(r.orderId, "pay", r.outstanding)} data-testid={`refund-pay-${r.orderId}`}>رد للعميل</Button>
-                  <Button size="sm" variant="ghost" className="min-h-10" onClick={() => start(r.orderId, "retain", r.outstanding)} data-testid={`refund-retain-${r.orderId}`}>احتجاز بسبب</Button>
+                  <Button size="sm" variant="outline" className="min-h-11" onClick={() => start(r.orderId, "pay", r.outstanding)} data-testid={`refund-pay-${r.orderId}`}>رد للعميل</Button>
+                  <Button size="sm" variant="ghost" className="min-h-11" onClick={() => start(r.orderId, "retain", r.outstanding)} data-testid={`refund-retain-${r.orderId}`}>احتجاز بسبب</Button>
                 </span>
               </div>
               {open?.orderId === r.orderId && (

@@ -5,6 +5,7 @@ import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import { businessDateKey } from "../shared/businessTime";
 import { LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import { getLedgerStatus, postLedgerTransaction, rawRows, resolveDb, reverseLedgerTransaction, type LedgerDb } from "./ledgerV3.service";
+import { claimShipmentLink, recordCarrierReview } from "./ledgerCarrierOps.service";
 
 /**
  * المرحلتان 3/4 — الأثر المالي للأوردر في Ledger V3 فقط (لا كتابة V1/V2)، مرة واحدة بمفاتيح دائمة:
@@ -43,14 +44,20 @@ async function txByKey(d: LedgerDb, tenantId: number, key: string) {
   return t?.id ?? null;
 }
 
-/** سبب مراجعة على الأوردر (يُضاف مرة واحدة) — نفس عمودي المراجعة الحاليين. */
+/**
+ * سبب مراجعة على الأوردر (يُضاف مرة واحدة) — نفس عمودي المراجعة الحاليين، وعنصر واحد في طابور مراجعة الدفتر الدائم
+ * (`order:<id>`، بعد 0047) يحمل أسباب الدفتر الحالية للأوردر.
+ */
 export async function flagOrderLedgerReview(d: LedgerDb, businessId: number, orderId: number, reason: string): Promise<void> {
-  const [o] = await d.select({ reviewReason: orders.reviewReason }).from(orders).where(and(eq(orders.id, orderId), eq(orders.businessId, businessId))).limit(1);
+  const [o] = await d.select({ reviewReason: orders.reviewReason, shipment: orders.bostaShipmentId }).from(orders).where(and(eq(orders.id, orderId), eq(orders.businessId, businessId))).limit(1);
   if (!o) return;
   const text = `${REVIEW_PREFIX} ${reason}`;
   const parts = (o.reviewReason ?? "").split(" | ").map(s => s.trim()).filter(Boolean);
   if (!parts.includes(text)) parts.push(text);
   await d.update(orders).set({ needsReview: true, reviewReason: parts.join(" | ") }).where(and(eq(orders.id, orderId), eq(orders.businessId, businessId)));
+  const ctx = await orderContext(d, businessId);
+  if (ctx) await recordCarrierReview(d, { tenantId: ctx.tenantId, businessId, source: "delivery", referenceKey: `order:${orderId}`, orderId, shipmentId: o.shipment ?? null,
+    reason: parts.filter(p => p.startsWith(REVIEW_PREFIX)).map(p => p.slice(REVIEW_PREFIX.length).trim()).join(" | ") });
 }
 
 const reasonOf = (e: unknown) => (e instanceof LedgerError ? e.message : e instanceof Error ? e.message : String(e));
@@ -93,6 +100,11 @@ export async function postOrderDelivered(input: { businessId: number; orderId: n
   const cod = toMinorUnits(input.cod.toFixed(4));
   if (cod !== total) return review(`مبلغ التحصيل من بوسطة ${fromMinorUnits(cod)} ≠ إجمالي الأوردر ${fromMinorUnits(total)} — لم يُسجَّل الإيراد`);
   if (total === 0n) return { status: "skipped", reason: "أوردر بلا مبلغ" };
+  // ربط أوردر↔شحنة موحّد قبل أي قيد: الشحنة لأوردر واحد والأوردر لشحنة واحدة (بعد 0047)
+  if (order.bostaShipmentId) {
+    const link = await claimShipmentLink(d, { tenantId: ctx.tenantId, businessId: input.businessId, orderId: order.id, shipmentId: order.bostaShipmentId });
+    if (!link.ok) return review(link.reason);
+  }
 
   const need = ["COD_BOSTA", "REVENUE", ...(fees > 0n ? ["REV_SHIPPING"] : [])];
   const acc = await accountsByCode(d, ctx.tenantId, need);

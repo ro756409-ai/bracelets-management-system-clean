@@ -5,7 +5,8 @@ import { openingDraftInput, validateOpeningDraft } from "./ledgerOpening.service
 import { dailyAccountsStatus, dailyLedgerReport, ensureDailyAccounts } from "./ledgerDaily.service";
 import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpeningFromStocktake } from "./ledgerInventory.service";
 import { closeChecklist, incomeStatement, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
-import { recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
+import { listCarrierStatements, recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
+import { clearLedgerSetting, listCarrierReviews, listLedgerSettings, resolveCarrierReview, setLedgerSetting } from "./ledgerCarrierOps.service";
 import { listRefundLiabilities, payCustomerRefund, retainRefundRemainder } from "./ledgerOrders.service";
 import { parseSettlementCsv } from "../shared/carrierSettlement";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
@@ -88,7 +89,7 @@ export function createLedgerRouter(deps: Deps) {
   /** نطاق القراءة: null = الشركة كلها، وإلا أنشطة الجلسة (تعذّر التحديد = لا شيء). */
   const readScope = async (ctx: ScopeCtx): Promise<number[] | null> => ((await deps.fullLedgerScope(ctx)) ? null : (await deps.sessionBusinessIds(ctx)) ?? []);
   const requireCompanyScope = async (ctx: ScopeCtx) => {
-    if ((await readScope(ctx)) !== null) throw new TRPCError({ code: "FORBIDDEN", message: "تسوية شركة الشحن على مستوى الشركة للمالك ومدير الحسابات" });
+    if ((await readScope(ctx)) !== null) throw new TRPCError({ code: "FORBIDDEN", message: "هذه العملية على مستوى الشركة — للمالك ومدير الحسابات" });
   };
   const requireProfit = async (ctx: ScopeCtx) => {
     if (!(await deps.canViewProfit?.(ctx))) throw new TRPCError({ code: "FORBIDDEN", message: "التقارير المالية للأرباح لمن يملك صلاحية «عرض الأرباح» فقط" });
@@ -263,6 +264,26 @@ export function createLedgerRouter(deps: Deps) {
       payout: ledgerProcedure("ledger.post")
         .input(z.object({ statementRef: z.string().trim().min(3).max(60), receivedOn: dateStr, amount: amountStr, accountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/) }))
         .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => recordCarrierPayout({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      // بعد 0047: الكشوف ومواعيد تحويلها، وطابور المراجعة الدائم (حل/استبعاد بسبب وفاعل)
+      statements: ledgerProcedure("ledger.view").query(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => listCarrierStatements(tenantOf(ctx))); }),
+      reviews: router({
+        list: ledgerProcedure("ledger.view").input(z.object({ status: z.enum(["open", "closed"]).default("open") }).optional())
+          .query(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => listCarrierReviews(tenantOf(ctx), input?.status ?? "open")); }),
+        resolve: ledgerProcedure("ledger.post")
+          .input(z.object({ id: z.number().int().positive(), status: z.enum(["resolved", "dismissed"]), note: z.string().trim().min(3).max(500) }))
+          .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => resolveCarrierReview({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      }),
+    }),
+
+    // بعد 0047: إعدادات مُدخلة (أيام الصرف، الرسوم، الضريبة، تكلفة التغليف) — لا قيمة افتراضية مخمّنة؛ الإدخال لمن يدير الحسابات.
+    settings: router({
+      list: ledgerProcedure("ledger.view").query(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => listLedgerSettings(tenantOf(ctx))); }),
+      set: ledgerProcedure("ledger.manage_accounts")
+        .input(z.object({ key: z.string().min(3).max(60), scopeBusinessId: z.number().int().min(0).default(0), value: z.union([z.string().trim().min(1).max(20), z.number().int()]) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => setLedgerSetting({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      clear: ledgerProcedure("ledger.manage_accounts")
+        .input(z.object({ key: z.string().min(3).max(60), scopeBusinessId: z.number().int().min(0).default(0) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); await guard(() => clearLedgerSetting({ tenantId: tenantOf(ctx), ...input })); return { ok: true }; }),
     }),
 
     // المرتجع بعد التحصيل: التزام الرد للعميل — رد مرة واحدة أو احتجاز الباقي بسبب معلن (نطاق الشركة + ledger.post)

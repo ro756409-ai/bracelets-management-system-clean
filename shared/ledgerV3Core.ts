@@ -57,6 +57,7 @@ export const LEDGER_MESSAGES = {
   // التفعيل على مستوى الشركة كلها (العلم في ledger_tenant_flags): كل نشاط فعّال يجب أن يكون في الخطة
   activationScope: "لا يمكن تفعيل دفتر الشركة",
   kindShape: "بنية القيد لا تطابق نوع الحركة",
+  setting: "قيمة الإعداد غير صالحة",
 } as const;
 
 export class LedgerError extends Error {
