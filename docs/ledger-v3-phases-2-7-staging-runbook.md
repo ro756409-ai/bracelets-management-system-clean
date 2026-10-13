@@ -17,7 +17,10 @@
    ثم `--apply --confirm "APPLY 0052 TO <db>"` ⇒ `↻ replay بلا أي تغيير`. **أي partial/فرق ⇒ توقف ومراجعة.**
 3. `node dist/scripts/check-ledger-prereqs.mjs` ⇒ `0052 … present` (وجداول الدفتر الجديدة `absent` متوقعة — معلّقة).
 4. التحقق بالمتصفح من منع التكرار (القسم «التحقق من منع التكرار بعد 0052» أدناه) لكل الشاشات المحمية.
-5. (اختياري، قراءة فقط) فحص 0053 المقترحة: `node dist/scripts/check-external-order-ids.mjs` — تقرير فقط، لا تطبيق.
+5. (قراءة فقط، يدويًا) فحص 0053 المقترحة: `node dist/scripts/check-external-order-ids.mjs --limit 50` — تأكد من سطر «الهدف»
+   أنه Staging؛ رمز 3 ⇒ توقف (لا تضف `--i-understand-production` بلا تأكد وموافقة). نسخة JSON:
+   `node dist/scripts/check-external-order-ids.mjs --json --limit 200 > /tmp/precheck-0053-staging.json; echo "exit=$?"`.
+   تقرير فقط — لا تعديل ولا إعادة تسمية لأي بيانات (التفاصيل: `docs/design-0053-0054-order-dedupe.md`).
 
 ## 0) بيئة لم تُطبَّق عليها 0052 بعد: إيقاف إنشاء الأوردرات وإرسال الورشة، ثم نشر الكود
 

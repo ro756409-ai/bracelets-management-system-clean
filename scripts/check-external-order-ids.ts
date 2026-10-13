@@ -15,7 +15,8 @@ async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) { console.error("DATABASE_URL غير مضبوط — إيقاف."); process.exit(2); }
   const target = looksLikeProductionTarget(url);
-  if (target.production && !args.includes("--i-understand-production")) { console.error("قاعدة تبدو إنتاجًا — يتطلب --i-understand-production (قراءة فقط)"); process.exit(3); }
+  console.log(`الهدف: ${target.host} / ${target.database}${target.production ? "  ⚠️ يبدو إنتاجًا" : ""} · قراءة فقط`);
+  if (target.production && !args.includes("--i-understand-production")) { console.error("قاعدة تبدو إنتاجًا — توقف وتأكد من الهدف أعلاه؛ التشغيل عليها يتطلب --i-understand-production (قراءة فقط) وموافقة منفصلة"); process.exit(3); }
   const exec = await openReadOnlyExecutor(url);
   try {
     const r = await checkExternalOrderIds(exec, { sampleLimit: Number(opt("--limit") ?? 20) });
