@@ -29,6 +29,7 @@ import { LegacyEngravingPicker } from "@/components/orders/LegacyEngravingPicker
 import { isValidEgyptianMobile } from "@/components/orders/OrderEditDialog";
 import { PartnerLogo } from "@/components/brand/PartnerLogo";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
+import { discardOperation, persistentOperationIdFor } from "@/lib/operationId";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { ErrorState, OfflineState } from "@/components/shared";
 import { DEFAULT_ORDER_ENTRY_MODE, type OrderEntryMode } from "@shared/orderEntryMode";
@@ -236,16 +237,20 @@ export default function FacebookEntry() {
     ? "الرقم ليس رقم موبايل مصري (01xxxxxxxxx) — راجعه قبل الحفظ" : null;
   const issueCount = Object.keys(fieldIssues).length + blockers.length;
 
+  // منع التكرار على السيرفر (0052): معرّف ثابت لهذه العملية حتى النجاح أو مسح النموذج — يبقى بعد انقطاع الشبكة وإعادة التحميل.
+  const OP_SCOPE = `fb-order:${DRAFT_KEY}`;
   const addOrderMutation = trpc.facebookEntry.addOrder.useMutation({
     onSuccess: data => {
-      toast.success(`تم إضافة الأوردر — رقم: ${data.orderNumber}`);
+      toast.success(data.replay ? `الأوردر محفوظ بالفعل — رقم: ${data.orderNumber}` : `تم إضافة الأوردر — رقم: ${data.orderNumber}`);
       setCust(EMPTY_CUSTOMER);
       setItems([]);
       resetParseState(); setManualMode(false); setPasteText("");
       localStorage.removeItem(DRAFT_KEY);
       if (showOrders) refetchOrders();
     },
-    onError: e => toast.error(`خطأ: ${e.message}`),
+    // CONFLICT = نفس المعرّف ببيانات مختلفة/فاعل آخر/استنفاد أرقام (لا شيء جديد حُفظ) ⇒ الحفظ التالي عملية جديدة.
+    // خطأ شبكة/رد ضائع ⇒ المعرّف يبقى، فإعادة المحاولة تعيد نفس الأوردر إن كان حُفظ.
+    onError: e => { if (e.data?.code === "CONFLICT") discardOperation(OP_SCOPE); toast.error(`خطأ: ${e.message}`); },
   });
   const updateOrderMutation = trpc.facebookEntry.updateOrder.useMutation({
     onSuccess: () => { toast.success("تم تعديل الأوردر"); setEditingOrder(null); refetchOrders(); },
@@ -295,6 +300,7 @@ export default function FacebookEntry() {
     setExpectedPieces(null); setTotalMismatch(false); setTotalConfirmed(false);
     resetParseState(); setManualMode(false);
     localStorage.removeItem(DRAFT_KEY);
+    discardOperation(OP_SCOPE);
     toast.success("تم مسح النموذج");
   }
   /** «إدخال يدوي»: يمسح اقتراحات التحليل الحالية فقط (بيانات العميل تفضل)، بلا توكن ولا مسودة. */
@@ -434,6 +440,7 @@ export default function FacebookEntry() {
       color: first.color ?? undefined,
       size: first.size ?? undefined,
       ...pastePayload,
+      operationId: persistentOperationIdFor(OP_SCOPE),
     } as any, { onSettled: done }));
   }
 

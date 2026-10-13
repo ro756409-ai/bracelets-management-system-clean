@@ -13,6 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { PageHeader, SectionCard, ResponsiveDataTable, StatusBadge, EmptyState, ErrorState, LoadingSkeleton, OfflineState, type Column } from "@/components/shared";
+import { discardOperation, persistentOperationIdFor } from "@/lib/operationId";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useRef } from "react";
@@ -83,7 +84,12 @@ export default function WorkshopReturns() {
     { businessId: bid! }, { enabled: Boolean(ready), retry: false }
   );
 
-  const send = trpc.accountingV2.workshopSend.useMutation({ onError: e => toast.error(e.message) });
+  // منع تكرار الإرسال على السيرفر (0052): معرّف ثابت لهذا الإذن حتى النجاح — يبقى بعد انقطاع الشبكة وإعادة التحميل.
+  const sendScope = `workshop-send:${bid ?? "none"}`;
+  const send = trpc.accountingV2.workshopSend.useMutation({
+    // CONFLICT (نفس المعرّف ببيانات مختلفة/فاعل آخر/استنفاد أرقام — لا شيء جديد حُفظ) ⇒ الإرسال التالي عملية جديدة
+    onError: e => { if (e.data?.code === "CONFLICT") discardOperation(sendScope); toast.error(e.message); },
+  });
   const receive = trpc.accountingV2.workshopReceive.useMutation({ onError: e => toast.error(e.message) });
   const setWorkshop = trpc.accountingV2.workshopSetWarehouse.useMutation({
     onError: e => toast.error(e.message),
@@ -148,9 +154,10 @@ export default function WorkshopReturns() {
         variantId: l.variantId ? Number(l.variantId) : null,
         quantity: Number(l.quantity),
       })),
+      operationId: persistentOperationIdFor(sendScope),
     }, {
       onSuccess: r => {
-        toast.success(r.duplicate ? "الإذن ده اتسجّل قبل كده" : `راح الورشة — إذن ${r.reference}`);
+        toast.success(r.duplicate ? "الإذن ده اتسجّل قبل كده" : r.replay ? `الإرسال محفوظ بالفعل — إذن ${r.reference}` : `راح الورشة — إذن ${r.reference}`);
         if (!r.duplicate) { setLines([newLine()]); setReason(""); setRepairCost(""); }
         batches.refetch();
       },

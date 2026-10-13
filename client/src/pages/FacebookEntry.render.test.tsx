@@ -12,6 +12,7 @@ type Q = { data?: any; isLoading?: boolean; isError?: boolean };
 const st = vi.hoisted(() => ({
   q: {} as Record<string, Q>,
   mut: {} as Record<string, ReturnType<typeof vi.fn>>,
+  opts: {} as Record<string, any>,
   pending: {} as Record<string, boolean>,
   refetch: {} as Record<string, ReturnType<typeof vi.fn>>,
   scope: { fp: "A" } as any,
@@ -25,7 +26,8 @@ const { mkQuery, mkMutation } = vi.hoisted(() => ({
     const q = st.q[key] ?? {};
     return { data: q.data, isLoading: q.isLoading ?? false, isError: q.isError ?? false, refetch: st.refetch[key] };
   },
-  mkMutation: (key: string) => () => {
+  mkMutation: (key: string) => (opts?: any) => {
+    st.opts[key] = opts;
     st.mut[key] ??= vi.fn();
     return { mutate: st.mut[key], mutateAsync: vi.fn(), isPending: st.pending[key] ?? false };
   },
@@ -80,6 +82,7 @@ vi.mock("@/components/orders/LegacyEngravingPicker", () => ({
 }));
 
 import FacebookEntry from "./FacebookEntry";
+import { completeOperation, __forgetInMemoryForTests, __pendingOperationScopes } from "@/lib/operationId";
 
 const CATALOG = { products: [{ id: 10, name: "سوار نحاسي", currentStock: 9, price: 250, isActive: true }, { id: 11, name: "خاتم", currentStock: 3, price: 120, isActive: true }], variants: [{ id: 100, productId: 10, color: "أسود", size: "M", currentStock: 5, price: 250, isActive: true }, { id: 101, productId: 10, color: "أسود", size: "L", currentStock: 4, price: 250, isActive: true }] };
 const line = (over: Partial<any> = {}) => ({ productId: 10, productName: "سوار نحاسي", variantId: 100, sku: null, color: "أسود", size: "M", optionLabel: "أسود / M", quantity: 1, unitPrice: 250, availableStock: 5, ...over });
@@ -95,7 +98,7 @@ function fillCustomer() {
 }
 
 beforeEach(() => {
-  st.q = {}; st.mut = {}; st.pending = {}; st.refetch = {}; st.scope = { fp: "A" }; st.businessId = 1; st.online = true; st.nextLines = [];
+  st.q = {}; st.mut = {}; st.opts = {}; st.pending = {}; st.refetch = {}; st.scope = { fp: "A" }; st.businessId = 1; st.online = true; st.nextLines = [];
   localStorage.clear();
   (window as any).matchMedia = (q: string) => ({ matches: q.includes("min-width"), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
   Element.prototype.scrollIntoView = vi.fn();
@@ -248,5 +251,48 @@ describe("⏳ Loading / Error / Offline", () => {
     expect(screen.getByTestId("offline-state")).toBeTruthy();
     fillCustomer(); fireEvent.click(screen.getByTestId("vop-add"));
     expect((screen.getByTestId("save-order") as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("🔁 منع تكرار الإنشاء على السيرفر (0052) — معرّف العملية", () => {
+  const save = () => { fillCustomer(); fireEvent.click(screen.getByTestId("vop-add")); fireEvent.click(screen.getByTestId("save-order")); };
+  const call = (i: number) => st.mut.addOrder.mock.calls[i];
+  const settle = (i: number) => call(i)[1].onSettled();
+
+  it("الرد ضاع بعد نجاح الحفظ: إعادة المحاولة (وبعد إعادة تحميل الصفحة) بنفس المعرّف؛ النجاح يغيّره للعملية التالية", () => {
+    setup(); st.nextLines = [line(), line(), line()];
+    render(<FacebookEntry />);
+    save();
+    const id1 = call(0)[0].operationId;
+    expect(id1).toMatch(/^[A-Za-z0-9_-]{8,80}$/);
+    // خطأ شبكة (لا code) — السيرفر ربما حفظ: المعرّف يبقى
+    st.opts.addOrder.onError({ message: "Failed to fetch", data: undefined }); settle(0);
+    fireEvent.click(screen.getByTestId("save-order"));
+    expect(call(1)[0].operationId).toBe(id1);
+    st.opts.addOrder.onError({ message: "Failed to fetch", data: undefined }); settle(1);
+    // إعادة تحميل الصفحة: الذاكرة تضيع والمعرّف محفوظ على الجهاز
+    cleanup(); for (const sc of __pendingOperationScopes()) if (sc.startsWith("fb-order:")) __forgetInMemoryForTests(sc);
+    render(<FacebookEntry />);
+    save();
+    expect(call(2)[0].operationId).toBe(id1);
+    // السيرفر أعاد النتيجة المحفوظة (replay) — النجاح يستهلك المعرّف (مستمع MutationCache في main.tsx)
+    st.opts.addOrder.onSuccess({ success: true, orderNumber: "FB-1", needsReview: false, replay: true }); completeOperation(id1); settle(2);
+    save();
+    expect(call(3)[0].operationId).not.toBe(id1);
+  });
+
+  it("CONFLICT (نفس المعرّف ببيانات مختلفة) أو «مسح النموذج» = عملية جديدة بمعرّف جديد", () => {
+    setup(); st.nextLines = [line(), line(), line()];
+    render(<FacebookEntry />);
+    save();
+    const id1 = call(0)[0].operationId;
+    st.opts.addOrder.onError({ message: "هذه العملية حُفظت سابقًا ببيانات مختلفة", data: { code: "CONFLICT" } }); settle(0);
+    fireEvent.click(screen.getByTestId("save-order"));
+    const id2 = call(1)[0].operationId;
+    expect(id2).not.toBe(id1);
+    st.opts.addOrder.onError({ message: "Failed to fetch", data: undefined }); settle(1);
+    fireEvent.click(screen.getByTestId("clear-form"));
+    save();
+    expect(call(2)[0].operationId).not.toBe(id2);
   });
 });
