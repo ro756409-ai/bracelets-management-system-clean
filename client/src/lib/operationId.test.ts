@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { operationIdFor, completeOperation, createTabGuard, discardOperation, persistentOperationIdFor, __forgetInMemoryForTests, __pendingOperationScopes } from "./operationId";
+import { operationIdFor, completeOperation, createTabGuard, sessionFingerprint, discardOperation, persistentOperationIdFor, __forgetInMemoryForTests, __pendingOperationScopes } from "./operationId";
 
 describe("operationId — ثابت طوال دورة العملية", () => {
   it("نفس النطاق = نفس المعرّف (Double-click / Retry بعد خطأ) حتى النجاح", () => {
@@ -114,4 +114,25 @@ describe("حارس التبويب المكرَّر", () => {
     createTabGuard({ storage: () => fakeStorage().api, channel: channel(), onDuplicate: () => {} }); // تبويب جديد آخر لا يؤثر
     expect([g.tabId, dup]).toEqual([first, 0]);
   });
+});
+
+describe("sessionFingerprint — هوية الجلسة في النطاق", () => {
+  const withLocal = (entries: Record<string, string>, fn: () => void) => {
+    const m = new Map(Object.entries(entries));
+    (globalThis as any).localStorage = { getItem: (k: string) => m.get(k) ?? null, setItem: () => {}, removeItem: () => {} };
+    try { fn(); } finally { delete (globalThis as any).localStorage; }
+  };
+  it("موظف: الشركة/النشاط/الموظف", () => withLocal({ employee_session: JSON.stringify({ id: 7, tenantId: 2, businessId: 3 }) }, () => {
+    expect(sessionFingerprint()).toBe("t2:b3:e7");
+  }));
+  it("مدير/مالك عبر /login: openId لا المعرّف الاصطناعي -1 — حسابان مختلفان = نطاقان مختلفان", () => {
+    let a = "", b = "";
+    withLocal({ "manus-runtime-user-info": JSON.stringify({ id: -1, openId: "employee-manager-1" }) }, () => { a = sessionFingerprint(); });
+    withLocal({ "manus-runtime-user-info": JSON.stringify({ id: -1, openId: "employee-manager-9" }) }, () => { b = sessionFingerprint(); });
+    expect(a).toBe("tx:uemployee-manager-1");
+    expect(b).not.toBe(a);
+  });
+  it("بلا هوية صالحة (id اصطناعي بلا openId) = anon", () => withLocal({ "manus-runtime-user-info": JSON.stringify({ id: -1 }) }, () => {
+    expect(sessionFingerprint()).toBe("anon");
+  }));
 });

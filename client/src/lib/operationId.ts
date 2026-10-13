@@ -103,7 +103,9 @@ export function sessionFingerprint(): string {
   if (emp) return scopeFingerprint(emp);
   try {
     const u = JSON.parse(globalThis.localStorage?.getItem("manus-runtime-user-info") ?? "null");
-    if (u && (typeof u.id === "number" || typeof u.id === "string")) return `t${u.tenantId ?? "x"}:u${u.id}`;
+    // openId هو الهوية الفعلية: جلسات المدير/الموظف عبر /login ترجع id اصطناعيًا ثابتًا (-1) لكل الحسابات
+    const who = typeof u?.openId === "string" && u.openId ? u.openId : (typeof u?.id === "number" && u.id > 0 ? String(u.id) : null);
+    if (who) return `t${u.tenantId ?? "x"}:u${who}`;
   } catch { /* بلا هوية */ }
   return "anon";
 }
