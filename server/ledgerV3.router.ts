@@ -10,6 +10,7 @@ import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpen
 import { closeChecklist, incomeStatement, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
 import { listCarrierStatements, recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
 import { clearLedgerSetting, listCarrierReviews, listLedgerSettings, resolveCarrierReview, setLedgerSetting } from "./ledgerCarrierOps.service";
+import { cancelSupplierDocument, createSupplier, createWorkshopBatch, ensureSupplierAccounts, listSuppliers, listWorkshopBatches, postSupplierDocument, recordWorkshopEvent, setSupplierActive, supplierStatement } from "./ledgerSuppliers.service";
 import { approvePayrollRun, cancelAdvance, cancelPayrollRun, createPayrollRun, ensurePayrollAccounts, getPayrollRun, issueAdvance, listAdvances, listPayrollRuns, payPayrollRun, recomputePayrollRun, setPayrollAdjustments } from "./ledgerPayroll.service";
 import { listRefundLiabilities, payCustomerRefund, retainRefundRemainder } from "./ledgerOrders.service";
 import { parseSettlementCsv } from "../shared/carrierSettlement";
@@ -323,6 +324,43 @@ export function createLedgerRouter(deps: Deps) {
         cancel: ledgerProcedure("ledger.reverse").input(z.object({ advanceId: z.number().int().positive(), reason: z.string().trim().min(3).max(500) }))
           .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => cancelAdvance({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
       }),
+    }),
+
+    // المرحلة 6 (بعد 0046 + 0049): الموردون والورشة — على مستوى الشركة (المالك ومدير الحسابات).
+    suppliers: router({
+      list: ledgerProcedure("ledger.view").query(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => listSuppliers(tenantOf(ctx))); }),
+      statement: ledgerProcedure("ledger.view").input(z.object({ supplierId: z.number().int().positive(), asOf: dateStr.optional() }))
+        .query(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => supplierStatement({ tenantId: tenantOf(ctx), ...input })); }),
+      ensureAccounts: ledgerProcedure("ledger.manage_accounts").mutation(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => ensureSupplierAccounts({ tenantId: tenantOf(ctx), actor: actorOf(ctx) })); }),
+      create: ledgerProcedure("ledger.manage_accounts")
+        .input(z.object({ code: z.string().trim().min(2).max(40), name: z.string().trim().min(2).max(160), phone: z.string().trim().max(30).optional(), isWorkshop: z.boolean().default(false) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => createSupplier({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      setActive: ledgerProcedure("ledger.manage_accounts").input(z.object({ supplierId: z.number().int().positive(), isActive: z.boolean() }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); await guard(() => setSupplierActive({ tenantId: tenantOf(ctx), ...input })); return { ok: true }; }),
+      postDocument: ledgerProcedure("ledger.post")
+        .input(z.object({ supplierId: z.number().int().positive(), docType: z.enum(["invoice", "payment", "advance", "advance_application", "return_credit"]), docNo: z.string().trim().min(1).max(80),
+          docDate: dateStr, dueDate: dateStr.nullable().optional(), amount: amountStr, businessId: z.number().int().positive().nullable().optional(), purchaseReceiptId: z.number().int().positive().nullable().optional(),
+          itemAccountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/).optional(), cashAccountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/).optional(), appliesToDocumentId: z.number().int().positive().nullable().optional() }))
+        .mutation(async ({ ctx, input }) => {
+          await requireCompanyScope(ctx);
+          const businessId = input.businessId == null ? null : await scopedBusiness(ctx, input.businessId);
+          return guard(() => postSupplierDocument({ tenantId: tenantOf(ctx), ...input, businessId, actor: actorOf(ctx) }));
+        }),
+      cancelDocument: ledgerProcedure("ledger.reverse").input(z.object({ documentId: z.number().int().positive(), reason: z.string().trim().min(3).max(500) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => cancelSupplierDocument({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      batches: ledgerProcedure("ledger.view").input(z.object({ supplierId: z.number().int().positive() }))
+        .query(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => listWorkshopBatches(tenantOf(ctx), input.supplierId)); }),
+      createBatch: ledgerProcedure("ledger.post")
+        .input(z.object({ supplierId: z.number().int().positive(), businessId: z.number().int().positive(), reference: z.string().trim().min(2).max(80), pieceWage: amountStr }))
+        .mutation(async ({ ctx, input }) => {
+          await requireCompanyScope(ctx);
+          const businessId = await scopedBusiness(ctx, input.businessId);
+          return guard(() => createWorkshopBatch({ tenantId: tenantOf(ctx), ...input, businessId: businessId!, actor: actorOf(ctx) }));
+        }),
+      workshopEvent: ledgerProcedure("ledger.post")
+        .input(z.object({ batchId: z.number().int().positive(), eventType: z.enum(["send", "receive", "shortage", "repair_cost"]), quantity: z.number().int().min(0).max(1_000_000).optional(),
+          value: amountStr.optional(), chargeTo: z.enum(["workshop", "loss"]).optional(), date: dateStr, operationId: idemKey, note: z.string().trim().max(300).optional() }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => recordWorkshopEvent({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
     }),
 
     // بعد 0047: إعدادات مُدخلة (أيام الصرف، الرسوم، الضريبة، تكلفة التغليف) — لا قيمة افتراضية مخمّنة؛ الإدخال لمن يدير الحسابات.

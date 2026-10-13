@@ -112,3 +112,69 @@ export const ledgerAdvanceInstallments = mysqlTable("ledger_advance_installments
   deductedAmount: decimal("deductedAmount", { precision: 18, scale: 4 }).default("0").notNull(),
   updatedAt: timestamp("updatedAt", { fsp: 3 }).defaultNow().onUpdateNow().notNull(),
 });
+
+// 0049 — الموردون والورشة
+export const ledgerSuppliers = mysqlTable("ledger_suppliers", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenantId").notNull(),
+  code: varchar("code", { length: 40 }).notNull(),
+  name: varchar("name", { length: 160 }).notNull(),
+  phone: varchar("phone", { length: 30 }),
+  isWorkshop: int("isWorkshop").default(0).notNull(),
+  isActive: int("isActive").default(1).notNull(),
+  createdByEmployeeId: int("createdByEmployeeId").notNull(),
+  createdAt: timestamp("createdAt", { fsp: 3 }).defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt", { fsp: 3 }).defaultNow().onUpdateNow().notNull(),
+});
+
+export const ledgerSupplierDocuments = mysqlTable("ledger_supplier_documents", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenantId").notNull(),
+  supplierId: int("supplierId").notNull(),
+  businessId: int("businessId"),
+  docType: mysqlEnum("docType", ["invoice", "payment", "advance", "advance_application", "return_credit"]).notNull(),
+  docNo: varchar("docNo", { length: 80 }).notNull(),
+  docDate: date("docDate", { mode: "string" }).notNull(),
+  dueDate: date("dueDate", { mode: "string" }),
+  amount: decimal("amount", { precision: 18, scale: 4 }).notNull(),
+  purchaseReceiptId: int("purchaseReceiptId"),
+  // receiptInvoiceId عمود مولّد في الـSQL — لا يُكتب أبدًا
+  appliesToDocumentId: int("appliesToDocumentId"),
+  transactionId: int("transactionId").notNull(),
+  reversalTransactionId: int("reversalTransactionId"),
+  createdByEmployeeId: int("createdByEmployeeId").notNull(),
+  createdAt: timestamp("createdAt", { fsp: 3 }).defaultNow().notNull(),
+});
+
+export const ledgerWorkshopBatches = mysqlTable("ledger_workshop_batches", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenantId").notNull(),
+  supplierId: int("supplierId").notNull(),
+  businessId: int("businessId").notNull(),
+  reference: varchar("reference", { length: 80 }).notNull(),
+  status: mysqlEnum("status", ["open", "partially_received", "closed"]).default("open").notNull(),
+  sentQuantity: int("sentQuantity").default(0).notNull(),
+  sentValue: decimal("sentValue", { precision: 18, scale: 4 }).default("0").notNull(),
+  receivedQuantity: int("receivedQuantity").default(0).notNull(),
+  receivedValue: decimal("receivedValue", { precision: 18, scale: 4 }).default("0").notNull(),
+  shortageQuantity: int("shortageQuantity").default(0).notNull(),
+  shortageValue: decimal("shortageValue", { precision: 18, scale: 4 }).default("0").notNull(),
+  pieceWage: decimal("pieceWage", { precision: 18, scale: 4 }).default("0").notNull(),
+  createdByEmployeeId: int("createdByEmployeeId").notNull(),
+  createdAt: timestamp("createdAt", { fsp: 3 }).defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt", { fsp: 3 }).defaultNow().onUpdateNow().notNull(),
+});
+
+export const ledgerWorkshopEvents = mysqlTable("ledger_workshop_events", {
+  id: int("id").autoincrement().primaryKey(),
+  tenantId: int("tenantId").notNull(),
+  batchId: int("batchId").notNull(),
+  eventType: mysqlEnum("eventType", ["send", "receive", "shortage", "repair_cost", "wage"]).notNull(),
+  quantity: int("quantity").default(0).notNull(),
+  value: decimal("value", { precision: 18, scale: 4 }).default("0").notNull(),
+  transactionId: int("transactionId"),
+  idempotencyKey: varchar("idempotencyKey", { length: 191 }).notNull(),
+  actorEmployeeId: int("actorEmployeeId").notNull(),
+  note: varchar("note", { length: 500 }),
+  createdAt: timestamp("createdAt", { fsp: 3 }).defaultNow().notNull(),
+});

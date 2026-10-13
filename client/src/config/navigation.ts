@@ -2,7 +2,7 @@ import {
   LayoutDashboard, ShoppingCart, PackageCheck, Boxes, Users, LineChart, Settings,
   Briefcase, Truck, RotateCcw, AlertTriangle, Printer, QrCode, Clock, Activity,
   Package, PackagePlus, ClipboardCheck, Building2, Globe, Zap,
-  BarChart3, GitMerge, Wallet, Wrench, BookOpen, ShieldCheck, UsersRound,
+  BarChart3, GitMerge, Wallet, Wrench, BookOpen, ShieldCheck, UsersRound, Factory,
 } from "lucide-react";
 
 /**
@@ -64,6 +64,7 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
       { label: "قائمة الدخل والأرباح", path: "/ledger/statements", icon: LineChart, permission: "reports.view_profit" },
       { label: "تسوية شركة الشحن", path: "/ledger/carrier", icon: Truck, permission: "ledger.post" },
       { label: "المرتبات والسلف", path: "/ledger/payroll", icon: Users, permission: "ledger.period.lock" },
+      { label: "الموردون والورشة", path: "/ledger/suppliers", icon: Factory, permission: "ledger.period.lock" },
       { label: "الحسابات وأرصدتها", path: "/ledger/accounts", icon: Wallet, permission: "ledger.view" },
       { label: "مراجعة الشهر وإقفاله", path: "/ledger/periods", icon: ClipboardCheck, permission: "ledger.view" },
       { label: "الأرصدة الافتتاحية", path: "/ledger/opening", icon: ShieldCheck, permission: "ledger.activate" },

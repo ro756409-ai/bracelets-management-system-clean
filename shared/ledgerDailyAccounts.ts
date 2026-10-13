@@ -4,7 +4,7 @@
  *  • شراء البضاعة والخامات: حسابات kind=inventory (أصل) — ليست مصروفًا؛ تكلفة المبيعات COGS تُسجَّل عند البيع من لقطة
  *    تكلفة الأوردر (المرحلة 4)، فلا يُحسب الدفع مصروفًا ثم تتكرر التكلفة عند البيع.
  */
-export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue" | "carrier_receivable" | "customer_advance" | "employee_receivable" | "payroll_payable"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" | "carrier" | "liability"; allowNegative?: boolean;
+export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue" | "carrier_receivable" | "customer_advance" | "employee_receivable" | "payroll_payable" | "supplier_payable" | "supplier_advance"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" | "carrier" | "liability"; allowNegative?: boolean;
   /** يُرحَّل آليًا فقط (تسليم/تسوية/مرتجع/جرد/تغليف) — ممنوع في الإدخال اليدوي، وإلا تتكرر القيمة. */
   systemPosted?: true };
 
@@ -48,5 +48,17 @@ export const LEDGER_PAYROLL_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "PAYROLL_PAYABLE", name: "رواتب مستحقة", kind: "payroll_payable", normalSide: "credit", group: "liability", systemPosted: true },
 ] as const;
 
+/**
+ * المرحلة 6 — الموردون والورشة (بعد 0046 + 0049). كلها آلية من مستندات المورد وأحداث الورشة فقط: المستحق لكل مورد يُحسب من
+ * مستنداته وأحداثه، فأي قيد يدوي على هذه الحسابات يفسد كشف المورد.
+ */
+export const LEDGER_SUPPLIER_ACCOUNTS: readonly DailyAccountSpec[] = [
+  { code: "SUPPLIER_PAYABLE", name: "موردون — مستحق لهم", kind: "supplier_payable", normalSide: "credit", group: "liability", systemPosted: true },
+  { code: "SUPPLIER_ADVANCES", name: "دفعات مقدمة لموردين", kind: "supplier_advance", normalSide: "debit", group: "liability", systemPosted: true },
+  { code: "WORKSHOP_CUSTODY", name: "خامات لدى الورشة (عهدة)", kind: "inventory", normalSide: "debit", group: "stock", systemPosted: true },
+  { code: "EXP_WORKSHOP_SHORTAGE", name: "عجز خامات الورشة", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
+  { code: "EXP_REPAIRS", name: "تكاليف تصليح لدى الورشة", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
+] as const;
+
 /** أكواد الحسابات التي تُرحَّل آليًا فقط — يرفضها مسار الإدخال اليدوي. */
-export const SYSTEM_POSTED_CODES: ReadonlySet<string> = new Set([...LEDGER_DAILY_ACCOUNTS, ...LEDGER_PAYROLL_ACCOUNTS].filter(a => a.systemPosted).map(a => a.code));
+export const SYSTEM_POSTED_CODES: ReadonlySet<string> = new Set([...LEDGER_DAILY_ACCOUNTS, ...LEDGER_PAYROLL_ACCOUNTS, ...LEDGER_SUPPLIER_ACCOUNTS].filter(a => a.systemPosted).map(a => a.code));

@@ -17,6 +17,8 @@ export const LEDGER_KINDS = [
   "return_refund", "return_cost", "customer_refund",
   // المرحلة 4: استهلاك التغليف عند التسليم لمندوب الشحن (تكلفة أوردر من مخزون التغليف)
   "packaging_consumption",
+  // المرحلة 6: مستندات الموردين وأحداث الورشة
+  "supplier_invoice", "supplier_payment", "supplier_advance", "supplier_advance_apply", "supplier_return", "workshop",
 ] as const;
 export type LedgerKind = (typeof LEDGER_KINDS)[number];
 export type LedgerSide = "debit" | "credit";
@@ -60,6 +62,7 @@ export const LEDGER_MESSAGES = {
   activationScope: "لا يمكن تفعيل دفتر الشركة",
   kindShape: "بنية القيد لا تطابق نوع الحركة",
   setting: "قيمة الإعداد غير صالحة",
+  invalid: "بيانات ناقصة أو غير صالحة",
 } as const;
 
 export class LedgerError extends Error {

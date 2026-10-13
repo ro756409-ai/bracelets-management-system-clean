@@ -31,7 +31,7 @@ export const OPERATION_META: Record<DailyOperation, { label: string; money: stri
 export const KIND_LABELS: Record<string, string> = {
   opening_balance: "رصيد افتتاحي", revenue_cod: "إيراد تحصيل بوسطة", revenue_prepaid: "إيراد", expense: "مصروف", payroll: "رواتب",
   advance: "سلفة", transfer: "تحويل", bosta_settlement: "تسوية بوسطة", owner_drawing: "مسحوبات المالك", owner_contribution: "إيداع المالك",
-  adjustment: "تسوية", reversal: "عكس حركة", inventory_purchase: "شراء بضاعة/خامات", cost_of_sales: "تكلفة مبيعات", return_loss: "خسارة مرتجع", return_refund: "التزام رد مرتجع", return_cost: "تكلفة مرتجع قيد الفحص", customer_refund: "رد مبلغ لعميل", packaging_consumption: "استهلاك تغليف",
+  adjustment: "تسوية", reversal: "عكس حركة", inventory_purchase: "شراء بضاعة/خامات", cost_of_sales: "تكلفة مبيعات", return_loss: "خسارة مرتجع", return_refund: "التزام رد مرتجع", return_cost: "تكلفة مرتجع قيد الفحص", customer_refund: "رد مبلغ لعميل", packaging_consumption: "استهلاك تغليف", supplier_invoice: "فاتورة مورد", supplier_payment: "دفعة لمورد", supplier_advance: "دفعة مقدمة لمورد", supplier_advance_apply: "تطبيق مقدّم مورد", supplier_return: "مرتجع لمورد", workshop: "ورشة",
 };
 export const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 
