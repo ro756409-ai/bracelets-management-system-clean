@@ -2,6 +2,7 @@ import { z } from "zod";
 import { assertNoMovementDuringStocktake, handoverOrder, InventoryLedgerError, isInventoryLedgerActive, postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
 import type { LedgerActor } from "../shared/ledgerV3Core";
 import { TRPCError } from "@trpc/server";
+import { isUniqueKeyCollision, numberSource, withFreshNumber } from "./uniqueNumber";
 import { createBostaShipment, isBostaEnabledForBusiness, resolveShipmentImagesForOrder, toPublicImageUrl } from "./bosta.service";
 import { isPublicImageUrl, packageImageTenant, PACKAGE_IMAGE_URL_PREFIX } from "../shared/packageImages";
 import { packageImageExists } from "./packageImageUpload";
@@ -6045,12 +6046,6 @@ export const appRouter = router({
           if (blockers.length)
             throw new TRPCError({ code: "BAD_REQUEST", message: blockers.join(" · ") });
         }
-        // توليد رقم أوردر فريد
-        const timestamp = Date.now();
-        const random = Math.floor(Math.random() * 1000)
-          .toString()
-          .padStart(3, "0");
-        const orderNumber = `FB-${timestamp}-${random}`;
         // عدد القطع لكل بند (افتراضي 1 لو غير محدد)
         // كل منتج مختار لازم يكون في نطاق الموظف — الإنشاء بيربط الأوردر بيهم.
         await requireAllOwned(
@@ -6132,7 +6127,9 @@ export const appRouter = router({
         // البنود بتتجهّز قبل أي كتابة، وبعدين الهيدر والبنود في **transaction واحدة**
         // (`insertOrderWithItems`): نجاح كامل أو rollback كامل. قبل كده كانوا في
         // transactionين، فلو البنود فشلت (deadlock بين أوردرين متزامنين مثلًا) كان بيفضل
-        // أوردر يتيم بلا بنود. رقم الأوردر اتولّد بره عشان إعادة المحاولة تستخدم نفسه.
+        // أوردر يتيم بلا بنود. إعادة المحاولة عند الـdeadlock بنفس الرقم؛ وتصادم رقم الأوردر
+        // (القيد الفريد orders_orderNumber_unique — عام لكل الشركات) = رقم جديد بمعاملة جديدة،
+        // 3 محاولات إجمالًا (withFreshNumber). أي خطأ تاني بيطلع كما هو.
         const itemRows = itemsWithQty.map(p => ({
           productId: p.productId,
           productName: p.productName,
@@ -6151,7 +6148,7 @@ export const appRouter = router({
             (p.productId === headerProductId ? (input.color ?? undefined) : undefined) ??
             undefined,
         }));
-        const newOrderId = await insertOrderWithItems(
+        const { number: orderNumber, value: newOrderId } = await withFreshNumber(numberSource.fbOrder, orderNumber => insertOrderWithItems(
           {
             orderNumber,
             businessId,
@@ -6188,7 +6185,7 @@ export const appRouter = router({
             externalRawPayload: input.rawText ?? null,
           } as any,
           itemRows
-        );
+        ), err => isUniqueKeyCollision(err, "orders_orderNumber_unique"));
         // سجل التحليل (fail-safe قبل 0038): اللي اتحقق على السيرفر + اللي اتحفظ فعلًا
         // + اللي الواجهة عرضته (لو اتبعت). مفيش أي عمود جديد في order_items.
         if (verifiedParse && input.rawText) {

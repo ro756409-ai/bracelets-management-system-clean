@@ -25,7 +25,8 @@ import {
   getDb,
   getWarehousesByBusiness,
 } from "./db";
-import { createBusinessEventInTransaction, type Actor } from "./accountingV2.service";
+import { createBusinessEventInTransaction, IdempotencyConflictError, type Actor } from "./accountingV2.service";
+import { isUniqueKeyCollision, NumberTakenError, numberSource, withFreshNumber } from "./uniqueNumber";
 
 export function makeInventoryKey(productId: number, variantId?: number | null): string {
   return `product:${productId}:variant:${variantId ?? "base"}`;
@@ -781,6 +782,11 @@ export async function transferStock(input: {
    */
   linkedReference?: string;
   /**
+   * الرقم مولَّد للتو (إذن ورشة): حدث موجود بنفس المفتاح = تصادم أرقام لا إعادة إرسال ⇒ NumberTakenError
+   * (rollback لكل ما سبق في المعاملة) بدل إرجاع الحدث القديم كأنه نجاح.
+   */
+  requireNewReference?: boolean;
+  /**
    * تكلفة إصلاح القطعة، لو متعرفة وقت الإرسال.
    *
    * **مابتعملش مصروف ولا بتلمس خزنة.** رقم للعلم بيتخزّن مع الحدث، والمصروف بيتسجّل
@@ -834,6 +840,7 @@ export async function transferStock(input: {
       targetBalances.map((b: typeof inventoryBalances.$inferSelect) => [b.inventoryKey, b])
     );
 
+    // نفس المفتاح ببيانات مختلفة مع رقم مولَّد للتو = تصادم أرقام أيضًا (لا تعارض إعادة إرسال)
     const eventResult = await createBusinessEventInTransaction(tx, {
       businessId: input.businessId,
       eventType: "inventory.stock_transfer",
@@ -850,7 +857,11 @@ export async function transferStock(input: {
         repairCostPerPiece: input.repairCostPerPiece ?? null,
       },
       actor: input.actor,
+    }).catch(err => {
+      if (input.requireNewReference && err instanceof IdempotencyConflictError) throw new NumberTakenError(input.reference);
+      throw err;
     });
+    if (eventResult.duplicate && input.requireNewReference) throw new NumberTakenError(input.reference);
     if (eventResult.duplicate) return { eventId: eventResult.event.id, duplicate: true };
     const eventId = eventResult.event.id;
 
@@ -1228,14 +1239,6 @@ export async function approveReturnInspection(input: {
 // الصفحة مابتخلّيش المستخدم يختار مخزنين — بتحلّهم من هنا. الإرسال/الاستلام بيمرّوا على
 // نفس `transferStock` (مفيش منطق مخزون مكرر)، ورقم الإذن بيتولّد تلقائيًا.
 
-/** توليد رقم إذن ورشة فريد — المستخدم مابيكتبوش. */
-function generateWorkshopReference(): string {
-  const rand = Math.floor(Math.random() * 1000)
-    .toString()
-    .padStart(3, "0");
-  return `WS-${Date.now()}-${rand}`;
-}
-
 export type WorkshopSetup = {
   officeWarehouseId: number | null;
   workshopWarehouseId: number | null;
@@ -1337,18 +1340,25 @@ export async function sendToWorkshop(input: {
 }) {
   const { officeWarehouseId, workshopWarehouseId } =
     await resolveWorkshopWarehouses(input.businessId);
-  const reference = generateWorkshopReference();
-  const result = await transferStock({
-    businessId: input.businessId,
-    fromWarehouseId: officeWarehouseId,
-    toWarehouseId: workshopWarehouseId,
-    reference,
-    reason: input.reason,
-    occurredAt: input.occurredAt,
-    repairCostPerPiece: input.repairCostPerPiece,
-    lines: input.lines,
-    actor: input.actor,
-  });
+  // رقم الإذن يولّده السيرفر (المستخدم مابيكتبوش) — فأي حدث موجود بنفس المفتاح = **تصادم** مش إعادة إرسال:
+  // `requireNewReference` يلغي المعاملة بدل ما يرجّع نتيجة الإذن التاني على إنها نجاح، ورقم جديد بمعاملة جديدة
+  // (3 محاولات إجمالًا). القيد: business_events (businessId, idempotencyKey) — داخل نفس النشاط فقط.
+  const { number: reference, value: result } = await withFreshNumber(
+    numberSource.workshopReference,
+    async reference => await transferStock({
+      businessId: input.businessId,
+      fromWarehouseId: officeWarehouseId,
+      toWarehouseId: workshopWarehouseId,
+      reference,
+      reason: input.reason,
+      occurredAt: input.occurredAt,
+      repairCostPerPiece: input.repairCostPerPiece,
+      lines: input.lines,
+      actor: input.actor,
+      requireNewReference: true,
+    }),
+    err => err instanceof NumberTakenError || isUniqueKeyCollision(err, "business_events_business_idempotency_unique"),
+  );
   return { ...result, reference };
 }
 
