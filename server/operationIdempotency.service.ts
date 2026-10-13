@@ -14,10 +14,13 @@ import { isUniqueKeyCollision } from "./uniqueNumber";
  *  • الإعادة لا تتجاوز الصلاحيات: البحث بنطاق نشاط الجلسة (لا يُرى مفتاح نشاط/شركة أخرى)، والصف لنفس الفاعل وإلا CONFLICT بلا
  *    تفاصيل، والنتيجة نفسها تُقرأ بنطاق النشاط (`replay`).
  *  • بلا operationId (عملاء قدامى) ⇒ السلوك القديم كما هو، **غير محمي** (idempotency: "none")، ولا يولّد السيرفر مفتاحًا.
- *    قبل تطبيق 0052 ⇒ "unavailable": العملية تتم بلا حماية (لا تتعطل الإدخالات) — 0052 تُطبَّق مباشرة بعد النشر.
+ *  • fail-closed: طلب بمعرّف والجدول غير موجود (0052 غير مطبّقة) ⇒ PRECONDITION_FAILED بلا أي كتابة — لا مرور صامت بلا حماية.
+ *  • إيقاف تشغيلي صريح `OPERATION_CREATION_PAUSED=true` ⇒ العمليتان مرفوضتان للجميع (بمعرّف أو بدونه) — للفترة بين نشر الكود
+ *    وتطبيق 0052 والتحقق منها على Staging/Production، فلا تمر طلبات غير محمية من واجهات قديمة مفتوحة.
  */
 export type IdemOperation = "order.create" | "workshop.send";
-export type IdemStatus = "protected" | "none" | "unavailable";
+export type IdemStatus = "protected" | "none";
+export const creationPaused = () => process.env.OPERATION_CREATION_PAUSED === "true";
 export type IdemScope = { tenantId: number; businessId: number; operation: IdemOperation; operationId: string };
 export type IdemActor = { type: "employee" | "user"; id: number };
 export type IdemRow = { id: number; requestHash: string; resultId: number; resultReference: string; actorType: string; actorId: number };
@@ -53,9 +56,9 @@ export async function findOperation(exec: { execute: (q: any) => Promise<any> },
 function assertReplayable(row: IdemRow, hash: string, actor: IdemActor): void {
   // فاعل آخر: لا تفاصيل (لا رقم أوردر ولا إذن) — المفتاح لا يكشف عملية خارج صلاحيات المستخدم
   if (row.actorType !== actor.type || row.actorId !== actor.id)
-    throw new TRPCError({ code: "CONFLICT", message: "معرّف العملية مستخدم بالفعل — ابدأ عملية جديدة" });
+    throw new TRPCError({ code: "CONFLICT", message: "معرّف العملية مستخدم بالفعل — اضغط «بدء عملية جديدة»" });
   if (row.requestHash !== hash)
-    throw new TRPCError({ code: "CONFLICT", message: `هذه العملية حُفظت سابقًا ببيانات مختلفة (${row.resultReference}) — راجعها أولًا؛ الحفظ مرة أخرى يبدأ عملية جديدة` });
+    throw new TRPCError({ code: "CONFLICT", message: `هذه العملية حُفظت سابقًا (${row.resultReference}) ببيانات مختلفة عن الطلب الحالي — راجعها أولًا؛ لعملية جديدة اضغط «بدء عملية جديدة»` });
 }
 
 export async function runIdempotent<T extends object>(opts: {
@@ -69,14 +72,16 @@ export async function runIdempotent<T extends object>(opts: {
   /** تنفيذ العملية؛ `record` (أو null) يُستدعى داخل معاملتها بعد كتابة النتيجة. */
   execute: (record: IdemRecord | null) => Promise<T>;
 }): Promise<T & { replay: boolean; idempotency: IdemStatus }> {
+  if (creationPaused())
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "إنشاء الأوردرات وإرسال الورشة متوقف مؤقتًا أثناء تحديث النظام — لم يُحفظ شيء، أعد المحاولة بعد انتهاء التحديث" });
   const s = opts.scope;
   if (!s) return { ...(await opts.execute(null)), replay: false, idempotency: "none" };
   if (!OPERATION_ID_RE.test(s.operationId)) throw new TRPCError({ code: "BAD_REQUEST", message: "معرّف العملية غير صالح" });
   const hash = requestHashOf(opts.payload);
   const found = await findOperation(opts.db, s);
   if (found === "unavailable") {
-    console.warn(`[idempotency] جدول operation_idempotency_keys غير موجود — ${s.operation} بلا حماية (طبّق 0052)`);
-    return { ...(await opts.execute(null)), replay: false, idempotency: "unavailable" };
+    console.error(`[idempotency] جدول operation_idempotency_keys غير موجود — ${s.operation} مرفوض حتى تطبيق 0052`);
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "منع تكرار العمليات غير جاهز على الخادم بعد (تحديث قاعدة البيانات 0052) — لم يُحفظ شيء، أعد المحاولة بعد انتهاء التحديث" });
   }
   const replayOf = async (row: IdemRow) => { assertReplayable(row, hash, opts.actor); return { ...(await opts.replay(row)), replay: true, idempotency: "protected" as const }; };
   if (found) return replayOf(found);

@@ -18,7 +18,8 @@ import { splitMigrationStatements } from "../shared/ledgerV3Spec";
  *  • الـMigration: check → apply → verify → replay، القيود فعّالة، rollback مرفوض مع أي صف ثم ناجح بعد التفريغ.
  *  • نفس المفتاح + نفس البيانات = نفس النتيجة (ولو ضاع الرد)؛ بيانات مختلفة = CONFLICT؛ التزامن = عملية واحدة؛
  *    عزل الشركات والأنشطة؛ فاعل آخر لا يرى النتيجة؛ الفشل بلا بيانات جزئية ولا يستهلك المفتاح؛ عمليتان مستقلتان بنفس
- *    المحتوى = عمليتان؛ الطلب بلا مفتاح غير محمي ولا يُسجَّل له شيء؛ قبل 0052 = "unavailable" بلا تعطيل الإدخال.
+ *    المحتوى = عمليتان؛ الطلب بلا مفتاح غير محمي ولا يُسجَّل له شيء؛ قبل 0052 الطلب بمعرّف مرفوض (fail-closed)؛
+ *    والإيقاف التشغيلي OPERATION_CREATION_PAUSED يرفض العمليتين للجميع بلا أي كتابة.
  */
 const CAN = Boolean(process.env.TEST_DATABASE_URL && process.env.JWT_SECRET);
 const insId = (r: any) => Number((Array.isArray(r) ? r[0] : r)?.insertId ?? r?.id);
@@ -206,7 +207,23 @@ describe.runIf(CAN)("🔁 0052 — منع تكرار الإنشاء على ال�
     });
   });
 
-  it("قبل 0052 (الجدول غير موجود): الإدخال لا يتعطل والنتيجة «unavailable» — غير محمي صراحةً", async () => {
+  it("الإيقاف التشغيلي (OPERATION_CREATION_PAUSED=true): الأوردر والورشة مرفوضان للجميع — بمعرّف أو بدونه — بلا أي كتابة", async () => {
+    const prev = process.env.OPERATION_CREATION_PAUSED;
+    process.env.OPERATION_CREATION_PAUSED = "true";
+    try {
+      const before = await allCounts();
+      const events = await n("SELECT COUNT(*) n FROM business_events WHERE eventType = 'inventory.stock_transfer'");
+      expect((await errOf(add("deA", "A", "paused-1", op())))?.code).toBe("PRECONDITION_FAILED");
+      expect((await errOf(add("deA", "A", "paused-2")))?.code).toBe("PRECONDITION_FAILED");
+      const ctx = await createContext({ req: { protocol: "https", headers: {}, cookies: { employee_token: jwt.sign({ employeeId: e.ownerA }, process.env.JWT_SECRET as string) } }, res: { cookie: () => {}, clearCookie: () => {} } } as any);
+      const ws = appRouter.createCaller(ctx).accountingV2.workshopSend({ businessId: A.businessId, reason: "تلميع", occurredAt: new Date(), lines: [{ productId: P.A.productId, quantity: 1 }], operationId: op() } as any);
+      expect((await errOf(ws))?.code).toBe("PRECONDITION_FAILED");
+      expect([await allCounts(), await n("SELECT COUNT(*) n FROM business_events WHERE eventType = 'inventory.stock_transfer'")]).toEqual([before, events]);
+    } finally { if (prev === undefined) delete process.env.OPERATION_CREATION_PAUSED; else process.env.OPERATION_CREATION_PAUSED = prev; }
+    expect((await add("deA", "A", "paused-3", op())).idempotency).toBe("protected");
+  });
+
+  it("قبل 0052 (الجدول غير موجود): الطلب بمعرّف مرفوض بلا أي كتابة (لا مرور صامت بلا حماية)؛ الطلب القديم بلا معرّف يعمل «none»", async () => {
     const bare = await createTempSchema("idem_bare");
     try {
       for (const stmt of splitMigrationStatements(fs.readFileSync("drizzle/0040_ledger_v3.sql", "utf-8"))) await bare.raw.query(stmt);
@@ -215,9 +232,12 @@ describe.runIf(CAN)("🔁 0052 — منع تكرار الإنشاء على ال�
       const emp = insId(await createEmployee({ name: "bare", role: "data_entry", isActive: true, tenantId: f.tenantId, businessId: f.businessId, username: `bare_${bare.name}`.slice(0, 50) } as any));
       const p = await createProductWithVariants(f.businessId, { name: `أسورة bare ${Date.now()}` }, [{ name: "سادة", sku: `ID-B-${Date.now()}`, currentStock: 10, price: "150" }]);
       const input = { customerName: "عميل bare", customerPhone: "01012345678", governorate: "القاهرة", customerAddress: "عنوان", totalAmount: 100,
-        selectedProducts: [{ productId: p.productId, productName: "x", quantity: 1, variantId: p.variantIds[0], unitPrice: 100 }], operationId: op() };
-      const r = await caller(emp).facebookEntry.addOrder(input as any);
-      expect([r.idempotency, r.replay]).toEqual(["unavailable", false]);
+        selectedProducts: [{ productId: p.productId, productName: "x", quantity: 1, variantId: p.variantIds[0], unitPrice: 100 }] };
+      const count = async () => Number(((await bare.raw.query("SELECT COUNT(*) n FROM orders WHERE customerName = 'عميل bare'")) as any)[0][0].n);
+      expect((await errOf(caller(emp).facebookEntry.addOrder({ ...input, operationId: op() } as any)))?.code).toBe("PRECONDITION_FAILED");
+      expect(await count()).toBe(0);
+      const legacy = await caller(emp).facebookEntry.addOrder(input as any);
+      expect([legacy.idempotency, await count()]).toEqual(["none", 1]);
     } finally { __setDbForTests(drizzle(tmp.url)); await bare.drop(); }
   }, 300_000);
 });
