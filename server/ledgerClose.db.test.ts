@@ -8,7 +8,7 @@ import { __setDbForTests, createEmployee, createExpense, addTreasuryTransactionI
 import { confirmPhrase, runHandMigration } from "./handMigration.service";
 import { runRoleEnumMigration } from "./roleEnumMigration.service";
 import { LEDGER_SNAPSHOTS_MIGRATION } from "./ledgerPhaseMigrations";
-import { activateLedgerV3, postLedgerTransaction } from "./ledgerV3.service";
+import { activateLedgerV3, disableLedgerV3, postLedgerTransaction } from "./ledgerV3.service";
 import { ensureDailyAccounts } from "./ledgerDaily.service";
 import { figuresHash } from "./ledgerClose.service";
 import { createTempSchema, type TempSchema } from "./testTempSchema";
@@ -106,5 +106,23 @@ describe.runIf(CAN)("🔒 المرحلة 7 — الإقفال والصورة ا�
     const month = (await q("SELECT DATE_FORMAT(NOW(), '%Y-%m') m"))[0].m;
     const c = await (await call(e.amA)).period.checklist({ period: month });
     expect(c.checks.find((x: any) => x.key === "legacy_writes")).toMatchObject({ ok: false, label: expect.stringMatching(/حركات خزنة قديمة 1/) });
+  });
+
+  it("الحظر مفصول عن علم V3: إطفاء V3 لا يرفعه؛ لا مسار لرفعه للمحاسب ولا مدير الحسابات (ولا عبر الإعدادات)؛ الشركة غير المفعّلة لم يتغير سلوكها", async () => {
+    const accA = insId(await createEmployee({ name: "acc-cl", role: "accountant", isActive: true, tenantId: A.tenantId, businessId: A.businessId, username: `accA_${tmp.name}`.slice(0, 50) } as any));
+    await disableLedgerV3({ tenantId: A.tenantId, actor: { type: "employee", employeeId: e.ownerA }, reason: "اختبار: إطفاء لا يرفع الحظر" });
+    expect((await q("SELECT ledgerV3Enabled v, enabledAt IS NOT NULL a FROM ledger_tenant_flags WHERE tenantId = ?", [A.tenantId]))[0]).toMatchObject({ v: 0, a: 1 });
+    await expect(createExpense({ businessId: A.businessId, amount: "10", description: "بعد الإطفاء", expenseDate: new Date(), createdBy: e.ownerA, createdByName: "مالك" } as any)).rejects.toThrow(/أرشيف للقراءة فقط/);
+    const db = await getDb();
+    await expect(db!.transaction(tx => addTreasuryTransactionInTransaction(tx, { businessId: A.businessId, type: "expense", direction: "out", amount: "10", description: "بعد الإطفاء", performedBy: e.ownerA, performedByName: "مالك" } as any))).rejects.toThrow(/أرشيف للقراءة فقط/);
+    // لا إجراء tRPC يرفع الحظر أصلًا (رفعه سيكون إجراءً منفصلًا للمالك بعد 0051) — ولا يمكن رفعه بإعداد عام
+    const paths = Object.keys((appRouter as any)._def.procedures);
+    expect(paths.filter(k => /legacy|unarchive/i.test(k) || /^ledger\..*archiv/i.test(k))).toEqual([]); // («أرشفة تصنيف مصروف» القديمة مسار مختلف)
+    for (const who of [e.amA, accA])
+      expect(await code(async () => (await call(who)).settings.set({ key: "legacy.archived", scopeBusinessId: 0, value: 0 } as any))).not.toBe("ok");
+    // الشركة B (لم تُفعَّل قط): السلوك القديم كما هو
+    await createExpense({ businessId: B.businessId, amount: "5", description: "شركة لم تفعّل", expenseDate: new Date(), createdBy: e.ownerB, createdByName: "مالك" } as any);
+    await db!.transaction(tx => addTreasuryTransactionInTransaction(tx, { businessId: B.businessId, type: "expense", direction: "out", amount: "5", description: "شركة لم تفعّل", performedBy: e.ownerB, performedByName: "مالك" } as any));
+    expect(Number((await q("SELECT COUNT(*) n FROM treasury_transactions WHERE businessId = ?", [B.businessId]))[0].n)).toBe(1);
   });
 });

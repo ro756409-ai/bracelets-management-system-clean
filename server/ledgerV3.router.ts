@@ -91,7 +91,7 @@ async function guard<T>(fn: () => Promise<T>): Promise<T> {
       const code = err.code === "conflict" || err.code === "reversedAlready" || err.code === "alreadyEnabled" ? "CONFLICT"
         : err.code === "disabled" || err.code === "unavailable" ? "PRECONDITION_FAILED"
         : err.code === "transaction" || err.code === "account" || err.code === "periodNotFound" ? "NOT_FOUND"
-        : err.code === "grant" || err.code === "outOfScope" || err.code === "business" || err.code === "actorEmployee" || err.code === "reopenRole" || err.code === "ownerOnly" ? "FORBIDDEN"
+        : err.code === "grant" || err.code === "outOfScope" || err.code === "business" || err.code === "actorEmployee" || err.code === "reopenRole" || err.code === "ownerOnly" || err.code === "retainDisabled" ? "FORBIDDEN"
         : "BAD_REQUEST";
       throw new TRPCError({ code, message: err.message });
     }
@@ -405,9 +405,11 @@ export function createLedgerRouter(deps: Deps) {
     // المرتجع بعد التحصيل: التزام الرد للعميل — رد مرة واحدة أو احتجاز الباقي بسبب معلن (نطاق الشركة + ledger.post)
     refunds: router({
       list: ledgerProcedure("ledger.view").query(async ({ ctx }) => { await requireCompanyScope(ctx); return guard(() => listRefundLiabilities(tenantOf(ctx))); }),
+      // رد على دفعات (جزئي أو كامل) — كل دفعة بمعرّف عملية؛ المجموع لا يتجاوز الالتزام (داخل transaction القيد)
       pay: ledgerProcedure("ledger.post")
-        .input(z.object({ orderId: z.number().int().positive(), accountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/), amount: amountStr, date: dateStr }))
+        .input(z.object({ orderId: z.number().int().positive(), accountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/), amount: amountStr, date: dateStr, operationId: idemKey }))
         .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => payCustomerRefund({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      // معطّل بقرار المالك: لا تحويل لمستحق العميل إلى إيراد حاليًا — الطلب المباشر يُرفض برسالة واضحة
       retain: ledgerProcedure("ledger.post")
         .input(z.object({ orderId: z.number().int().positive(), amount: amountStr, reason: z.string().trim().min(3).max(300), date: dateStr }))
         .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => retainRefundRemainder({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),

@@ -64,6 +64,7 @@ export const LEDGER_MESSAGES = {
   setting: "قيمة الإعداد غير صالحة",
   invalid: "بيانات ناقصة أو غير صالحة",
   ownerOnly: "هذه العملية للمالك فقط",
+  retainDisabled: "الاحتفاظ بمستحق العميل معطّل بقرار المالك — الباقي يظل التزامًا حتى يُرد",
 } as const;
 
 export class LedgerError extends Error {
