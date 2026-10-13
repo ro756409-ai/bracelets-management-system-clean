@@ -6,7 +6,7 @@
  * وحالات Loading/Error/Offline.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent, within } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, within, act } from "@testing-library/react";
 
 type Q = { data?: any; isLoading?: boolean; isError?: boolean };
 const st = vi.hoisted(() => ({
@@ -99,7 +99,7 @@ function fillCustomer() {
 
 beforeEach(() => {
   st.q = {}; st.mut = {}; st.opts = {}; st.pending = {}; st.refetch = {}; st.scope = { fp: "A" }; st.businessId = 1; st.online = true; st.nextLines = [];
-  localStorage.clear();
+  localStorage.clear(); sessionStorage.clear();
   (window as any).matchMedia = (q: string) => ({ matches: q.includes("min-width"), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
   Element.prototype.scrollIntoView = vi.fn();
   (window as any).requestAnimationFrame = (cb: () => void) => { cb(); return 0; };
@@ -271,7 +271,7 @@ describe("🔁 منع تكرار الإنشاء على السيرفر (0052) —
     expect(call(1)[0].operationId).toBe(id1);
     st.opts.addOrder.onError({ message: "Failed to fetch", data: undefined }); settle(1);
     // إعادة تحميل الصفحة: الذاكرة تضيع والمعرّف محفوظ على الجهاز
-    cleanup(); for (const sc of __pendingOperationScopes()) if (sc.startsWith("fb-order:")) __forgetInMemoryForTests(sc);
+    cleanup(); for (const sc of __pendingOperationScopes()) if (sc.startsWith("order.create|")) __forgetInMemoryForTests(sc);
     render(<FacebookEntry />);
     save();
     expect(call(2)[0].operationId).toBe(id1);
@@ -281,18 +281,25 @@ describe("🔁 منع تكرار الإنشاء على السيرفر (0052) —
     expect(call(3)[0].operationId).not.toBe(id1);
   });
 
-  it("CONFLICT (نفس المعرّف ببيانات مختلفة) أو «مسح النموذج» = عملية جديدة بمعرّف جديد", () => {
+  it("CONFLICT لا يغيّر المعرّف: تنبيه «البيانات اختلفت» وإعادة المحاولة بنفس المعرّف؛ «بدء عملية جديدة» أو «مسح النموذج» فقط يغيّرانه", () => {
     setup(); st.nextLines = [line(), line(), line()];
     render(<FacebookEntry />);
     save();
     const id1 = call(0)[0].operationId;
-    st.opts.addOrder.onError({ message: "هذه العملية حُفظت سابقًا ببيانات مختلفة", data: { code: "CONFLICT" } }); settle(0);
+    act(() => st.opts.addOrder.onError({ message: "هذه العملية حُفظت سابقًا (FB-1) ببيانات مختلفة عن الطلب الحالي", data: { code: "CONFLICT" } })); settle(0);
+    expect(screen.getByTestId("op-conflict").textContent).toContain("البيانات اختلفت");
+    expect(screen.getByTestId("op-conflict").textContent).toContain("FB-1");
     fireEvent.click(screen.getByTestId("save-order"));
-    const id2 = call(1)[0].operationId;
+    expect(call(1)[0].operationId).toBe(id1); // لا تغيير تلقائي — لا أوردر ثانٍ بعد حفظ الأول وضياع رده
+    st.opts.addOrder.onError({ message: "هذه العملية حُفظت سابقًا (FB-1) ببيانات مختلفة", data: { code: "CONFLICT" } }); settle(1);
+    fireEvent.click(screen.getByTestId("op-new"));
+    expect(screen.queryByTestId("op-conflict")).toBeNull();
+    fireEvent.click(screen.getByTestId("save-order"));
+    const id2 = call(2)[0].operationId;
     expect(id2).not.toBe(id1);
-    st.opts.addOrder.onError({ message: "Failed to fetch", data: undefined }); settle(1);
+    st.opts.addOrder.onError({ message: "Failed to fetch", data: undefined }); settle(2);
     fireEvent.click(screen.getByTestId("clear-form"));
     save();
-    expect(call(2)[0].operationId).not.toBe(id2);
+    expect(call(3)[0].operationId).not.toBe(id2);
   });
 });

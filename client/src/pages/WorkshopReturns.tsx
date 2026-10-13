@@ -13,7 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { PageHeader, SectionCard, ResponsiveDataTable, StatusBadge, EmptyState, ErrorState, LoadingSkeleton, OfflineState, type Column } from "@/components/shared";
-import { discardOperation, persistentOperationIdFor } from "@/lib/operationId";
+import { discardOperation, persistentOperationIdFor, sessionFingerprint } from "@/lib/operationId";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useRef } from "react";
@@ -84,11 +84,13 @@ export default function WorkshopReturns() {
     { businessId: bid! }, { enabled: Boolean(ready), retry: false }
   );
 
-  // منع تكرار الإرسال على السيرفر (0052): معرّف ثابت لهذا الإذن حتى النجاح — يبقى بعد انقطاع الشبكة وإعادة التحميل.
-  const sendScope = `workshop-send:${bid ?? "none"}`;
+  // منع تكرار الإرسال على السيرفر (0052): معرّف ثابت لهذا الإذن (نطاقه = نوع العملية + هوية الجلسة + النشاط، ولكل تبويب معرّفه)
+  // حتى النجاح أو «بدء عملية جديدة» — يبقى بعد انقطاع الشبكة وإعادة التحميل، ولا يتغيّر تلقائيًا عند CONFLICT.
+  const sendScope = `workshop.send|${sessionFingerprint()}|b${bid ?? "none"}`;
+  const [sendConflict, setSendConflict] = useState<string | null>(null);
+  const startNewSend = () => { discardOperation(sendScope); setSendConflict(null); };
   const send = trpc.accountingV2.workshopSend.useMutation({
-    // CONFLICT (نفس المعرّف ببيانات مختلفة/فاعل آخر/استنفاد أرقام — لا شيء جديد حُفظ) ⇒ الإرسال التالي عملية جديدة
-    onError: e => { if (e.data?.code === "CONFLICT") discardOperation(sendScope); toast.error(e.message); },
+    onError: e => { if (e.data?.code === "CONFLICT") setSendConflict(e.message); toast.error(e.message); },
   });
   const receive = trpc.accountingV2.workshopReceive.useMutation({ onError: e => toast.error(e.message) });
   const setWorkshop = trpc.accountingV2.workshopSetWarehouse.useMutation({
@@ -159,6 +161,7 @@ export default function WorkshopReturns() {
       onSuccess: r => {
         toast.success(r.duplicate ? "الإذن ده اتسجّل قبل كده" : r.replay ? `الإرسال محفوظ بالفعل — إذن ${r.reference}` : `راح الورشة — إذن ${r.reference}`);
         if (!r.duplicate) { setLines([newLine()]); setReason(""); setRepairCost(""); }
+        setSendConflict(null);
         batches.refetch();
       },
       onSettled: done,
@@ -383,8 +386,15 @@ export default function WorkshopReturns() {
                 </div>
               </div>
 
+              {sendConflict && (
+                <div className="mt-4 flex flex-col gap-2 rounded-[var(--radius-brand-md)] border border-destructive/40 bg-destructive/5 p-3 text-sm sm:flex-row sm:items-center" role="alert" data-testid="send-conflict">
+                  <p className="flex flex-1 items-start gap-1.5 text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>البيانات اختلفت عن طلب سابق لنفس الإرسال: {sendConflict}</span></p>
+                  <Button type="button" variant="outline" className="min-h-11 md:min-h-9" onClick={startNewSend} data-testid="send-new">بدء عملية جديدة</Button>
+                </div>
+              )}
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <Button className="min-h-11 md:min-h-9 gap-1.5" onClick={doSend} disabled={send.isPending}>
+                <Button className="min-h-11 md:min-h-9 gap-1.5" onClick={doSend} disabled={send.isPending} data-testid="workshop-send">
                   <Send className="h-4 w-4" />
                   {send.isPending ? "جاري الإرسال..." : "إرسال للورشة"}
                 </Button>

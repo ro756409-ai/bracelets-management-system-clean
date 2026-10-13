@@ -237,20 +237,24 @@ export default function FacebookEntry() {
     ? "الرقم ليس رقم موبايل مصري (01xxxxxxxxx) — راجعه قبل الحفظ" : null;
   const issueCount = Object.keys(fieldIssues).length + blockers.length;
 
-  // منع التكرار على السيرفر (0052): معرّف ثابت لهذه العملية حتى النجاح أو مسح النموذج — يبقى بعد انقطاع الشبكة وإعادة التحميل.
-  const OP_SCOPE = `fb-order:${DRAFT_KEY}`;
+  // منع التكرار على السيرفر (0052): معرّف ثابت لهذه العملية (نطاقه = نوع العملية + مفتاح المسودة: الشركة/النشاط/الموظف/النشاط
+  // الفعّال/القالب، ولكل تبويب معرّفه) حتى النجاح أو إجراء صريح — يبقى بعد انقطاع الشبكة وإعادة التحميل، ولا يتغيّر عند CONFLICT.
+  const OP_SCOPE = `order.create|${DRAFT_KEY}`;
+  const [opConflict, setOpConflict] = useState<string | null>(null);
+  const startNewOperation = () => { discardOperation(OP_SCOPE); setOpConflict(null); };
   const addOrderMutation = trpc.facebookEntry.addOrder.useMutation({
     onSuccess: data => {
       toast.success(data.replay ? `الأوردر محفوظ بالفعل — رقم: ${data.orderNumber}` : `تم إضافة الأوردر — رقم: ${data.orderNumber}`);
+      setOpConflict(null);
       setCust(EMPTY_CUSTOMER);
       setItems([]);
       resetParseState(); setManualMode(false); setPasteText("");
       localStorage.removeItem(DRAFT_KEY);
       if (showOrders) refetchOrders();
     },
-    // CONFLICT = نفس المعرّف ببيانات مختلفة/فاعل آخر/استنفاد أرقام (لا شيء جديد حُفظ) ⇒ الحفظ التالي عملية جديدة.
-    // خطأ شبكة/رد ضائع ⇒ المعرّف يبقى، فإعادة المحاولة تعيد نفس الأوردر إن كان حُفظ.
-    onError: e => { if (e.data?.code === "CONFLICT") discardOperation(OP_SCOPE); toast.error(`خطأ: ${e.message}`); },
+    // CONFLICT (البيانات اختلفت عن طلب سابق بنفس المعرّف، أو غيره): المعرّف **يبقى** — تغييره تلقائيًا قد يُنشئ أوردرًا ثانيًا
+    // بعد حفظ الأول وضياع رده. التنبيه يعرض السبب، وبدء عملية جديدة بزر صريح. خطأ شبكة/رد ضائع ⇒ إعادة المحاولة بنفس المعرّف.
+    onError: e => { if (e.data?.code === "CONFLICT") setOpConflict(e.message); toast.error(`خطأ: ${e.message}`); },
   });
   const updateOrderMutation = trpc.facebookEntry.updateOrder.useMutation({
     onSuccess: () => { toast.success("تم تعديل الأوردر"); setEditingOrder(null); refetchOrders(); },
@@ -300,7 +304,7 @@ export default function FacebookEntry() {
     setExpectedPieces(null); setTotalMismatch(false); setTotalConfirmed(false);
     resetParseState(); setManualMode(false);
     localStorage.removeItem(DRAFT_KEY);
-    discardOperation(OP_SCOPE);
+    startNewOperation();
     toast.success("تم مسح النموذج");
   }
   /** «إدخال يدوي»: يمسح اقتراحات التحليل الحالية فقط (بيانات العميل تفضل)، بلا توكن ولا مسودة. */
@@ -873,6 +877,13 @@ export default function FacebookEntry() {
             <p className="text-xs text-muted-foreground">آخر حقل فوق زر الحفظ دائمًا؛ الشريط أدناه يبقى ظاهرًا أثناء التمرير على الموبايل.</p>
           </EntrySection>
 
+          {opConflict && (
+            <div className="flex flex-col gap-2 rounded-[var(--radius-brand-md)] border border-destructive/40 bg-destructive/5 p-3 text-sm sm:flex-row sm:items-center" role="alert" data-testid="op-conflict">
+              <p className="flex flex-1 items-start gap-1.5 text-destructive"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>البيانات اختلفت عن طلب سابق لنفس العملية: {opConflict}</span></p>
+              <Button type="button" variant="outline" className="min-h-11" onClick={startNewOperation} data-testid="op-new">بدء عملية جديدة</Button>
+            </div>
+          )}
           {/* شريط الحفظ ثابت أسفل الشاشة على الهاتف (بخلفية + safe-area) — النموذج له حشو سفلي فلا يغطي آخر حقل؛ عادي على sm+ */}
           <div className="fixed inset-x-0 bottom-0 z-20 flex items-center gap-2 border-t border-border bg-background/95 px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-0" data-testid="save-bar">
             <Button

@@ -11,11 +11,13 @@ const main = fs.readFileSync("client/src/main.tsx", "utf-8");
 
 describe("🔁 إرسال الورشة — معرّف العملية", () => {
   it("المعرّف محفوظ بنطاق النشاط ويُرسل مع كل محاولة", () => {
-    expect(page).toContain("const sendScope = `workshop-send:${bid ?? \"none\"}`;");
+    expect(page).toContain("const sendScope = `workshop.send|${sessionFingerprint()}|b${bid ?? \"none\"}`;");
     expect(page).toContain("operationId: persistentOperationIdFor(sendScope),");
   });
-  it("CONFLICT فقط يبدأ عملية جديدة؛ خطأ الشبكة يُبقي المعرّف", () => {
-    expect(page).toContain('onError: e => { if (e.data?.code === "CONFLICT") discardOperation(sendScope); toast.error(e.message); },');
+  it("CONFLICT لا يغيّر المعرّف (تنبيه فقط)؛ بدء عملية جديدة بزر صريح", () => {
+    expect(page).toContain('onError: e => { if (e.data?.code === "CONFLICT") setSendConflict(e.message); toast.error(e.message); },');
+    expect(page).toContain("const startNewSend = () => { discardOperation(sendScope); setSendConflict(null); };");
+    expect(page.match(/discardOperation\(/g)?.length).toBe(1);
   });
   it("النجاح يستهلك المعرّف (مستمع MutationCache)، ورسالة الإعادة واضحة", () => {
     expect(main).toContain("completeOperation((event.mutation.state.variables as { operationId?: unknown } | undefined)?.operationId);");
