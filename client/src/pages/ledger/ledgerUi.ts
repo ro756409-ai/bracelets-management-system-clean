@@ -1,3 +1,4 @@
+import { SYSTEM_POSTED_CODES } from "@shared/ledgerDailyAccounts";
 import { fromMinorUnits, toMinorUnits } from "@shared/accountingMoney";
 
 /**
@@ -30,7 +31,7 @@ export const OPERATION_META: Record<DailyOperation, { label: string; money: stri
 export const KIND_LABELS: Record<string, string> = {
   opening_balance: "رصيد افتتاحي", revenue_cod: "إيراد تحصيل بوسطة", revenue_prepaid: "إيراد", expense: "مصروف", payroll: "رواتب",
   advance: "سلفة", transfer: "تحويل", bosta_settlement: "تسوية بوسطة", owner_drawing: "مسحوبات المالك", owner_contribution: "إيداع المالك",
-  adjustment: "تسوية", reversal: "عكس حركة", inventory_purchase: "شراء بضاعة/خامات", cost_of_sales: "تكلفة مبيعات", return_loss: "خسارة مرتجع", return_refund: "التزام رد مرتجع", return_cost: "تكلفة مرتجع قيد الفحص", customer_refund: "رد مبلغ لعميل",
+  adjustment: "تسوية", reversal: "عكس حركة", inventory_purchase: "شراء بضاعة/خامات", cost_of_sales: "تكلفة مبيعات", return_loss: "خسارة مرتجع", return_refund: "التزام رد مرتجع", return_cost: "تكلفة مرتجع قيد الفحص", customer_refund: "رد مبلغ لعميل", packaging_consumption: "استهلاك تغليف",
 };
 export const kindLabel = (k: string) => KIND_LABELS[k] ?? k;
 
@@ -53,9 +54,11 @@ export function codReceivableTotal(accounts: UiAccount[]): string | null {
   if (list.some(a => a.currentBalance == null)) return null;
   return fromMinorUnits(list.reduce((sum, a) => sum + toMinorUnits(a.currentBalance as string), 0n));
 }
-export const revenueAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "revenue" && isActiveAccount(a));
-export const expenseAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "expense" && isActiveAccount(a));
-export const inventoryAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "inventory" && isActiveAccount(a));
+// الحسابات التي تُرحَّل آليًا (رسوم الشحن، خسائر المرتجع، فروق الجرد، إيراد الشحن، مرتجعات قيد الفحص…) لا تظهر للإدخال اليدوي
+const manual = (a: UiAccount) => !SYSTEM_POSTED_CODES.has(a.code) && isActiveAccount(a);
+export const revenueAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "revenue" && manual(a));
+export const expenseAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "expense" && manual(a));
+export const inventoryAccounts = (accounts: UiAccount[]) => accounts.filter(a => a.kind === "inventory" && manual(a));
 
 export const AMOUNT_RE = /^\d{1,14}(\.\d{1,4})?$/;
 

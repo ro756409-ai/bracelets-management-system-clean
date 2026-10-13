@@ -4,7 +4,9 @@
  *  • شراء البضاعة والخامات: حسابات kind=inventory (أصل) — ليست مصروفًا؛ تكلفة المبيعات COGS تُسجَّل عند البيع من لقطة
  *    تكلفة الأوردر (المرحلة 4)، فلا يُحسب الدفع مصروفًا ثم تتكرر التكلفة عند البيع.
  */
-export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue" | "carrier_receivable" | "customer_advance"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" | "carrier" | "liability"; allowNegative?: boolean };
+export type DailyAccountSpec = { code: string; name: string; kind: "expense" | "inventory" | "cogs" | "revenue" | "carrier_receivable" | "customer_advance"; normalSide: "debit" | "credit"; group: "expense" | "stock" | "revenue" | "carrier" | "liability"; allowNegative?: boolean;
+  /** يُرحَّل آليًا فقط (تسليم/تسوية/مرتجع/جرد/تغليف) — ممنوع في الإدخال اليدوي، وإلا تتكرر القيمة. */
+  systemPosted?: true };
 
 export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "EXP_FLYERS", name: "فلاير ومطبوعات", kind: "expense", normalSide: "debit", group: "expense" },
@@ -16,17 +18,24 @@ export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "EXP_ADS", name: "إعلانات", kind: "expense", normalSide: "debit", group: "expense" },
   { code: "INV_GOODS", name: "مخزون بضاعة جاهزة", kind: "inventory", normalSide: "debit", group: "stock" },
   { code: "INV_RAW", name: "مخزون خامات", kind: "inventory", normalSide: "debit", group: "stock" },
-  { code: "COGS", name: "تكلفة البضاعة المباعة", kind: "cogs", normalSide: "debit", group: "stock" },
+  { code: "COGS", name: "تكلفة البضاعة المباعة", kind: "cogs", normalSide: "debit", group: "stock", systemPosted: true },
   // المرحلة 3/4: الشحن الذي دفعه العميل منفصل عن إيراد المنتج؛ وخسارة المرتجع بعد التسليم منفصلة عن تكلفة المبيعات
-  { code: "REV_SHIPPING", name: "إيراد شحن محصّل من العميل", kind: "revenue", normalSide: "credit", group: "revenue" },
-  { code: "RETURN_LOSS", name: "خسائر المرتجعات (التالف والفاقد فقط)", kind: "expense", normalSide: "debit", group: "expense" },
+  { code: "REV_SHIPPING", name: "إيراد شحن محصّل من العميل", kind: "revenue", normalSide: "credit", group: "revenue", systemPosted: true },
+  { code: "RETURN_LOSS", name: "خسائر المرتجعات (التالف والفاقد فقط)", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
   // المرتجع بعد التسليم: التكلفة تنتظر الفحص والاستلام الفعلي؛ والمبلغ المحصَّل لمرتجع = التزام رد للعميل
-  { code: "RETURNS_PENDING", name: "مرتجعات قيد الفحص", kind: "inventory", normalSide: "debit", group: "stock" },
-  { code: "REFUND_PAYABLE", name: "مبالغ مستحقة للعملاء (مرتجعات)", kind: "customer_advance", normalSide: "credit", group: "liability" },
-  { code: "REV_RETURN_RETAINED", name: "مبالغ محتجزة من مرتجعات (بسبب معلن)", kind: "revenue", normalSide: "credit", group: "revenue" },
-  { code: "INV_VARIANCE", name: "فروقات الجرد", kind: "expense", normalSide: "debit", group: "expense" },
+  { code: "RETURNS_PENDING", name: "مرتجعات قيد الفحص", kind: "inventory", normalSide: "debit", group: "stock", systemPosted: true },
+  { code: "REFUND_PAYABLE", name: "مبالغ مستحقة للعملاء (مرتجعات)", kind: "customer_advance", normalSide: "credit", group: "liability", systemPosted: true },
+  { code: "REV_RETURN_RETAINED", name: "مبالغ محتجزة من مرتجعات (بسبب معلن)", kind: "revenue", normalSide: "credit", group: "revenue", systemPosted: true },
+  { code: "INV_VARIANCE", name: "فروقات الجرد", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
   // المرحلة 3: رسوم شركة الشحن الفعلية من كشف التسوية (لا تقدير)، و«مستحقات بوسطة قيد الصرف» بين التسوية والتحويل الفعلي
   // (حساب تسوية مؤقت يُسمح بسالبه حين تزيد رسوم المرتجعات في الكشف عن الصافي)
-  { code: "EXP_CARRIER_FEES", name: "رسوم شركة الشحن", kind: "expense", normalSide: "debit", group: "expense" },
-  { code: "COD_PAYOUT", name: "مستحقات بوسطة قيد الصرف", kind: "carrier_receivable", normalSide: "debit", group: "carrier", allowNegative: true },
+  { code: "EXP_CARRIER_FEES", name: "رسوم شركة الشحن", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
+  { code: "COD_PAYOUT", name: "مستحقات بوسطة قيد الصرف", kind: "carrier_receivable", normalSide: "debit", group: "carrier", allowNegative: true, systemPosted: true },
+  // المرحلة 4: التغليف — شراؤه أصل («مخزون تغليف»)، واستهلاكه تكلفة أوردر عند التسليم لمندوب الشحن من الإعداد المُدخل،
+  // مرة واحدة لكل أوردر (لا مصروف يدوي للتغليف ولا تكلفة مكررة)
+  { code: "INV_PACKAGING", name: "مخزون مواد التغليف", kind: "inventory", normalSide: "debit", group: "stock" },
+  { code: "COGS_PACKAGING", name: "تكلفة تغليف الأوردرات", kind: "cogs", normalSide: "debit", group: "stock", systemPosted: true },
 ] as const;
+
+/** أكواد الحسابات التي تُرحَّل آليًا فقط — يرفضها مسار الإدخال اليدوي. */
+export const SYSTEM_POSTED_CODES: ReadonlySet<string> = new Set(LEDGER_DAILY_ACCOUNTS.filter(a => a.systemPosted).map(a => a.code));

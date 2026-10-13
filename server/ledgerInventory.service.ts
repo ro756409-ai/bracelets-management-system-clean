@@ -7,6 +7,7 @@ import { LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import { dispatchOrderInventory, reserveOrderInventory } from "./inventoryV2.service";
 import { getLedgerStatus, postLedgerTransaction, rawRows, resolveDb, type LedgerDb } from "./ledgerV3.service";
 import { flagOrderLedgerReview } from "./ledgerOrders.service";
+import { getCarrierSettingValues } from "./ledgerCarrierOps.service";
 
 /**
  * المرحلة 4 — المخزون وتكلفة الأوردر مع Ledger V3. محرك المخزون (الكميات/متوسط التكلفة/الحجز) هو V2 كما هو؛
@@ -143,7 +144,60 @@ export async function handoverOrder(input: { businessId: number; orderId: number
   const items = await d.select({ quantity: orderItems.quantity, stockOutQuantity: orderItems.stockOutQuantity, unitCostSnapshot: orderItems.unitCostSnapshot }).from(orderItems).where(eq(orderItems.orderId, o.id));
   let cost = 0n;
   for (const it of items) if (it.unitCostSnapshot != null) cost += toMinorUnits(String(it.unitCostSnapshot)) * BigInt(it.stockOutQuantity ?? 0);
-  return { orderId: o.id, orderNumber: o.orderNumber, duplicate: r.duplicate, cost: fromMinorUnits(cost) };
+  const packaging = await postPackagingForOrder(d, ctx, input.businessId, o, { type: "employee", employeeId: input.actor.id });
+  return { orderId: o.id, orderNumber: o.orderNumber, duplicate: r.duplicate, cost: fromMinorUnits(cost), packaging };
+}
+
+/**
+ * التغليف عند التسليم لمندوب الشحن: تكلفة التغليف للأوردر = الإعداد المُدخل للنشاط («packaging.cost_per_order») من «مخزون مواد
+ * التغليف» إلى «تكلفة تغليف الأوردرات»، مرة واحدة (`order:<id>:packaging`) — إعادة المسح أو تغيير الإعداد لاحقًا لا يكرر ولا
+ * يعدّل. بلا إعداد = لا قيد (لا تخمين). مخزون التغليف لا يكفي = مراجعة على الأوردر والتسليم نفسه لا يفشل. المرتجع لا يعيد
+ * التغليف (استُهلك فعلًا)، والإعلانات لا تُحمَّل على الأوردر (مصروف يومها).
+ */
+async function postPackagingForOrder(d: LedgerDb, ctx: { tenantId: number; timezone: string; ledgerGoLive: string }, businessId: number, o: { id: number; orderNumber: string }, actor: LedgerActor) {
+  const key = `order:${o.id}:packaging`;
+  const [existing] = await d.select({ id: ledgerTransactions.id }).from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, ctx.tenantId), eq(ledgerTransactions.idempotencyKey, key))).limit(1);
+  if (existing) return { status: "replay" as const, transactionId: existing.id };
+  const value = (await getCarrierSettingValues(d, ctx.tenantId, businessId))["packaging.cost_per_order"];
+  if (value == null || toMinorUnits(String(value)) === 0n) return { status: "skipped" as const, reason: "تكلفة التغليف للأوردر غير مُدخلة" };
+  const date = businessDateKey(new Date(), ctx.timezone);
+  if (date < ctx.ledgerGoLive) return { status: "skipped" as const, reason: "قبل بداية الدفتر" };
+  try {
+    const acc = await accountIds(d, ctx.tenantId, ["COGS_PACKAGING", "INV_PACKAGING"]);
+    const amount = fromMinorUnits(toMinorUnits(String(value)));
+    const r = await postLedgerTransaction({ tenantId: ctx.tenantId, sourceBusinessId: businessId, kind: "packaging_consumption", idempotencyKey: key, effectiveDate: date, currency: "EGP", actor,
+      entries: [{ accountId: acc.COGS_PACKAGING, side: "debit", amount, businessId }, { accountId: acc.INV_PACKAGING, side: "credit", amount, businessId }],
+      description: `تغليف الأوردر ${o.orderNumber}`, sourceType: "order", sourceReference: String(o.id) } as any, d);
+    return { status: r.replay ? "replay" as const : "posted" as const, transactionId: r.transactionId, amount };
+  } catch (e) {
+    const reason = `لم تُسجَّل تكلفة التغليف: ${e instanceof Error ? e.message : String(e)}`;
+    await flagOrderLedgerReview(d, businessId, o.id, reason);
+    return { status: "review" as const, reason };
+  }
+}
+
+/**
+ * رصيد مخزون التغليف الافتتاحي (المالك فقط) من عدّ فعلي يوم Go-live: مدين «مخزون مواد التغليف» للنشاط / دائن الرصيد
+ * الافتتاحي، بتاريخ Go-live، مرة واحدة لكل نشاط. لا يُقرأ أي رصيد قديم.
+ */
+export async function postPackagingOpening(input: { tenantId: number; businessId: number; amount: string; countedOn: string; actor: LedgerActor }, db?: LedgerDb) {
+  const d = await resolveDb(db);
+  const [b] = await d.select({ id: businesses.id }).from(businesses).where(and(eq(businesses.id, input.businessId), eq(businesses.tenantId, input.tenantId))).limit(1);
+  if (!b) throw new LedgerError("business", `#${input.businessId}`);
+  const status = await getLedgerStatus(input.tenantId, d);
+  if (!status.enabled || !status.goLiveDate) throw new LedgerError("disabled");
+  if (input.countedOn !== status.goLiveDate) throw new InventoryLedgerError(`العدّ بتاريخ ${input.countedOn} — رصيد التغليف الافتتاحي من عدّ يوم Go-live (${status.goLiveDate}) فقط`);
+  const value = toMinorUnits(input.amount);
+  if (value <= 0n) throw new InventoryLedgerError("قيمة العدّ صفر — لا قيد افتتاحي");
+  const acc = await accountIds(d, input.tenantId, ["INV_PACKAGING", "OPENING_EQUITY"]);
+  try {
+    return await postLedgerTransaction({ tenantId: input.tenantId, sourceBusinessId: input.businessId, kind: "adjustment", idempotencyKey: `packaging-opening:business:${input.businessId}`, effectiveDate: status.goLiveDate, currency: "EGP",
+      actor: input.actor, description: "رصيد مخزون التغليف الافتتاحي من عدّ يوم Go-live", sourceType: "packaging_opening", sourceReference: String(input.businessId),
+      entries: [{ accountId: acc.INV_PACKAGING, side: "debit", amount: fromMinorUnits(value), businessId: input.businessId }, { accountId: acc.OPENING_EQUITY, side: "credit", amount: fromMinorUnits(value), businessId: null }] } as any, d);
+  } catch (e) {
+    if (e instanceof LedgerError && e.code === "conflict") throw new InventoryLedgerError("رصيد التغليف الافتتاحي لهذا النشاط مسجّل بالفعل — لا يُكرر");
+    throw e;
+  }
 }
 
 const stocktakeValue = (lines: { countedQuantity: number; unitCostSnapshot: string | null }[]) => {

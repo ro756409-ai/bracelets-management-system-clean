@@ -72,7 +72,39 @@ export function InventoryOpeningSection() {
             </ul>
           )}
       </SectionCard>
+      {candidates.data?.goLiveDate && <PackagingOpeningCard goLiveDate={candidates.data.goLiveDate} />}
     </div>
+  );
+}
+
+/** رصيد مخزون التغليف الافتتاحي من عدّ فعلي يوم Go-live — مرة لكل نشاط (السيرفر يرفض التكرار وأي تاريخ آخر). */
+function PackagingOpeningCard({ goLiveDate }: { goLiveDate: string }) {
+  const businesses = trpc.ledger.businesses.list.useQuery(undefined, { retry: false });
+  const post = trpc.ledger.inventory.packagingOpening.useMutation();
+  const [businessId, setBusinessId] = useState<number | null>(null);
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const list = (businesses.data ?? []) as { id: number; name: string }[];
+  const chosen = businessId ?? list[0]?.id ?? null;
+  const run = async () => {
+    if (busy || chosen == null) return;
+    setBusy(true);
+    try { const r = await post.mutateAsync({ businessId: chosen, amount: amount.trim(), countedOn: goLiveDate }); toast.success(r.replay ? "مسجّل بالفعل — لم يتكرر" : "سُجّل رصيد التغليف الافتتاحي"); setAmount(""); }
+    catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <SectionCard title="مخزون مواد التغليف الافتتاحي" testId="ledger-packaging-opening">
+      <p className="text-xs text-muted-foreground">قيمة ما عُدّ فعليًا من مواد التغليف يوم <span dir="ltr">{goLiveDate}</span> — مرة واحدة لكل نشاط. بعدها يُشترى التغليف كمخزون، ويُحمَّل على الأوردر عند تسليمه لمندوب الشحن.</p>
+      <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div><Label htmlFor="pk-biz">النشاط</Label>
+          <select id="pk-biz" value={chosen ?? ""} onChange={e => setBusinessId(Number(e.target.value))} className="mt-1 block min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" data-testid="pk-biz">
+            {list.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <div><Label htmlFor="pk-amount">القيمة المعدودة</Label><Input id="pk-amount" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} className="mt-1 min-h-11" dir="ltr" data-testid="pk-amount" /></div>
+        <div className="flex items-end"><Button className="min-h-11 w-full" onClick={run} disabled={busy || chosen == null || !/^\d{1,14}(\.\d{1,4})?$/.test(amount.trim())} data-testid="pk-run">تسجيل</Button></div>
+      </div>
+    </SectionCard>
   );
 }
 

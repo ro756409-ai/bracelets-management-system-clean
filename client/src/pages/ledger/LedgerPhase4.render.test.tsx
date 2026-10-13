@@ -6,7 +6,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
-const state = vi.hoisted(() => ({ active: true, handoverCalls: 0, handoverResult: { duplicate: false, cost: "120.0000" } as any, candidates: [] as any[], postCalls: [] as number[] }));
+const state = vi.hoisted(() => ({ active: true, handoverCalls: 0, handoverResult: { duplicate: false, cost: "120.0000" } as any, candidates: [] as any[], postCalls: [] as number[], pkCalls: [] as any[] }));
 vi.mock("@/lib/trpc", () => ({
   trpc: {
     inventoryLedger: {
@@ -15,7 +15,9 @@ vi.mock("@/lib/trpc", () => ({
     },
     ledger: {
       status: { useQuery: () => ({ data: { tablesPresent: true, enabled: true } }) },
+      businesses: { list: { useQuery: () => ({ data: [{ id: 3, name: "براند A" }, { id: 4, name: "براند B" }] }) } },
       inventory: {
+        packagingOpening: { useMutation: () => ({ mutateAsync: async (i: any) => { state.pkCalls.push(i); await new Promise(r => setTimeout(r, 20)); return { replay: false }; } }) },
         openingCandidates: { useQuery: () => ({ data: { goLiveDate: "2026-10-01", rows: state.candidates }, isLoading: false, error: null, refetch: async () => {} }) },
         openingFromStocktake: { useMutation: () => ({ mutateAsync: async (i: any) => { state.postCalls.push(i.stocktakeId); await new Promise(r => setTimeout(r, 20)); return { replay: false }; }, isPending: false }) },
       },
@@ -28,7 +30,7 @@ import { HandoverPanel } from "@/components/inventory/HandoverPanel";
 import LedgerOpening from "./LedgerOpening";
 
 beforeEach(() => {
-  state.active = true; state.handoverCalls = 0; state.handoverResult = { duplicate: false, cost: "120.0000" }; state.postCalls = [];
+  state.active = true; state.handoverCalls = 0; state.handoverResult = { duplicate: false, cost: "120.0000" }; state.postCalls = []; state.pkCalls = [];
   state.candidates = [
     { stocktakeId: 5, businessName: "براند A", warehouseName: "المكتب", approvedDay: "2026-09-30", value: "4000.0000", postedFromStocktakeId: null },
     { stocktakeId: 6, businessName: "براند A", warehouseName: "الورشة", approvedDay: "2026-10-01", value: null, postedFromStocktakeId: null },
@@ -64,5 +66,17 @@ describe("🏷️ المخزون الافتتاحي (المالك بعد الت�
     const btn = screen.getByTestId("ledger-inventory-opening-post-5");
     fireEvent.click(btn); fireEvent.click(btn);
     await waitFor(() => expect(state.postCalls).toEqual([5]));
+  });
+
+  it("رصيد التغليف الافتتاحي: تاريخ العدّ = يوم Go-live دائمًا، قيمة غير صالحة = معطّل، ضغط مزدوج = طلب واحد", async () => {
+    render(<LedgerOpening />);
+    const run = screen.getByTestId("pk-run") as HTMLButtonElement;
+    expect(run.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("pk-amount"), { target: { value: "12.345678" } });
+    expect(run.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("pk-biz"), { target: { value: "4" } });
+    fireEvent.change(screen.getByTestId("pk-amount"), { target: { value: "250" } });
+    fireEvent.click(run); fireEvent.click(run);
+    await waitFor(() => expect(state.pkCalls).toEqual([{ businessId: 4, amount: "250", countedOn: "2026-10-01" }]));
   });
 });

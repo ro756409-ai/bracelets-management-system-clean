@@ -1,9 +1,12 @@
 import { z } from "zod";
+import { and, eq, inArray } from "drizzle-orm";
+import { ledgerAccounts } from "../drizzle/ledgerV3.schema";
+import { SYSTEM_POSTED_CODES } from "../shared/ledgerDailyAccounts";
 import { TRPCError } from "@trpc/server";
 import { router, authenticatedProcedure } from "./_core/trpc";
 import { openingDraftInput, validateOpeningDraft } from "./ledgerOpening.service";
 import { dailyAccountsStatus, dailyLedgerReport, ensureDailyAccounts } from "./ledgerDaily.service";
-import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpeningFromStocktake } from "./ledgerInventory.service";
+import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpeningFromStocktake, postPackagingOpening } from "./ledgerInventory.service";
 import { closeChecklist, incomeStatement, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
 import { listCarrierStatements, recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
 import { clearLedgerSetting, listCarrierReviews, listLedgerSettings, resolveCarrierReview, setLedgerSetting } from "./ledgerCarrierOps.service";
@@ -14,7 +17,7 @@ import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3C
 import {
   createLedgerAccount, getLedgerStatus, getLedgerTransactionScoped, listLedgerAccountsScoped, reviewLedgerPeriod, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerBusinesses, listLedgerPeriods,
   listLedgerTransactions, lockLedgerPeriod, postLedgerTransaction, reconcileLedgerV3, renameLedgerAccount, reopenLedgerPeriod,
-  reverseLedgerTransaction, revokeLedgerAccountBusiness, setLedgerAccountActive,
+  resolveDb, reverseLedgerTransaction, revokeLedgerAccountBusiness, setLedgerAccountActive,
 } from "./ledgerV3.service";
 
 /**
@@ -61,6 +64,13 @@ function actorOf(ctx: any): LedgerActor {
   const id = ctx.employee?.id ?? ctx.realEmployeeId;
   if (!id) throw new TRPCError({ code: "FORBIDDEN", message: "جلستك غير مرتبطة بموظف — لا يمكن تسجيل الفاعل" });
   return { type: "employee", employeeId: Number(id) };
+}
+
+async function rejectSystemPostedAccounts(tenantId: number, accountIds: number[]) {
+  const d = await resolveDb();
+  const rows = await d.select({ code: ledgerAccounts.code }).from(ledgerAccounts).where(and(eq(ledgerAccounts.tenantId, tenantId), inArray(ledgerAccounts.id, accountIds)));
+  const blocked = rows.map(r => r.code).filter(c => SYSTEM_POSTED_CODES.has(c));
+  if (blocked.length) throw new LedgerError("kindShape", `حساب يُرحَّل آليًا ولا يُدخل يدويًا: ${blocked.join("، ")}`);
 }
 
 /** LedgerError → رمز tRPC واضح برسالة عربية. */
@@ -175,6 +185,9 @@ export function createLedgerRouter(deps: Deps) {
           entries.push({ accountId: e.accountId, side: e.side, amount: e.amount, businessId });
         }
         const scope = await deps.sessionBusinessIds(ctx);
+        // حسابات تُرحَّل آليًا فقط (رسوم الشحن من الكشف، خسائر المرتجع من الفحص، فروق الجرد، إيراد الشحن، التغليف…) — الإدخال
+        // اليدوي عليها يكرر القيمة، فيُرفض قبل أي كتابة
+        await guard(() => rejectSystemPostedAccounts(tenantOf(ctx), input.entries.map(e => e.accountId)));
         return maskBalances(ctx, await guard(() => postLedgerTransaction({
           tenantId: tenantOf(ctx), sourceBusinessId, kind: input.kind as any, idempotencyKey: input.idempotencyKey, effectiveDate: input.effectiveDate,
           currency: input.currency.toUpperCase(), actor: actorOf(ctx), entries, description: input.description, sourceType: input.sourceType ?? null, sourceReference: input.sourceReference ?? null,
@@ -304,6 +317,13 @@ export function createLedgerRouter(deps: Deps) {
         .input(z.object({ stocktakeId: z.number().int().positive() }))
         .mutation(async ({ ctx, input }) => {
           try { return await guard(() => postInventoryOpeningFromStocktake({ tenantId: tenantOf(ctx), stocktakeId: input.stocktakeId, actor: actorOf(ctx) })); }
+          catch (e) { if (e instanceof InventoryLedgerError) throw new TRPCError({ code: "PRECONDITION_FAILED", message: e.message }); throw e; }
+        }),
+      // رصيد مخزون التغليف الافتتاحي من عدّ يوم Go-live — المالك فقط، مرة لكل نشاط
+      packagingOpening: ledgerProcedure("ledger.activate")
+        .input(z.object({ businessId: z.number().int().positive(), amount: amountStr, countedOn: dateStr }))
+        .mutation(async ({ ctx, input }) => {
+          try { return await guard(() => postPackagingOpening({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }
           catch (e) { if (e instanceof InventoryLedgerError) throw new TRPCError({ code: "PRECONDITION_FAILED", message: e.message }); throw e; }
         }),
     }),

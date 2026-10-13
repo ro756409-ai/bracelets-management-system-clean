@@ -15,6 +15,8 @@ export const LEDGER_KINDS = [
   "cost_of_sales", "return_loss",
   // مرتجع بعد التسليم: التزام رد للعميل (بعد التحصيل)، ونقل التكلفة لـ«مرتجعات قيد الفحص»، ورد المبلغ للعميل
   "return_refund", "return_cost", "customer_refund",
+  // المرحلة 4: استهلاك التغليف عند التسليم لمندوب الشحن (تكلفة أوردر من مخزون التغليف)
+  "packaging_consumption",
 ] as const;
 export type LedgerKind = (typeof LEDGER_KINDS)[number];
 export type LedgerSide = "debit" | "credit";
@@ -199,6 +201,13 @@ const PURCHASE_CREDIT_KINDS = new Set(["cash", "bank", "wallet", "supplier_payab
 export function assertKindShape(kind: string, entries: { accountId: number; side: LedgerSide }[], kindOf: (accountId: number) => string | undefined): void {
   if (kind === "expense") {
     for (const e of entries) if (STOCK_KINDS.has(kindOf(e.accountId) ?? "")) throw new LedgerError("kindShape", "المصروف لا يُسجَّل على حساب مخزون أو تكلفة — استخدم «شراء بضاعة/خامات»");
+  }
+  if (kind === "packaging_consumption") {
+    for (const e of entries) {
+      const k = kindOf(e.accountId) ?? "";
+      if (e.side === "debit" && k !== "cogs") throw new LedgerError("kindShape", "استهلاك التغليف مدين على حساب تكلفة فقط");
+      if (e.side === "credit" && k !== "inventory") throw new LedgerError("kindShape", "استهلاك التغليف دائن على حساب مخزون فقط");
+    }
   }
   if (kind === "inventory_purchase") {
     for (const e of entries) {
