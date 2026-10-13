@@ -78,7 +78,17 @@ describe.runIf(CAN)("🏦 خزنة مشتركة بين نشاطين — نطاق
   afterAll(async () => { __setDbForTests(null); await tmp?.drop(); }, 120_000);
 
   // المبلغ بصيغتيه (4 خانات من القاعدة، وخانتان كما يُدخل) — بلا الصيغة المقصوصة التي تطابق معرّفات/تواريخ صدفةً
-  const leaks = (v: unknown, amounts: string[]) => { const s = JSON.stringify(v); return amounts.filter(a => s.includes(a) || s.includes(a.slice(0, -2))); };
+  // الطوابع الزمنية تُحذف قبل البحث: القاعدة تخزّن ثواني صحيحة فتظهر «…:10.000Z» وتطابق «10.00» صدفةً حين يُنشأ الحساب في
+  // الثانية 10 — إنذار كاذب متقطع (≈1/60) لا تسريب. البحث عن المبالغ نفسه بنفس الصرامة.
+  const leaks = (v: unknown, amounts: string[]) => {
+    const s = JSON.stringify(v).replace(/"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,3})?Z"/g, '"<ts>"');
+    return amounts.filter(a => s.includes(a) || s.includes(a.slice(0, -2)));
+  };
+  it("أداة كشف التسريب: تلتقط المبلغ بصيغتيه وتتجاهل طابعًا زمنيًا في الثانية 10", () => {
+    expect(leaks([{ amount: "10.0000" }], ["10.0000"])).toEqual(["10.0000"]);
+    expect(leaks([{ amount: "10.00" }], ["10.0000"])).toEqual(["10.0000"]);
+    expect(leaks([{ createdAt: "2026-10-13T13:45:10.000Z" }], ["10.0000"])).toEqual([]);
+  });
 
   it("المحاسب (النشاط الأول): رصيد الخزنة المشتركة والإجماليات محجوبة؛ رصيد العهدة الخاصة ظاهر؛ لا أرقام النشاط الثاني", async () => {
     const l = await call(e.accA1);
