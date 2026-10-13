@@ -148,6 +148,7 @@ describe("كتّاب الخزنة معروفين بالاسم", () => {
         "supplierLedger.service.ts", // دفعة للمصنع
         "accountingV2.service.ts", // إيداع/سحب يدوي (recordManualTreasuryEntry بمفتاح idempotency)
         "settlementsV2.service.ts", // تحصيل اليوم من شركة الشحن
+        "legacyRecovery.service.ts", // خطة الرجوع (0051): فرق رصيد التوقف مرة واحدة — مفتاح recovery:<صورة> + قفل العلم + replay
       ].sort()
     );
   });
