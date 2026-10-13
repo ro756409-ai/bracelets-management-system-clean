@@ -10,7 +10,7 @@ const state = vi.hoisted(() => ({
   perms: [] as string[], user: { id: 1, tenantId: 10, role: "admin" } as any,
   accounts: [] as any[], review: null as any, periods: [] as any[],
   calls: { create: [] as any[], rename: [] as any[], setActive: [] as any[], grant: [] as any[], revoke: [] as any[], lock: [] as any[], reopen: [] as any[], validate: [] as any[] },
-  validateResult: null as any, ledgerEnabled: true, position: undefined as any, checklist: undefined as any,
+  validateResult: null as any, ledgerEnabled: true, position: undefined as any, checklist: undefined as any, snapshots: undefined as any,
 }));
 const { slowMutation } = vi.hoisted(() => ({
   slowMutation: (key: string, result: () => any) => ({ useMutation: () => ({ mutateAsync: async (input: any) => { (state.calls as any)[key].push(input); await new Promise(r => setTimeout(r, 20)); return result(); }, isPending: false }) }),
@@ -26,6 +26,7 @@ vi.mock("@/lib/trpc", () => ({
       reports: { position: { useQuery: () => ({ data: state.position }) } },
       period: {
         checklist: { useQuery: () => ({ data: state.checklist, error: null }) },
+        snapshots: { useQuery: () => ({ data: state.snapshots }) },
         review: { useQuery: () => ({ data: state.review, isLoading: false, error: null, refetch: async () => {} }) },
         lock: slowMutation("lock", () => ({ periodId: 1, status: "locked", replay: false })),
         reopen: slowMutation("reopen", () => ({ periodId: 1, status: "open", replay: false })),
@@ -272,5 +273,20 @@ describe("📈 المرحلة 7 — ما لنا وما علينا وقائمة �
     render(<LedgerPeriods />);
     expect(screen.getByTestId("ledger-checklist").textContent).toContain("يحتاج مراجعة");
     expect(screen.getByTestId("ledger-checklist-deliveries_posted").textContent).toContain("بلا قيد");
+  });
+  it("صور الإقفال الثابتة (بعد 0050): كل إصدار ببصمته؛ بصمة لا تطابق أو أرقام تغيّرت = تنبيه صريح", () => {
+    state.perms = ["ledger.view", "ledger.period.lock"];
+    state.snapshots = { available: true, snapshots: [
+      { version: 1, figuresHash: "a".repeat(64), hashOk: false, changedSince: true, createdBy: "مدير", netProfit: "-300.0000" },
+      { version: 2, figuresHash: "b".repeat(64), hashOk: true, changedSince: false, createdBy: "مدير", netProfit: "-350.0000" },
+    ] };
+    render(<LedgerPeriods />);
+    expect(screen.getByTestId("ledger-snapshot-1").textContent).toContain("لا تطابق");
+    expect(screen.getByTestId("ledger-snapshot-1").textContent).toContain("تختلف عن هذا الإصدار");
+    expect(screen.getByTestId("ledger-snapshot-2").textContent).toContain("bbbbbbbbbbbb");
+    cleanup();
+    state.snapshots = { available: false, snapshots: [] };
+    render(<LedgerPeriods />);
+    expect(screen.queryByTestId("ledger-snapshots")).toBeNull();
   });
 });

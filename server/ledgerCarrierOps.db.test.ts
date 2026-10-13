@@ -183,6 +183,15 @@ describe.runIf(CAN)("🚚 بعد 0047 — الربط، طابور المراجع
     expect((await am.carrier.statements()).find((x: any) => x.statementRef === "CO-ST-4")).toMatchObject({ overdue: false, payoutTransactionId: expect.any(Number) });
   });
 
+  it("تكلفة الأوردر (المرحلة 7): الإيراد − تكلفته − رسوم شحنته الفعلية من الكشف؛ بلا توزيع إعلانات؛ للمالك (عرض الأرباح)", async () => {
+    const r = await (await call(e.ownerA)).reports.orderCost({ from: "2026-10-01", to: businessDateKey(new Date(), "Africa/Cairo") });
+    const by = Object.fromEntries(r.orders.map((o: any) => [o.orderNumber, o]));
+    const num = async (s: string) => (await q("SELECT orderNumber n FROM orders WHERE bostaShipmentId = ? AND status = 'delivered' ORDER BY id LIMIT 1", [sh(s)]))[0].n;
+    expect(by[await num("F1")]).toMatchObject({ revenue: "200.0000", cost: "10.0000", expenses: "45.6000", contribution: "144.4000", returned: false });
+    expect(by[await num("F2")]).toMatchObject({ revenue: "200.0000", cost: "10.0000", expenses: "50.0000", contribution: "140.0000" });
+    expect(await code(async () => (await call(e.accA)).reports.orderCost({ from: "2026-10-01", to: "2026-10-31" }))).toBe("FORBIDDEN"); // بلا عرض الأرباح
+  });
+
   it("العزل: الشركة B لا ترى طابور A ولا كشوفه", async () => {
     expect(Number((await q("SELECT COUNT(*) n FROM ledger_carrier_review_items WHERE tenantId = ?", [B.tenantId]))[0].n)).toBe(0);
     const ob = await call(e.ownerB);

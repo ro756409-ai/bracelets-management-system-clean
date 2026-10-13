@@ -45,7 +45,7 @@ const payPayrollFn = payrollSvc.slice(
  * `tx` مزيّف بيحاكي سلسلة Drizzle: كل ميثود بترجّع نفس الكائن، والكائن نفسه awaitable.
  * أول `select` هو قراءة آخر رصيد، والتاني هو قراءة الصف اللي اتكتب.
  */
-function fakeTx(opts: { last?: string; insertId?: number | null } = {}) {
+function fakeTx(opts: { last?: string; insertId?: number | null; v3Enabled?: boolean } = {}) {
   const inserted: any[] = [];
   let selects = 0;
   const chain = (resolve: () => any) => {
@@ -62,6 +62,8 @@ function fakeTx(opts: { last?: string; insertId?: number | null } = {}) {
     return obj;
   };
   const tx = {
+    // حاجز الأرشيف (المرحلة 7) يقرأ علم Ledger V3 للشركة: بلا صف = غير مفعّل ⇒ الكتابة القديمة مسموحة كما هي
+    execute: async () => [opts.v3Enabled ? [{ e: 1 }] : []],
     select: () => {
       const nth = selects++;
       return chain(() =>
@@ -138,6 +140,12 @@ describe("🔑 الرصيد بعد الحركة", () => {
     const { tx } = fakeTx({ last: "1000.00" });
     const row = await addTreasuryTransactionInTransaction(tx, movement());
     expect(row?.id).toBe(7);
+  });
+
+  it("🔑 شركة فعّلت Ledger V3: الخزنة القديمة أرشيف — رفض قبل أي كتابة (المرحلة 7)", async () => {
+    const { tx, inserted } = fakeTx({ last: "1000.00", v3Enabled: true });
+    await expect(addTreasuryTransactionInTransaction(tx, movement())).rejects.toThrow(/أرشيف للقراءة فقط/);
+    expect(inserted).toEqual([]);
   });
 });
 

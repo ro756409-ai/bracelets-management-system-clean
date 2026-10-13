@@ -22,6 +22,7 @@ export default function LedgerStatements() {
   const stmt = trpc.ledger.reports.incomeStatement.useQuery({ from, to }, { enabled, retry: false });
   const byBiz = trpc.ledger.reports.profitByBusiness.useQuery({ from, to }, { enabled, retry: false });
   const byProd = trpc.ledger.reports.profitByProduct.useQuery({ from, to }, { enabled, retry: false });
+  const orderCost = trpc.ledger.reports.orderCost.useQuery({ from, to }, { enabled, retry: false });
 
   if (status.data && !status.data.enabled) return <EmptyState title="دفتر الحسابات غير مفعّل لهذه الشركة" description="التقارير تبدأ بعد التفعيل." className="m-4" />;
   const s = stmt.data;
@@ -64,6 +65,20 @@ export default function LedgerStatements() {
               </ul>
               {(byProd.data?.unallocated.orders ?? 0) > 0 && <p className="mt-2 text-xs text-muted-foreground" data-testid="statements-unallocated">{byProd.data!.unallocated.orders} أوردر متعدد البنود بلا أسعار بنود كاملة — غير موزّع على المنتجات (إيراد {money(byProd.data!.unallocated.revenue)}).</p>}
             </SectionCard>
+            {orderCost.data && (
+              <SectionCard title={`تكلفة الأوردرات المسلَّمة (${orderCost.data.count})`} testId="statements-order-cost">
+                <p className="text-xs text-muted-foreground">الإيراد − تكلفة البضاعة والتغليف − رسوم الشحن الفعلية من الكشف وأثر المرتجع. الإعلانات والمصروفات العامة لا تُوزَّع على الأوردرات.</p>
+                <p className="mt-1 text-sm" data-testid="order-cost-totals">إيراد <b className="tabular-nums">{money(orderCost.data.totals.revenue)}</b> · تكلفة <b className="tabular-nums">{money(orderCost.data.totals.cost)}</b> · مصروفات مرتبطة <b className="tabular-nums">{money(orderCost.data.totals.expenses)}</b> · مساهمة <b className="tabular-nums">{money(orderCost.data.totals.contribution)}</b></p>
+                <ul className="mt-2 max-h-96 divide-y divide-border overflow-y-auto text-sm">
+                  {orderCost.data.orders.slice(0, 200).map((o: any) => (
+                    <li key={o.orderId} className="flex flex-wrap justify-between gap-2 py-1.5" data-testid={`order-cost-${o.orderId}`}>
+                      <span dir="ltr">{o.orderNumber}{o.returned ? " ↩" : ""}</span>
+                      <span className="tabular-nums">{money(o.revenue)} − {money(o.cost)} − {money(o.expenses)} = <b>{money(o.contribution)}</b></span>
+                    </li>
+                  ))}
+                </ul>
+              </SectionCard>
+            )}
           </>
         ) : null}
     </div>

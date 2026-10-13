@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import { businessDayRange } from "../shared/businessTime";
 import { LedgerError } from "../shared/ledgerV3Core";
+import { legacyFinanceWritesBetween } from "./legacyFinanceArchive";
 import { getLedgerStatus, listLedgerAccountsScoped, listLedgerPeriods, rawRows, reconcileLedgerV3, resolveDb, scopeVisibleTx, type LedgerDb, type LedgerReadScope } from "./ledgerV3.service";
 
 /**
@@ -122,6 +123,44 @@ export async function profitByProduct(input: { tenantId: number; from: string; t
 }
 
 const OURS = new Set(["carrier_receivable", "employee_receivable", "supplier_advance"]);
+/**
+ * تكلفة/مساهمة الأوردر (المرحلة 7) — لكل أوردر سُلّم في الفترة، من قيوده هو فقط: قيود `order:<id>:*` (تسليم، تكلفة، تغليف،
+ * مرتجع، رد/احتجاز)، تسوية شحنته (`bosta-settle:<شحنة>:*` — الرسوم الفعلية)، وقيود فحص مرتجعه. المساهمة = الإيراد − التكلفة
+ * − المصروفات المرتبطة به. الإعلانات والمصروفات العامة لا تُوزَّع على الأوردرات (مصروف يومها) — لا توزيع مخمّن.
+ */
+export async function orderCostReport(input: { tenantId: number; from: string; to: string; scope: LedgerReadScope; businessId?: number | null }, db?: LedgerDb) {
+  assertRange(input.from, input.to);
+  const d = await resolveDb(db);
+  await assertEnabled(d, input.tenantId);
+  const scoped = input.scope === null ? sql`` : input.scope.length === 0 ? sql` AND 1 = 0` : sql` AND o.businessId IN (${sql.join(input.scope.map(b => sql`${b}`), sql`, `)})`;
+  const biz = input.businessId ? sql` AND o.businessId = ${input.businessId}` : sql``;
+  const rows = rawRows(await d.execute(sql`SELECT o.id AS orderId, o.orderNumber, o.businessId, a.kind,
+      SUM(CASE WHEN e.side = 'debit' THEN e.amount ELSE -e.amount END) AS debitNet,
+      MAX(CASE WHEN t.idempotencyKey = CONCAT('order:', o.id, ':returned') THEN 1 ELSE 0 END) AS returned
+    FROM ledger_transactions dl
+    JOIN orders o ON dl.idempotencyKey = CONCAT('order:', o.id, ':delivered')
+    JOIN ledger_transactions t ON t.tenantId = dl.tenantId AND (
+      t.idempotencyKey LIKE CONCAT('order:', o.id, ':%')
+      OR (o.bostaShipmentId IS NOT NULL AND t.idempotencyKey IN (CONCAT('bosta-settle:', o.bostaShipmentId, ':cod'), CONCAT('bosta-settle:', o.bostaShipmentId, ':fees')))
+      OR (t.sourceType = 'return_inspection' AND EXISTS (SELECT 1 FROM return_inspections ri WHERE ri.orderId = o.id AND ri.id = t.sourceReference)))
+    JOIN ledger_entries e ON e.transactionId = t.id
+    JOIN ledger_accounts a ON a.id = e.accountId AND a.kind IN ('revenue','cogs','expense')
+    WHERE dl.tenantId = ${input.tenantId} AND dl.effectiveDate BETWEEN ${input.from} AND ${input.to}${scoped}${biz}
+    GROUP BY o.id, o.orderNumber, o.businessId, a.kind ORDER BY o.id LIMIT 3000`));
+  const by = new Map<number, { orderId: number; orderNumber: string; businessId: number; revenue: bigint; cost: bigint; expenses: bigint; returned: boolean }>();
+  for (const r of rows as any[]) {
+    const id = Number(r.orderId);
+    const cur = by.get(id) ?? { orderId: id, orderNumber: String(r.orderNumber), businessId: Number(r.businessId), revenue: 0n, cost: 0n, expenses: 0n, returned: false };
+    const v = String(r.debitNet ?? "0").startsWith("-") ? -minor(String(r.debitNet).slice(1)) : minor(r.debitNet);
+    if (r.kind === "revenue") cur.revenue += -v; else if (r.kind === "cogs") cur.cost += v; else cur.expenses += v;
+    cur.returned ||= Number(r.returned) === 1;
+    by.set(id, cur);
+  }
+  const orders = [...by.values()].map(o => ({ ...o, revenue: fmt(o.revenue), cost: fmt(o.cost), expenses: fmt(o.expenses), contribution: fmt(o.revenue - o.cost - o.expenses) }));
+  const sum = (k: "revenue" | "cost" | "expenses" | "contribution") => fmt(orders.reduce((s2, o) => s2 + minor(o[k]), 0n));
+  return { from: input.from, to: input.to, count: orders.length, totals: { revenue: sum("revenue"), cost: sum("cost"), expenses: sum("expenses"), contribution: sum("contribution") }, orders };
+}
+
 const THEIRS = new Set(["supplier_payable", "customer_advance", "payroll_payable"]);
 const CASH = new Set(["cash", "bank", "wallet"]);
 
@@ -134,7 +173,7 @@ export async function positionSummary(input: { tenantId: number; scope: LedgerRe
     const total = rows.some(r => r.balance == null) ? null : fmt(rows.reduce((s, r) => s + minor(r.balance), 0n));
     return { total, rows };
   };
-  return { cash: pick(CASH), receivables: pick(OURS), payables: pick(THEIRS) };
+  return { cash: pick(CASH), receivables: pick(OURS), payables: pick(THEIRS), inventory: pick(new Set(["inventory"])) };
 }
 
 /** قائمة فحص الإقفال لشهر (قراءة فقط) — لا تُقفل شيئًا؛ القفل يبقى بملاحظة مراجعة إلزامية. */
@@ -161,12 +200,18 @@ export async function closeChecklist(input: { tenantId: number; period: string }
     missingCount = Number(missing?.n ?? 0);
   } catch { missingCount = -1; } // صندوق الوارد (0039) غير موجود — يُعرض «تعذر الفحص» لا صفر
   const [reviews] = rawRows(await d.execute(sql`SELECT COUNT(*) AS n FROM orders o JOIN businesses b ON b.id = o.businessId WHERE b.tenantId = ${input.tenantId} AND o.needsReview = 1 AND o.reviewReason LIKE '%دفتر:%'`));
+  // المرحلة 7: الحسابات القديمة أرشيف — أي كتابة مالية قديمة خلال الشهر (بعد التفعيل) = بند مفتوح
+  // من لحظة تفعيل الدفتر فقط: ما قبل التفعيل في نفس الشهر مشروع (قبل Go-live كان القديم هو المعتمد)
+  const [en] = rawRows(await d.execute(sql`SELECT ROUND(UNIX_TIMESTAMP(enabledAt) * 1000) AS ms FROM ledger_tenant_flags WHERE tenantId = ${input.tenantId}`));
+  const legacyFrom = Math.max(startMs, en?.ms != null ? Number(en.ms) : startMs);
+  const legacy = legacyFrom >= endMs ? [] : await legacyFinanceWritesBetween(d, input.tenantId, legacyFrom, endMs);
   let reconciliationOk: boolean | null = null;
   try { reconciliationOk = (await reconcileLedgerV3(input.tenantId, d)).ok; } catch { reconciliationOk = null; }
   const checks = [
     { key: "previous_locked", ok: prevLocked, label: prevLocked ? "الشهر السابق مقفل (ترتيب الشهور سليم)" : `الشهر السابق ${prev} غير مقفل — اقفله أولًا` },
     { key: "deliveries_posted", ok: missingCount === 0, label: missingCount < 0 ? "تعذر فحص التسليمات (صندوق وارد شركة الشحن غير متاح)" : missingCount === 0 ? "كل تسليمات الشهر لها قيد" : `${missingCount} أوردر مُسلَّم في الشهر بلا قيد في الدفتر` },
     { key: "ledger_reviews", ok: Number(reviews?.n ?? 0) === 0, label: Number(reviews?.n ?? 0) === 0 ? "لا مراجعات دفتر مفتوحة" : `${reviews.n} أوردر عليه مراجعة دفتر مفتوحة` },
+    { key: "legacy_writes", ok: legacy.length === 0, label: legacy.length === 0 ? "لا كتابات مالية في الحسابات القديمة خلال الشهر" : `كتابات في الحسابات القديمة خلال الشهر: ${legacy.map(l => `${l.label} ${l.count}`).join("، ")} — يجب تسجيلها في الدفتر الجديد` },
     { key: "reconciliation", ok: reconciliationOk === true, label: reconciliationOk == null ? "تعذر تشغيل مطابقة الأرصدة" : reconciliationOk ? "الأرصدة مطابقة لمجموع القيود" : "فرق في مطابقة الأرصدة — راجع قبل الإقفال" },
   ];
   return { period: input.period, ready: checks.every(c => c.ok), checks };

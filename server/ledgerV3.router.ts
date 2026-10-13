@@ -7,10 +7,11 @@ import { router, authenticatedProcedure } from "./_core/trpc";
 import { openingDraftInput, validateOpeningDraft } from "./ledgerOpening.service";
 import { dailyAccountsStatus, dailyLedgerReport, ensureDailyAccounts } from "./ledgerDaily.service";
 import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpeningFromStocktake, postPackagingOpening } from "./ledgerInventory.service";
-import { closeChecklist, incomeStatement, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
+import { closeChecklist, incomeStatement, orderCostReport, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
 import { listCarrierStatements, recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
 import { clearLedgerSetting, listCarrierReviews, listLedgerSettings, resolveCarrierReview, setLedgerSetting } from "./ledgerCarrierOps.service";
 import { cancelSupplierDocument, createSupplier, createWorkshopBatch, ensureSupplierAccounts, listSuppliers, listWorkshopBatches, postSupplierDocument, recordWorkshopEvent, setSupplierActive, supplierStatement } from "./ledgerSuppliers.service";
+import { closeLedgerPeriod, listPeriodSnapshots } from "./ledgerClose.service";
 import { approvePayrollRun, cancelAdvance, cancelPayrollRun, createPayrollRun, ensurePayrollAccounts, getPayrollRun, issueAdvance, listAdvances, listPayrollRuns, payPayrollRun, recomputePayrollRun, setPayrollAdjustments } from "./ledgerPayroll.service";
 import { listRefundLiabilities, payCustomerRefund, retainRefundRemainder } from "./ledgerOrders.service";
 import { parseSettlementCsv } from "../shared/carrierSettlement";
@@ -18,7 +19,7 @@ import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_
 import { LEDGER_KINDS, LedgerError, type LedgerActor } from "../shared/ledgerV3Core";
 import {
   createLedgerAccount, getLedgerStatus, getLedgerTransactionScoped, listLedgerAccountsScoped, reviewLedgerPeriod, grantLedgerAccountBusiness, listLedgerAccounts, listLedgerBusinesses, listLedgerPeriods,
-  listLedgerTransactions, lockLedgerPeriod, postLedgerTransaction, reconcileLedgerV3, renameLedgerAccount, reopenLedgerPeriod,
+  listLedgerTransactions, postLedgerTransaction, reconcileLedgerV3, renameLedgerAccount, reopenLedgerPeriod,
   resolveDb, reverseLedgerTransaction, revokeLedgerAccountBusiness, setLedgerAccountActive,
 } from "./ledgerV3.service";
 
@@ -212,7 +213,10 @@ export function createLedgerRouter(deps: Deps) {
       // الاعتماد = مراجعة الشهر ثم إقفاله بملاحظة مراجعة إلزامية مسجّلة (الحركات نفسها تُرحّل فورًا).
       lock: ledgerProcedure("ledger.period.lock")
         .input(z.object({ period: periodStr, reason: z.string().trim().min(3, "ملاحظة المراجعة إلزامية (3 أحرف على الأقل)").max(500) }))
-        .mutation(async ({ ctx, input }) => guard(() => lockLedgerPeriod({ tenantId: tenantOf(ctx), period: input.period, reason: input.reason, actor: actorOf(ctx) }))),
+        // المرحلة 7: الإقفال = قائمة فحص مكتملة + قفل + صورة ثابتة للشهر (بعد 0050) في نفس الـtransaction
+        .mutation(async ({ ctx, input }) => guard(() => closeLedgerPeriod({ tenantId: tenantOf(ctx), period: input.period, reason: input.reason, actor: actorOf(ctx) }))),
+      snapshots: ledgerProcedure("ledger.view").input(z.object({ period: periodStr }))
+        .query(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => listPeriodSnapshots({ tenantId: tenantOf(ctx), period: input.period })); }),
       // مراجعة شهر (قراءة فقط) داخل نطاق القراءة: حركة كل حساب ونشاط، العكوس، وسجل الإقفال/الفتح بالأسماء.
       review: ledgerProcedure("ledger.view")
         .input(z.object({ period: periodStr }))
@@ -251,6 +255,13 @@ export function createLedgerRouter(deps: Deps) {
         .query(async ({ ctx, input }) => { await requireProfit(ctx); const scope = await readScope(ctx); return guard(() => profitByBusiness({ tenantId: tenantOf(ctx), ...input, scope })); }),
       profitByProduct: ledgerProcedure("ledger.view").input(z.object({ from: dateStr, to: dateStr }))
         .query(async ({ ctx, input }) => { await requireProfit(ctx); const scope = await readScope(ctx); return guard(() => profitByProduct({ tenantId: tenantOf(ctx), ...input, scope })); }),
+      orderCost: ledgerProcedure("ledger.view").input(z.object({ from: dateStr, to: dateStr, businessId: z.number().int().positive().optional() }))
+        .query(async ({ ctx, input }) => {
+          await requireProfit(ctx);
+          const businessId = await scopedBusiness(ctx, input.businessId);
+          const scope = await readScope(ctx);
+          return guard(() => orderCostReport({ tenantId: tenantOf(ctx), from: input.from, to: input.to, scope, businessId }));
+        }),
       // ما لنا وما علينا الآن — نطاق القراءة والأرصدة المحجوبة كما هي
       position: ledgerProcedure("ledger.view").query(async ({ ctx }) => { const scope = await readScope(ctx); return guard(() => positionSummary({ tenantId: tenantOf(ctx), scope })); }),
       daily: ledgerProcedure("ledger.view")

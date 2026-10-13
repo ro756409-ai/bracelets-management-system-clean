@@ -1,3 +1,4 @@
+import { assertLegacyFinanceWritable } from "./legacyFinanceArchive";
 import {
   eq,
   desc,
@@ -5743,6 +5744,8 @@ export async function addTreasuryTransactionInTransaction(
   tx: any,
   data: Omit<InsertTreasuryTransaction, "balanceAfter">
 ): Promise<TreasuryTransaction | null> {
+  // المرحلة 7: الخزنة القديمة أرشيف للقراءة فقط لشركة فعّلت Ledger V3 — رفض قبل أي كتابة
+  await assertLegacyFinanceWritable(tx, data.businessId);
   const signed =
     data.direction === "in" ? Number(data.amount) : -Number(data.amount);
 
@@ -6124,6 +6127,7 @@ export async function getExpenses(filters: ExpenseFilters = {}) {
 export async function createExpense(data: InsertExpense) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  await assertLegacyFinanceWritable(db, data.businessId); // المرحلة 7: أرشيف بعد تفعيل V3
   const result: any = await db.insert(expenses).values(data);
   const insertId = Number(result?.insertId ?? result?.[0]?.insertId);
   if (!insertId) throw new Error("تعذر إنشاء المصروف");

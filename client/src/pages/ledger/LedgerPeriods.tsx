@@ -89,6 +89,7 @@ export default function LedgerPeriods() {
             </div>
 
             {canLock && <CloseChecklist period={r.period} />}
+            {canLock && <PeriodSnapshots period={r.period} />}
 
             <SectionCard title="حركة الحسابات في الشهر" testId="ledger-review-accounts">
               {r.accounts.length === 0 ? <EmptyState title="لا حركات في هذا الشهر ضمن نطاقك" /> : (
@@ -178,6 +179,30 @@ export function CloseChecklist({ period }: { period: string }) {
         {c.data.checks.map(x => (
           <li key={x.key} className={`flex items-start gap-2 ${x.ok ? "" : "text-destructive"}`} data-testid={`ledger-checklist-${x.key}`}>
             <span aria-hidden="true">{x.ok ? "✓" : "✗"}</span><span>{x.label}</span>
+          </li>
+        ))}
+      </ul>
+    </SectionCard>
+  );
+}
+
+/**
+ * صور الشهر الثابتة (المرحلة 7، بعد 0050): إصدار لكل إقفال، ببصمته وتحققها، وهل تغيّرت أرقام الشهر الآن عن الإصدار (بعد إعادة
+ * فتح مثلًا). لا حذف لأي إصدار. قبل 0050 أو لنطاق نشاط واحد: لا يظهر شيء.
+ */
+export function PeriodSnapshots({ period }: { period: string }) {
+  const q = trpc.ledger.period.snapshots.useQuery({ period }, { retry: false });
+  if (!q.data?.available || q.data.snapshots.length === 0) return null;
+  return (
+    <SectionCard title="صور الإقفال الثابتة" testId="ledger-snapshots">
+      <ul className="space-y-1.5 text-sm">
+        {q.data.snapshots.map((x: any) => (
+          <li key={x.version} className="flex flex-wrap items-center justify-between gap-2" data-testid={`ledger-snapshot-${x.version}`}>
+            <span>الإصدار {x.version}{x.createdBy ? ` — ${x.createdBy}` : ""} · صافي الربح <span className="tabular-nums">{x.netProfit ?? "—"}</span></span>
+            <span className={`font-mono text-xs ${x.hashOk ? "text-muted-foreground" : "text-destructive"}`} dir="ltr" title={x.figuresHash}>
+              {x.hashOk ? `✓ ${x.figuresHash.slice(0, 12)}` : "✗ البصمة لا تطابق الأرقام المخزنة"}
+            </span>
+            {x.changedSince && <span className="w-full text-xs text-destructive">أرقام الشهر الآن تختلف عن هذا الإصدار</span>}
           </li>
         ))}
       </ul>

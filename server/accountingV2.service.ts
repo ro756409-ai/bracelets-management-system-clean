@@ -1,3 +1,4 @@
+import { assertLegacyFinanceWritable } from "./legacyFinanceArchive";
 import { createHash } from "crypto";
 import {
   and,
@@ -789,6 +790,8 @@ export async function postFinancialTransactionInTransaction(
     actor: Actor;
   }
 ) {
+  // المرحلة 7: V2 أرشيف للقراءة فقط لشركة فعّلت Ledger V3 — لا كتابة مزدوجة حتى لو فُتح علم المحاسبة القديم
+  await assertLegacyFinanceWritable(tx, input.businessId);
   if (!input.sourceAccountId && !input.targetAccountId)
     throw new Error("A source or target account is required");
   if (

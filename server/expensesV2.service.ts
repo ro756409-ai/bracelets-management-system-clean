@@ -1,3 +1,4 @@
+import { assertLegacyFinanceWritable } from "./legacyFinanceArchive";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import {
   adSpendEntries,
@@ -42,6 +43,7 @@ type ExpenseDraftInput = {
 };
 
 async function validateExpenseDimensions(tx: any, input: ExpenseDraftInput) {
+  await assertLegacyFinanceWritable(tx, input.businessId); // المرحلة 7: أرشيف بعد تفعيل Ledger V3
   const [business] = await tx.select().from(businesses).where(eq(businesses.id, input.businessId)).limit(1);
   if (!business) throw new Error("Business not found");
   if (input.currencyCode && business.baseCurrency !== input.currencyCode) throw new Error("Expense currency must match Business Base Currency");

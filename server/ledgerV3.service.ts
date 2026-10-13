@@ -299,7 +299,13 @@ async function currentCompanyPeriod(tx: Tx, tenantId: number): Promise<string> {
   return tzs.map(tz => businessDateKey(now, tz).slice(0, 7)).sort().at(-1)!;
 }
 
-export async function lockLedgerPeriod(input: { tenantId: number; period: string; actor: LedgerActor; reason?: string }, db?: LedgerDb): Promise<{ periodId: number; status: "locked"; replay: boolean }> {
+export async function lockLedgerPeriod(input: {
+  tenantId: number; period: string; actor: LedgerActor; reason?: string;
+  /** داخلي فقط: قبل القفل وبعد التحققات الأساسية (شهر مستقبلي، مقفل بالفعل = replay، الملاحظة) — مثل قائمة فحص الإقفال. */
+  beforeLock?: (tx: Tx) => Promise<void>;
+  /** داخلي فقط: بعد القفل داخل نفس الـtransaction (الفترة مقفولة FOR UPDATE ⇒ لا ترحيل متزامن) — مثل الصورة الثابتة للشهر. */
+  afterLock?: (tx: Tx, info: { periodId: number; lockEventId: number }) => Promise<void>;
+}, db?: LedgerDb): Promise<{ periodId: number; status: "locked"; replay: boolean }> {
   const d = await resolveDb(db);
   return ledgerTransaction(d, async tx => {
     await assertEnabled(tx, input.tenantId);
@@ -314,8 +320,10 @@ export async function lockLedgerPeriod(input: { tenantId: number; period: string
     // الاعتماد = مراجعة الشهر ثم إقفاله بملاحظة مراجعة **إلزامية** (3 أحرف على الأقل) تُسجَّل مع الفاعل — لا نص افتراضي.
     const note = input.reason?.trim() ?? "";
     if (note.length < 3) throw new LedgerError("reason");
+    if (input.beforeLock) await input.beforeLock(tx);
     await tx.update(ledgerPeriods).set({ status: "locked" }).where(eq(ledgerPeriods.id, row.id));
-    await tx.insert(ledgerPeriodEvents).values({ tenantId: input.tenantId, periodId: row.id, action: "lock", actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId, reason: note });
+    const ev = await tx.insert(ledgerPeriodEvents).values({ tenantId: input.tenantId, periodId: row.id, action: "lock", actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId, reason: note });
+    if (input.afterLock) await input.afterLock(tx, { periodId: row.id, lockEventId: insertId(ev) });
     return { periodId: row.id, status: "locked" as const, replay: false };
   });
 }

@@ -241,10 +241,11 @@ export function PositionSection() {
   );
   return (
     <SectionCard title="ما لنا وما علينا" testId="ledger-position">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {block("النقدية المتاحة", p.cash, "ledger-position-cash")}
         {block("لنا عند الغير (ذمم — ليست نقدية)", p.receivables, "ledger-position-receivables")}
         {block("علينا للغير (التزامات)", p.payables, "ledger-position-payables")}
+        {(p as any).inventory && block("المخزون (بضاعة/خامات/تغليف/عهدة/قيد الفحص)", (p as any).inventory, "ledger-position-inventory")}
       </div>
     </SectionCard>
   );
