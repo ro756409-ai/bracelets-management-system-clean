@@ -58,6 +58,7 @@ describe.runIf(CAN)("🔁 0052 — منع تكرار الإنشاء على ال�
     await emp("deA", "data_entry", A.tenantId, A.businessId); await emp("deA_other", "data_entry", A.tenantId, A.businessId);
     await emp("deA2", "data_entry", A.tenantId, A2); await emp("deB", "data_entry", B.tenantId, B.businessId);
     await emp("ownerA", "super_admin", A.tenantId, A.businessId); await emp("ownerB", "super_admin", B.tenantId, B.businessId);
+    await emp("ownerA_2", "super_admin", A.tenantId, A.businessId);
     for (const [k, biz] of [["A", A.businessId], ["A2", A2], ["B", B.businessId]] as const) {
       const tag = `${k}${Date.now()}`;
       const p = await createProductWithVariants(biz, { name: `أسورة ${tag}` }, [
@@ -162,6 +163,69 @@ describe.runIf(CAN)("🔁 0052 — منع تكرار الإنشاء على ال�
     expect(await ordersNamed("deleted-1")).toBe(0);
     expect((await errOf(add("deA", "A", "deleted-1", k)))?.code).toBe("CONFLICT");
     expect(await ordersNamed("deleted-1")).toBe(0);
+  });
+
+  describe("نموذج /orders (orders.create)", () => {
+    // جلسة كاملة (createContext) — نفس مسار الواجهة: protectedProcedure بكوكي الموظف المدير
+    const session = async (emp: number) => appRouter.createCaller(await createContext({ req: { protocol: "https", headers: {}, cookies: { employee_token: jwt.sign({ employeeId: emp }, process.env.JWT_SECRET as string) } }, res: { cookie: () => {}, clearCookie: () => {} } } as any));
+    const createInput = (who: "A" | "B", tag: string, extra: Record<string, unknown> = {}) => ({
+      customerName: `عميل ${tag}`, customerPhone: "01012345678", customerAddress: `شارع ${tag} رقم 10`, governorate: "القاهرة",
+      productId: P[who].productId, productName: "أسورة", variantId: P[who].variants[0], quantity: 2, totalAmount: "300", source: "facebook",
+      businessId: (who === "A" ? A : B).businessId, ...extra,
+    });
+    const create = async (emp: string, who: "A" | "B", tag: string, operationId?: string, extra: Record<string, unknown> = {}) =>
+      (await session(e[emp])).orders.create({ ...createInput(who, tag, extra), ...(operationId ? { operationId } : {}) } as any);
+    const itemsOf = (num: string) => n("SELECT COUNT(*) n FROM order_items i JOIN orders o ON o.id = i.orderId WHERE o.orderNumber = ?", [num]);
+
+    it("فقدان الرد بعد الحفظ ثم إعادة المحاولة (ولو بعد إعادة تحميل الصفحة — نفس المعرّف من تخزين التبويب) = نفس الأوردر بلا تكرار بنود", async () => {
+      const k = op();
+      const r1 = await create("ownerA", "A", "pg-1", k);
+      expect([r1.success, r1.replay, r1.idempotency]).toEqual([true, false, "protected"]);
+      const r2 = await create("ownerA", "A", "pg-1", k);
+      const r3 = await create("ownerA", "A", "pg-1", k);
+      expect([r2.orderNumber, r2.replay, r3.orderNumber, r3.replay]).toEqual([r1.orderNumber, true, r1.orderNumber, true]);
+      expect([await ordersNamed("pg-1"), await keys(k), await itemsOf(r1.orderNumber)]).toEqual([1, 1, 1]);
+    });
+
+    it("نفس المفتاح ببيانات مختلفة = CONFLICT يذكر الأوردر المحفوظ، بلا أي كتابة", async () => {
+      const k = op();
+      const r1 = await create("ownerA", "A", "pg-2", k);
+      const before = await allCounts();
+      const err = await errOf(create("ownerA", "A", "pg-2", k, { quantity: 3, totalAmount: "450" }));
+      expect([err?.code, String(err?.message)]).toEqual(["CONFLICT", expect.stringContaining(r1.orderNumber)]);
+      expect(await allCounts()).toEqual(before);
+    });
+
+    it("5 طلبات متزامنة بنفس المفتاح = أوردر واحد ومفتاح واحد ونفس الرقم للجميع", async () => {
+      const k = op();
+      const res = await Promise.allSettled(Array.from({ length: 5 }, () => create("ownerA", "A", "pg-3", k)));
+      expect(res.filter(r => r.status === "rejected").map(r => String((r as PromiseRejectedResult).reason?.message).slice(0, 100))).toEqual([]);
+      expect(new Set(res.map(r => (r as PromiseFulfilledResult<any>).value.orderNumber)).size).toBe(1);
+      expect([await ordersNamed("pg-3"), await keys(k)]).toEqual([1, 1]);
+    });
+
+    it("العزل: نفس المعرّف في شركة أخرى = عملية مستقلة؛ مدير آخر في نفس النشاط = CONFLICT بلا كشف الرقم؛ بلا مفتاح = غير محمي", async () => {
+      const k = op();
+      const mine = await create("ownerA", "A", "pg-4", k);
+      const other = await create("ownerB", "B", "pg-4b", k);
+      expect([other.replay, other.orderNumber === mine.orderNumber && false]).toEqual([false, false]);
+      const err = await errOf(create("ownerA_2", "A", "pg-4", k));
+      expect(err?.code).toBe("CONFLICT");
+      expect(String(err?.message)).not.toContain(mine.orderNumber);
+      const l1 = await create("ownerA", "A", "pg-5"), l2 = await create("ownerA", "A", "pg-5");
+      expect([l1.idempotency, l2.idempotency, l1.orderNumber === l2.orderNumber, await ordersNamed("pg-5")]).toEqual(["none", "none", false, 2]);
+    });
+
+    it("الإيقاف التشغيلي يرفض orders.create أيضًا بلا أي كتابة", async () => {
+      const prev = process.env.OPERATION_CREATION_PAUSED;
+      process.env.OPERATION_CREATION_PAUSED = "true";
+      try {
+        const before = await allCounts();
+        expect((await errOf(create("ownerA", "A", "pg-6", op())))?.code).toBe("PRECONDITION_FAILED");
+        expect((await errOf(create("ownerA", "A", "pg-6")))?.code).toBe("PRECONDITION_FAILED");
+        expect(await allCounts()).toEqual(before);
+      } finally { if (prev === undefined) delete process.env.OPERATION_CREATION_PAUSED; else process.env.OPERATION_CREATION_PAUSED = prev; }
+    });
   });
 
   describe("إرسال الورشة", () => {

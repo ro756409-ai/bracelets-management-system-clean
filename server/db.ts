@@ -1696,9 +1696,15 @@ export async function createOrder(
 /** الهيدر والبنود في transaction واحدة — نجاح كامل أو rollback كامل. */
 export async function createOrderWithItems(
   data: InsertOrder,
-  items: OrderItemWrite[]
+  items: OrderItemWrite[],
+  /** داخلي (0052): داخل نفس المعاملة بعد الهيدر والبنود — مثل تسجيل مفتاح منع التكرار. أي رمي يلغي الأوردر كله. */
+  inTransaction?: (tx: any, orderId: number) => Promise<void>
 ): Promise<number | undefined> {
-  return runOrderTransaction(tx => createOrderInTransaction(tx, data, items));
+  return runOrderTransaction(async tx => {
+    const id = await createOrderInTransaction(tx, data, items);
+    if (id && inTransaction) await inTransaction(tx, id);
+    return id;
+  });
 }
 
 /**

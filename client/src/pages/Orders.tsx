@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
-import { operationIdFor } from "@/lib/operationId";
+import { discardOperation, operationIdFor, persistentOperationIdFor, sessionFingerprint } from "@/lib/operationId";
 import {
   OrderEditDialog, type OrderEditSavePayload,
 } from "@/components/orders/OrderEditDialog";
@@ -1983,13 +1983,21 @@ function CreateOrderDialog({
     shippingProviderId: "", shippingType: "", paymentType: "",
   };
 
+  // منع التكرار على السيرفر (0052): معرّف ثابت لهذه العملية (نطاقه = نوع العملية + الشاشة + هوية الجلسة + النشاط المختار، ولكل
+  // تبويب معرّفه) حتى النجاح أو «بدء عملية جديدة» — يبقى بعد انقطاع الشبكة وإغلاق النافذة وإعادة التحميل، ولا يتغيّر عند CONFLICT.
+  const opScope = `order.create|orders-page|${sessionFingerprint()}|b${form.businessId || "none"}`;
+  const [opConflict, setOpConflict] = useState<string | null>(null);
+  const startNewOperation = () => { discardOperation(opScope); setOpConflict(null); };
+
   const createMutation = trpc.orders.create.useMutation({
     onSuccess: (data) => {
-      toast.success(`تم إنشاء الأوردر ${data.orderNumber}`);
+      toast.success(data.replay ? `الأوردر محفوظ بالفعل — رقم ${data.orderNumber}` : `تم إنشاء الأوردر ${data.orderNumber}`);
+      setOpConflict(null);
       onSuccess();
       setForm(emptyForm);
     },
-    onError: (e) => toast.error(e.message),
+    // CONFLICT: المعرّف **يبقى** (تغييره تلقائيًا قد يُنشئ أوردرًا ثانيًا بعد حفظ الأول وضياع رده) — تنبيه وزر صريح لعملية جديدة.
+    onError: (e) => { if (e.data?.code === "CONFLICT") setOpConflict(e.message); toast.error(e.message); },
   });
 
   const selectedProduct = products.find(p => p.id === Number(form.productId));
@@ -2038,6 +2046,7 @@ function CreateOrderDialog({
       projectedShippingProviderId: form.shippingProviderId ? Number(form.shippingProviderId) : undefined,
       projectedShippingType: form.shippingType || undefined,
       projectedPaymentType: form.paymentType || undefined,
+      operationId: persistentOperationIdFor(opScope),
     });
   };
 
@@ -2143,9 +2152,16 @@ function CreateOrderDialog({
             <Textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="أي ملاحظات إضافية..." className="mt-1" rows={2} />
           </div>
         </div>
+        {opConflict && (
+          <div className="flex flex-col gap-2 rounded-[var(--radius-brand-md)] border border-destructive/40 bg-destructive/5 p-3 text-sm sm:flex-row sm:items-center" role="alert" data-testid="create-order-conflict">
+            <p className="flex flex-1 items-start gap-1.5 text-destructive"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>البيانات اختلفت عن طلب سابق لنفس العملية: {opConflict}</span></p>
+            <Button type="button" variant="outline" className="min-h-11 md:min-h-9" onClick={startNewOperation} data-testid="create-order-new">بدء عملية جديدة</Button>
+          </div>
+        )}
         <DialogFooter>
           <Button className="min-h-11 md:min-h-9" variant="outline" onClick={onClose}>إلغاء</Button>
-          <Button className="min-h-11 md:min-h-9" onClick={handleSubmit} disabled={createMutation.isPending}>{createMutation.isPending ? "جاري الحفظ..." : "حفظ الأوردر"}</Button>
+          <Button className="min-h-11 md:min-h-9" onClick={handleSubmit} disabled={createMutation.isPending} data-testid="create-order-save">{createMutation.isPending ? "جاري الحفظ..." : "حفظ الأوردر"}</Button>
         </DialogFooter>
         {/* نوافذ «أضف الآن» — فوق النموذج؛ بعد الحفظ تُعاد القائمة وتُختار القيمة الجديدة فورًا. */}
         {businessId != null && (

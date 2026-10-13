@@ -3635,50 +3635,80 @@ export const appRouter = router({
           projectedShippingProviderId: z.number().optional(),
           projectedShippingType: z.string().min(1).optional(),
           projectedPaymentType: z.string().min(1).optional(),
+          /**
+           * منع تكرار الإنشاء (0052) — نفس عقد facebookEntry.addOrder: معرّف ثابت للعملية من نموذج /orders. اختياري للعملاء
+           * القدامى: بدونه الطلب غير محمي ولا يُولَّد له معرّف على السيرفر.
+           */
+          operationId: z.string().regex(OPERATION_ID_RE).optional(),
         })
       )
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ ctx, input: rawInput }) => {
+        const { operationId, ...input } = rawInput;
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const businessId = await requireScopedBusinessId(
           ctx,
           input.businessId
         );
-        // رقم الأوردر «MAX+1» غير ذرّي: إنشاءان متزامنان قد يحصلان على نفس الرقم فيرفض القيد
-        // الفريد أحدهما. بدل إظهار خطأ خام للمستخدم نعيد التوليد والمحاولة مرات محدودة.
-        let orderNumber = "";
-        let orderId: number | undefined;
-        for (let attempt = 1; ; attempt++) {
-          orderNumber = await generateOrderNumber();
-          try {
-            orderId = await createOrderWithItems(
-              {
-                ...input,
-                businessId,
-                orderNumber,
-                lastUpdatedBy: actingEmpId,
-              },
-              [
+        const actor = await requireActor(ctx);
+        const acting = await resolveActingEmployeeIdAndName(ctx);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const { orders } = await import("../drizzle/schema");
+        const [biz] = await db.select({ tenantId: businessesTable.tenantId }).from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+        const createOrder = async (record: IdemRecord | null) => {
+          // رقم الأوردر «MAX+1» غير ذرّي: إنشاءان متزامنان قد يحصلان على نفس الرقم فيرفض القيد
+          // الفريد أحدهما. بدل إظهار خطأ خام للمستخدم نعيد التوليد والمحاولة مرات محدودة.
+          let orderNumber = "";
+          let orderId: number | undefined;
+          for (let attempt = 1; ; attempt++) {
+            orderNumber = await generateOrderNumber();
+            try {
+              orderId = await createOrderWithItems(
                 {
-                  productId: input.productId,
-                  productName: input.productName,
-                  variantId: input.variantId,
-                  quantity: input.quantity,
-                  unitPrice: Number(input.totalAmount) / input.quantity,
+                  ...input,
+                  businessId,
+                  orderNumber,
+                  lastUpdatedBy: actingEmpId,
                 },
-              ]
-            );
-            break;
-          } catch (err) {
-            if (!isOrderNumberCollision(err) || attempt >= 3) throw err;
-            await new Promise(r => setTimeout(r, 10 * attempt + Math.random() * 20));
+                [
+                  {
+                    productId: input.productId,
+                    productName: input.productName,
+                    variantId: input.variantId,
+                    quantity: input.quantity,
+                    unitPrice: Number(input.totalAmount) / input.quantity,
+                  },
+                ],
+                // مفتاح منع التكرار داخل نفس معاملة الهيدر والبنود
+                record ? (tx, id) => record(tx, { id, reference: orderNumber }) : undefined
+              );
+              break;
+            } catch (err) {
+              if (!isOrderNumberCollision(err) || attempt >= 3) throw err;
+              await new Promise(r => setTimeout(r, 10 * attempt + Math.random() * 20));
+            }
           }
-        }
-        if (!orderId)
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "تعذر إنشاء الأوردر",
-          });
-        return { success: true, orderNumber };
+          if (!orderId)
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "تعذر إنشاء الأوردر",
+            });
+          return { success: true as const, orderNumber };
+        };
+        return runIdempotent({
+          db,
+          scope: operationId && biz?.tenantId != null ? { tenantId: biz.tenantId, businessId, operation: "order.create", operationId } : null,
+          payload: { ...input, businessId },
+          actor: acting.id != null ? { type: "employee", id: acting.id } : { type: "user", id: actor.id },
+          // الإعادة بنطاق النشاط: الأوردر لازم يكون لسه موجود في نفس النشاط، وإلا رفض (لا إنشاء جديد بنفس المعرّف)
+          replay: async row => {
+            const [o] = await db.select({ orderNumber: orders.orderNumber }).from(orders)
+              .where(and(eq(orders.id, row.resultId), eq(orders.businessId, businessId))).limit(1);
+            if (!o) throw new TRPCError({ code: "CONFLICT", message: `هذه العملية نُفّذت سابقًا (${row.resultReference}) والأوردر لم يعد موجودًا — لن يُنشأ أوردر جديد بنفس المعرّف` });
+            return { success: true as const, orderNumber: o.orderNumber };
+          },
+          execute: createOrder,
+        });
       }),
 
     update: protectedProcedure
