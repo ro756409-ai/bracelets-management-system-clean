@@ -39,7 +39,7 @@ export const DEPLOY_SCRIPTS = [
   "migrate-0047-ledger-carrier",
   "migrate-0048-ledger-payroll",
   "migrate-0049-ledger-suppliers",
-  "migrate-0050-ledger-snapshots", "check-ledger-prereqs",
+  "migrate-0050-ledger-snapshots", "migrate-0051-ledger-legacy-archive", "legacy-recovery", "check-ledger-prereqs",
   "preview-tenant-access",
 ] as const;
 

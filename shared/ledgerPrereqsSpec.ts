@@ -27,8 +27,10 @@ export const LEDGER_PREREQ_TABLES: readonly PrereqTable[] = [
   { area: "المرتبات", table: "payroll_settings", required: true, columns: ["businessId", "workingDaysPerMonth", "workHoursPerDay", "overtimeMultiplier"] },
   { area: "الحضور (0042)", table: "attendance_days", required: true, columns: ["tenantId", "employeeId", "workDate", "status", "lateMinutes", "overtimeMinutes", "requiresReview", "approvedByEmployeeId"] },
   // أرشيف V1/V2: حاجز الكتابات القديمة وبند قائمة الفحص يتجاهلان الجدول الغائب
-  { area: "أرشيف V1/V2", table: "treasury_transactions", required: false, columns: ["businessId", "createdAt"] },
+  // + سكربت الاستعادة (إدخال أرصدة التوقف كفروق): رصيد V1 = آخر balanceAfter للنشاط، ورصيد V2 = currentBalance للحساب
+  { area: "أرشيف V1/V2", table: "treasury_transactions", required: false, columns: ["businessId", "balanceAfter", "createdAt"] },
   { area: "أرشيف V1/V2", table: "financial_transactions", required: false, columns: ["businessId", "createdAt"] },
+  { area: "أرشيف V1/V2", table: "financial_accounts", required: false, columns: ["id", "businessId", "currencyCode", "currentBalance"] },
   { area: "أرشيف V1/V2", table: "expenses", required: false, columns: ["businessId", "createdAt"] },
   { area: "أرشيف V1/V2", table: "employee_advances", required: false, columns: ["businessId", "createdAt"] },
 ] as const;
@@ -40,4 +42,5 @@ export const LEDGER_MIGRATION_MARKERS = [
   { id: "0048", label: "المرتبات والسلف", tables: ["ledger_payroll_runs", "ledger_payroll_lines", "ledger_advances", "ledger_advance_installments"] },
   { id: "0049", label: "الموردون والورشة", tables: ["ledger_suppliers", "ledger_supplier_documents", "ledger_workshop_batches", "ledger_workshop_events"] },
   { id: "0050", label: "صور الإقفال", tables: ["ledger_period_snapshots"] },
+  { id: "0051", label: "سجل حظر/رفع الكتابات القديمة", tables: ["ledger_legacy_archive_events"] },
 ] as const;

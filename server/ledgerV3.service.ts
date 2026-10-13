@@ -12,6 +12,7 @@ import {
 import { getDb, withDeadlockRetry } from "./db";
 import { businessDateKey } from "../shared/businessTime";
 import { isOwnerRole } from "./permissions";
+import { recordLegacyBanReapplied } from "./legacyFinanceArchive";
 
 /**
  * Accounting Ledger V3 — خدمة داخلية فقط (لا Router عام في هذه المرحلة) خلف Feature Flag لكل tenant.
@@ -464,6 +465,8 @@ export async function activateLedgerV3(input: ActivateLedgerV3Input, db?: Ledger
     // العلم يجب أن يكون مفعّلًا لحظة الترحيل (postInternal يفحصه) — نفعّله هنا داخل نفس الـtransaction؛ أي فشل لاحق يرجع كل شيء.
     await tx.update(ledgerTenantFlags).set({ ledgerV3Enabled: 1, goLiveDate: input.goLiveDate, actorType: actor.actorType, actorEmployeeId: actor.actorEmployeeId, enabledAt: sql`now()`, disabledAt: null, disabledReason: null })
       .where(eq(ledgerTenantFlags.tenantId, input.tenantId));
+    // حظر الكتابات القديمة يُعاد تثبيته داخل نفس المعاملة — أي رفع سابق (0051) لا يتغلب على هذا التفعيل
+    await recordLegacyBanReapplied(tx, input.tenantId, actor.actorEmployeeId);
     if (total > 0n) {
       entries.push({ accountId: accountIds.OPENING_EQUITY, side: "credit", amount: fromMinorUnits(total), businessId: null });
       const posted = await postInternal(tx, {

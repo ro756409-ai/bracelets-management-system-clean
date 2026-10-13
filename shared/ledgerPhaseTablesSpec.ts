@@ -1,7 +1,7 @@
 import type { TableSpec } from "./schemaSpec";
 
 /**
- * مواصفات 0047–0050 كبيانات (تحقق check/verify مقابل information_schema) — جداول Ledger V3 للمراحل 3/5/6/7.
+ * مواصفات 0047–0051 كبيانات (تحقق check/verify مقابل information_schema) — جداول Ledger V3 للمراحل 3/5/6/7.
  * كل جدول بمفتاح شركة (tenantId) وFK مركّبة للأنشطة/الموظفين/قيود الدفتر، وCHECK مسمّاة (موجودة في ملف الـSQL).
  */
 const int = (name: string, nullable = false) => ({ name, type: "int", nullable });
@@ -25,6 +25,7 @@ export const CARRIER_TABLES = ["ledger_shipments", "ledger_carrier_review_items"
 export const PAYROLL_TABLES = ["ledger_payroll_runs", "ledger_payroll_lines", "ledger_advances", "ledger_advance_installments"] as const;
 export const SUPPLIER_TABLES = ["ledger_suppliers", "ledger_supplier_documents", "ledger_workshop_batches", "ledger_workshop_events"] as const;
 export const SNAPSHOT_TABLES = ["ledger_period_snapshots"] as const;
+export const LEGACY_ARCHIVE_TABLES = ["ledger_legacy_archive_events"] as const;
 
 export const CARRIER_SPEC: Record<(typeof CARRIER_TABLES)[number], TableSpec> = {
   ledger_shipments: {
@@ -136,5 +137,16 @@ export const SNAPSHOT_SPEC: Record<(typeof SNAPSHOT_TABLES)[number], TableSpec> 
     foreignKeys: [ten("fk_lps_tenant"), fk("fk_lps_tenant_period", ["tenantId", "period"], "ledger_periods", ["tenantId", "period"]),
       fk("fk_lps_lock_event", ["lockEventId"], "ledger_period_events", ["id"]), emp("fk_lps_tenant_creator", "createdByEmployeeId")],
     checks: ["chk_lps_version", "chk_lps_period", "chk_lps_hash"],
+  },
+};
+
+export const LEGACY_ARCHIVE_SPEC: Record<(typeof LEGACY_ARCHIVE_TABLES)[number], TableSpec> = {
+  ledger_legacy_archive_events: {
+    columns: [int("id"), int("tenantId"), en("action"), { name: "activationAt", type: "timestamp", nullable: false }, vc("dedupeKey", 120), int("snapshotEventId", true),
+      { name: "figuresJson", type: "json", nullable: true }, ch("figuresHash", 64, true), vc("reason", 500), int("actorEmployeeId", true), ts("createdAt")],
+    uniques: [{ name: "PRIMARY", columns: ["id"] }, { name: "llae_tenant_id_unique", columns: ["tenantId", "id"] }, { name: "llae_tenant_dedupe_unique", columns: ["tenantId", "dedupeKey"] }],
+    indexes: [],
+    foreignKeys: [ten("fk_llae_tenant"), fk("fk_llae_tenant_snapshot", ["tenantId", "snapshotEventId"], "ledger_legacy_archive_events", ["tenantId", "id"]), emp("fk_llae_tenant_actor", "actorEmployeeId")],
+    checks: ["chk_llae_reason", "chk_llae_actor", "chk_llae_shape", "chk_llae_hash"],
   },
 };

@@ -28,7 +28,7 @@ import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconcilia
  * البيئات المسموح فيها apply/rollback: DEPLOY_ENV=staging مع قاعدة غير إنتاجية باسم staging/stage/test (للـRunbook
  * لاحقًا — **ممنوع تشغيله في هذه المرحلة**)، أو DEPLOY_ENV=test/local على مضيف محلي (Docker مؤقت).
  */
-export type HandMigrationId = "0041" | "0042" | "0043" | "0044" | "0045" | "0046" | "0047" | "0048" | "0049" | "0050";
+export type HandMigrationId = "0041" | "0042" | "0043" | "0044" | "0045" | "0046" | "0047" | "0048" | "0049" | "0050" | "0051";
 export type HandMigrationDef = {
   id: HandMigrationId;
   title: string;
@@ -38,7 +38,7 @@ export type HandMigrationDef = {
   /** قيود FK تُضاف بـALTER بعد الإنشاء (كسر الدورة) */
   lateForeignKeys: { table: string; name: string }[];
   compositeIndexes: "create_if_absent" | "require_present";
-  /** جداول يجب وجودها قبل التطبيق (preflight) — مثل جداول 0040 لترحيلات الدفتر 0047–0050. اختياري. */
+  /** جداول يجب وجودها قبل التطبيق (preflight) — مثل جداول 0040 لترحيلات الدفتر 0047–0051. اختياري. */
   requiresTables?: string[];
 };
 
@@ -179,6 +179,15 @@ function gate(def: HandMigrationDef, mode: "apply" | "rollback", target: { host:
 
 /** بوابات apply/rollback المشتركة (لا إنتاج، DEPLOY_ENV، عبارة تأكيد باسم القاعدة) — يعيد استخدامها 0045. */
 export function migrationGate(id: HandMigrationId, mode: "apply" | "rollback", target: { host: string; database: string; production: boolean }, deployEnv: string | null | undefined, confirm: string | null | undefined): string | null {
+  const why = environmentGate(target, deployEnv);
+  if (why) return why;
+  const expected = confirmPhrase(id, mode, target.database);
+  if ((confirm ?? "") !== expected) return `عبارة التأكيد غير مطابقة — المطلوب حرفيًا: ${expected}`;
+  return null;
+}
+
+/** بوابة البيئة وحدها (لا إنتاج؛ staging باسم يدل عليه أو test/local على مضيف محلي) — يعيد استخدامها سكربت الاستعادة. */
+export function environmentGate(target: { host: string; database: string; production: boolean }, deployEnv: string | null | undefined): string | null {
   if (target.production) return "القاعدة تبدو إنتاجًا — مرفوض دائمًا";
   const env = deployEnv ?? "";
   if (env === "staging") {
@@ -186,8 +195,6 @@ export function migrationGate(id: HandMigrationId, mode: "apply" | "rollback", t
   } else if (env === "test" || env === "local") {
     if (!LOCAL_HOSTS.has(target.host)) return `DEPLOY_ENV=${env} مسموح على مضيف محلي فقط (الحالي: ${target.host})`;
   } else return `DEPLOY_ENV يجب أن يكون staging أو test/local (الحالي: ${env || "غير مضبوط"})`;
-  const expected = confirmPhrase(id, mode, target.database);
-  if ((confirm ?? "") !== expected) return `عبارة التأكيد غير مطابقة — المطلوب حرفيًا: ${expected}`;
   return null;
 }
 
