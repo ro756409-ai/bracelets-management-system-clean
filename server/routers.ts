@@ -3,6 +3,7 @@ import { assertNoMovementDuringStocktake, handoverOrder, InventoryLedgerError, i
 import type { LedgerActor } from "../shared/ledgerV3Core";
 import { TRPCError } from "@trpc/server";
 import { isUniqueKeyCollision, numberSource, withFreshNumber } from "./uniqueNumber";
+import { OPERATION_ID_RE, runIdempotent, type IdemRecord } from "./operationIdempotency.service";
 import { createBostaShipment, isBostaEnabledForBusiness, resolveShipmentImagesForOrder, toPublicImageUrl } from "./bosta.service";
 import { isPublicImageUrl, packageImageTenant, PACKAGE_IMAGE_URL_PREFIX } from "../shared/packageImages";
 import { packageImageExists } from "./packageImageUpload";
@@ -2138,18 +2139,33 @@ export const appRouter = router({
               })
             )
             .min(1),
+          /** منع تكرار الإرسال (0052) — نفس عقد addOrder: اختياري للعملاء القدامى (بدونه غير محمي). */
+          operationId: z.string().regex(OPERATION_ID_RE).optional(),
         })
       )
-      .mutation(async ({ ctx, input }) =>
-        sendToWorkshop({
-          ...input,
-          businessId: await requireScopedBusinessId(
-            ctx,
-            input.businessId
-          ),
-          actor: await requireActor(ctx),
-        })
-      ),
+      .mutation(async ({ ctx, input }) => {
+        const { operationId, ...requestPayload } = input;
+        const businessId = await requireScopedBusinessId(ctx, input.businessId);
+        const actor = await requireActor(ctx);
+        const acting = await resolveActingEmployeeIdAndName(ctx);
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const [biz] = await db.select({ tenantId: businessesTable.tenantId }).from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+        return runIdempotent({
+          db,
+          scope: operationId && biz?.tenantId != null ? { tenantId: biz.tenantId, businessId, operation: "workshop.send", operationId } : null,
+          payload: { ...requestPayload, businessId },
+          actor: acting.id != null ? { type: "employee", id: acting.id } : { type: "user", id: actor.id },
+          // الإعادة بنطاق النشاط: حدث التحويل لازم يكون لسه في نفس النشاط
+          replay: async row => {
+            const [ev] = await db.select({ id: businessEvents.id }).from(businessEvents)
+              .where(and(eq(businessEvents.id, row.resultId), eq(businessEvents.businessId, businessId))).limit(1);
+            if (!ev) throw new TRPCError({ code: "CONFLICT", message: `هذه العملية نُفّذت سابقًا (${row.resultReference}) ولم يعد إذنها موجودًا` });
+            return { eventId: row.resultId, duplicate: false, reference: row.resultReference };
+          },
+          execute: record => sendToWorkshop({ ...requestPayload, businessId, actor, record: record ?? undefined }),
+        });
+      }),
 
     workshopReceive: permissionProcedure("inventory_costing.manage")
       .input(
@@ -5987,6 +6003,11 @@ export const appRouter = router({
           variantId: z.number().int().optional(),
           size: z.string().optional(),
           color: z.string().optional(),
+          /**
+           * منع تكرار الإنشاء (0052): معرّف ثابت للعملية من الواجهة — إعادة المحاولة بعد انقطاع الشبكة بنفس المعرّف تعيد
+           * نفس الأوردر. اختياري للعملاء القدامى: بدونه الطلب غير محمي ولا يُولَّد له معرّف على السيرفر.
+           */
+          operationId: z.string().regex(OPERATION_ID_RE).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -5997,224 +6018,244 @@ export const appRouter = router({
         // (businessId=1). موظف بلا نشاط صالح → fail-closed (مفيش أوردر يتكتب).
         const businessId = await resolveEmployeeBusinessId(empScope(ctx));
 
-        // ── أوردر ناتج عن لصق: التحقق **على السيرفر** بإعادة تحليل النص نفسه ──
-        //
-        // الـmetadata الجاية من المتصفح مش مرجعًا: rawText + parseToken لازم ييجوا سوا،
-        // التوكن موقّع (موظف + نشاط + hash النص) فمش قابل للتعديل، والنص بيتحلّل تاني
-        // بنفس analyzePasteV2 على كتالوج النشاط الحالي (حتمي، بلا AI) — والقواعد تتطبّق
-        // على اللي اتحلّل هنا مش على اللي العميل قاله. الأوردر اليدوي (بلا الاتنين)
-        // بيفضل بقواعده الحالية.
-        const pasteOrigin = input.rawText != null || input.parseToken != null || input.parseResult != null;
-        let verifiedParse: Awaited<ReturnType<typeof analyzePasteV2>> | null = null;
-        let canonLines: ReturnType<typeof canonicalParse>["lines"] | null = null;
-        if (pasteOrigin) {
-          // 1) rawText + parseToken + parseResult لازم سوا — حذف أي واحد مش «أوردر يدوي».
-          if (!input.rawText || !input.parseToken || !input.parseResult)
-            throw new TRPCError({ code: "BAD_REQUEST", message: "بيانات التحليل ناقصة — أعد تحليل الرسالة ثم احفظ" });
-          // 2) التوقيع + الموظف + النشاط + النص + بصمة النتيجة القانونية + الصلاحية (ساعتان).
-          const tok = verifyParseToken(input.parseToken, {
-            employeeId: ctx.employee.id, businessId, rawText: input.rawText, fingerprint: canonicalFingerprint(input.parseResult),
-          });
-          if (!tok.ok) throw new TRPCError({ code: "BAD_REQUEST", message: PARSE_TOKEN_MESSAGES[tok.reason] });
-          // 3) إعادة التحليل الحتمي للحقول الصريحة والحسابات (بلا أي AI هنا) — لازم تطابق
-          //    الإجماليات الموقّعة، وإلا الرسالة/الكتالوج اتغيّروا ويلزم تحليل جديد.
-          const catalogIds = await employeeCatalogBusinessIds(empScope(ctx));
-          const catalog = catalogIds.length ? await getMatchCatalog(undefined, catalogIds) : { products: [], variants: [] };
-          verifiedParse = await analyzePasteV2(input.rawText, catalog, {});
-          const canon = canonicalParse(input.parseResult);
-          const fresh = canonicalParse(verifiedParse);
-          if (JSON.stringify(fresh.totals) !== JSON.stringify(canon.totals))
-            throw new TRPCError({ code: "BAD_REQUEST", message: "أرقام الرسالة تغيّرت عن نتيجة التحليل — أعد التحليل ثم احفظ" });
-          // 4) السطور النهائية **مستقلة عن اقتراح التحليل**: الموظفة تضيف/تحذف/تقسم/تدمج
-          //    وتغيّر النوع. هنا بس: مفيش سطر بلا منتج. الملكية للنشاط وتبعية التركيبة لمنتجها
-          //    بيتفحصوا تحت لكل سطر، والكميات/الأسعار/الإجماليات في الخطوة 5.
-          const missing = finalLinesBlocker(input.selectedProducts);
-          if (missing) throw new TRPCError({ code: "BAD_REQUEST", message: missing });
-          canonLines = canon.lines;
-          // 5) القواعد الحسابية على الإجماليات المتحقَّق منها.
-          const num = (v: unknown) => (typeof v === "number" ? v : null);
-          const blockers = pasteSaveBlockers(
-            input.selectedProducts.map(p => ({ quantity: p.quantity ?? 1, unitPrice: p.unitPrice ?? 0, resolved: p.productId != null })),
-            {
-              pieces: num(fresh.totals.pieces),
-              itemsTotal: num(fresh.totals.itemsTotal),
-              shipping: input.shippingCost ?? num(fresh.totals.shipping) ?? 0,
-              discount: input.discount ?? num(fresh.totals.discount) ?? 0,
-            },
-            input.totalAmount
+        // ── منع التكرار (0052): نطاق الشركة + نشاط الجلسة + نوع العملية + معرّف الواجهة، والبيانات بلا المعرّف ──
+        const { operationId, ...requestPayload } = input;
+        const createOrder = async (record: IdemRecord | null) => {
+          // ── أوردر ناتج عن لصق: التحقق **على السيرفر** بإعادة تحليل النص نفسه ──
+          //
+          // الـmetadata الجاية من المتصفح مش مرجعًا: rawText + parseToken لازم ييجوا سوا،
+          // التوكن موقّع (موظف + نشاط + hash النص) فمش قابل للتعديل، والنص بيتحلّل تاني
+          // بنفس analyzePasteV2 على كتالوج النشاط الحالي (حتمي، بلا AI) — والقواعد تتطبّق
+          // على اللي اتحلّل هنا مش على اللي العميل قاله. الأوردر اليدوي (بلا الاتنين)
+          // بيفضل بقواعده الحالية.
+          const pasteOrigin = input.rawText != null || input.parseToken != null || input.parseResult != null;
+          let verifiedParse: Awaited<ReturnType<typeof analyzePasteV2>> | null = null;
+          let canonLines: ReturnType<typeof canonicalParse>["lines"] | null = null;
+          if (pasteOrigin) {
+            // 1) rawText + parseToken + parseResult لازم سوا — حذف أي واحد مش «أوردر يدوي».
+            if (!input.rawText || !input.parseToken || !input.parseResult)
+              throw new TRPCError({ code: "BAD_REQUEST", message: "بيانات التحليل ناقصة — أعد تحليل الرسالة ثم احفظ" });
+            // 2) التوقيع + الموظف + النشاط + النص + بصمة النتيجة القانونية + الصلاحية (ساعتان).
+            const tok = verifyParseToken(input.parseToken, {
+              employeeId: ctx.employee.id, businessId, rawText: input.rawText, fingerprint: canonicalFingerprint(input.parseResult),
+            });
+            if (!tok.ok) throw new TRPCError({ code: "BAD_REQUEST", message: PARSE_TOKEN_MESSAGES[tok.reason] });
+            // 3) إعادة التحليل الحتمي للحقول الصريحة والحسابات (بلا أي AI هنا) — لازم تطابق
+            //    الإجماليات الموقّعة، وإلا الرسالة/الكتالوج اتغيّروا ويلزم تحليل جديد.
+            const catalogIds = await employeeCatalogBusinessIds(empScope(ctx));
+            const catalog = catalogIds.length ? await getMatchCatalog(undefined, catalogIds) : { products: [], variants: [] };
+            verifiedParse = await analyzePasteV2(input.rawText, catalog, {});
+            const canon = canonicalParse(input.parseResult);
+            const fresh = canonicalParse(verifiedParse);
+            if (JSON.stringify(fresh.totals) !== JSON.stringify(canon.totals))
+              throw new TRPCError({ code: "BAD_REQUEST", message: "أرقام الرسالة تغيّرت عن نتيجة التحليل — أعد التحليل ثم احفظ" });
+            // 4) السطور النهائية **مستقلة عن اقتراح التحليل**: الموظفة تضيف/تحذف/تقسم/تدمج
+            //    وتغيّر النوع. هنا بس: مفيش سطر بلا منتج. الملكية للنشاط وتبعية التركيبة لمنتجها
+            //    بيتفحصوا تحت لكل سطر، والكميات/الأسعار/الإجماليات في الخطوة 5.
+            const missing = finalLinesBlocker(input.selectedProducts);
+            if (missing) throw new TRPCError({ code: "BAD_REQUEST", message: missing });
+            canonLines = canon.lines;
+            // 5) القواعد الحسابية على الإجماليات المتحقَّق منها.
+            const num = (v: unknown) => (typeof v === "number" ? v : null);
+            const blockers = pasteSaveBlockers(
+              input.selectedProducts.map(p => ({ quantity: p.quantity ?? 1, unitPrice: p.unitPrice ?? 0, resolved: p.productId != null })),
+              {
+                pieces: num(fresh.totals.pieces),
+                itemsTotal: num(fresh.totals.itemsTotal),
+                shipping: input.shippingCost ?? num(fresh.totals.shipping) ?? 0,
+                discount: input.discount ?? num(fresh.totals.discount) ?? 0,
+              },
+              input.totalAmount
+            );
+            if (blockers.length)
+              throw new TRPCError({ code: "BAD_REQUEST", message: blockers.join(" · ") });
+          }
+          // عدد القطع لكل بند (افتراضي 1 لو غير محدد)
+          // كل منتج مختار لازم يكون في نطاق الموظف — الإنشاء بيربط الأوردر بيهم.
+          await requireAllOwned(
+            empScope(ctx),
+            "product",
+            input.selectedProducts
+              .map(p => p.productId)
+              .filter((id): id is number => id != null)
           );
-          if (blockers.length)
-            throw new TRPCError({ code: "BAD_REQUEST", message: blockers.join(" · ") });
-        }
-        // عدد القطع لكل بند (افتراضي 1 لو غير محدد)
-        // كل منتج مختار لازم يكون في نطاق الموظف — الإنشاء بيربط الأوردر بيهم.
-        await requireAllOwned(
-          empScope(ctx),
-          "product",
-          input.selectedProducts
-            .map(p => p.productId)
-            .filter((id): id is number => id != null)
-        );
-        // تحقّق **الملكية والتركيب** لكل بند — مش المخزون.
-        //
-        // المخزون مابيمنعش تسجيل أوردر: العميل طلب قطعتين والمتاح واحدة = أوردر حقيقي
-        // لازم يتسجّل بكميته الصحيحة. سياسة `confirmOrder` المعتمدة أصلاً مابتمنعش
-        // التأكيد بسبب العجز (بتعلّم needsReview بدل ما ترفض)، فمنع الإدخال كان أقسى
-        // من التأكيد نفسه وكان بيخلي الموظف يزوّر الكمية عشان يعدّي.
-        // اللون/المقاس لكل بند بيتاخدوا من **تركيبته هو**، مش من هيدر الأوردر.
-        // كانوا بيتنسخوا من `input.color/size` للبند الأول بس، فأوردر بقطعتين
-        // بتركيبتين مختلفتين كان بيسجّل البند التاني بلون ومقاس فاضيين.
-        const variantById = new Map<number, { color: string | null; size: string | null }>();
-        for (const p of input.selectedProducts) {
-          if (p.variantId == null) continue;
-          // variantId من غير productId ممنوع — مايبقاش فيه منتج نتحقّق التركيبة ضده.
-          if (p.productId == null)
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "لازم تحدّد المنتج مع التركيبة",
-            });
-          const variant = await getVariantById(p.variantId);
-          // التركيبة لازم تتبع **نفس المنتج**؛ والمنتج نفسه اتأكّد إنه تابع لنشاط الموظف
-          // أعلاه (requireAllOwned) — فمستحيل تمرير تركيبة من منتج/نشاط تاني.
-          if (!variant || variant.productId !== p.productId)
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "التركيبة غير صحيحة لهذا المنتج",
-            });
-          variantById.set(p.variantId, { color: variant.color, size: variant.size });
-        }
-        // **الاسم من كتالوج النشاط، مش من العميل** — وقبل أي كتابة.
-        //
-        // `order_items` بيتصحّح جوه replaceOrderItems بـwithCatalogProductNames، لكن مرآة
-        // الهيدر كانت بتتبني من نص العميل — فعميل API قديم أو طلب مباشر يقدر يحط اسمًا
-        // مركّبًا («أسورة نحاس - آية الكرسي») أو اسم منتج تاني خالص في الهيدر، وتفضل
-        // المرآة مخالفة للبنود. البند اللي مالوش productId (صنف ما اتطابقش) بيحتفظ بنصّه
-        // الخام عن قصد — ده اللي الموظف بيعيّنه يدويًا بعدين.
-        const catalogNames = await getOwnedProductNames(
-          businessId,
-          input.selectedProducts
-            .map(p => p.productId)
-            .filter((id): id is number => id != null)
-        );
-        const itemsWithQty = input.selectedProducts.map(p => ({
-          ...p,
-          productName:
-            (p.productId != null ? catalogNames.get(p.productId) : undefined) ??
-            p.productName,
-          quantity: p.quantity ?? 1,
-        }));
-        // العدد الإجمالي = مجموع كميات البنود
-        const totalQty =
-          itemsWithQty.reduce((sum, p) => sum + p.quantity, 0) ||
-          input.quantity ||
-          1;
-        // مرآة الهيدر: أسماء المنتجات وأعدادها فقط (نوع الحفر في variantId لكل بند).
-        const productNames = buildOrderHeaderName(itemsWithQty);
-
-        // Any item without a resolved product means the order needs a human to finish
-        // mapping it. It is still created — never dropped — but flagged, and the header
-        // productId points at the first RESOLVED item (or null when none resolved) rather
-        // than at an arbitrary product.
-        const unresolved = itemsWithQty.filter(p => !p.productId);
-        const needsReview = unresolved.length > 0;
-        const firstResolved = itemsWithQty.find(p => p.productId);
-        const headerProductId = firstResolved?.productId ?? null;
-        const headerVariantId =
-          firstResolved?.variantId ?? input.variantId ?? null;
-
-        const normalizedCustomerPhone =
-          normalizeEgyptianPhone(input.customerPhone) || input.customerPhone;
-        // البنود بتتجهّز قبل أي كتابة، وبعدين الهيدر والبنود في **transaction واحدة**
-        // (`insertOrderWithItems`): نجاح كامل أو rollback كامل. قبل كده كانوا في
-        // transactionين، فلو البنود فشلت (deadlock بين أوردرين متزامنين مثلًا) كان بيفضل
-        // أوردر يتيم بلا بنود. إعادة المحاولة عند الـdeadlock بنفس الرقم؛ وتصادم رقم الأوردر
-        // (القيد الفريد orders_orderNumber_unique — عام لكل الشركات) = رقم جديد بمعاملة جديدة،
-        // 3 محاولات إجمالًا (withFreshNumber). أي خطأ تاني بيطلع كما هو.
-        const itemRows = itemsWithQty.map(p => ({
-          productId: p.productId,
-          productName: p.productName,
-          quantity: p.quantity,
-          unitPrice: p.unitPrice,
-          // Each item carries its OWN variant now (previously only the first product could
-          // have one, which made multi-engraving orders impossible to represent).
-          variantId: p.variantId,
-          // من التركيبة نفسها؛ ولو البند بلا تركيبة بنرجع لحقول الهيدر (منتج بسيط).
-          size:
-            (p.variantId != null ? variantById.get(p.variantId)?.size : null) ??
-            (p.productId === headerProductId ? (input.size ?? undefined) : undefined) ??
-            undefined,
-          color:
-            (p.variantId != null ? variantById.get(p.variantId)?.color : null) ??
-            (p.productId === headerProductId ? (input.color ?? undefined) : undefined) ??
-            undefined,
-        }));
-        const { number: orderNumber, value: newOrderId } = await withFreshNumber(numberSource.fbOrder, orderNumber => insertOrderWithItems(
-          {
-            orderNumber,
+          // تحقّق **الملكية والتركيب** لكل بند — مش المخزون.
+          //
+          // المخزون مابيمنعش تسجيل أوردر: العميل طلب قطعتين والمتاح واحدة = أوردر حقيقي
+          // لازم يتسجّل بكميته الصحيحة. سياسة `confirmOrder` المعتمدة أصلاً مابتمنعش
+          // التأكيد بسبب العجز (بتعلّم needsReview بدل ما ترفض)، فمنع الإدخال كان أقسى
+          // من التأكيد نفسه وكان بيخلي الموظف يزوّر الكمية عشان يعدّي.
+          // اللون/المقاس لكل بند بيتاخدوا من **تركيبته هو**، مش من هيدر الأوردر.
+          // كانوا بيتنسخوا من `input.color/size` للبند الأول بس، فأوردر بقطعتين
+          // بتركيبتين مختلفتين كان بيسجّل البند التاني بلون ومقاس فاضيين.
+          const variantById = new Map<number, { color: string | null; size: string | null }>();
+          for (const p of input.selectedProducts) {
+            if (p.variantId == null) continue;
+            // variantId من غير productId ممنوع — مايبقاش فيه منتج نتحقّق التركيبة ضده.
+            if (p.productId == null)
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "لازم تحدّد المنتج مع التركيبة",
+              });
+            const variant = await getVariantById(p.variantId);
+            // التركيبة لازم تتبع **نفس المنتج**؛ والمنتج نفسه اتأكّد إنه تابع لنشاط الموظف
+            // أعلاه (requireAllOwned) — فمستحيل تمرير تركيبة من منتج/نشاط تاني.
+            if (!variant || variant.productId !== p.productId)
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "التركيبة غير صحيحة لهذا المنتج",
+              });
+            variantById.set(p.variantId, { color: variant.color, size: variant.size });
+          }
+          // **الاسم من كتالوج النشاط، مش من العميل** — وقبل أي كتابة.
+          //
+          // `order_items` بيتصحّح جوه replaceOrderItems بـwithCatalogProductNames، لكن مرآة
+          // الهيدر كانت بتتبني من نص العميل — فعميل API قديم أو طلب مباشر يقدر يحط اسمًا
+          // مركّبًا («أسورة نحاس - آية الكرسي») أو اسم منتج تاني خالص في الهيدر، وتفضل
+          // المرآة مخالفة للبنود. البند اللي مالوش productId (صنف ما اتطابقش) بيحتفظ بنصّه
+          // الخام عن قصد — ده اللي الموظف بيعيّنه يدويًا بعدين.
+          const catalogNames = await getOwnedProductNames(
             businessId,
-            customerName: input.customerName,
-            customerPhone: normalizedCustomerPhone,
-            customerPhone2: input.customerPhone2?.trim()
-              ? normalizeEgyptianPhone(input.customerPhone2) || input.customerPhone2.trim()
-              : null,
-            governorate: input.governorate,
-            customerAddress: input.customerAddress,
-            city: input.city ?? null,
-            productId: headerProductId,
-            productName: productNames,
-            quantity: totalQty,
-            totalAmount: input.totalAmount.toString(),
-            shippingFees:
-              input.shippingCost != null
-                ? input.shippingCost.toString()
-                : undefined,
-            source: "facebook",
-            adName: input.adName ?? null,
-            pageName: input.pageName ?? null,
-            notes: input.notes ?? null,
-            status: "new",
-            lastUpdatedBy: ctx.employee.id,
-            variantId: headerVariantId,
-            size: input.size ?? null,
-            color: input.color ?? null,
-            needsReview,
-            reviewReason: needsReview
-              ? `أصناف غير مطابقة تحتاج تعيين منتج يدويًا: ${unresolved.map(u => u.productName).join(" | ")}`
-              : null,
-            // Verbatim pasted message for audit, when the paste parser was used.
-            externalRawPayload: input.rawText ?? null,
-          } as any,
-          itemRows
-        ), err => isUniqueKeyCollision(err, "orders_orderNumber_unique"));
-        // سجل التحليل (fail-safe قبل 0038): اللي اتحقق على السيرفر + اللي اتحفظ فعلًا
-        // + اللي الواجهة عرضته (لو اتبعت). مفيش أي عمود جديد في order_items.
-        if (verifiedParse && input.rawText) {
-          await insertOrderParseAudit({
-            tenantId: ctx.employee.tenantId as number,
-            businessId,
-            orderId: newOrderId,
-            parserVersion: verifiedParse.parserVersion,
-            // مصدر التحليل من النتيجة الموقّعة (بتشمل مطابقات الـAI)؛ إعادة التحليل هنا حتمية.
-            parseSource: input.parseResult?.parseSource ?? verifiedParse.parseSource,
-            rawText: input.rawText,
-            resultJson: JSON.stringify({
-              verified: verifiedParse,
-              client: input.parseResult ?? null,
-              // اقتراح التحليل الأصلي محفوظ في client/verified؛ هنا السطور النهائية كما اختارتها
-              // الموظفة، مع تصنيف كل سطر (مقبول/مصحَّح) وعلامة التعديل البنيوي.
-              resolution: (() => {
-                const cls = classifyFinalLines(canonLines ?? [], itemsWithQty.map(p => ({ productId: p.productId ?? null, variantId: p.variantId ?? null, quantity: p.quantity })));
-                return { status: cls.structurallyEdited ? "employee_corrected" : "accepted", structurallyEdited: cls.structurallyEdited };
-              })(),
-              saved: (() => {
-                const cls = classifyFinalLines(canonLines ?? [], itemsWithQty.map(p => ({ productId: p.productId ?? null, variantId: p.variantId ?? null, quantity: p.quantity })));
-                return itemsWithQty.map((p, i) => ({ ...cls.lines[i], quantity: p.quantity, unitPrice: p.unitPrice ?? null, priceSource: p.priceSource ?? null }));
-              })(),
-              totals: { totalAmount: input.totalAmount, shipping: input.shippingCost ?? null, discount: input.discount ?? null },
-            }),
-          });
-        }
-        return { success: true, orderNumber, needsReview };
+            input.selectedProducts
+              .map(p => p.productId)
+              .filter((id): id is number => id != null)
+          );
+          const itemsWithQty = input.selectedProducts.map(p => ({
+            ...p,
+            productName:
+              (p.productId != null ? catalogNames.get(p.productId) : undefined) ??
+              p.productName,
+            quantity: p.quantity ?? 1,
+          }));
+          // العدد الإجمالي = مجموع كميات البنود
+          const totalQty =
+            itemsWithQty.reduce((sum, p) => sum + p.quantity, 0) ||
+            input.quantity ||
+            1;
+          // مرآة الهيدر: أسماء المنتجات وأعدادها فقط (نوع الحفر في variantId لكل بند).
+          const productNames = buildOrderHeaderName(itemsWithQty);
+
+          // Any item without a resolved product means the order needs a human to finish
+          // mapping it. It is still created — never dropped — but flagged, and the header
+          // productId points at the first RESOLVED item (or null when none resolved) rather
+          // than at an arbitrary product.
+          const unresolved = itemsWithQty.filter(p => !p.productId);
+          const needsReview = unresolved.length > 0;
+          const firstResolved = itemsWithQty.find(p => p.productId);
+          const headerProductId = firstResolved?.productId ?? null;
+          const headerVariantId =
+            firstResolved?.variantId ?? input.variantId ?? null;
+
+          const normalizedCustomerPhone =
+            normalizeEgyptianPhone(input.customerPhone) || input.customerPhone;
+          // البنود بتتجهّز قبل أي كتابة، وبعدين الهيدر والبنود في **transaction واحدة**
+          // (`insertOrderWithItems`): نجاح كامل أو rollback كامل. قبل كده كانوا في
+          // transactionين، فلو البنود فشلت (deadlock بين أوردرين متزامنين مثلًا) كان بيفضل
+          // أوردر يتيم بلا بنود. إعادة المحاولة عند الـdeadlock بنفس الرقم؛ وتصادم رقم الأوردر
+          // (القيد الفريد orders_orderNumber_unique — عام لكل الشركات) = رقم جديد بمعاملة جديدة،
+          // 3 محاولات إجمالًا (withFreshNumber). أي خطأ تاني بيطلع كما هو.
+          const itemRows = itemsWithQty.map(p => ({
+            productId: p.productId,
+            productName: p.productName,
+            quantity: p.quantity,
+            unitPrice: p.unitPrice,
+            // Each item carries its OWN variant now (previously only the first product could
+            // have one, which made multi-engraving orders impossible to represent).
+            variantId: p.variantId,
+            // من التركيبة نفسها؛ ولو البند بلا تركيبة بنرجع لحقول الهيدر (منتج بسيط).
+            size:
+              (p.variantId != null ? variantById.get(p.variantId)?.size : null) ??
+              (p.productId === headerProductId ? (input.size ?? undefined) : undefined) ??
+              undefined,
+            color:
+              (p.variantId != null ? variantById.get(p.variantId)?.color : null) ??
+              (p.productId === headerProductId ? (input.color ?? undefined) : undefined) ??
+              undefined,
+          }));
+          const { number: orderNumber, value: newOrderId } = await withFreshNumber(numberSource.fbOrder, orderNumber => insertOrderWithItems(
+            {
+              orderNumber,
+              businessId,
+              customerName: input.customerName,
+              customerPhone: normalizedCustomerPhone,
+              customerPhone2: input.customerPhone2?.trim()
+                ? normalizeEgyptianPhone(input.customerPhone2) || input.customerPhone2.trim()
+                : null,
+              governorate: input.governorate,
+              customerAddress: input.customerAddress,
+              city: input.city ?? null,
+              productId: headerProductId,
+              productName: productNames,
+              quantity: totalQty,
+              totalAmount: input.totalAmount.toString(),
+              shippingFees:
+                input.shippingCost != null
+                  ? input.shippingCost.toString()
+                  : undefined,
+              source: "facebook",
+              adName: input.adName ?? null,
+              pageName: input.pageName ?? null,
+              notes: input.notes ?? null,
+              status: "new",
+              lastUpdatedBy: ctx.employee.id,
+              variantId: headerVariantId,
+              size: input.size ?? null,
+              color: input.color ?? null,
+              needsReview,
+              reviewReason: needsReview
+                ? `أصناف غير مطابقة تحتاج تعيين منتج يدويًا: ${unresolved.map(u => u.productName).join(" | ")}`
+                : null,
+              // Verbatim pasted message for audit, when the paste parser was used.
+              externalRawPayload: input.rawText ?? null,
+            } as any,
+            itemRows,
+            // مفتاح منع التكرار داخل نفس معاملة الهيدر والبنود
+            record ? (tx, id) => record(tx, { id, reference: orderNumber }) : undefined
+          ), err => isUniqueKeyCollision(err, "orders_orderNumber_unique"));
+          // سجل التحليل (fail-safe قبل 0038): اللي اتحقق على السيرفر + اللي اتحفظ فعلًا
+          // + اللي الواجهة عرضته (لو اتبعت). مفيش أي عمود جديد في order_items.
+          if (verifiedParse && input.rawText) {
+            await insertOrderParseAudit({
+              tenantId: ctx.employee.tenantId as number,
+              businessId,
+              orderId: newOrderId,
+              parserVersion: verifiedParse.parserVersion,
+              // مصدر التحليل من النتيجة الموقّعة (بتشمل مطابقات الـAI)؛ إعادة التحليل هنا حتمية.
+              parseSource: input.parseResult?.parseSource ?? verifiedParse.parseSource,
+              rawText: input.rawText,
+              resultJson: JSON.stringify({
+                verified: verifiedParse,
+                client: input.parseResult ?? null,
+                // اقتراح التحليل الأصلي محفوظ في client/verified؛ هنا السطور النهائية كما اختارتها
+                // الموظفة، مع تصنيف كل سطر (مقبول/مصحَّح) وعلامة التعديل البنيوي.
+                resolution: (() => {
+                  const cls = classifyFinalLines(canonLines ?? [], itemsWithQty.map(p => ({ productId: p.productId ?? null, variantId: p.variantId ?? null, quantity: p.quantity })));
+                  return { status: cls.structurallyEdited ? "employee_corrected" : "accepted", structurallyEdited: cls.structurallyEdited };
+                })(),
+                saved: (() => {
+                  const cls = classifyFinalLines(canonLines ?? [], itemsWithQty.map(p => ({ productId: p.productId ?? null, variantId: p.variantId ?? null, quantity: p.quantity })));
+                  return itemsWithQty.map((p, i) => ({ ...cls.lines[i], quantity: p.quantity, unitPrice: p.unitPrice ?? null, priceSource: p.priceSource ?? null }));
+                })(),
+                totals: { totalAmount: input.totalAmount, shipping: input.shippingCost ?? null, discount: input.discount ?? null },
+              }),
+            });
+          }
+          return { success: true as const, orderNumber, needsReview };
+        };
+        return runIdempotent({
+          db,
+          scope: operationId ? { tenantId: ctx.employee.tenantId as number, businessId, operation: "order.create", operationId } : null,
+          payload: requestPayload,
+          actor: { type: "employee", id: ctx.employee.id },
+          // الإعادة بنطاق نشاط الجلسة: الأوردر لازم يكون لسه موجود في نفس النشاط، وإلا رفض (لا إنشاء جديد بنفس المعرّف)
+          replay: async row => {
+            const [o] = await db.select({ orderNumber: orders.orderNumber, needsReview: orders.needsReview }).from(orders)
+              .where(and(eq(orders.id, row.resultId), eq(orders.businessId, businessId))).limit(1);
+            if (!o) throw new TRPCError({ code: "CONFLICT", message: `هذه العملية نُفّذت سابقًا (${row.resultReference}) والأوردر لم يعد موجودًا — لن يُنشأ أوردر جديد بنفس المعرّف` });
+            return { success: true as const, orderNumber: o.orderNumber, needsReview: Boolean(o.needsReview) };
+          },
+          execute: createOrder,
+        });
       }),
 
     // جلب أوردرات الموظف الحالي (فيسبوك)

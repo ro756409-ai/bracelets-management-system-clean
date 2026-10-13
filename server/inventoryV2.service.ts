@@ -787,6 +787,10 @@ export async function transferStock(input: {
    */
   requireNewReference?: boolean;
   /**
+   * داخلي: يُنفَّذ **داخل نفس المعاملة** بعد الحركات وقبل الالتزام (مثل تسجيل مفتاح منع التكرار 0052) — أي رمي يلغي التحويل كله.
+   */
+  inTransaction?: (tx: any, info: { eventId: number }) => Promise<void>;
+  /**
    * تكلفة إصلاح القطعة، لو متعرفة وقت الإرسال.
    *
    * **مابتعملش مصروف ولا بتلمس خزنة.** رقم للعلم بيتخزّن مع الحدث، والمصروف بيتسجّل
@@ -961,6 +965,7 @@ export async function transferStock(input: {
       sourceByKey.set(key, { ...source, onHandQuantity: out.quantity, inventoryValue: out.inventoryValue, movingAverageCost: out.movingAverageCost, version: source.version + 1 });
       targetByKey.set(key, { ...target, onHandQuantity: inn.quantity, inventoryValue: inn.inventoryValue, movingAverageCost: inn.movingAverageCost, version: target.version + 1 });
     }
+    if (input.inTransaction) await input.inTransaction(tx, { eventId });
     return { eventId, duplicate: false };
   });
 }
@@ -1337,6 +1342,8 @@ export async function sendToWorkshop(input: {
   repairCostPerPiece?: string;
   lines: Array<{ productId: number; variantId?: number | null; quantity: number }>;
   actor: Actor;
+  /** داخلي (0052): تسجيل مفتاح منع التكرار داخل معاملة التحويل نفسها. */
+  record?: (tx: any, result: { id: number; reference: string }) => Promise<void>;
 }) {
   const { officeWarehouseId, workshopWarehouseId } =
     await resolveWorkshopWarehouses(input.businessId);
@@ -1356,6 +1363,7 @@ export async function sendToWorkshop(input: {
       lines: input.lines,
       actor: input.actor,
       requireNewReference: true,
+      inTransaction: input.record ? (tx, { eventId }) => input.record!(tx, { id: eventId, reference }) : undefined,
     }),
     err => err instanceof NumberTakenError || isUniqueKeyCollision(err, "business_events_business_idempotency_unique"),
   );

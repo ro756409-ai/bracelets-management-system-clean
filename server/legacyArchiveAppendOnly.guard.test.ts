@@ -28,3 +28,13 @@ describe("🧾 سجل الأرشيف (0051) للإضافة فقط", () => {
     expect(routers).toEqual([]);
   });
 });
+
+describe("🔁 مفاتيح منع التكرار (0052) دائمة", () => {
+  const K = "operation_idempotency_keys";
+  it("لا UPDATE/DELETE/TRUNCATE/REPLACE في كود التطبيق، والإدراج في خدمة منع التكرار وحدها، ولا تعريف Drizzle", () => {
+    const read = (f: string) => fs.readFileSync(path.join(ROOT, f), "utf-8");
+    expect(SOURCES.filter(f => new RegExp(`(UPDATE|DELETE\\s+FROM|TRUNCATE(\\s+TABLE)?|REPLACE\\s+INTO)\\s+\`?${K}`, "i").test(read(f)))).toEqual([]);
+    expect(SOURCES.filter(f => new RegExp(`INSERT\\s+INTO\\s+\`?${K}`, "i").test(read(f)))).toEqual([path.join("server", "operationIdempotency.service.ts")]);
+    expect(SOURCES.filter(f => f.startsWith("drizzle") && read(f).includes(`"${K}"`))).toEqual([]);
+  });
+});

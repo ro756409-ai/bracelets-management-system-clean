@@ -28,7 +28,7 @@ import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconcilia
  * البيئات المسموح فيها apply/rollback: DEPLOY_ENV=staging مع قاعدة غير إنتاجية باسم staging/stage/test (للـRunbook
  * لاحقًا — **ممنوع تشغيله في هذه المرحلة**)، أو DEPLOY_ENV=test/local على مضيف محلي (Docker مؤقت).
  */
-export type HandMigrationId = "0041" | "0042" | "0043" | "0044" | "0045" | "0046" | "0047" | "0048" | "0049" | "0050" | "0051";
+export type HandMigrationId = "0041" | "0042" | "0043" | "0044" | "0045" | "0046" | "0047" | "0048" | "0049" | "0050" | "0051" | "0052";
 export type HandMigrationDef = {
   id: HandMigrationId;
   title: string;

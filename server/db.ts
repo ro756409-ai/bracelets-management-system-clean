@@ -1713,13 +1713,16 @@ export async function createOrderWithItems(
  */
 export async function insertOrderWithItems(
   values: InsertOrder,
-  items: OrderItemWrite[]
+  items: OrderItemWrite[],
+  /** داخلي (0052): داخل نفس المعاملة بعد الهيدر والبنود — مثل تسجيل مفتاح منع التكرار. أي رمي يلغي الأوردر كله. */
+  inTransaction?: (tx: any, orderId: number) => Promise<void>
 ): Promise<number> {
   return runOrderTransaction(async tx => {
     const [res] = await tx.insert(orders).values(values).$returningId();
     const id = Number((res as any)?.id);
     if (!id) throw new Error("تعذّر إنشاء الأوردر");
     await replaceOrderItemsInTransaction(tx, id, items, { isNewOrder: true });
+    if (inTransaction) await inTransaction(tx, id);
     return id;
   });
 }

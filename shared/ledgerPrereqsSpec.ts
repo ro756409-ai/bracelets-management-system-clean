@@ -43,4 +43,5 @@ export const LEDGER_MIGRATION_MARKERS = [
   { id: "0049", label: "الموردون والورشة", tables: ["ledger_suppliers", "ledger_supplier_documents", "ledger_workshop_batches", "ledger_workshop_events"] },
   { id: "0050", label: "صور الإقفال", tables: ["ledger_period_snapshots"] },
   { id: "0051", label: "سجل حظر/رفع الكتابات القديمة", tables: ["ledger_legacy_archive_events"] },
+  { id: "0052", label: "منع تكرار إنشاء الأوردر وإرسال الورشة", tables: ["operation_idempotency_keys"] },
 ] as const;
