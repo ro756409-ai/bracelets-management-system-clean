@@ -17,7 +17,9 @@ import type { NavLink } from "@/config/navigation";
 export function WorkspaceTabs({ tabs }: { tabs: NavLink[] }) {
   const [location, setLocation] = useLocation();
   const activeRef = useRef<HTMLButtonElement | null>(null);
-  const activePath = tabs.find(tab => location === tab.path || location.startsWith(tab.path + "/"))?.path;
+  // الأكثر تحديدًا يفوز: «/ledger/payroll» لا يُنسب لتبويب «/ledger» لمجرد أنه بادئته
+  const activePath = tabs.filter(tab => location === tab.path || location.startsWith(tab.path + "/"))
+    .sort((a, b) => b.path.length - a.path.length)[0]?.path;
 
   useEffect(() => {
     const el = activeRef.current;

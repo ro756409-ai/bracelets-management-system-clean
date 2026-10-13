@@ -162,7 +162,7 @@ export type CreatableAccountKind = (typeof CREATABLE_ACCOUNT_KINDS)[number]["kin
 export const ACCOUNT_KIND_LABELS: Record<string, string> = {
   cash: "خزنة نقدية", bank: "بنك", wallet: "محفظة", carrier_receivable: "ذمة شركة شحن (COD)", revenue: "إيراد", expense: "مصروف",
   equity: "حقوق ملكية", suspense: "حساب معلّق", employee_receivable: "ذمم موظفين", supplier_payable: "موردون", customer_advance: "مقدمات عملاء",
-  owner_current: "جاري المالك", cogs: "تكلفة مبيعات", inventory: "مخزون",
+  owner_current: "جاري المالك", cogs: "تكلفة مبيعات", inventory: "مخزون", payroll_payable: "رواتب مستحقة", supplier_advance: "دفعات مقدمة لموردين",
 };
 export const accountKindLabel = (k: string) => ACCOUNT_KIND_LABELS[k] ?? k;
 

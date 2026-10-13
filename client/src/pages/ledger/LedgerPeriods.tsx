@@ -198,7 +198,7 @@ export function PeriodSnapshots({ period }: { period: string }) {
       <ul className="space-y-1.5 text-sm">
         {q.data.snapshots.map((x: any) => (
           <li key={x.version} className="flex flex-wrap items-center justify-between gap-2" data-testid={`ledger-snapshot-${x.version}`}>
-            <span>الإصدار {x.version}{x.createdBy ? ` — ${x.createdBy}` : ""} · صافي الربح <span className="tabular-nums">{x.netProfit ?? "—"}</span></span>
+            <span>الإصدار {x.version}{x.createdBy ? ` — ${x.createdBy}` : ""} · صافي الربح <span className="tabular-nums">{x.netProfit == null ? "—" : `${money(x.netProfit)} ج.م`}</span></span>
             <span className={`font-mono text-xs ${x.hashOk ? "text-muted-foreground" : "text-destructive"}`} dir="ltr" title={x.figuresHash}>
               {x.hashOk ? `✓ ${x.figuresHash.slice(0, 12)}` : "✗ البصمة لا تطابق الأرقام المخزنة"}
             </span>

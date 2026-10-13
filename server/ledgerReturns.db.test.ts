@@ -12,6 +12,7 @@ import { ensureDailyAccounts } from "./ledgerDaily.service";
 import { postOrderDelivered, postOrderReturned } from "./ledgerOrders.service";
 import { settleCarrierStatement } from "./ledgerCarrier.service";
 import { postReturnInspection } from "./ledgerInventory.service";
+import { incomeStatement, profitByProduct } from "./ledgerReports.service";
 import { createTempSchema, type TempSchema } from "./testTempSchema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { splitMigrationStatements } from "../shared/ledgerV3Spec";
@@ -182,6 +183,15 @@ describe.runIf(CAN)("↩️ المرتجع بعد التسليم — التحص�
     const scrapWon = runs[0].status === "fulfilled";
     expect([await orderNet(o.id, "REVENUE"), await orderNet(o.id, "COGS"), await orderNet(o.id, "RETURN_LOSS"), await orderNet(o.id, "INV_GOODS")])
       .toEqual(["0.0000", "0.0000", scrapWon ? "40.0000" : "0.0000", scrapWon ? "-40.0000" : "0.0000"]); // INV: −80 عند البيع ثم +40 أو +80
+  });
+
+  it("الربح حسب المنتج متسق مع قائمة الدخل: المرتجع قبل التسوية وبعدها لا يُحسب ربحًا للمنتج", async () => {
+    const kept = await delivered("P7"); // أوردر مُسلَّم لم يرتد — الوحيد الذي يُحسب
+    const p = await profitByProduct({ tenantId: A.tenantId, from: "2026-10-01", to: "2026-10-31", scope: null });
+    expect(p.products.map((x: any) => [x.quantity, x.revenue, x.cogs])).toEqual([[2, "450.0000", "80.0000"]]);
+    const s = await incomeStatement({ tenantId: A.tenantId, from: "2026-10-01", to: "2026-10-31", scope: null });
+    expect(s.revenue.lines.find((l: any) => l.code === "REVENUE")?.amount).toBe("450.0000"); // نفس المصدر: كل المرتجعات صافيها صفر
+    expect(kept.id).toBeGreaterThan(0);
   });
 
   it("الصلاحيات والعزل: المحاسب (ولو يرحّل) لا يرى ولا يرد؛ الشركة B لا تلمس أوردرات A", async () => {

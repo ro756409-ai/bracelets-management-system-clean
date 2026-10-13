@@ -46,6 +46,16 @@ describe("🧭 WorkspaceTabs", () => {
     fireEvent.click(screen.getByTestId("workspace-tab-/returns"));
     expect(state.navigated).toEqual(["/returns"]);
   });
+  it("التبويب النشط هو الأكثر تحديدًا: /ledger/payroll يُنسب لـ«المرتبات» لا لـ«/ledger» (البادئة)", () => {
+    state.location = "/ledger/payroll";
+    render(<WorkspaceTabs tabs={[{ label: "اليومية", path: "/ledger", icon: Printer }, { label: "السجل", path: "/ledger/transactions", icon: Printer }, { label: "المرتبات", path: "/ledger/payroll", icon: Printer }] as any} />);
+    expect(screen.getByTestId("workspace-tab-/ledger/payroll").getAttribute("aria-current")).toBe("page");
+    expect(screen.getByTestId("workspace-tab-/ledger").getAttribute("aria-current")).toBeNull();
+    cleanup();
+    state.location = "/ledger";
+    render(<WorkspaceTabs tabs={[{ label: "اليومية", path: "/ledger", icon: Printer }, { label: "المرتبات", path: "/ledger/payroll", icon: Printer }] as any} />);
+    expect(screen.getByTestId("workspace-tab-/ledger").getAttribute("aria-current")).toBe("page");
+  });
   it("prefers-reduced-motion → التمرير بلا حركة (behavior auto)؛ تبويب واحد → لا شيء", () => {
     state.reduced = true;
     render(<WorkspaceTabs tabs={TABS as any} />);

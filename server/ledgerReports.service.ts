@@ -95,7 +95,9 @@ export async function profitByProduct(input: { tenantId: number; from: string; t
   const delivered = rawRows(await d.execute(sql`SELECT t.id, CAST(t.sourceReference AS UNSIGNED) AS orderId,
       (SELECT SUM(e.amount) FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.accountId WHERE e.transactionId = t.id AND e.side = 'credit' AND a.code = 'REVENUE') AS revenue
     FROM ledger_transactions t WHERE t.tenantId = ${input.tenantId} AND t.kind = 'revenue_cod' AND t.sourceType = 'order' AND t.effectiveDate BETWEEN ${input.from} AND ${input.to}
-      AND NOT EXISTS (SELECT 1 FROM ledger_transactions r WHERE r.reversalOfTransactionId = t.id)${scoped}`));
+      AND NOT EXISTS (SELECT 1 FROM ledger_transactions r WHERE r.reversalOfTransactionId = t.id)
+      -- مرتجع بعد التحصيل: الإيراد عُكس مقابل التزام رد (بلا عكس لقيد التسليم) — لا يُحسب ربحًا للمنتج مثل قائمة الدخل
+      AND NOT EXISTS (SELECT 1 FROM ledger_transactions rt WHERE rt.tenantId = t.tenantId AND rt.idempotencyKey = CONCAT('order:', t.sourceReference, ':returned'))${scoped}`));
   const byProduct = new Map<string, { productId: number | null; name: string; quantity: number; revenue: bigint; cogs: bigint }>();
   let unallocated = { orders: 0, revenue: 0n, cogs: 0n };
   for (const o of delivered) {
