@@ -35,6 +35,9 @@ describe.runIf(CAN)("🏭 المرحلة 6 — الموردون والورشة",
   const q = async (s: string, p: unknown[] = []) => ((await tmp.raw.query(s, p)) as any)[0];
   const bal = async (c: string) => (await q("SELECT currentBalance b FROM ledger_accounts WHERE tenantId = ? AND code = ?", [A.tenantId, c]))[0]?.b;
   const am = () => call(e.amA);
+  const am_ = am;
+  const num = (v: string) => Number(v);
+  const fmt = (v: number) => v.toFixed(4);
   const doc = (x: Record<string, unknown>) => am().then(c => c.suppliers.postDocument({ supplierId: sup, docDate: "2026-10-05", ...x } as any));
 
   beforeAll(async () => {
@@ -134,6 +137,74 @@ describe.runIf(CAN)("🏭 المرحلة 6 — الموردون والورشة",
     expect(await code(() => ev({ eventType: "send", quantity: 1, value: "10", operationId: "ui:ws-send-0002" }))).toBe("CONFLICT"); // مغلقة
     const st = await c.suppliers.statement({ supplierId: shop });
     expect(st.payable).toBe("98.3333"); // أجور 50 + 85 + تصليح 30 − عجز على الورشة 66.6667
+  });
+
+  it("رصيد افتتاحي لمورد: المالك فقط، مقابل الرصيد الافتتاحي بتاريخ Go-live (لا مخزون ولا مصروف)، مرجع مطابقة إلزامي، بلا تكرار ولا عدّ مزدوج مع فاتورة عادية", async () => {
+    const op = await call(e.ownerA), am = await am_();
+    const s2 = (await am.suppliers.create({ code: "OP-01", name: "مورد قديم", isWorkshop: false })).supplierId;
+    const base = { supplierId: s2, side: "payable" as const, originalDocNo: "OLD-77", originalDate: "2026-08-15", dueDate: "2026-09-15", amount: "1200", evidenceRef: "كشف حساب المورد 30/9 موقّع" };
+    const invBefore = await bal("INV_RAW"), expBefore = (await q("SELECT COALESCE(SUM(currentBalance),0) s FROM ledger_accounts WHERE tenantId = ? AND kind = 'expense'", [A.tenantId]))[0].s;
+    expect(await code(() => am.suppliers.opening(base))).toBe("FORBIDDEN"); // ledger.activate للمالك فقط
+    expect(await code(() => op.suppliers.opening({ ...base, evidenceRef: "x" }))).toBe("BAD_REQUEST");
+    expect(await code(() => op.suppliers.opening({ ...base, originalDate: "2026-10-05" }))).toBe("BAD_REQUEST"); // بعد Go-live ليس افتتاحيًا
+    const r = await op.suppliers.opening(base);
+    expect((await op.suppliers.opening(base)).replay).toBe(true);
+    expect(await code(() => op.suppliers.opening({ ...base, amount: "1300" }))).toBe("CONFLICT");
+    expect(await code(() => am.suppliers.postDocument({ supplierId: s2, docType: "invoice", docNo: "OLD-77", docDate: "2026-10-05", amount: "1200", businessId: A.businessId, itemAccountCode: "INV_RAW" }))).toBe("CONFLICT"); // نفس الفاتورة الأصلية لا تُسجَّل مرتين
+    const lines = (await q("SELECT a.code, e.side, e.amount, DATE_FORMAT(t.effectiveDate,'%Y-%m-%d') d FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.accountId JOIN ledger_transactions t ON t.id = e.transactionId WHERE t.id = ? ORDER BY a.code", [r.transactionId]));
+    expect(lines.map((x: any) => [x.code, x.side, x.amount, x.d])).toEqual([["OPENING_EQUITY", "debit", "1200.0000", "2026-10-01"], ["SUPPLIER_PAYABLE", "credit", "1200.0000", "2026-10-01"]]);
+    expect([await bal("INV_RAW"), (await q("SELECT COALESCE(SUM(currentBalance),0) s FROM ledger_accounts WHERE tenantId = ? AND kind = 'expense'", [A.tenantId]))[0].s]).toEqual([invBefore, expBefore]);
+    await op.suppliers.opening({ ...base, side: "advance", originalDocNo: "OLD-ADV-3", dueDate: null, amount: "200" });
+    const st = await am.suppliers.statement({ supplierId: s2, asOf: "2026-10-20" });
+    expect([st.payable, st.advance, st.aging.d31_60]).toEqual(["1200.0000", "200.0000", "1200.0000"]); // الأعمار من استحقاقه الأصلي 15/9
+    expect(st.documents.every((x: any) => x.opening)).toBe(true);
+    // إلغاء الرصيد الافتتاحي للمالك وحده
+    const doc = st.documents.find((x: any) => x.docNo === "OLD-77")!;
+    expect(await code(() => am.suppliers.cancelDocument({ documentId: doc.id, reason: "خطأ في الكشف" }))).toBe("FORBIDDEN");
+    await op.suppliers.cancelDocument({ documentId: doc.id, reason: "خطأ في الكشف" });
+    expect((await am.suppliers.statement({ supplierId: s2 })).payable).toBe("0.0000");
+  });
+
+  it("تصحيح أحداث الورشة بالعكس: من الأحدث للأقدم، يعيد الكميات والقيمة بالضبط، سبب وفاعل، مرة واحدة؛ ما يُنقص مستحقًا مدفوعًا يُرفض", async () => {
+    const c = await am_();
+    const ws2 = (await c.suppliers.create({ code: "WS-02", name: "ورشة التصحيح", isWorkshop: true })).supplierId;
+    const b2 = (await c.suppliers.createBatch({ supplierId: ws2, businessId: A.businessId, reference: "B-REV", pieceWage: "4" })).batchId;
+    const ev = (x: Record<string, unknown>) => c.suppliers.workshopEvent({ batchId: b2, date: "2026-10-09", ...x } as any);
+    await ev({ eventType: "send", quantity: 10, value: "300", operationId: "ui:rv-send-0001" });
+    await ev({ eventType: "receive", quantity: 4, operationId: "ui:rv-recv-0001" });      // 120 + أجر 16
+    await ev({ eventType: "shortage", quantity: 1, chargeTo: "loss", operationId: "ui:rv-short-0001" }); // 30
+    await ev({ eventType: "repair_cost", value: "9", note: "تلميع", operationId: "ui:rv-rep-0001" });
+    const events = async () => (await c.suppliers.batches({ supplierId: ws2 }))[0];
+    const byType = async (t: string) => (await events()).events.find((x: any) => x.eventType === t && !x.reversal)!;
+    const before = { custody: await bal("WORKSHOP_CUSTODY"), goods: await bal("INV_GOODS"), raw: await bal("INV_RAW"), shortage: await bal("EXP_WORKSHOP_SHORTAGE") };
+    // الاستلام له حدث لاحق (العجز) يعتمد على متوسطه ⇒ مرفوض مع ذكره
+    const recv = await byType("receive");
+    const err = await c.suppliers.reverseWorkshopEvent({ eventId: recv.id, reason: "عدّ خاطئ" }).then(() => null, (x: any) => x);
+    expect(err?.code).toBe("CONFLICT"); expect(err?.message).toMatch(/shortage/);
+    expect(await code(() => c.suppliers.reverseWorkshopEvent({ eventId: recv.id, reason: "x" }))).toBe("BAD_REQUEST");
+    expect(await code(async () => (await call(e.accA)).suppliers.reverseWorkshopEvent({ eventId: recv.id, reason: "عدّ خاطئ" }))).toBe("FORBIDDEN");
+    // التصليح مستقل عن العهدة: يُعكس في أي وقت
+    await c.suppliers.reverseWorkshopEvent({ eventId: (await byType("repair_cost")).id, reason: "سُجّل لدفعة أخرى" });
+    // العكس بالترتيب: العجز ثم الاستلام — مرة واحدة حتى تحت التزامن
+    const sh = await byType("shortage");
+    const runs = await Promise.allSettled([1, 2].map(() => c.suppliers.reverseWorkshopEvent({ eventId: sh.id, reason: "القطعة وُجدت" })));
+    expect(runs.every(x => x.status === "fulfilled")).toBe(true);
+    expect(Number((await q("SELECT COUNT(*) n FROM ledger_transactions WHERE reversalOfTransactionId = ?", [sh.transactionId]))[0].n)).toBe(1);
+    await c.suppliers.reverseWorkshopEvent({ eventId: recv.id, reason: "عدّ خاطئ" });
+    const b = await events();
+    expect([b.sentQuantity, b.receivedQuantity, b.shortageQuantity, b.remainingQuantity, b.remainingValue, b.status]).toEqual([10, 0, 0, 10, "300.0000", "open"]);
+    expect([await bal("WORKSHOP_CUSTODY"), await bal("INV_GOODS"), await bal("EXP_WORKSHOP_SHORTAGE")])
+      .toEqual([fmt(num(before.custody) + 150), fmt(num(before.goods) - 136), fmt(num(before.shortage) - 30)]); // 120+30 للعهدة، 120+16 من البضاعة
+    const rev = (await events()).events.find((x: any) => x.id === recv.id).reversal;
+    expect(rev).toMatchObject({ actorEmployeeId: e.amA, description: expect.stringMatching(/عدّ خاطئ/) });
+    // بعد العكس: الاستلام من جديد يحسب من العهدة الأصلية (300 / 10)
+    await ev({ eventType: "receive", quantity: 5, operationId: "ui:rv-recv-0002" });
+    expect((await events()).remainingValue).toBe("150.0000");
+    // أجر مستحق ثم سُدد للورشة: عكس الاستلام يُنقص مستحقًا مدفوعًا ⇒ مرفوض حتى تُعكس الدفعة
+    await c.suppliers.postDocument({ supplierId: ws2, docType: "payment", docNo: "WS2-PAY-1", docDate: "2026-10-10", amount: "20", cashAccountCode: "OFFICE_CASH" });
+    const recv2 = (await events()).events.filter((x: any) => x.eventType === "receive" && !x.reversal).pop()!;
+    const e2 = await c.suppliers.reverseWorkshopEvent({ eventId: recv2.id, reason: "تصحيح" }).then(() => null, (x: any) => x);
+    expect(e2?.code).toBe("CONFLICT"); expect(e2?.message).toMatch(/سُدد/);
   });
 
   it("العزل والصلاحيات: المحاسب لا يرى الموردين؛ الشركة B لا ترى موردي A ولا كشوفهم", async () => {

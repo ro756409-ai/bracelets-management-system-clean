@@ -63,6 +63,7 @@ export const LEDGER_MESSAGES = {
   kindShape: "بنية القيد لا تطابق نوع الحركة",
   setting: "قيمة الإعداد غير صالحة",
   invalid: "بيانات ناقصة أو غير صالحة",
+  ownerOnly: "هذه العملية للمالك فقط",
 } as const;
 
 export class LedgerError extends Error {

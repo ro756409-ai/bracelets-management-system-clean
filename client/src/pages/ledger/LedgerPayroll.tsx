@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { Users } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermission";
+import { allocateEvenly, fromMinorUnits } from "@shared/accountingMoney";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -49,6 +51,7 @@ export default function LedgerPayroll() {
       </SectionCard>
       {selected != null && <RunDetail runId={selected} />}
       <AdvancesSection />
+      <OpeningAdvanceCard />
     </div>
   );
 }
@@ -241,7 +244,7 @@ function AdvancesSection() {
         {(list.data.advances as any[]).map(a => (
           <li key={a.id} className="py-2" data-testid={`adv-${a.id}`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span>{a.employeeName} · <span className="tabular-nums">{money(a.principal)}</span> على {a.installmentsCount} · المتبقي <b className="tabular-nums">{money(a.balance)}</b>{a.nextDue ? ` · القسط التالي ${a.nextDue}` : ""}</span>
+              <span>{a.opening && <StatusBadge status="opening" label="افتتاحية" tone="info" size="sm" icon={null} />} {a.employeeName} · <span className="tabular-nums">{money(a.principal)}</span> على {a.installmentsCount} · المتبقي <b className="tabular-nums">{money(a.balance)}</b>{a.nextDue ? ` · القسط التالي ${a.nextDue}` : ""}</span>
               <span className="flex items-center gap-2">
                 <StatusBadge status={a.status} label={ADV_STATUS[a.status] ?? a.status} tone={a.status === "cancelled" ? "danger" : a.status === "settled" ? "success" : "info"} size="sm" icon={null} />
                 {a.status === "active" && a.repaid === "0.0000" && <Button size="sm" variant="ghost" className="min-h-11" onClick={() => setCancelFor({ id: a.id, reason: "" })}>إلغاء</Button>}
@@ -256,6 +259,57 @@ function AdvancesSection() {
           </li>
         ))}
       </ul>
+    </SectionCard>
+  );
+}
+
+const nextMonthOf = (p: string) => { const [y, m] = p.split("-").map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; };
+
+/** جدول أقساط متساوية من شهر البداية (آخر قسط يمتص فرق التقريب) — يُرسل صريحًا والسيرفر يتحقق أن مجموعه = الرصيد القائم. */
+export function openingSchedule(outstanding: string, count: number, firstMonth: string): { dueMonth: string; amount: string }[] {
+  if (!/^\d{1,14}(\.\d{1,4})?$/.test(outstanding) || !Number.isInteger(count) || count < 1 || count > 60 || !/^\d{4}-\d{2}$/.test(firstMonth)) return [];
+  const parts = allocateEvenly(outstanding, count);
+  let month = firstMonth;
+  return parts.map(p => { const row = { dueMonth: month, amount: fromMinorUnits(p) }; month = nextMonthOf(month); return row; });
+}
+
+/** سلفة قائمة قبل Go-live (المالك فقط): رصيدها وأقساطها المتبقية فعلًا — بلا صرف من الخزنة، وما خُصم قبل Go-live لا يُعاد. */
+function OpeningAdvanceCard() {
+  const { has } = usePermissions();
+  const utils = trpc.useUtils();
+  const emps = trpc.employees.list.useQuery({ isActive: true }, { retry: false, enabled: has("ledger.activate") });
+  const post = trpc.ledger.payroll.advances.opening.useMutation();
+  const [f, setF] = useState({ employeeId: 0, ref: "", principal: "", issuedOn: "", outstanding: "", count: "1", first: thisMonth(), evidence: "" });
+  const [busy, setBusy] = useState(false);
+  if (!has("ledger.activate")) return null;
+  const employees = ((emps.data ?? []) as any[]).map(e => ({ id: Number(e.id), name: String(e.name) }));
+  const employeeId = employees.some(e => e.id === f.employeeId) ? f.employeeId : employees[0]?.id ?? 0;
+  const schedule = openingSchedule(f.outstanding.trim(), Number(f.count), f.first);
+  const valid = employeeId > 0 && /^[A-Za-z0-9_#.-]{2,60}$/.test(f.ref.trim()) && /^\d{4}-\d{2}-\d{2}$/.test(f.issuedOn) && /^\d{1,14}(\.\d{1,4})?$/.test(f.principal.trim())
+    && schedule.length > 0 && Number(f.outstanding) <= Number(f.principal) && f.evidence.trim().length >= 5;
+  const run = async () => {
+    if (busy || !valid) return;
+    setBusy(true);
+    try {
+      const r = await post.mutateAsync({ employeeId, originalRef: f.ref.trim(), originalPrincipal: f.principal.trim(), originalIssuedOn: f.issuedOn, outstanding: f.outstanding.trim(), schedule, evidenceRef: f.evidence.trim() });
+      toast.success(r.replay ? "مسجّلة بالفعل — لم تتكرر" : "سُجّلت السلفة الافتتاحية"); setF({ ...f, ref: "", principal: "", outstanding: "" }); await utils.ledger.payroll.advances.list.invalidate();
+    } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <SectionCard title="سلفة افتتاحية (قائمة قبل Go-live — المالك)" testId="opening-advance">
+      <p className="text-xs text-muted-foreground">رصيدها القائم فعلًا وأقساطها المتبقية من مستند مطابقة (إقرار الموظف) — لا صرف من الخزنة، والأقساط المخصومة قبل Go-live لا تُنشأ.</p>
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-4">
+        <div><Label htmlFor="oa-emp">الموظف</Label><select id="oa-emp" value={employeeId} onChange={e => setF({ ...f, employeeId: Number(e.target.value) })} className="mt-1 block min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm">{employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
+        <div><Label htmlFor="oa-ref">مرجع السلفة الأصلي</Label><Input id="oa-ref" value={f.ref} onChange={e => setF({ ...f, ref: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="oa-ref" /></div>
+        <div><Label htmlFor="oa-principal">أصل السلفة</Label><Input id="oa-principal" inputMode="decimal" value={f.principal} onChange={e => setF({ ...f, principal: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="oa-principal" /></div>
+        <div><Label htmlFor="oa-issued">تاريخ صرفها</Label><Input id="oa-issued" type="date" value={f.issuedOn} onChange={e => setF({ ...f, issuedOn: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="oa-issued" /></div>
+        <div><Label htmlFor="oa-out">الرصيد القائم</Label><Input id="oa-out" inputMode="decimal" value={f.outstanding} onChange={e => setF({ ...f, outstanding: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="oa-out" /></div>
+        <div><Label htmlFor="oa-count">الأقساط المتبقية</Label><Input id="oa-count" inputMode="numeric" value={f.count} onChange={e => setF({ ...f, count: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="oa-count" /></div>
+        <div><Label htmlFor="oa-first">أول قسط متبقٍ</Label><Input id="oa-first" type="month" value={f.first} onChange={e => setF({ ...f, first: e.target.value })} className="mt-1 min-h-11" dir="ltr" /></div>
+        <div><Label htmlFor="oa-ev">مرجع المطابقة</Label><Input id="oa-ev" value={f.evidence} onChange={e => setF({ ...f, evidence: e.target.value })} className="mt-1 min-h-11" placeholder="إقرار الموظف بالرصيد…" data-testid="oa-ev" /></div>
+      </div>
+      {schedule.length > 0 && <p className="mt-2 text-xs text-muted-foreground" data-testid="oa-schedule">{schedule.map(x => `${x.dueMonth}: ${money(x.amount)}`).join(" · ")}</p>}
+      <Button className="mt-2 min-h-11" disabled={busy || !valid} onClick={run} data-testid="oa-post">تسجيل السلفة الافتتاحية</Button>
     </SectionCard>
   );
 }

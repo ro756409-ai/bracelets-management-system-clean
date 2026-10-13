@@ -229,14 +229,74 @@ export async function postSupplierDocument(input: SupplierDocInput, db?: LedgerD
   }
 }
 
+/**
+ * رصيد افتتاحي لمورد (المالك فقط) من مستند مطابقة فعلي يوم Go-live — لكل فاتورة قائمة أو دفعة مقدمة قائمة سطر بمستندها الأصلي:
+ *  • مستحق له: مدين «الرصيد الافتتاحي» / دائن «موردون» — لا مخزون ولا مصروف جديد (البضاعة/المصروف سُجّلا قبل Go-live).
+ *  • دفعة مقدمة له: مدين «دفعات مقدمة لموردين» / دائن «الرصيد الافتتاحي».
+ * التاريخ المحاسبي = يوم Go-live دائمًا (شهر Go-live مفتوح وإلا يرفض الدفتر)، وتاريخ المستند الأصلي واستحقاقه للأعمار.
+ * مرجع المطابقة إلزامي (كشف حساب/إقرار المورد). مرة واحدة لكل (مورد، نوع، رقم المستند الأصلي) — نفس الفهرس الفريد يمنع
+ * لاحقًا تسجيل نفس الفاتورة الأصلية كفاتورة جديدة (لا عدّ مزدوج).
+ */
+export async function postSupplierOpening(input: {
+  tenantId: number; supplierId: number; side: "payable" | "advance"; originalDocNo: string; originalDate: string; dueDate?: string | null;
+  amount: string; businessId?: number | null; evidenceRef: string; actor: LedgerActor;
+}, db?: LedgerDb) {
+  const d = await resolveDb(db);
+  const { goLiveDate } = await requireReady(d, input.tenantId);
+  const by = employeeOf(input.actor);
+  const sup = await supplierOf(d, input.tenantId, input.supplierId);
+  const docNo = input.originalDocNo.trim();
+  if (docNo.length < 1 || docNo.length > 80) throw new LedgerError("invalid", "رقم المستند الأصلي");
+  if (!DATE_RE.test(input.originalDate) || input.originalDate > goLiveDate) throw new LedgerError("date", `المستند الأصلي يسبق Go-live (${goLiveDate}) أو في يومه`);
+  if (input.dueDate != null && (!DATE_RE.test(input.dueDate) || input.dueDate < input.originalDate)) throw new LedgerError("date", "الاستحقاق لا يسبق تاريخ المستند");
+  const evidence = input.evidenceRef.trim();
+  if (evidence.length < 5) throw new LedgerError("invalid", "مرجع مستند المطابقة (كشف حساب أو إقرار المورد) إلزامي");
+  const amount = toMinorUnits(input.amount);
+  if (amount <= 0n) throw new LedgerError("amount", input.amount);
+  const businessId = input.businessId ?? null;
+  if (businessId != null) {
+    const [b] = await d.select({ id: businesses.id }).from(businesses).where(and(eq(businesses.id, businessId), eq(businesses.tenantId, input.tenantId))).limit(1);
+    if (!b) throw new LedgerError("business", `#${businessId}`);
+  }
+  const acc = await accounts(d, input.tenantId);
+  const equity = acc.need("OPENING_EQUITY"), payable = acc.need("SUPPLIER_PAYABLE"), advances = acc.need("SUPPLIER_ADVANCES");
+  const amt = fromMinorUnits(amount);
+  const docType = input.side === "payable" ? "invoice" as const : "advance" as const;
+  const entries = input.side === "payable"
+    ? [{ accountId: equity.id, side: "debit" as const, amount: amt, businessId: null }, { accountId: payable.id, side: "credit" as const, amount: amt, businessId }]
+    : [{ accountId: advances.id, side: "debit" as const, amount: amt, businessId }, { accountId: equity.id, side: "credit" as const, amount: amt, businessId: null }];
+  const key = `supplier-doc:${sup.id}:${docType}:${docNo}`.slice(0, 191);
+  let docId = 0;
+  try {
+    const r = await postLedgerTransaction({ tenantId: input.tenantId, sourceBusinessId: businessId, kind: "adjustment", idempotencyKey: key, effectiveDate: goLiveDate, currency: "EGP", actor: input.actor, entries,
+      description: `رصيد افتتاحي — ${sup.name} — ${input.side === "payable" ? "مستحق له" : "دفعة مقدمة له"} ${docNo} — مطابقة: ${evidence}`,
+      sourceType: "supplier_opening", sourceReference: `${sup.id}:${docNo}`,
+      guard: async (tx: any, { transactionId }: { transactionId: number }) => {
+        docId = insertId(await tx.insert(ledgerSupplierDocuments).values({ tenantId: input.tenantId, supplierId: sup.id, businessId, docType, docNo, docDate: input.originalDate,
+          dueDate: input.side === "payable" ? input.dueDate ?? null : null, amount: amt, transactionId, createdByEmployeeId: by }));
+      } } as any, d);
+    if (!docId) {
+      const [row] = await d.select({ id: ledgerSupplierDocuments.id }).from(ledgerSupplierDocuments).where(eq(ledgerSupplierDocuments.transactionId, r.transactionId)).limit(1);
+      docId = row?.id ?? 0;
+    }
+    return { documentId: docId, transactionId: r.transactionId, replay: r.replay };
+  } catch (e) {
+    if (e instanceof LedgerError && e.code === "conflict" && e.message === new LedgerError("conflict").message)
+      throw new LedgerError("conflict", `المستند ${docNo} مسجّل لهذا المورد بالفعل (افتتاحيًا أو كمستند عادي) — لا عدّ مزدوج`);
+    throw e;
+  }
+}
+
 /** إلغاء مستند بالعكس بسبب — يُرفض إن ترك المورد بمستحق سالب أو دفعة مقدمة سالبة (ألغِ ما بُني عليه أولًا). */
-export async function cancelSupplierDocument(input: { tenantId: number; documentId: number; reason: string; actor: LedgerActor }, db?: LedgerDb) {
+export async function cancelSupplierDocument(input: { tenantId: number; documentId: number; reason: string; actor: LedgerActor; isOwner?: boolean }, db?: LedgerDb) {
   const d = await resolveDb(db);
   await requireReady(d, input.tenantId);
   if (!input.reason || input.reason.trim().length < 3) throw new LedgerError("reason");
   const [doc] = await d.select().from(ledgerSupplierDocuments).where(and(eq(ledgerSupplierDocuments.id, input.documentId), eq(ledgerSupplierDocuments.tenantId, input.tenantId))).limit(1);
   if (!doc) throw new LedgerError("transaction", "المستند غير موجود");
   if (doc.reversalTransactionId) return { replay: true };
+  const [src] = rawRows(await d.execute(sql`SELECT sourceType AS s FROM ledger_transactions WHERE id = ${doc.transactionId}`));
+  if (src?.s === "supplier_opening" && !input.isOwner) throw new LedgerError("ownerOnly", "إلغاء رصيد افتتاحي");
   const acc = await accounts(d, input.tenantId);
   const payable = acc.need("SUPPLIER_PAYABLE"), advances = acc.need("SUPPLIER_ADVANCES");
   const r = await reverseLedgerTransaction({ tenantId: input.tenantId, transactionId: doc.transactionId, idempotencyKey: `supplier-doc:${doc.id}:cancel`, effectiveDate: today(), reason: input.reason.trim(), actor: input.actor,
@@ -266,12 +326,12 @@ export async function supplierStatement(input: { tenantId: number; supplierId: n
   const payable = acc.need("SUPPLIER_PAYABLE"), advances = acc.need("SUPPLIER_ADVANCES");
   const asOf = input.asOf ?? today();
   const ids = await supplierTxIds(d, input.tenantId, sup.id);
-  const rows = ids.length === 0 ? [] : rawRows(await d.execute(sql`SELECT t.id, t.kind, t.description, DATE_FORMAT(t.effectiveDate, '%Y-%m-%d') AS date, t.reversalOfTransactionId AS rev,
+  const rows = ids.length === 0 ? [] : rawRows(await d.execute(sql`SELECT t.id, t.kind, t.sourceType AS src, t.description, DATE_FORMAT(t.effectiveDate, '%Y-%m-%d') AS date, t.reversalOfTransactionId AS rev,
       SUM(CASE WHEN e.accountId = ${payable.id} THEN (CASE WHEN e.side = 'credit' THEN e.amount ELSE -e.amount END) ELSE 0 END) AS payableDelta,
       SUM(CASE WHEN e.accountId = ${advances.id} THEN (CASE WHEN e.side = 'debit' THEN e.amount ELSE -e.amount END) ELSE 0 END) AS advanceDelta
     FROM ledger_transactions t JOIN ledger_entries e ON e.transactionId = t.id
     WHERE t.tenantId = ${input.tenantId} AND (t.id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}) OR t.reversalOfTransactionId IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)}))
-    GROUP BY t.id ORDER BY t.effectiveDate, t.id`));
+    GROUP BY t.id, t.kind, t.sourceType, t.description, t.effectiveDate, t.reversalOfTransactionId ORDER BY t.effectiveDate, t.id`));
   const signed = (v: unknown) => { const s = String(v ?? "0"); return s.startsWith("-") ? -toMinorUnits(s.slice(1)) : toMinorUnits(s); };
   let runPay = 0n, runAdv = 0n;
   const lines = rows.map((r: any) => {
@@ -299,13 +359,14 @@ export async function supplierStatement(input: { tenantId: number; supplierId: n
     const k = late <= 0 ? "notDue" : late <= 30 ? "d1_30" : late <= 60 ? "d31_60" : late <= 90 ? "d61_90" : "d90plus";
     buckets[k] += open;
   }
+  const openingTx = new Set(rows.filter((r: any) => r.src === "supplier_opening").map((r: any) => Number(r.id)));
   const advDocs = docs.filter(x => x.docType === "advance" && !x.reversalTransactionId);
   const advRem = await Promise.all(advDocs.map(async a => ({ documentId: a.id, docNo: a.docNo, remaining: fromMinorUnits(await advanceRemaining(d, a.id)) })));
   return {
     supplier: { id: sup.id, code: sup.code, name: sup.name, isWorkshop: sup.isWorkshop === 1, isActive: sup.isActive === 1 },
     payable: fromMinorUnits(runPay), advance: fromMinorUnits(runAdv), lines,
     aging: Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, fromMinorUnits(v)])),
-    documents: docs.sort((a, b) => b.id - a.id).map(x => ({ id: x.id, docType: x.docType, docNo: x.docNo, docDate: x.docDate, dueDate: x.dueDate, amount: String(x.amount), cancelled: x.reversalTransactionId != null, appliesToDocumentId: x.appliesToDocumentId })),
+    documents: docs.sort((a, b) => b.id - a.id).map(x => ({ id: x.id, docType: x.docType, docNo: x.docNo, docDate: x.docDate, dueDate: x.dueDate, amount: String(x.amount), cancelled: x.reversalTransactionId != null, appliesToDocumentId: x.appliesToDocumentId, opening: openingTx.has(x.transactionId) })),
     advancesOpen: advRem.filter(a => toMinorUnits(a.remaining) > 0n),
   };
 }
@@ -445,11 +506,74 @@ export async function recordWorkshopEvent(input: {
   }
 }
 
+/**
+ * تصحيح حدث ورشة بالعكس (قيد عكسي لقيد الحدث كله — الاستلام مع أجره)، بسبب مكتوب وفاعل، مرة واحدة (عكس الحركة فريد في الدفتر):
+ *  • أحداث الكمية (إرسال/استلام/عجز) من الأحدث للأقدم داخل الدفعة: حدث كمية بعده أحداث كمية غير معكوسة يُرفض مع ذكرها — قيمة
+ *    الاستلامات/العجز اللاحقة حُسبت بمتوسط الباقي بعده؛ العكس بالترتيب يعيد الكميات والقيمة لما قبل الحدث بالضبط.
+ *  • التصليح لا يغيّر العهدة ⇒ يُعكس في أي وقت.
+ *  • ما يُنقص مستحق الورشة (أجر استلام، تصليح) يُرفض إن جعله سالبًا (سُدد بالفعل) — تُعكس الدفعة أولًا.
+ *  • عداد الدفعة وحالتها يُحدَّثان داخل transaction القيد بعد قفل الدفعة؛ التزامن المتغيّر يُرفض ويُعاد.
+ */
+export async function reverseWorkshopEvent(input: { tenantId: number; eventId: number; reason: string; actor: LedgerActor }, db?: LedgerDb) {
+  const d = await resolveDb(db);
+  await requireReady(d, input.tenantId);
+  employeeOf(input.actor);
+  const reason = input.reason?.trim() ?? "";
+  if (reason.length < 3) throw new LedgerError("reason");
+  const [ev] = await d.select().from(ledgerWorkshopEvents).where(and(eq(ledgerWorkshopEvents.id, input.eventId), eq(ledgerWorkshopEvents.tenantId, input.tenantId))).limit(1);
+  if (!ev || !ev.transactionId) throw new LedgerError("transaction", "حدث الورشة غير موجود");
+  const txEvents = await d.select().from(ledgerWorkshopEvents).where(and(eq(ledgerWorkshopEvents.tenantId, input.tenantId), eq(ledgerWorkshopEvents.transactionId, ev.transactionId)));
+  const main = txEvents.find(e => e.eventType !== "wage") ?? ev;
+  const [already] = rawRows(await d.execute(sql`SELECT id FROM ledger_transactions WHERE tenantId = ${input.tenantId} AND reversalOfTransactionId = ${ev.transactionId}`));
+  if (already) return { replay: true, transactionId: Number(already.id) };
+  const [batch] = await d.select().from(ledgerWorkshopBatches).where(eq(ledgerWorkshopBatches.id, main.batchId)).limit(1);
+  const acc = await accounts(d, input.tenantId);
+  const payable = acc.need("SUPPLIER_PAYABLE");
+  const quantityTypes = ["send", "receive", "shortage"];
+  const isQty = quantityTypes.includes(main.eventType);
+  const q = main.quantity, v = toMinorUnits(String(main.value));
+  const wage = txEvents.filter(e => e.eventType === "wage").reduce((s2, e) => s2 + toMinorUnits(String(e.value)), 0n);
+  const payableDrop = main.eventType === "receive" ? wage : main.eventType === "repair_cost" ? v : 0n;
+  const next: Partial<BatchRow> = main.eventType === "send" ? { sentQuantity: batch.sentQuantity - q, sentValue: fromMinorUnits(toMinorUnits(String(batch.sentValue)) - v) }
+    : main.eventType === "receive" ? { receivedQuantity: batch.receivedQuantity - q, receivedValue: fromMinorUnits(toMinorUnits(String(batch.receivedValue)) - v) }
+    : main.eventType === "shortage" ? { shortageQuantity: batch.shortageQuantity - q, shortageValue: fromMinorUnits(toMinorUnits(String(batch.shortageValue)) - v) } : {};
+  const after = { ...batch, ...next } as BatchRow;
+  const r2 = remainingOf(after);
+  const status = after.sentQuantity > 0 && r2.qty === 0 ? "closed" : after.receivedQuantity + after.shortageQuantity > 0 ? "partially_received" : "open";
+  const r = await reverseLedgerTransaction({ tenantId: input.tenantId, transactionId: ev.transactionId, idempotencyKey: `workshop-reverse:${ev.transactionId}`, effectiveDate: today(),
+    reason: `تصحيح حدث ورشة (${main.eventType}) — دفعة ${batch.reference}: ${reason}`, actor: input.actor,
+    guard: async (tx: any) => {
+      const [now] = await tx.select().from(ledgerWorkshopBatches).where(eq(ledgerWorkshopBatches.id, batch.id)).for("update");
+      if (!now || now.sentQuantity !== batch.sentQuantity || now.receivedQuantity !== batch.receivedQuantity || now.shortageQuantity !== batch.shortageQuantity
+        || String(now.sentValue) !== String(batch.sentValue) || String(now.receivedValue) !== String(batch.receivedValue) || String(now.shortageValue) !== String(batch.shortageValue))
+        throw new LedgerError("conflict", "الدفعة تغيّرت أثناء التصحيح — أعد المحاولة");
+      if (isQty) {
+        // أحداث كمية لاحقة غير معكوسة تعتمد على هذا الحدث
+        const later = rawRows(await tx.execute(sql`SELECT ev.id, ev.eventType AS t FROM ledger_workshop_events ev
+          WHERE ev.tenantId = ${input.tenantId} AND ev.batchId = ${batch.id} AND ev.id > ${main.id} AND ev.eventType IN ('send','receive','shortage') AND ev.transactionId <> ${ev.transactionId}
+            AND NOT EXISTS (SELECT 1 FROM ledger_transactions r WHERE r.tenantId = ev.tenantId AND r.reversalOfTransactionId = ev.transactionId)`));
+        if (later.length) throw new LedgerError("conflict", `أحداث لاحقة تعتمد على هذا الحدث: ${later.map((x: any) => `#${x.id} (${x.t})`).join("، ")} — تُعكس من الأحدث للأقدم`);
+        if (r2.qty < 0 || r2.value < 0n) throw new LedgerError("conflict", "العكس يجعل العهدة سالبة");
+      }
+      if (payableDrop > 0n) {
+        const due = await supplierBalance(tx, input.tenantId, batch.supplierId, payable.id, "credit", true);
+        if (due < payableDrop) throw new LedgerError("conflict", `مستحق الورشة ${fromMinorUnits(due)} أقل من ${fromMinorUnits(payableDrop)} (سُدد) — اعكس الدفعة للورشة أولًا`);
+      }
+      if (Object.keys(next).length || status !== batch.status) await tx.update(ledgerWorkshopBatches).set({ ...next, status }).where(eq(ledgerWorkshopBatches.id, batch.id));
+    } }, d);
+  return { replay: r.replay, transactionId: r.transactionId };
+}
+
 export async function listWorkshopBatches(tenantId: number, supplierId: number, db?: LedgerDb) {
   const d = await resolveDb(db);
   await supplierOf(d, tenantId, supplierId);
   const batches = await d.select().from(ledgerWorkshopBatches).where(and(eq(ledgerWorkshopBatches.tenantId, tenantId), eq(ledgerWorkshopBatches.supplierId, supplierId))).orderBy(desc(ledgerWorkshopBatches.id));
   const ids = batches.map(b => b.id);
   const events = ids.length ? await d.select().from(ledgerWorkshopEvents).where(and(eq(ledgerWorkshopEvents.tenantId, tenantId), inArray(ledgerWorkshopEvents.batchId, ids))).orderBy(asc(ledgerWorkshopEvents.id)) : [];
-  return batches.map(b => { const r = remainingOf(b); return { ...b, remainingQuantity: r.qty, remainingValue: fromMinorUnits(r.value), events: events.filter(e => e.batchId === b.id) }; });
+  const txIds = events.map(e => e.transactionId).filter((x): x is number => x != null);
+  const revs = txIds.length ? rawRows(await d.execute(sql`SELECT r.reversalOfTransactionId AS o, r.id, r.description, r.actorEmployeeId AS a, DATE_FORMAT(r.effectiveDate, '%Y-%m-%d') AS date
+    FROM ledger_transactions r WHERE r.tenantId = ${tenantId} AND r.reversalOfTransactionId IN (${sql.join(txIds.map(i => sql`${i}`), sql`, `)})`)) : [];
+  const revBy = new Map(revs.map((x: any) => [Number(x.o), { transactionId: Number(x.id), description: String(x.description), actorEmployeeId: x.a == null ? null : Number(x.a), date: String(x.date) }]));
+  return batches.map(b => { const r = remainingOf(b); return { ...b, remainingQuantity: r.qty, remainingValue: fromMinorUnits(r.value),
+    events: events.filter(e => e.batchId === b.id).map(e => ({ ...e, reversal: e.transactionId ? revBy.get(e.transactionId) ?? null : null })) }; });
 }

@@ -6,7 +6,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
-const state = vi.hoisted(() => ({ list: null as any, statement: null as any, batches: [] as any[], calls: [] as [string, any][] }));
+const state = vi.hoisted(() => ({ list: null as any, statement: null as any, batches: [] as any[], calls: [] as [string, any][], perms: [] as string[] }));
+vi.mock("@/hooks/usePermission", () => ({ usePermissions: () => ({ has: (p: string) => state.perms.includes(p) }) }));
 const mut = vi.hoisted(() => (name: string) => ({ useMutation: () => ({ isPending: false, mutateAsync: async (i: any) => { state.calls.push([name, i]); await new Promise(r => setTimeout(r, 10)); return { replay: false }; } }) }));
 vi.mock("@/lib/trpc", () => ({
   trpc: {
@@ -24,6 +25,7 @@ vi.mock("@/lib/trpc", () => ({
         statement: { useQuery: () => ({ data: state.statement }) },
         batches: { useQuery: () => ({ data: state.batches }) },
         ensureAccounts: mut("ensure"), create: mut("create"), postDocument: mut("post"), cancelDocument: mut("cancel"), createBatch: mut("batch"), workshopEvent: mut("event"),
+        opening: mut("opening"), reverseWorkshopEvent: mut("reverse"),
       },
     },
   },
@@ -32,11 +34,12 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import LedgerSuppliers from "./LedgerSuppliers";
 
 beforeEach(() => {
-  state.calls = [];
+  state.calls = []; state.perms = [];
   state.list = { available: true, accountsReady: true, suppliers: [{ id: 9, code: "WS-01", name: "ورشة الأسطى", isWorkshop: true, isActive: true, payable: "98.3333", advance: "0.0000" }] };
   state.statement = { supplier: { id: 9, name: "ورشة الأسطى", isWorkshop: true }, payable: "98.3333", advance: "0.0000", aging: { notDue: "98.3333", d1_30: "0.0000", d31_60: "0.0000", d61_90: "0.0000", d90plus: "0.0000" },
     documents: [{ id: 51, docType: "invoice", docNo: "INV-1", docDate: "2026-10-05", dueDate: "2026-10-20", amount: "5000.0000", cancelled: false }], advancesOpen: [], lines: [] };
-  state.batches = [{ id: 4, reference: "B-1", status: "partially_received", sentQuantity: 30, receivedQuantity: 10, shortageQuantity: 0, remainingQuantity: 20, remainingValue: "666.6667", events: [] }];
+  state.batches = [{ id: 4, reference: "B-1", status: "partially_received", sentQuantity: 30, receivedQuantity: 10, shortageQuantity: 0, remainingQuantity: 20, remainingValue: "666.6667",
+    events: [{ id: 70, eventType: "send", quantity: 30, value: "1000.0000", reversal: null }, { id: 71, eventType: "receive", quantity: 10, value: "333.3333", reversal: null }, { id: 72, eventType: "wage", quantity: 10, value: "50.0000", reversal: null }] }];
 });
 afterEach(() => cleanup());
 
@@ -65,6 +68,29 @@ describe("🏭 الموردون والورشة", () => {
     fireEvent.change(screen.getByTestId("doc-cancel-reason"), { target: { value: "رقم مكرر" } });
     fireEvent.click(screen.getByTestId("doc-cancel-run"));
     await waitFor(() => expect(state.calls).toContainEqual(["cancel", { documentId: 51, reason: "رقم مكرر" }]));
+  });
+
+  it("الرصيد الافتتاحي للمورد للمالك فقط ويتطلب مرجع مطابقة؛ تصحيح حدث الورشة بسبب إلزامي (الأجر ضمن قيد الاستلام لا يُعرض منفصلًا)", async () => {
+    render(<LedgerSuppliers />);
+    fireEvent.click(screen.getByTestId("supplier-open-9"));
+    expect(screen.queryByTestId("supplier-opening")).toBeNull(); // بلا ledger.activate
+    expect(screen.queryByTestId("wev-72")).toBeNull();
+    fireEvent.click(screen.getByTestId("wev-reverse-71"));
+    expect((screen.getByTestId("wev-run") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId("wev-reason"), { target: { value: "عدّ خاطئ" } });
+    fireEvent.click(screen.getByTestId("wev-run"));
+    await waitFor(() => expect(state.calls).toContainEqual(["reverse", { eventId: 71, reason: "عدّ خاطئ" }]));
+    cleanup();
+    state.perms = ["ledger.activate"];
+    render(<LedgerSuppliers />);
+    fireEvent.click(screen.getByTestId("supplier-open-9"));
+    fireEvent.change(screen.getByTestId("so-no"), { target: { value: "OLD-77" } });
+    fireEvent.change(screen.getByTestId("so-date"), { target: { value: "2026-08-15" } });
+    fireEvent.change(screen.getByTestId("so-amount"), { target: { value: "1200" } });
+    expect((screen.getByTestId("so-post") as HTMLButtonElement).disabled).toBe(true); // بلا مرجع مطابقة
+    fireEvent.change(screen.getByTestId("so-ev"), { target: { value: "كشف حساب المورد" } });
+    fireEvent.click(screen.getByTestId("so-post"));
+    await waitFor(() => expect(state.calls).toContainEqual(["opening", expect.objectContaining({ supplierId: 9, side: "payable", originalDocNo: "OLD-77", amount: "1200", evidenceRef: "كشف حساب المورد" })]));
   });
 
   it("العجز لا يُسجَّل بلا اختيار صريح؛ بالاختيار يُرسل chargeTo نفسه", async () => {

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Factory } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/hooks/usePermission";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +15,7 @@ import { cairoToday, expenseAccounts, inventoryAccounts, money, newOperationId, 
  */
 const DOC_LABEL: Record<string, string> = { invoice: "فاتورة", payment: "دفعة", advance: "دفعة مقدمة", advance_application: "تطبيق مقدّم", return_credit: "مرتجع للمورد" };
 const AGING: [string, string][] = [["notDue", "غير مستحق"], ["d1_30", "1–30 يوم"], ["d31_60", "31–60"], ["d61_90", "61–90"], ["d90plus", "+90"]];
+const EV_LABEL: Record<string, string> = { send: "إرسال", receive: "استلام", shortage: "عجز", repair_cost: "تصليح" };
 const select = "mt-1 block min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm";
 
 export default function LedgerSuppliers() {
@@ -87,6 +89,7 @@ function NewSupplierCard() {
 }
 
 function SupplierDetail({ supplierId }: { supplierId: number }) {
+  const { has } = usePermissions();
   const utils = trpc.useUtils();
   const st = trpc.ledger.suppliers.statement.useQuery({ supplierId }, { retry: false });
   const cancel = trpc.ledger.suppliers.cancelDocument.useMutation();
@@ -114,7 +117,7 @@ function SupplierDetail({ supplierId }: { supplierId: number }) {
           {s.documents.map((d: any) => (
             <li key={d.id} className="py-2" data-testid={`supplier-doc-${d.id}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span>{DOC_LABEL[d.docType] ?? d.docType} <b dir="ltr">{d.docNo}</b> · {d.docDate}{d.dueDate ? ` · يستحق ${d.dueDate}` : ""}</span>
+                <span>{d.opening && <StatusBadge status="opening" label="افتتاحي" tone="info" size="sm" icon={null} />} {DOC_LABEL[d.docType] ?? d.docType} <b dir="ltr">{d.docNo}</b> · {d.docDate}{d.dueDate ? ` · يستحق ${d.dueDate}` : ""}</span>
                 <span className="flex items-center gap-2">
                   <span className="tabular-nums">{money(d.amount)}</span>
                   {d.cancelled ? <StatusBadge status="cancelled" label="ملغى بالعكس" tone="danger" size="sm" icon={null} />
@@ -132,8 +135,39 @@ function SupplierDetail({ supplierId }: { supplierId: number }) {
         </ul>
       </SectionCard>
       <DocumentForm supplierId={supplierId} advancesOpen={s.advancesOpen} onDone={refresh} />
+      {has("ledger.activate") && <SupplierOpeningForm supplierId={supplierId} onDone={refresh} />}
       {s.supplier.isWorkshop && <WorkshopSection supplierId={supplierId} onDone={refresh} />}
     </>
+  );
+}
+
+/** رصيد افتتاحي لمورد (المالك فقط): لكل فاتورة/دفعة مقدمة قائمة يوم Go-live بمستندها الأصلي ومرجع المطابقة — لا مخزون ولا مصروف. */
+function SupplierOpeningForm({ supplierId, onDone }: { supplierId: number; onDone: () => Promise<void> }) {
+  const post = trpc.ledger.suppliers.opening.useMutation();
+  const [f, setF] = useState({ side: "payable" as "payable" | "advance", docNo: "", date: "", due: "", amount: "", evidence: "" });
+  const [busy, setBusy] = useState(false);
+  const valid = f.docNo.trim() && /^\d{4}-\d{2}-\d{2}$/.test(f.date) && /^\d{1,14}(\.\d{1,4})?$/.test(f.amount.trim()) && Number(f.amount) > 0 && f.evidence.trim().length >= 5;
+  const run = async () => {
+    if (busy || !valid) return;
+    setBusy(true);
+    try {
+      const r = await post.mutateAsync({ supplierId, side: f.side, originalDocNo: f.docNo.trim(), originalDate: f.date, dueDate: f.side === "payable" && f.due ? f.due : null, amount: f.amount.trim(), evidenceRef: f.evidence.trim() });
+      toast.success(r.replay ? "مسجّل بالفعل — لم يتكرر" : "سُجّل الرصيد الافتتاحي"); setF({ ...f, docNo: "", amount: "", due: "" }); await onDone();
+    } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <SectionCard title="رصيد افتتاحي للمورد (المالك)" testId="supplier-opening">
+      <p className="text-xs text-muted-foreground">لكل فاتورة أو دفعة مقدمة قائمة يوم Go-live: رقمها وتاريخها الأصليان ومرجع مستند المطابقة (كشف حساب أو إقرار المورد). يُسجَّل بتاريخ Go-live مقابل الرصيد الافتتاحي — لا مخزون ولا مصروف.</p>
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div><Label htmlFor="so-side">النوع</Label><select id="so-side" value={f.side} onChange={e => setF({ ...f, side: e.target.value as any })} className={select} data-testid="so-side"><option value="payable">مستحق له</option><option value="advance">دفعة مقدمة له</option></select></div>
+        <div><Label htmlFor="so-no">رقم المستند الأصلي</Label><Input id="so-no" value={f.docNo} onChange={e => setF({ ...f, docNo: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="so-no" /></div>
+        <div><Label htmlFor="so-amount">المبلغ القائم</Label><Input id="so-amount" inputMode="decimal" value={f.amount} onChange={e => setF({ ...f, amount: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="so-amount" /></div>
+        <div><Label htmlFor="so-date">تاريخ المستند الأصلي</Label><Input id="so-date" type="date" value={f.date} onChange={e => setF({ ...f, date: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="so-date" /></div>
+        {f.side === "payable" && <div><Label htmlFor="so-due">الاستحقاق الأصلي</Label><Input id="so-due" type="date" value={f.due} onChange={e => setF({ ...f, due: e.target.value })} className="mt-1 min-h-11" dir="ltr" /></div>}
+        <div><Label htmlFor="so-ev">مرجع المطابقة</Label><Input id="so-ev" value={f.evidence} onChange={e => setF({ ...f, evidence: e.target.value })} className="mt-1 min-h-11" placeholder="كشف حساب المورد بتاريخ…" data-testid="so-ev" /></div>
+      </div>
+      <Button className="mt-2 min-h-11" disabled={busy || !valid} onClick={run} data-testid="so-post">تسجيل الرصيد الافتتاحي</Button>
+    </SectionCard>
   );
 }
 
@@ -192,6 +226,8 @@ function WorkshopSection({ supplierId, onDone }: { supplierId: number; onDone: (
   const businesses = trpc.ledger.businesses.list.useQuery(undefined, { retry: false });
   const create = trpc.ledger.suppliers.createBatch.useMutation();
   const event = trpc.ledger.suppliers.workshopEvent.useMutation();
+  const reverse = trpc.ledger.suppliers.reverseWorkshopEvent.useMutation();
+  const [rev, setRev] = useState<{ eventId: number; reason: string } | null>(null);
   const [nb, setNb] = useState({ reference: "", pieceWage: "", businessId: 0 });
   const [ev, setEv] = useState<{ batchId: number; eventType: "send" | "receive" | "shortage" | "repair_cost"; quantity: string; value: string; chargeTo: "" | "workshop" | "loss"; note: string; date: string } | null>(null);
   const [opId, setOpId] = useState(newOperationId);
@@ -230,6 +266,24 @@ function WorkshopSection({ supplierId, onDone }: { supplierId: number; onDone: (
                 </span>
               )}
             </div>
+            {b.events.some((x: any) => x.eventType !== "wage") && (
+              <ul className="mt-2 space-y-1 text-xs" data-testid={`batch-events-${b.id}`}>
+                {b.events.filter((x: any) => x.eventType !== "wage").map((x: any) => (
+                  <li key={x.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-2 py-1" data-testid={`wev-${x.id}`}>
+                    <span className={x.reversal ? "line-through text-muted-foreground" : ""}>{EV_LABEL[x.eventType] ?? x.eventType}{x.quantity ? ` ${x.quantity} قطعة` : ""} · <span className="tabular-nums">{money(x.value)}</span></span>
+                    {x.reversal ? <span className="text-muted-foreground">صُحّح بالعكس {x.reversal.date}</span>
+                      : <Button size="sm" variant="ghost" className="min-h-11" onClick={() => setRev({ eventId: x.id, reason: "" })} data-testid={`wev-reverse-${x.id}`}>تصحيح بالعكس</Button>}
+                    {rev && rev.eventId === x.id && (
+                      <div className="flex w-full flex-col gap-2 sm:flex-row">
+                        <Input aria-label="سبب التصحيح" value={rev.reason} onChange={e => setRev({ eventId: x.id, reason: e.target.value })} placeholder="سبب التصحيح (إلزامي)" className="min-h-11" data-testid="wev-reason" />
+                        <Button variant="destructive" className="min-h-11" disabled={busy || rev.reason.trim().length < 3} data-testid="wev-run"
+                          onClick={() => { const why = rev.reason.trim(); run(() => reverse.mutateAsync({ eventId: x.id, reason: why }), "صُحّح الحدث بقيد عكسي", () => setRev(null)); }}>تأكيد</Button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
             {ev && ev.batchId === b.id && (
               <div className="mt-2 grid grid-cols-1 gap-2 rounded-md border border-border p-3 sm:grid-cols-3">
                 {ev.eventType !== "repair_cost" && <div><Label htmlFor="ev-q">الكمية</Label><Input id="ev-q" inputMode="numeric" value={ev.quantity} onChange={e => setEv({ ...ev, quantity: e.target.value })} className="mt-1 min-h-11" dir="ltr" data-testid="ev-q" /></div>}

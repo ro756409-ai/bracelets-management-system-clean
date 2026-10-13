@@ -189,6 +189,45 @@ describe.runIf(CAN)("💼 المرحلة 5 — المرتبات والسلف ف�
     expect((await line(octRun, e.W2)).inputs.engine.commission.clawback).toEqual([]); // لا استرداد مرتين
   });
 
+  it("سلفة افتتاحية: المالك فقط، رصيد قائم وأقساط متبقية فعلية مقابل الرصيد الافتتاحي — بلا صرف من الخزنة ولا إعادة خصم ما سبق", async () => {
+    const op = await call(e.ownerA), am = await call(e.amA);
+    const base = { employeeId: e.W2, originalRef: "V2-ADV-15", originalPrincipal: "3000", originalIssuedOn: "2026-07-10", outstanding: "1200",
+      schedule: [{ dueMonth: "2026-10", amount: "400" }, { dueMonth: "2026-11", amount: "400" }, { dueMonth: "2026-12", amount: "400" }], evidenceRef: "إقرار الموظف بالرصيد 31/7" };
+    const cash = await bal("OFFICE_CASH"), adv = await bal("EMP_ADVANCES");
+    expect(await code(() => am.payroll.advances.opening(base))).toBe("FORBIDDEN");
+    expect(await code(() => op.payroll.advances.opening({ ...base, schedule: base.schedule.slice(0, 2) }))).toBe("BAD_REQUEST"); // مجموع ≠ الرصيد
+    expect(await code(() => op.payroll.advances.opening({ ...base, originalIssuedOn: "2026-08-03" }))).toBe("BAD_REQUEST"); // بعد Go-live ليست افتتاحية
+    expect(await code(() => op.payroll.advances.opening({ ...base, schedule: [{ dueMonth: "2026-07", amount: "1200" }] }))).toBe("BAD_REQUEST"); // قسط قبل Go-live
+    const r = await op.payroll.advances.opening(base);
+    expect((await op.payroll.advances.opening(base)).replay).toBe(true);
+    expect(await code(() => op.payroll.advances.opening({ ...base, outstanding: "1100", schedule: [{ dueMonth: "2026-10", amount: "1100" }] }))).toBe("CONFLICT");
+    expect([await bal("OFFICE_CASH"), await bal("EMP_ADVANCES")]).toEqual([cash, (Number(adv) + 1200).toFixed(4)]); // لا صرف من الخزنة
+    const tx = (await q("SELECT a.code, e.side, e.amount, DATE_FORMAT(t.effectiveDate,'%Y-%m-%d') d FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.accountId JOIN ledger_transactions t ON t.id = e.transactionId WHERE t.idempotencyKey = ? ORDER BY a.code", [`advance-opening:${e.W2}:V2-ADV-15`]));
+    expect(tx.map((x: any) => [x.code, x.side, x.amount, x.d])).toEqual([["EMP_ADVANCES", "debit", "1200.0000", "2026-08-01"], ["OPENING_EQUITY", "credit", "1200.0000", "2026-08-01"]]);
+    expect((await q("SELECT dueMonth, amount, status FROM ledger_advance_installments WHERE advanceId = ? ORDER BY seq", [r.advanceId])).map((x: any) => [x.dueMonth, x.amount, x.status]))
+      .toEqual([["2026-10", "400.0000", "pending"], ["2026-11", "400.0000", "pending"], ["2026-12", "400.0000", "pending"]]); // ما خُصم قبل Go-live (1800) لم يُنشأ
+    // دورة أكتوبر (مسودة) تخصم قسط أكتوبر وحده من السلفة الافتتاحية
+    const oct = (await am.payroll.runs()).runs.find((x: any) => x.period === "2026-10")!;
+    await am.payroll.recompute({ runId: oct.id });
+    const w2 = (await am.payroll.run({ runId: oct.id })).lines.find((l: any) => l.employeeId === e.W2)!;
+    expect(w2.inputs.installments.filter((i: any) => i.advanceId === r.advanceId).map((i: any) => i.amount)).toEqual(["400.0000"]);
+    expect((await am.payroll.advances.list()).advances.find((a: any) => a.id === r.advanceId)).toMatchObject({ opening: true, balance: "1200.0000" });
+    expect(await code(() => am.payroll.advances.cancel({ advanceId: r.advanceId, reason: "خطأ في الإقرار" }))).toBe("FORBIDDEN"); // إلغاء الافتتاحية للمالك
+  });
+
+  it("الأنواع المُدارة آليًا لا تُنشأ يدويًا (موردون/سلف/مخزون/تكلفة…)؛ المسموحة تُنشأ؛ وحساب يدوي قديم منها يمنع الإقفال", async () => {
+    const am = await call(e.amA);
+    for (const kind of ["supplier_payable", "supplier_advance", "payroll_payable", "employee_receivable", "customer_advance", "inventory", "cogs"])
+      expect(await code(() => am.account.create({ code: `MAN_${kind.toUpperCase()}`.slice(0, 50), name: "يدوي", kind, normalSide: "debit" } as any))).toBe("BAD_REQUEST");
+    expect((await am.account.create({ code: "EXP_PRINT_X", name: "طباعة", kind: "expense", normalSide: "debit" })).id).toBeGreaterThan(0);
+    // حساب قديم أُنشئ يدويًا قبل المنع (محاكاة مباشرة)
+    await q("INSERT INTO ledger_accounts (tenantId, code, name, kind, normalSide, currency, actorType) VALUES (?, 'OLD_SUPPLIERS', 'موردون قديم', 'supplier_payable', 'credit', 'EGP', 'system')", [A.tenantId]);
+    const c = await am.period.checklist({ period: "2026-10" });
+    expect(c.checks.find((x: any) => x.key === "managed_accounts")).toMatchObject({ ok: false, label: expect.stringMatching(/OLD_SUPPLIERS/) });
+    await q("UPDATE ledger_accounts SET isActive = 0 WHERE tenantId = ? AND code = 'OLD_SUPPLIERS'", [A.tenantId]);
+    expect((await am.period.checklist({ period: "2026-10" })).checks.find((x: any) => x.key === "managed_accounts")?.ok).toBe(true);
+  });
+
   it("الصلاحيات والعزل: المحاسب لا يرى المرتبات ولا السلف؛ الشركة B لا ترى دورات A", async () => {
     const acc = await call(e.accA);
     expect(await code(() => acc.payroll.runs())).toBe("FORBIDDEN");

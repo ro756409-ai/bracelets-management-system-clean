@@ -125,14 +125,78 @@ export async function issueAdvance(input: { tenantId: number; employeeId: number
   return { advanceId, replay: false };
 }
 
+/**
+ * سلفة افتتاحية (المالك فقط) لسلفة صُرفت قبل Go-live وما زال لها رصيد: مدين «سلف الموظفين» / دائن «الرصيد الافتتاحي» بتاريخ
+ * Go-live — لا صرف جديد من الخزنة (الصرف حدث قبل Go-live). الأقساط المُنشأة = المتبقي فعلًا فقط (مجموعها = الرصيد القائم) من
+ * شهر Go-live أو بعده؛ ما خُصم قبل Go-live لا يُنشأ أصلًا فلا يُخصم مرة أخرى. مرجع السلفة الأصلي (سند/سجل قديم) إلزامي ومرة
+ * واحدة لكل (موظف، مرجع). الأصل والمخصوم سابقًا للتوثيق في الوصف فقط.
+ */
+export async function postOpeningAdvance(input: {
+  tenantId: number; employeeId: number; originalRef: string; originalPrincipal: string; originalIssuedOn: string; outstanding: string;
+  schedule: { dueMonth: string; amount: string }[]; evidenceRef: string; actor: LedgerActor;
+}, db?: LedgerDb) {
+  const d = await resolveDb(db);
+  const { goLiveDate } = await requireReady(d, input.tenantId);
+  const creator = employeeOf(input.actor);
+  const ref = input.originalRef.trim();
+  if (!/^[A-Za-z0-9_#.-]{2,60}$/.test(ref)) throw new LedgerError("invalid", "مرجع السلفة الأصلي: حروف لاتينية/أرقام/-_#. (2–60)");
+  if (input.evidenceRef.trim().length < 5) throw new LedgerError("invalid", "مرجع مستند المطابقة (إقرار الموظف بالرصيد) إلزامي");
+  if (!DATE_RE.test(input.originalIssuedOn) || input.originalIssuedOn >= goLiveDate) throw new LedgerError("date", `السلفة الافتتاحية صُرفت قبل Go-live (${goLiveDate})`);
+  const principal = toMinorUnits(input.originalPrincipal), outstanding = toMinorUnits(input.outstanding);
+  if (outstanding <= 0n || principal <= 0n || outstanding > principal) throw new LedgerError("amount", "الرصيد القائم موجب ولا يتجاوز أصل السلفة");
+  if (input.schedule.length < 1 || input.schedule.length > 60) throw new LedgerError("invalid", "الأقساط المتبقية من 1 إلى 60");
+  const goLiveMonth = goLiveDate.slice(0, 7);
+  let sum = 0n; let prev = "";
+  for (const s of input.schedule) {
+    if (!PERIOD_RE.test(s.dueMonth) || s.dueMonth < goLiveMonth) throw new LedgerError("date", `القسط ${s.dueMonth} يسبق شهر Go-live`);
+    if (s.dueMonth <= prev) throw new LedgerError("invalid", "أشهر الأقساط متزايدة بلا تكرار");
+    const a = toMinorUnits(s.amount); if (a <= 0n) throw new LedgerError("amount", s.amount);
+    sum += a; prev = s.dueMonth;
+  }
+  if (sum !== outstanding) throw new LedgerError("invalid", `مجموع الأقساط المتبقية ${fromMinorUnits(sum)} ≠ الرصيد القائم ${fromMinorUnits(outstanding)}`);
+  const [emp] = await d.select({ id: employees.id, businessId: employees.businessId }).from(employees).where(and(eq(employees.id, input.employeeId), eq(employees.tenantId, input.tenantId))).limit(1);
+  if (!emp) throw new LedgerError("actorEmployee", "الموظف غير موجود في الشركة");
+  const key = `advance-opening:${emp.id}:${ref}`.slice(0, 191);
+  const [existing] = await d.select().from(ledgerAdvances).where(and(eq(ledgerAdvances.tenantId, input.tenantId), eq(ledgerAdvances.idempotencyKey, key))).limit(1);
+  if (existing) {
+    if (toMinorUnits(String(existing.principal)) !== outstanding) throw new LedgerError("conflict", `السلفة ${ref} مسجّلة افتتاحيًا بالفعل برصيد مختلف — لا تكرار`);
+    return { advanceId: existing.id, replay: true };
+  }
+  const acc = await accountIds(d, input.tenantId, ["EMP_ADVANCES", "OPENING_EQUITY"]);
+  const businessId = emp.businessId ?? null;
+  let advanceId = 0;
+  try {
+    await postLedgerTransaction({ tenantId: input.tenantId, sourceBusinessId: businessId, kind: "adjustment", idempotencyKey: key, effectiveDate: goLiveDate, currency: "EGP", actor: input.actor,
+      entries: [{ accountId: acc.EMP_ADVANCES, side: "debit", amount: fromMinorUnits(outstanding), businessId }, { accountId: acc.OPENING_EQUITY, side: "credit", amount: fromMinorUnits(outstanding), businessId: null }],
+      description: `سلفة افتتاحية ${ref} — أصلها ${fromMinorUnits(principal)} صُرفت ${input.originalIssuedOn}، المتبقي ${fromMinorUnits(outstanding)} — مطابقة: ${input.evidenceRef.trim()}`,
+      sourceType: "advance_opening", sourceReference: String(emp.id),
+      guard: async (tx: any, { transactionId }: { transactionId: number }) => {
+        advanceId = insertId(await tx.insert(ledgerAdvances).values({ tenantId: input.tenantId, employeeId: emp.id, businessId, principal: fromMinorUnits(outstanding), issuedOn: goLiveDate,
+          installmentsCount: input.schedule.length, issueTransactionId: transactionId, idempotencyKey: key, createdByEmployeeId: creator }));
+        for (const [i, s] of input.schedule.entries())
+          await tx.insert(ledgerAdvanceInstallments).values({ tenantId: input.tenantId, advanceId, seq: i + 1, dueMonth: s.dueMonth, amount: fromMinorUnits(toMinorUnits(s.amount)) });
+      } } as any, d);
+  } catch (e) {
+    const [again] = await d.select().from(ledgerAdvances).where(and(eq(ledgerAdvances.tenantId, input.tenantId), eq(ledgerAdvances.idempotencyKey, key))).limit(1);
+    if (again) return { advanceId: again.id, replay: true };
+    throw e;
+  }
+  if (!advanceId) { // replay من طلب متزامن بنفس المفتاح
+    const [row] = await d.select().from(ledgerAdvances).where(and(eq(ledgerAdvances.tenantId, input.tenantId), eq(ledgerAdvances.idempotencyKey, key))).limit(1);
+    return { advanceId: row?.id ?? 0, replay: true };
+  }
+  return { advanceId, replay: false };
+}
+
 /** إلغاء سلفة بالعكس — فقط إن لم يُخصم منها شيء في أي دورة. */
-export async function cancelAdvance(input: { tenantId: number; advanceId: number; reason: string; actor: LedgerActor }, db?: LedgerDb) {
+export async function cancelAdvance(input: { tenantId: number; advanceId: number; reason: string; actor: LedgerActor; isOwner?: boolean }, db?: LedgerDb) {
   const d = await resolveDb(db);
   await requireReady(d, input.tenantId);
   if (!input.reason || input.reason.trim().length < 3) throw new LedgerError("reason");
   const [adv] = await d.select().from(ledgerAdvances).where(and(eq(ledgerAdvances.id, input.advanceId), eq(ledgerAdvances.tenantId, input.tenantId))).limit(1);
   if (!adv) throw new LedgerError("transaction", "السلفة غير موجودة");
   if (adv.status === "cancelled") return { replay: true };
+  if (adv.idempotencyKey.startsWith("advance-opening:") && !input.isOwner) throw new LedgerError("ownerOnly", "إلغاء سلفة افتتاحية");
   return reverseLedgerTransaction({ tenantId: input.tenantId, transactionId: adv.issueTransactionId, idempotencyKey: `advance:${adv.id}:cancel`, effectiveDate: today(), reason: `إلغاء سلفة: ${input.reason.trim()}`, actor: input.actor,
     guard: async (tx: any, { transactionId }: { transactionId: number }) => {
       const [deducted] = rawRows(await tx.execute(sql`SELECT COUNT(*) AS n FROM ledger_advance_installments WHERE advanceId = ${adv.id} AND status = 'deducted' FOR UPDATE`));
@@ -147,14 +211,14 @@ export async function listAdvances(tenantId: number, db?: LedgerDb) {
   if (!(await payrollAvailability(d)).ok) return { available: false as const, advances: [] };
   const rows = rawRows(await d.execute(sql`SELECT a.id, a.employeeId, e.name AS employeeName, a.principal, DATE_FORMAT(a.issuedOn, '%Y-%m-%d') AS issuedOn, a.installmentsCount, a.status,
       COALESCE((SELECT SUM(i.deductedAmount) FROM ledger_advance_installments i WHERE i.advanceId = a.id AND i.status = 'deducted'), 0) AS repaid,
-      (SELECT MIN(i.dueMonth) FROM ledger_advance_installments i WHERE i.advanceId = a.id AND i.status = 'pending') AS nextDue
+      (SELECT MIN(i.dueMonth) FROM ledger_advance_installments i WHERE i.advanceId = a.id AND i.status = 'pending') AS nextDue, a.idempotencyKey AS k
     FROM ledger_advances a JOIN employees e ON e.id = a.employeeId WHERE a.tenantId = ${tenantId} ORDER BY a.id DESC LIMIT 300`));
   return {
     available: true as const,
     advances: rows.map((r: any) => {
       const principal = toMinorUnits(String(r.principal)), repaid = toMinorUnits(String(r.repaid));
       return { id: Number(r.id), employeeId: Number(r.employeeId), employeeName: String(r.employeeName), principal: fromMinorUnits(principal), repaid: fromMinorUnits(repaid),
-        balance: r.status === "cancelled" ? "0.0000" : fromMinorUnits(principal - repaid), issuedOn: String(r.issuedOn), installmentsCount: Number(r.installmentsCount), status: String(r.status), nextDue: r.nextDue ?? null };
+        balance: r.status === "cancelled" ? "0.0000" : fromMinorUnits(principal - repaid), issuedOn: String(r.issuedOn), installmentsCount: Number(r.installmentsCount), status: String(r.status), nextDue: r.nextDue ?? null, opening: String(r.k).startsWith("advance-opening:") };
     }),
   };
 }

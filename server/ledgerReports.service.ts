@@ -3,7 +3,8 @@ import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import { businessDayRange } from "../shared/businessTime";
 import { LedgerError } from "../shared/ledgerV3Core";
 import { legacyFinanceWritesBetween } from "./legacyFinanceArchive";
-import { getLedgerStatus, listLedgerAccountsScoped, listLedgerPeriods, rawRows, reconcileLedgerV3, resolveDb, scopeVisibleTx, type LedgerDb, type LedgerReadScope } from "./ledgerV3.service";
+import { LEDGER_DAILY_ACCOUNTS, LEDGER_PAYROLL_ACCOUNTS, LEDGER_SUPPLIER_ACCOUNTS } from "../shared/ledgerDailyAccounts";
+import { LEDGER_BASE_ACCOUNTS, getLedgerStatus, listLedgerAccountsScoped, listLedgerPeriods, rawRows, reconcileLedgerV3, resolveDb, scopeVisibleTx, type LedgerDb, type LedgerReadScope } from "./ledgerV3.service";
 
 /**
  * المرحلة 7 — تقارير من مصدر واحد متسق (Ledger V3 فقط) داخل نطاق القراءة:
@@ -207,6 +208,10 @@ export async function closeChecklist(input: { tenantId: number; period: string }
   const [en] = rawRows(await d.execute(sql`SELECT ROUND(UNIX_TIMESTAMP(enabledAt) * 1000) AS ms FROM ledger_tenant_flags WHERE tenantId = ${input.tenantId}`));
   const legacyFrom = Math.max(startMs, en?.ms != null ? Number(en.ms) : startMs);
   const legacy = legacyFrom >= endMs ? [] : await legacyFinanceWritesBetween(d, input.tenantId, legacyFrom, endMs);
+  // حسابات من أنواع مُدارة آليًا أُنشئت يدويًا (قبل منعها) — أرصدة بلا هوية مورد/موظف/أوردر
+  const systemCodes = new Set([...LEDGER_BASE_ACCOUNTS, ...LEDGER_DAILY_ACCOUNTS, ...LEDGER_PAYROLL_ACCOUNTS, ...LEDGER_SUPPLIER_ACCOUNTS].map(a => a.code));
+  const manualManaged = rawRows(await d.execute(sql`SELECT code FROM ledger_accounts WHERE tenantId = ${input.tenantId} AND isActive = 1
+      AND kind IN ('supplier_payable','supplier_advance','payroll_payable','employee_receivable','customer_advance','inventory','cogs')`)).map((r: any) => String(r.code)).filter(c => !systemCodes.has(c));
   let reconciliationOk: boolean | null = null;
   try { reconciliationOk = (await reconcileLedgerV3(input.tenantId, d)).ok; } catch { reconciliationOk = null; }
   const checks = [
@@ -214,6 +219,7 @@ export async function closeChecklist(input: { tenantId: number; period: string }
     { key: "deliveries_posted", ok: missingCount === 0, label: missingCount < 0 ? "تعذر فحص التسليمات (صندوق وارد شركة الشحن غير متاح)" : missingCount === 0 ? "كل تسليمات الشهر لها قيد" : `${missingCount} أوردر مُسلَّم في الشهر بلا قيد في الدفتر` },
     { key: "ledger_reviews", ok: Number(reviews?.n ?? 0) === 0, label: Number(reviews?.n ?? 0) === 0 ? "لا مراجعات دفتر مفتوحة" : `${reviews.n} أوردر عليه مراجعة دفتر مفتوحة` },
     { key: "legacy_writes", ok: legacy.length === 0, label: legacy.length === 0 ? "لا كتابات مالية في الحسابات القديمة خلال الشهر" : `كتابات في الحسابات القديمة خلال الشهر: ${legacy.map(l => `${l.label} ${l.count}`).join("، ")} — يجب تسجيلها في الدفتر الجديد` },
+    { key: "managed_accounts", ok: manualManaged.length === 0, label: manualManaged.length === 0 ? "لا حسابات يدوية من الأنواع المُدارة آليًا" : `حسابات يدوية من نوع مُدار آليًا: ${manualManaged.join("، ")} — أوقفها أو انقل رصيدها لمساره` },
     { key: "reconciliation", ok: reconciliationOk === true, label: reconciliationOk == null ? "تعذر تشغيل مطابقة الأرصدة" : reconciliationOk ? "الأرصدة مطابقة لمجموع القيود" : "فرق في مطابقة الأرصدة — راجع قبل الإقفال" },
   ];
   return { period: input.period, ready: checks.every(c => c.ok), checks };

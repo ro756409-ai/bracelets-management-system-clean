@@ -8,8 +8,9 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 
 const state = vi.hoisted(() => ({
   runs: { available: true, runs: [] as any[] } as any, detail: null as any, calls: [] as [string, any][],
-  advances: { available: true, advances: [] as any[] } as any,
+  advances: { available: true, advances: [] as any[] } as any, perms: [] as string[],
 }));
+vi.mock("@/hooks/usePermission", () => ({ usePermissions: () => ({ has: (p: string) => state.perms.includes(p) }) }));
 const mut = vi.hoisted(() => (name: string, ret: any = {}) => ({ useMutation: () => ({ isPending: false, mutateAsync: async (i: any) => { state.calls.push([name, i]); await new Promise(r => setTimeout(r, 15)); return ret; } }) }));
 vi.mock("@/lib/trpc", () => ({
   trpc: {
@@ -24,13 +25,13 @@ vi.mock("@/lib/trpc", () => ({
         ensureAccounts: mut("ensure", { created: [] }),
         create: mut("create", { runId: 3, replay: false }),
         recompute: mut("recompute"), approve: mut("approve"), pay: mut("pay"), cancel: mut("cancel"), adjust: mut("adjust"),
-        advances: { list: { useQuery: () => ({ data: state.advances }) }, issue: mut("issue", { advanceId: 1, replay: false }), cancel: mut("advCancel") },
+        advances: { list: { useQuery: () => ({ data: state.advances }) }, issue: mut("issue", { advanceId: 1, replay: false }), cancel: mut("advCancel"), opening: mut("opening", { advanceId: 2, replay: false }) },
       },
     },
   },
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-import LedgerPayroll from "./LedgerPayroll";
+import LedgerPayroll, { openingSchedule } from "./LedgerPayroll";
 
 const okLine = (employeeId: number, name: string) => ({ employeeId, employeeName: name, gross: "3045.0000", totalDeductions: "420.0000", net: "2625.0000", inputs: { adjustments: { bonuses: [], deductions: [] } },
   result: { status: "ok", earnings: [{ key: "base", label: "المرتب الأساسي", amount: "3000.0000" }], deductions: [{ key: "absence", label: "غياب 1 يوم", amount: "120.0000" }] } });
@@ -39,11 +40,30 @@ beforeEach(() => {
   state.calls = [];
   state.runs = { available: true, runs: [{ id: 3, period: "2026-09", status: "draft", net: "2625.0000" }] };
   state.detail = { run: { id: 3, period: "2026-09", status: "draft", gross: "3045.0000", totalDeductions: "420.0000", net: "2625.0000" }, lines: [okLine(7, "سارة")] };
-  state.advances = { available: true, advances: [] };
+  state.advances = { available: true, advances: [] }; state.perms = [];
 });
 afterEach(() => cleanup());
 
 describe("💼 المرتبات والسلف", () => {
+  it("جدول السلفة الافتتاحية: أقساط متساوية من شهر البداية، آخرها يمتص التقريب، ومجموعها = الرصيد؛ مدخلات غير صالحة = لا جدول", () => {
+    expect(openingSchedule("1000", 3, "2026-11")).toEqual([{ dueMonth: "2026-11", amount: "333.3333" }, { dueMonth: "2026-12", amount: "333.3333" }, { dueMonth: "2027-01", amount: "333.3334" }]);
+    expect(openingSchedule("1000", 0, "2026-11")).toEqual([]);
+    expect(openingSchedule("abc", 2, "2026-11")).toEqual([]);
+  });
+
+  it("السلفة الافتتاحية للمالك فقط؛ الجدول المُرسل هو المعروض", async () => {
+    render(<LedgerPayroll />);
+    expect(screen.queryByTestId("opening-advance")).toBeNull();
+    cleanup();
+    state.perms = ["ledger.activate"];
+    render(<LedgerPayroll />);
+    for (const [id, v] of [["oa-ref", "V2-ADV-15"], ["oa-principal", "3000"], ["oa-issued", "2026-07-10"], ["oa-out", "1200"], ["oa-count", "3"], ["oa-ev", "إقرار الموظف بالرصيد"]] as const)
+      fireEvent.change(screen.getByTestId(id), { target: { value: v } });
+    expect(screen.getByTestId("oa-schedule").textContent).toContain("٤٠٠");
+    fireEvent.click(screen.getByTestId("oa-post"));
+    await waitFor(() => expect(state.calls.find(c => c[0] === "opening")?.[1]).toMatchObject({ employeeId: 7, originalRef: "V2-ADV-15", outstanding: "1200", schedule: [expect.objectContaining({ amount: "400.0000" }), expect.anything(), expect.anything()] }));
+  });
+
   it("قبل 0048: رسالة واضحة بلا أي قسم", () => {
     state.runs = { available: false, reason: "0048", runs: [] };
     render(<LedgerPayroll />);

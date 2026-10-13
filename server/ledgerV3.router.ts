@@ -10,9 +10,9 @@ import { InventoryLedgerError, listInventoryOpeningCandidates, postInventoryOpen
 import { closeChecklist, incomeStatement, orderCostReport, positionSummary, profitByBusiness, profitByProduct } from "./ledgerReports.service";
 import { listCarrierStatements, recordCarrierPayout, settleCarrierStatement, statementStatus } from "./ledgerCarrier.service";
 import { clearLedgerSetting, listCarrierReviews, listLedgerSettings, resolveCarrierReview, setLedgerSetting } from "./ledgerCarrierOps.service";
-import { cancelSupplierDocument, createSupplier, createWorkshopBatch, ensureSupplierAccounts, listSuppliers, listWorkshopBatches, postSupplierDocument, recordWorkshopEvent, setSupplierActive, supplierStatement } from "./ledgerSuppliers.service";
+import { cancelSupplierDocument, createSupplier, createWorkshopBatch, ensureSupplierAccounts, listSuppliers, listWorkshopBatches, postSupplierDocument, postSupplierOpening, recordWorkshopEvent, reverseWorkshopEvent, setSupplierActive, supplierStatement } from "./ledgerSuppliers.service";
 import { closeLedgerPeriod, listPeriodSnapshots } from "./ledgerClose.service";
-import { approvePayrollRun, cancelAdvance, cancelPayrollRun, createPayrollRun, ensurePayrollAccounts, getPayrollRun, issueAdvance, listAdvances, listPayrollRuns, payPayrollRun, recomputePayrollRun, setPayrollAdjustments } from "./ledgerPayroll.service";
+import { approvePayrollRun, postOpeningAdvance, cancelAdvance, cancelPayrollRun, createPayrollRun, ensurePayrollAccounts, getPayrollRun, issueAdvance, listAdvances, listPayrollRuns, payPayrollRun, recomputePayrollRun, setPayrollAdjustments } from "./ledgerPayroll.service";
 import { listRefundLiabilities, payCustomerRefund, retainRefundRemainder } from "./ledgerOrders.service";
 import { parseSettlementCsv } from "../shared/carrierSettlement";
 import { hasTenantPermission, isOwnerRole, isRoleRestrictedDenied, LEDGER_OWNER_ONLY_PERMISSIONS, type Permission } from "./permissions";
@@ -76,6 +76,12 @@ async function rejectSystemPostedAccounts(tenantId: number, accountIds: number[]
   if (blocked.length) throw new LedgerError("kindShape", `حساب يُرحَّل آليًا ولا يُدخل يدويًا: ${blocked.join("، ")}`);
 }
 
+/** دور الجلسة الفعلي: المالك (أو مسؤول المنصة) — لعمليات المالك وحده داخل إجراء له صلاحية أوسع. */
+const isOwnerCtx = (ctx: any) => isOwnerRole(ctx.employee?.role ?? (ctx.user?.role === "admin" ? "super_admin" : null));
+
+/** أنواع حسابات لا تُنشأ يدويًا — لها مسار آلي يربط الرصيد بهوية أو بلقطة تكلفة. */
+export const MANAGED_ACCOUNT_KINDS: ReadonlySet<string> = new Set(["supplier_payable", "supplier_advance", "payroll_payable", "employee_receivable", "customer_advance", "inventory", "cogs"]);
+
 /** LedgerError → رمز tRPC واضح برسالة عربية. */
 async function guard<T>(fn: () => Promise<T>): Promise<T> {
   try {
@@ -85,7 +91,7 @@ async function guard<T>(fn: () => Promise<T>): Promise<T> {
       const code = err.code === "conflict" || err.code === "reversedAlready" || err.code === "alreadyEnabled" ? "CONFLICT"
         : err.code === "disabled" || err.code === "unavailable" ? "PRECONDITION_FAILED"
         : err.code === "transaction" || err.code === "account" || err.code === "periodNotFound" ? "NOT_FOUND"
-        : err.code === "grant" || err.code === "outOfScope" || err.code === "business" || err.code === "actorEmployee" || err.code === "reopenRole" ? "FORBIDDEN"
+        : err.code === "grant" || err.code === "outOfScope" || err.code === "business" || err.code === "actorEmployee" || err.code === "reopenRole" || err.code === "ownerOnly" ? "FORBIDDEN"
         : "BAD_REQUEST";
       throw new TRPCError({ code, message: err.message });
     }
@@ -319,8 +325,7 @@ export function createLedgerRouter(deps: Deps) {
       approve: ledgerProcedure("ledger.period.lock").input(z.object({ runId: z.number().int().positive() }))
         .mutation(async ({ ctx, input }) => {
           await requireCompanyScope(ctx);
-          const role = (ctx as any).employee?.role ?? ((ctx as any).user?.role === "admin" ? "super_admin" : null);
-          return guard(() => approvePayrollRun({ tenantId: tenantOf(ctx), runId: input.runId, actor: actorOf(ctx), isOwner: isOwnerRole(role) }));
+          return guard(() => approvePayrollRun({ tenantId: tenantOf(ctx), runId: input.runId, actor: actorOf(ctx), isOwner: isOwnerCtx(ctx) }));
         }),
       pay: ledgerProcedure("ledger.post").input(z.object({ runId: z.number().int().positive(), paidOn: dateStr, fromAccountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/) }))
         .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => payPayrollRun({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
@@ -333,7 +338,12 @@ export function createLedgerRouter(deps: Deps) {
             fromAccountCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/), operationId: idemKey, note: z.string().trim().max(200).optional() }))
           .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => issueAdvance({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
         cancel: ledgerProcedure("ledger.reverse").input(z.object({ advanceId: z.number().int().positive(), reason: z.string().trim().min(3).max(500) }))
-          .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => cancelAdvance({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+          .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => cancelAdvance({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx), isOwner: isOwnerCtx(ctx) })); }),
+        // سلفة قائمة قبل Go-live برصيدها وأقساطها المتبقية — المالك فقط
+        opening: ledgerProcedure("ledger.activate")
+          .input(z.object({ employeeId: z.number().int().positive(), originalRef: z.string().trim().min(2).max(60), originalPrincipal: amountStr, originalIssuedOn: dateStr, outstanding: amountStr,
+            schedule: z.array(z.object({ dueMonth: periodStr, amount: amountStr })).min(1).max(60), evidenceRef: z.string().trim().min(5).max(200) }))
+          .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => postOpeningAdvance({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
       }),
     }),
 
@@ -358,7 +368,14 @@ export function createLedgerRouter(deps: Deps) {
           return guard(() => postSupplierDocument({ tenantId: tenantOf(ctx), ...input, businessId, actor: actorOf(ctx) }));
         }),
       cancelDocument: ledgerProcedure("ledger.reverse").input(z.object({ documentId: z.number().int().positive(), reason: z.string().trim().min(3).max(500) }))
-        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => cancelSupplierDocument({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => cancelSupplierDocument({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx), isOwner: isOwnerCtx(ctx) })); }),
+      // رصيد افتتاحي لمورد من مستند مطابقة فعلي — المالك فقط (ledger.activate)
+      opening: ledgerProcedure("ledger.activate")
+        .input(z.object({ supplierId: z.number().int().positive(), side: z.enum(["payable", "advance"]), originalDocNo: z.string().trim().min(1).max(80), originalDate: dateStr,
+          dueDate: dateStr.nullable().optional(), amount: amountStr, businessId: z.number().int().positive().nullable().optional(), evidenceRef: z.string().trim().min(5).max(200) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => postSupplierOpening({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
+      reverseWorkshopEvent: ledgerProcedure("ledger.reverse").input(z.object({ eventId: z.number().int().positive(), reason: z.string().trim().min(3).max(500) }))
+        .mutation(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => reverseWorkshopEvent({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); }),
       batches: ledgerProcedure("ledger.view").input(z.object({ supplierId: z.number().int().positive() }))
         .query(async ({ ctx, input }) => { await requireCompanyScope(ctx); return guard(() => listWorkshopBatches(tenantOf(ctx), input.supplierId)); }),
       createBatch: ledgerProcedure("ledger.post")
@@ -427,11 +444,15 @@ export function createLedgerRouter(deps: Deps) {
         .input(z.object({
           code: z.string().regex(/^[A-Z][A-Z0-9_]{1,49}$/, "الكود: حروف لاتينية كبيرة وأرقام و_"),
           name: z.string().trim().min(1).max(120),
-          kind: z.enum(["cash", "bank", "wallet", "carrier_receivable", "employee_receivable", "supplier_payable", "customer_advance", "owner_current", "revenue", "expense", "cogs", "inventory", "equity", "suspense"]),
+          kind: z.enum(["cash", "bank", "wallet", "carrier_receivable", "employee_receivable", "supplier_payable", "supplier_advance", "payroll_payable", "customer_advance", "owner_current", "revenue", "expense", "cogs", "inventory", "equity", "suspense"]),
           normalSide: z.enum(["debit", "credit"]),
           allowNegative: z.boolean().optional(),
         }))
-        .mutation(async ({ ctx, input }) => guard(() => createLedgerAccount({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) }))),
+        .mutation(async ({ ctx, input }) => {
+          // أنواع مُدارة آليًا: رصيدها مربوط بهوية (مورد/موظف/أوردر) أو بلقطة تكلفة عبر مسارها — حساب يدوي منها يحمل أرصدة بلا هوية
+          if (MANAGED_ACCOUNT_KINDS.has(input.kind)) throw new TRPCError({ code: "BAD_REQUEST", message: `نوع «${input.kind}» يُنشأ ويُدار آليًا من مساره (الموردون/المرتبات/المرتجعات/المخزون) — لا يُنشأ يدويًا` });
+          return guard(() => createLedgerAccount({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) }));
+        }),
       updateName: ledgerProcedure("ledger.manage_accounts")
         .input(z.object({ accountId: z.number().int().positive(), name: z.string().trim().min(1).max(120) }))
         .mutation(async ({ ctx, input }) => { await guard(() => renameLedgerAccount({ tenantId: tenantOf(ctx), ...input, actor: actorOf(ctx) })); return { ok: true }; }),
