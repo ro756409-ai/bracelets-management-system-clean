@@ -24,7 +24,9 @@ import { tenantAccessEnforcementEnabled } from "./tenantAccess";
  *      البصمة الممرّرة = بصمة أرقام V3 الآن (لا حركة V3 منذ الصورة).
  *   3. خريطة صريحة: كل حساب نقدي/بنكي/محفظة بقيمة غير صفرية ← هدف قديم واحد (خزنة V1 لنشاط، أو حساب V2)؛ باقي الحسابات غير الصفرية
  *      تُذكر صراحةً في acknowledgedNonCash (تُتابَع خارج V1/V2)؛ كل هدف قديم نقدي برصيد غير صفري خارج الخريطة يجب أن يُذكر في
- *      zeroTargets (يُصفَّر) — فلا يبقى رصيد قديم «مجمّد» بجانب رصيد التوقف. هدف مكرر مرفوض؛ V1 بأكثر من منزلتين مرفوض.
+ *      zeroTargets — فلا يبقى رصيد قديم «مجمّد» بجانب رصيد التوقف. التصفير **ليس** لمجرد غياب مقابل في V3: لكل هدف تفسير موثّق
+ *      ومرجع مطابقة والرصيد الذي طُوبق (= الرصيد الحالي بالضبط) واعتماد صريح من مالك فعّال لنفس الشركة؛ أي هدف غير محسوم
+ *      (ناقص أو غير مطابق) يمنع التنفيذ كله. هدف مكرر مرفوض؛ V1 بأكثر من منزلتين مرفوض.
  *   4. **معالجة الأرصدة القائمة في V1/V2**: لا يُدخل رصيد التوقف فوقها (يتضاعف)؛ يُقرأ الرصيد الحالي ويُرحَّل **الفرق فقط**
  *      (تسوية V1 من نوع adjustment، أو حركة V2 من نوع recovery_adjustment بمرجع الصورة) — بلا حذف أو تعديل أي تاريخ.
  *   5. حدث lift ثم الترحيل ثم إعادة القراءة: كل هدف = رصيد الصورة بالضبط وإلا يُلغى كل شيء؛ ثم حدث recovery بالنتيجة وبصمتها.
@@ -43,8 +45,21 @@ export type RecoveryPlan = {
   figuresHash: string;
   cash: { code: string; target: LegacyTarget }[];
   acknowledgedNonCash: string[];
-  zeroTargets: LegacyTarget[];
+  zeroTargets: ZeroTarget[];
 };
+/** تصفير هدف قديم بلا مقابل في V3 — محسوم فقط بتفسير ومطابقة واعتماد صريح داخل ملف الاستعادة. */
+export type ZeroTarget = {
+  target: LegacyTarget;
+  /** الرصيد الذي طُوبق فعليًا — يجب أن يساوي الرصيد القديم الحالي بالضبط. */
+  reconciledBalance: string;
+  /** لماذا لا مقابل له في V3 (10 أحرف على الأقل). */
+  explanation: string;
+  /** مرجع مستند المطابقة (كشف/محضر). */
+  evidenceRef: string;
+  /** مالك فعّال من نفس الشركة يعتمد التصفير صراحةً. */
+  approvedByEmployeeId: number;
+};
+export const MIN_ZERO_EXPLANATION = 10;
 export type SnapshotFigures = { tenantId: number; activationAtMs: number; lastTransactionId: number; balances: { code: string; kind: string; currency: string; balance: string }[] };
 
 /** أنواع لا تُستعاد إلا بهدف قديم صريح (لا تُقبل في acknowledgedNonCash). */
@@ -185,12 +200,21 @@ export async function recoverLegacyFromSnapshot(input: {
       mappedCodes.add(acc!.code); usedTargets.add(key);
       desired.set(key, { code: acc!.code, target: t!, amount });
     }
+    const zeroed: (ZeroTarget & { key: string; approvedBy: string })[] = [];
     for (const z of p.zeroTargets) {
-      const key = z ? targetKey(z) : "";
+      const key = z?.target ? targetKey(z.target) : "";
       const t = legacy.get(key);
       if (!t) fail("mapping", `هدف التصفير ${key || "؟"} غير موجود لهذه الشركة`);
       if (usedTargets.has(key)) fail("mapping", `الهدف ${key} مكرر`);
+      // غير محسوم = يمنع التنفيذ: تفسير + مرجع مطابقة + رصيد مطابق للحالي + اعتماد مالك نفس الشركة
+      if (String(z.explanation ?? "").trim().length < MIN_ZERO_EXPLANATION) fail("unresolved", `تصفير ${key}: التفسير الموثّق إلزامي (${MIN_ZERO_EXPLANATION} أحرف على الأقل)`);
+      if (String(z.evidenceRef ?? "").trim().length < 3) fail("unresolved", `تصفير ${key}: مرجع مستند المطابقة إلزامي`);
+      if (!/^-?\d{1,14}(\.\d{1,4})?$/.test(String(z.reconciledBalance ?? "")) || toMinorUnits(String(z.reconciledBalance)) !== t!.balance)
+        fail("unresolved", `تصفير ${key}: الرصيد المطابَق (${z.reconciledBalance ?? "—"}) ≠ الرصيد الحالي ${fromMinorUnits(t!.balance)} — أعد المطابقة`);
+      const [ap] = rawRows(await tx.execute(sql`SELECT id, name, role, isActive FROM employees WHERE id = ${Number(z.approvedByEmployeeId) || 0} AND tenantId = ${input.tenantId} LIMIT 1 FOR SHARE`));
+      if (!ap || !Number(ap.isActive) || !isOwnerRole(String(ap.role))) fail("unresolved", `تصفير ${key}: الاعتماد الصريح لمالك فعّال من نفس الشركة إلزامي`);
       usedTargets.add(key); desired.set(key, { code: null, target: t!, amount: 0n });
+      zeroed.push({ ...z, key, explanation: String(z.explanation).trim(), evidenceRef: String(z.evidenceRef).trim(), approvedBy: String(ap.name) });
     }
     const ack = new Set(p.acknowledgedNonCash.map(String));
     for (const b of stored.balances) {
@@ -204,7 +228,7 @@ export async function recoverLegacyFromSnapshot(input: {
       }
     }
     for (const a of ack) if (!byCode.has(a)) fail("mapping", `${a} غير موجود في الصورة`);
-    for (const t of legacy.values()) if (t.cash && t.balance !== 0n && !usedTargets.has(t.key)) fail("mapping", `الهدف القديم ${t.key} برصيد ${fromMinorUnits(t.balance)} خارج الخريطة — اربطه أو أضفه إلى zeroTargets`);
+    for (const t of legacy.values()) if (t.cash && t.balance !== 0n && !usedTargets.has(t.key)) fail("unresolved", `الهدف القديم ${t.key} برصيد ${fromMinorUnits(t.balance)} غير محسوم — اربطه بحساب V3 أو صفّره بتفسير ومطابقة واعتماد في zeroTargets`);
 
     const lines: RecoveryLine[] = [...desired.entries()].map(([key, x]) => ({ code: x.code, target: key, before: fromMinorUnits(x.target.balance), after: fromMinorUnits(x.amount), delta: fromMinorUnits(x.amount - x.target.balance) }));
     if (!input.apply) return { applied: false, replay: false, recoveryEventId: null, lines };
@@ -235,7 +259,8 @@ export async function recoverLegacyFromSnapshot(input: {
       const got = after.get(key)?.balance;
       if (got !== x.amount) fail("verify", `بعد الإدخال: ${key} = ${got == null ? "؟" : fromMinorUnits(got)} ≠ ${fromMinorUnits(x.amount)} — أُلغي كل شيء`);
     }
-    const result = { snapshotEventId: p.snapshotEventId, snapshotHash: p.figuresHash, lines, acknowledgedNonCash: stored.balances.filter(b => ack.has(b.code)) };
+    const result = { snapshotEventId: p.snapshotEventId, snapshotHash: p.figuresHash, lines, acknowledgedNonCash: stored.balances.filter(b => ack.has(b.code)),
+      zeroed: zeroed.map(z => ({ target: z.key, reconciledBalance: fromMinorUnits(toMinorUnits(z.reconciledBalance)), explanation: z.explanation, evidenceRef: z.evidenceRef, approvedByEmployeeId: Number(z.approvedByEmployeeId), approvedBy: z.approvedBy })) };
     const r = await tx.execute(sql`INSERT INTO ledger_legacy_archive_events (tenantId, action, activationAt, dedupeKey, snapshotEventId, figuresJson, figuresHash, reason, actorEmployeeId)
       SELECT tenantId, 'recovery', enabledAt, ${recoveryKey}, ${p.snapshotEventId}, ${canonicalJson(result)}, ${figuresHash(result)}, ${reason}, ${c.actor.id} FROM ledger_tenant_flags WHERE tenantId = ${input.tenantId}`);
     return { applied: true, replay: false, recoveryEventId: Number((Array.isArray(r) ? r[0] : r)?.insertId), lines };

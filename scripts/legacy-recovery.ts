@@ -5,7 +5,8 @@
  *   node dist/scripts/legacy-recovery.mjs recover --tenant <id> --actor <ownerId> --reason "<سبب>" --plan plan.json        # dry-run
  *   DEPLOY_ENV=test node dist/scripts/legacy-recovery.mjs recover ... --apply --confirm "RECOVER LEGACY TENANT <id> ON <db>"
  * plan.json: { snapshotEventId, figuresHash, cash: [{ code, target: { kind: "v1_treasury", businessId } | { kind: "v2_account", accountId } }],
- *              acknowledgedNonCash: [code], zeroTargets: [target] }
+ *              acknowledgedNonCash: [code],
+ *              zeroTargets: [{ target, reconciledBalance, explanation, evidenceRef, approvedByEmployeeId }] }  ← غير المحسوم يمنع التنفيذ
  * الشروط (V3 مطفأ، الشركة suspended والإيقاف مُطبَّق، مالك من نفس الشركة، البصمة، الخريطة الكاملة) في legacyRecovery.service.
  * الإنتاج مرفوض دائمًا في هذه المرحلة؛ apply على test/local بمضيف محلي (أو staging باسم يدل عليه لاحقًا بموافقة). لا يُطبع الرابط.
  */

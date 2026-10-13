@@ -12,7 +12,7 @@ import { LEDGER_LEGACY_ARCHIVE_MIGRATION } from "./ledgerPhaseMigrations";
 import { activateLedgerV3, disableLedgerV3, postLedgerTransaction } from "./ledgerV3.service";
 import { ensureDailyAccounts } from "./ledgerDaily.service";
 import { assertLegacyFinanceWritable } from "./legacyFinanceArchive";
-import { recoverLegacyFromSnapshot, recoveryConfirmPhrase, takeStopSnapshot, type RecoveryPlan } from "./legacyRecovery.service";
+import { recoverLegacyFromSnapshot, recoveryConfirmPhrase, takeStopSnapshot, type RecoveryPlan, type ZeroTarget } from "./legacyRecovery.service";
 import { createTempSchema, type TempSchema } from "./testTempSchema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { splitMigrationStatements } from "../shared/ledgerV3Spec";
@@ -49,8 +49,10 @@ describe.runIf(CAN)("♻️ 0051 — حظر الكتابات القديمة ور
   const plan = (snapshotEventId: number, figuresHash: string, over: Partial<RecoveryPlan> = {}): RecoveryPlan => ({
     snapshotEventId, figuresHash,
     cash: [{ code: "OFFICE_CASH", target: { kind: "v1_treasury", businessId: A.businessId } }, { code: "BANK_MAIN", target: { kind: "v2_account", accountId: v2Main } }],
-    acknowledgedNonCash: ["EXP_RENT", "OPENING_EQUITY"], zeroTargets: [{ kind: "v2_account", accountId: v2Old }], ...over,
+    acknowledgedNonCash: ["EXP_RENT", "OPENING_EQUITY"], zeroTargets: [zeroOld()], ...over,
   });
+  const zeroOld = (over: Partial<ZeroTarget> = {}): ZeroTarget => ({ target: { kind: "v2_account", accountId: v2Old }, reconciledBalance: "50", explanation: "محفظة قديمة أُغلقت قبل التفعيل ولم تُنقل إلى V3",
+    evidenceRef: "محضر جرد 2026-09-01 رقم 7", approvedByEmployeeId: e.ownerA, ...over });
   const recover = (snapId: number, hash: string, over: Partial<RecoveryPlan> = {}, actor = e.ownerA, extra: Record<string, unknown> = {}) =>
     recoverLegacyFromSnapshot({ tenantId: A.tenantId, actorEmployeeId: actor, reason: "توقف ومطابقة بعد عطل", plan: plan(snapId, hash, over), apply: true, ...extra });
 
@@ -137,7 +139,15 @@ describe.runIf(CAN)("♻️ 0051 — حظر الكتابات القديمة ور
     expect(await code(() => recover(id, h, { cash: [{ code: "OFFICE_CASH", target: { kind: "v1_treasury", businessId: A.businessId } }] }))).toBe("mapping");                       // بنك بلا هدف
     expect(await code(() => recover(id, h, { acknowledgedNonCash: ["OPENING_EQUITY"] }))).toBe("mapping");                                                                       // مصروف غير مُقرّ به
     expect(await code(() => recover(id, h, { acknowledgedNonCash: ["EXP_RENT", "OPENING_EQUITY", "BANK_MAIN"] }))).toBe("mapping");                                           // إقرار بنقدي
-    expect(await code(() => recover(id, h, { zeroTargets: [] }))).toBe("mapping");                                                                                               // هدف قديم برصيد خارج الخريطة
+    // تصفير هدف قديم لا يُقبل لمجرد غياب مقابل في V3: غير المحسوم يمنع التنفيذ
+    expect(await code(() => recover(id, h, { zeroTargets: [] }))).toBe("unresolved");                                                     // خارج الخريطة
+    expect(await code(() => recover(id, h, { zeroTargets: [zeroOld({ explanation: "قديم" })] }))).toBe("unresolved");                     // بلا تفسير موثّق
+    expect(await code(() => recover(id, h, { zeroTargets: [zeroOld({ evidenceRef: "" })] }))).toBe("unresolved");                         // بلا مرجع مطابقة
+    expect(await code(() => recover(id, h, { zeroTargets: [zeroOld({ reconciledBalance: "40" })] }))).toBe("unresolved");                 // مطابقة لا تساوي الرصيد الحالي
+    expect(await code(() => recover(id, h, { zeroTargets: [zeroOld({ reconciledBalance: undefined as any })] }))).toBe("unresolved");     // بلا رصيد مطابَق
+    expect(await code(() => recover(id, h, { zeroTargets: [zeroOld({ approvedByEmployeeId: e.amA })] }))).toBe("unresolved");             // اعتماد مدير الحسابات
+    expect(await code(() => recover(id, h, { zeroTargets: [zeroOld({ approvedByEmployeeId: e.ownerB })] }))).toBe("unresolved");          // اعتماد مالك شركة أخرى
+    expect(await code(() => recover(id, h, { zeroTargets: [zeroOld({ approvedByEmployeeId: undefined as any })] }))).toBe("unresolved");  // بلا اعتماد
     expect(await code(() => recover(id, h, { cash: [{ code: "OFFICE_CASH", target: { kind: "v2_account", accountId: v2Main } }, { code: "BANK_MAIN", target: { kind: "v2_account", accountId: v2Main } }] }))).toBe("mapping"); // هدف مكرر
     expect(await code(() => recover(id, h, { cash: [{ code: "OFFICE_CASH", target: { kind: "v1_treasury", businessId: B.businessId } }, { code: "BANK_MAIN", target: { kind: "v2_account", accountId: v2Main } }] }))).toBe("mapping"); // نشاط شركة أخرى
     expect([await events(), await legacyRows(), await banned()]).toEqual([0, rows0, true]);
@@ -186,6 +196,10 @@ describe.runIf(CAN)("♻️ 0051 — حظر الكتابات القديمة ور
     expect(newV2.slice(oldV2.length).every((r: any) => r.ev === `ledger-v3-recovery:snapshot:${s.snapshotEventId}`)).toBe(true);
     expect(await banned()).toBe(false);
     expect((await q("SELECT status FROM tenants WHERE id = ?", [A.tenantId]))[0].status).toBe("suspended");
+    // التصفير مسجّل في حدث الاستعادة بتفسيره ومرجعه واعتماده
+    const [rec] = await q("SELECT figuresJson j FROM ledger_legacy_archive_events WHERE tenantId = ? AND action = 'recovery'", [A.tenantId]);
+    const recJson = typeof rec.j === "string" ? JSON.parse(rec.j) : rec.j;
+    expect(recJson.zeroed).toEqual([expect.objectContaining({ target: `v2:${v2Old}`, reconciledBalance: "50.0000", evidenceRef: "محضر جرد 2026-09-01 رقم 7", approvedByEmployeeId: e.ownerA })]);
     const rows = await legacyRows();
     const again = await recover(s.snapshotEventId!, s.figuresHash);
     expect([again.replay, await legacyRows()]).toEqual([true, rows]);

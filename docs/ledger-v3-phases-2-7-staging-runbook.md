@@ -126,10 +126,17 @@ node dist/scripts/check-ledger-prereqs.mjs
      "cash": [{ "code": "OFFICE_CASH", "target": { "kind": "v1_treasury", "businessId": 0 } },
               { "code": "BANK_MAIN", "target": { "kind": "v2_account", "accountId": 0 } }],
      "acknowledgedNonCash": ["<كل حساب غير نقدي برصيد غير صفري>"],
-     "zeroTargets": [{ "kind": "v2_account", "accountId": 0 }] }
+     "zeroTargets": [{ "target": { "kind": "v2_account", "accountId": 0 },
+                       "reconciledBalance": "<الرصيد القديم الحالي كما طُوبق>",
+                       "explanation": "<لماذا لا مقابل له في V3 — 10 أحرف على الأقل>",
+                       "evidenceRef": "<مرجع مستند المطابقة>",
+                       "approvedByEmployeeId": 0 }] }
    ```
-   كل حساب نقدي/بنكي/محفظة برصيد ← هدف واحد؛ كل حساب آخر برصيد يُذكر في `acknowledgedNonCash` (يُتابَع خارج V1/V2)؛
-   كل خزنة/حساب قديم نقدي برصيد خارج الخريطة يُذكر في `zeroTargets`. الهدف لا يتكرر؛ خزنة V1 بمنزلتين فقط.
+   كل حساب نقدي/بنكي/محفظة برصيد ← هدف واحد؛ كل حساب آخر برصيد يُذكر في `acknowledgedNonCash` (يُتابَع خارج V1/V2).
+   **التصفير لا يُقبل لمجرد غياب مقابل في V3**: كل خزنة/حساب قديم نقدي برصيد خارج `cash` يجب أن يُحسم في `zeroTargets`
+   بتفسير موثّق، ومرجع مطابقة، ورصيد مطابَق يساوي الرصيد الحالي بالضبط، واعتماد صريح من مالك فعّال لنفس الشركة.
+   أي هدف غير محسوم (ناقص أو غير مطابق) يرفض التنفيذ كله برمز `unresolved`. الهدف لا يتكرر؛ خزنة V1 بمنزلتين فقط.
+   التفسير والمرجع والاعتماد تُحفظ في حدث الاستعادة الدائم.
 5. الاستعادة — dry-run (يطبع قبل/بعد/الفرق لكل هدف) ثم apply:
    ```bash
    node dist/scripts/legacy-recovery.mjs recover --tenant <t> --actor <ownerId> --reason "<سبب>" --plan plan.json
