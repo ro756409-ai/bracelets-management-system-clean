@@ -63,6 +63,7 @@ describe.runIf(CAN)("↩️ المرتجع بعد التسليم — التحص�
   };
   const lines = async (key: string) => (await q(`SELECT a.code, e.side, e.amount FROM ledger_entries e JOIN ledger_accounts a ON a.id = e.accountId
     JOIN ledger_transactions t ON t.id = e.transactionId WHERE t.tenantId = ? AND t.idempotencyKey = ? ORDER BY e.id`, [A.tenantId, key])).map((r: any) => [r.code, r.side, r.amount]);
+  const bal = async (code: string) => (await q("SELECT currentBalance b FROM ledger_accounts WHERE tenantId = ? AND code = ?", [A.tenantId, code]))[0]?.b;
   const countKey = async (key: string) => Number((await q("SELECT COUNT(*) n FROM ledger_transactions WHERE tenantId = ? AND idempotencyKey = ?", [A.tenantId, key]))[0].n);
   /** صافي حساب لأوردر واحد (debit − credit) عبر كل قيوده. */
   const orderNet = async (orderId: number, codeName: string, extraKeys: string[] = []) => {
@@ -118,17 +119,17 @@ describe.runIf(CAN)("↩️ المرتجع بعد التسليم — التحص�
     expect((await (await call(e.amA)).refunds.list()).find((x: any) => x.orderId === o.id)?.outstanding).toBe("500.0000");
     expect((await settle("RT-ST-2", "P2")).outcomes[0].status).toBe("already_settled");
     const am = await call(e.amA);
-    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500.01", date: "2026-10-16" }))).toBe("CONFLICT");
-    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "REVENUE", amount: "500", date: "2026-10-16" }))).not.toBe("ok"); // ليست خزنة
-    const p = await am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16" });
+    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500.01", date: "2026-10-16", operationId: "ui:p2-over-01" }))).toBe("CONFLICT");
+    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "REVENUE", amount: "500", date: "2026-10-16", operationId: "ui:p2-rev-001" }))).not.toBe("ok"); // ليست خزنة
+    const p = await am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16", operationId: "ui:p2-pay-001" });
     expect(p.replay).toBe(false);
-    expect((await am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16" })).replay).toBe(true);
-    expect(await countKey(`order:${o.id}:refund`)).toBe(1);
+    expect((await am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16", operationId: "ui:p2-pay-001" })).replay).toBe(true); // نفس العملية = لا تكرار
+    expect(await countKey(`order:${o.id}:refund:ui:p2-pay-001`)).toBe(1);
     expect((await am.refunds.list()).find((x: any) => x.orderId === o.id)).toBeUndefined();
-    expect(await code(() => am.refunds.retain({ orderId: o.id, amount: "1", reason: "شحن المرتجع", date: "2026-10-16" }))).toBe("CONFLICT"); // لا شيء قائم
+    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "1", date: "2026-10-16", operationId: "ui:p2-pay-002" }))).toBe("CONFLICT"); // لا شيء قائم
   });
 
-  it("بعد التسوية: الإيراد يُعكس مقابل التزام رد (ذمة بوسطة المسوّاة لا تُمس)؛ رد جزئي + احتجاز بسبب = الالتزام؛ لا تجاوز ولا تكرار", async () => {
+  it("بعد التسوية: الإيراد يُعكس مقابل التزام رد (ذمة بوسطة المسوّاة لا تُمس)؛ الاحتفاظ معطّل والطلب المباشر مرفوض؛ الرد على دفعات حتى الالتزام بلا تجاوز ولا تكرار", async () => {
     const o = await delivered("P3");
     expect((await settle("RT-ST-3", "P3")).outcomes[0].status).toBe("posted");
     const r = await returned(o.id);
@@ -137,20 +138,27 @@ describe.runIf(CAN)("↩️ المرتجع بعد التسليم — التحص�
     expect((await returned(o.id)).status).toBe("replay");
     expect(await orderNet(o.id, "COD_BOSTA", [`bosta-settle:${sh("P3")}:cod`])).toBe("0.0000");
     const am = await call(e.amA);
-    expect(await code(() => am.refunds.retain({ orderId: o.id, amount: "50", reason: "x", date: "2026-10-16" }))).toBe("BAD_REQUEST"); // سبب إلزامي
-    await am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "450", date: "2026-10-16" });
-    expect(await code(() => am.refunds.retain({ orderId: o.id, amount: "60", reason: "شحن المرتجع على العميل", date: "2026-10-16" }))).toBe("CONFLICT"); // > 50 الباقي
-    await am.refunds.retain({ orderId: o.id, amount: "50", reason: "شحن المرتجع على العميل", date: "2026-10-16" });
-    expect(await lines(`order:${o.id}:refund-retained`)).toEqual([["REFUND_PAYABLE", "debit", "50.0000"], ["REV_RETURN_RETAINED", "credit", "50.0000"]]);
+    // الاحتفاظ معطّل بقرار المالك: الطلب المباشر مرفوض للجميع (حتى المالك) ولا يكتب شيئًا
+    for (const who of [e.amA, e.ownerA]) {
+      const err = await (await call(who)).refunds.retain({ orderId: o.id, amount: "50", reason: "شحن المرتجع على العميل", date: "2026-10-16" }).then(() => null, (x: any) => x);
+      expect(err?.code).toBe("FORBIDDEN"); expect(err?.message).toMatch(/معطّل بقرار المالك/);
+    }
+    expect(Number((await q("SELECT COUNT(*) n FROM ledger_transactions WHERE tenantId = ? AND idempotencyKey LIKE ?", [A.tenantId, `order:${o.id}:refund-retained%`]))[0].n)).toBe(0);
+    // الرد على دفعات: 450 ثم الباقي 50؛ أي زيادة مرفوضة
+    await am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "450", date: "2026-10-16", operationId: "ui:p3-pay-001" });
+    expect((await am.refunds.list()).find((x: any) => x.orderId === o.id)?.outstanding).toBe("50.0000"); // الباقي يظل التزامًا
+    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "60", date: "2026-10-16", operationId: "ui:p3-pay-002" }))).toBe("CONFLICT");
+    await am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "50", date: "2026-10-16", operationId: "ui:p3-pay-003" });
     expect(await orderNet(o.id, "REFUND_PAYABLE", [`bosta-settle:${sh("P3")}:cod`])).toBe("0.0000");
-    // صافي إيراد الأوردر: المحتجز فقط (50) — لا إيراد مبيعات لأوردر مرتجع
-    expect([await orderNet(o.id, "REVENUE"), await orderNet(o.id, "REV_SHIPPING"), await orderNet(o.id, "REV_RETURN_RETAINED")]).toEqual(["0.0000", "0.0000", "-50.0000"]);
-    // مفتاح الرد ثابت: ردّ ثانٍ بمبلغ مختلف = تعارض لا قيد جديد
-    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "10", date: "2026-10-16" }))).toBe("CONFLICT");
-    expect(await countKey(`order:${o.id}:refund`)).toBe(1);
+    // لا إيراد لأوردر مرتجع، ولا حركة على «المحتجز»
+    expect([await orderNet(o.id, "REVENUE"), await orderNet(o.id, "REV_SHIPPING"), await bal("REV_RETURN_RETAINED")]).toEqual(["0.0000", "0.0000", "0.0000"]);
+    // نفس العملية بمبلغ مختلف = تعارض لا قيد جديد؛ أي دفعة إضافية = تجاوز
+    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "10", date: "2026-10-16", operationId: "ui:p3-pay-001" }))).toBe("CONFLICT");
+    expect(await code(() => am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "1", date: "2026-10-16", operationId: "ui:p3-pay-004" }))).toBe("CONFLICT");
+    expect(Number((await q("SELECT COUNT(*) n FROM ledger_transactions WHERE tenantId = ? AND idempotencyKey LIKE ?", [A.tenantId, `order:${o.id}:refund:%`]))[0].n)).toBe(2);
   });
 
-  it("تزامن الرد والاحتجاز بكامل الالتزام نفسه: واحد فقط ينجح ولا يتجاوز المجموع الالتزام", async () => {
+  it("تزامن دفعتي رد بكامل الالتزام نفسه: واحدة فقط تنجح ولا يتجاوز المجموع الالتزام", async () => {
     // التزام قائم لأوردر آخر — رصيد الحساب الإجمالي يكفي للاثنين، فمنع التجاوز هنا من فحص الأوردر نفسه لا من «منع السالب»
     const other = await delivered("P4B"); await settle("RT-ST-4B", "P4B"); await returned(other.id);
     const o = await delivered("P4");
@@ -169,8 +177,8 @@ describe.runIf(CAN)("↩️ المرتجع بعد التسليم — التحص�
     await holder.query("START TRANSACTION");
     await holder.query("SELECT id FROM ledger_accounts WHERE id = ? FOR UPDATE", [refundAcc]);
     const pending = Promise.allSettled([
-      am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16" }),
-      am.refunds.retain({ orderId: o.id, amount: "500", reason: "تزامن اختبار", date: "2026-10-16" }),
+      am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16", operationId: "ui:p4-pay-A01" }),
+      am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16", operationId: "ui:p4-pay-B01" }),
     ]);
     let waits = 0;
     for (let i = 0; i < 200 && waits < 2; i++) {
@@ -222,9 +230,9 @@ describe.runIf(CAN)("↩️ المرتجع بعد التسليم — التحص�
     await settle("RT-ST-6", "P6"); await returned(o.id);
     const acc = await call(e.accA);
     expect(await code(() => acc.refunds.list())).toBe("FORBIDDEN");
-    expect(await code(() => acc.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16" }))).toBe("FORBIDDEN");
+    expect(await code(() => acc.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16", operationId: "ui:p6-acc-001" }))).toBe("FORBIDDEN");
     const ob = await call(e.ownerB);
-    expect(await code(() => ob.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16" }))).not.toBe("ok");
-    expect(await countKey(`order:${o.id}:refund`)).toBe(0);
+    expect(await code(() => ob.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16", operationId: "ui:p6-ob-0001" }))).not.toBe("ok");
+    expect(Number((await q("SELECT COUNT(*) n FROM ledger_transactions WHERE tenantId = ? AND idempotencyKey LIKE ?", [A.tenantId, `order:${o.id}:refund%`]))[0].n)).toBe(0);
   });
 });

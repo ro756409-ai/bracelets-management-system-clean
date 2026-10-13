@@ -95,19 +95,19 @@ describe("🚛 تسوية شركة الشحن", () => {
     await waitFor(() => expect(state.setCalls).toEqual([{ key: "carrier.bosta.payout_weekdays", scopeBusinessId: 0, value: 10 }]));
   });
 
-  it("مبالغ مستحقة للعملاء: الرد من خزنة بالمبلغ القائم، والاحتجاز يتطلب سببًا؛ ونطاق نشاط واحد (رفض السيرفر) = القسم مخفي", async () => {
+  it("مبالغ مستحقة للعملاء: الرد على دفعات بمعرّف عملية (ضغط مزدوج = طلب واحد)، ولا زر احتفاظ (معطّل بقرار المالك)؛ ونطاق نشاط واحد = القسم مخفي", async () => {
     state.refunds = [{ orderId: 7, orderNumber: "A-7", businessId: 1, outstanding: "500.0000" }];
     render(<LedgerCarrier />);
     expect(screen.getByTestId("refund-7").textContent).toContain("A-7");
+    expect(screen.queryByTestId("refund-retain-7")).toBeNull();
+    expect(screen.getByTestId("refunds").textContent).toContain("الباقي يظل التزامًا");
     fireEvent.click(screen.getByTestId("refund-pay-7"));
-    fireEvent.click(screen.getByTestId("refund-run"));
-    await waitFor(() => expect(state.payCalls).toEqual([expect.objectContaining({ orderId: 7, amount: "500.0000", accountCode: "BANK_MAIN" })]));
+    fireEvent.change(screen.getByTestId("refund-amount"), { target: { value: "300" } }); // دفعة جزئية
+    const run = screen.getByTestId("refund-run");
+    fireEvent.click(run); fireEvent.click(run);
+    await waitFor(() => expect(state.payCalls).toEqual([expect.objectContaining({ orderId: 7, amount: "300", accountCode: "BANK_MAIN", operationId: expect.stringMatching(/^ui:/) })]));
     expect(state.invalidated).toBe(1);
-    fireEvent.click(screen.getByTestId("refund-retain-7"));
-    expect((screen.getByTestId("refund-run") as HTMLButtonElement).disabled).toBe(true); // بلا سبب
-    fireEvent.change(screen.getByLabelText("السبب (إلزامي)"), { target: { value: "شحن المرتجع على العميل" } });
-    fireEvent.click(screen.getByTestId("refund-run"));
-    await waitFor(() => expect(state.retainCalls).toEqual([expect.objectContaining({ orderId: 7, reason: "شحن المرتجع على العميل" })]));
+    expect(state.retainCalls).toEqual([]);
     cleanup();
     state.refundError = { data: { code: "FORBIDDEN" } };
     render(<LedgerCarrier />);

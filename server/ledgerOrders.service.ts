@@ -229,14 +229,8 @@ export async function afterCarrierOrderUpdate(input: { businessId: number; order
 export async function orderRefundLiability(d: LedgerDb, tenantId: number, order: { id: number; bostaShipmentId: string | null; bostaTrackingNumber: string | null }) {
   const acc = await accountsByCode(d, tenantId, ["REFUND_PAYABLE"]);
   if (acc.missing.length) return { created: 0n, settled: 0n, outstanding: 0n };
-  const createdKeys = [`order:${order.id}:returned`, ...settlementKeysFor(order)];
-  const settledKeys = [`order:${order.id}:refund`, `order:${order.id}:refund-retained`];
-  const sum = async (keys: string[], side: "debit" | "credit") => {
-    const rows = await d.select({ amount: ledgerEntries.amount }).from(ledgerEntries).innerJoin(ledgerTransactions, eq(ledgerTransactions.id, ledgerEntries.transactionId))
-      .where(and(eq(ledgerTransactions.tenantId, tenantId), inArray(ledgerTransactions.idempotencyKey, keys), eq(ledgerEntries.accountId, acc.ids.REFUND_PAYABLE), eq(ledgerEntries.side, side)));
-    return rows.reduce((s2, r) => s2 + toMinorUnits(String(r.amount)), 0n);
-  };
-  const created = await sum(createdKeys, "credit"), settled = await sum(settledKeys, "debit");
+  const [row] = rawRows(await d.execute(refundLiabilitySql(tenantId, acc.ids.REFUND_PAYABLE, order, false)));
+  const created = toMinorUnits(String(row?.created ?? "0")), settled = toMinorUnits(String(row?.settled ?? "0"));
   return { created, settled, outstanding: created - settled };
 }
 
@@ -244,15 +238,24 @@ export async function orderRefundLiability(d: LedgerDb, tenantId: number, order:
  * فحص الالتزام **داخل transaction الترحيل** بعد قفل حساب «مبالغ مستحقة للعملاء» FOR UPDATE (guard): الرد والاحتجاز
  * المتزامنان على نفس الأوردر يتسلسلان، فلا يتجاوز مجموعهما الالتزام. القراءة مقفولة (FOR SHARE) ترى آخر التزام.
  */
-const refundGuard = (tenantId: number, accountId: number, order: { id: number; bostaShipmentId: string | null; bostaTrackingNumber: string | null }, amount: bigint) => async (tx: any) => {
+/**
+ * الالتزام لأوردر: دائن «مبالغ مستحقة للعملاء» من مرتجعه/تسوية شحنته − مدين كل دفعات الرد (`order:<id>:refund…` — دفعات متعددة،
+ * ويشمل أي احتجاز تاريخي). القفل اختياري (FOR SHARE داخل transaction القيد).
+ */
+function refundLiabilitySql(tenantId: number, accountId: number, order: { id: number; bostaShipmentId: string | null; bostaTrackingNumber: string | null }, lock: boolean) {
   const created = [`order:${order.id}:returned`, ...settlementKeysFor(order)];
-  const settledKeys = [`order:${order.id}:refund`, `order:${order.id}:refund-retained`];
-  const list = (keys: string[]) => sql.join(keys.map(k => sql`${k}`), sql`, `);
-  const [row] = rawRows(await tx.execute(sql`SELECT
-      COALESCE(SUM(CASE WHEN e.side = 'credit' AND t.idempotencyKey IN (${list(created)}) THEN e.amount END), 0) AS created,
-      COALESCE(SUM(CASE WHEN e.side = 'debit' AND t.idempotencyKey IN (${list(settledKeys)}) THEN e.amount END), 0) AS settled
+  const list = sql.join(created.map(k => sql`${k}`), sql`, `);
+  const refundLike = `order:${order.id}:refund%`;
+  return sql`SELECT
+      COALESCE(SUM(CASE WHEN e.side = 'credit' AND t.idempotencyKey IN (${list}) THEN e.amount END), 0) AS created,
+      COALESCE(SUM(CASE WHEN e.side = 'debit' AND t.idempotencyKey LIKE ${refundLike} THEN e.amount END), 0) AS settled
     FROM ledger_transactions t JOIN ledger_entries e ON e.transactionId = t.id AND e.accountId = ${accountId}
-    WHERE t.tenantId = ${tenantId} AND t.idempotencyKey IN (${list([...created, ...settledKeys])}) FOR SHARE`));
+    WHERE t.tenantId = ${tenantId} AND (t.idempotencyKey IN (${list}) OR t.idempotencyKey LIKE ${refundLike})${lock ? sql` FOR SHARE` : sql``}`;
+}
+
+const refundGuard = (tenantId: number, accountId: number, order: { id: number; bostaShipmentId: string | null; bostaTrackingNumber: string | null }, amount: bigint) => async (tx: any) => {
+  // الـguard قبل إدراج قيود الحركة نفسها ⇒ القائم المقروء قبل هذه الدفعة
+  const [row] = rawRows(await tx.execute(refundLiabilitySql(tenantId, accountId, order, true)));
   const outstanding = toMinorUnits(String(row?.created ?? "0")) - toMinorUnits(String(row?.settled ?? "0"));
   if (amount > outstanding) throw new LedgerError("conflict", `المبلغ ${fromMinorUnits(amount)} يتجاوز الالتزام القائم ${fromMinorUnits(outstanding)}`);
 };
@@ -265,36 +268,34 @@ async function refundContext(d: LedgerDb, tenantId: number, orderId: number) {
 }
 
 /** رد المبلغ للعميل (مرة واحدة) من خزنة/بنك/محفظة — لا يتجاوز الالتزام القائم. */
-export async function payCustomerRefund(input: { tenantId: number; orderId: number; accountCode: string; amount: string; date: string; actor: LedgerActor }, db?: LedgerDb) {
+/**
+ * رد مبلغ للعميل من خزنة/بنك/محفظة — على دفعات (جزئي أو كامل)، كل دفعة بمعرّف عملية (`order:<id>:refund:<op>`): نفس العملية =
+ * replay، ومجموع الدفعات لا يتجاوز الالتزام القائم (فحص داخل transaction القيد بعد قفل الحساب). الباقي يظل التزامًا حتى يُرد.
+ */
+export async function payCustomerRefund(input: { tenantId: number; orderId: number; accountCode: string; amount: string; date: string; operationId: string; actor: LedgerActor }, db?: LedgerDb) {
   const d = await resolveDb(db);
+  if (!/^[A-Za-z0-9_:-]{8,80}$/.test(input.operationId)) throw new LedgerError("invalid", "معرّف العملية");
   const o = await refundContext(d, input.tenantId, input.orderId);
   const l = await orderRefundLiability(d, input.tenantId, o);
   const amount = toMinorUnits(input.amount);
-  const existing = await txByKey(d, input.tenantId, `order:${o.id}:refund`);
+  const key = `order:${o.id}:refund:${input.operationId}`.slice(0, 191);
+  const existing = await txByKey(d, input.tenantId, key);
   if (existing == null && (amount <= 0n || amount > l.outstanding)) throw new LedgerError("conflict", `مبلغ الرد ${input.amount} يتجاوز الالتزام القائم ${fromMinorUnits(l.outstanding)}`);
   const acc = await accountsByCode(d, input.tenantId, ["REFUND_PAYABLE", input.accountCode]);
   if (acc.missing.length) throw new LedgerError("account", acc.missing.join("، "));
   const [cash] = await d.select({ kind: ledgerAccounts.kind }).from(ledgerAccounts).where(eq(ledgerAccounts.id, acc.ids[input.accountCode])).limit(1);
   if (!cash || !["cash", "bank", "wallet"].includes(cash.kind)) throw new LedgerError("account", "الرد يُدفع من خزنة أو بنك أو محفظة");
-  return postLedgerTransaction({ tenantId: input.tenantId, sourceBusinessId: o.businessId, kind: "customer_refund", idempotencyKey: `order:${o.id}:refund`, effectiveDate: input.date, currency: "EGP", actor: input.actor,
+  return postLedgerTransaction({ tenantId: input.tenantId, sourceBusinessId: o.businessId, kind: "customer_refund", idempotencyKey: key, effectiveDate: input.date, currency: "EGP", actor: input.actor,
     entries: [{ accountId: acc.ids.REFUND_PAYABLE, side: "debit", amount: fromMinorUnits(amount), businessId: o.businessId }, { accountId: acc.ids[input.accountCode], side: "credit", amount: fromMinorUnits(amount), businessId: o.businessId }],
     description: `رد مبلغ مرتجع للعميل — الأوردر ${o.orderNumber}`, sourceType: "order", sourceReference: String(o.id), guard: refundGuard(input.tenantId, acc.ids.REFUND_PAYABLE, o, amount) } as any, d);
 }
 
-/** احتجاز الباقي من الالتزام (مثل شحن المرتجع على العميل) بسبب معلن إلزامي — مرة واحدة، لا يتجاوز القائم. */
-export async function retainRefundRemainder(input: { tenantId: number; orderId: number; amount: string; reason: string; date: string; actor: LedgerActor }, db?: LedgerDb) {
-  if (!input.reason || input.reason.trim().length < 3) throw new LedgerError("reason");
-  const d = await resolveDb(db);
-  const o = await refundContext(d, input.tenantId, input.orderId);
-  const l = await orderRefundLiability(d, input.tenantId, o);
-  const amount = toMinorUnits(input.amount);
-  const existing = await txByKey(d, input.tenantId, `order:${o.id}:refund-retained`);
-  if (existing == null && (amount <= 0n || amount > l.outstanding)) throw new LedgerError("conflict", `المبلغ المحتجز ${input.amount} يتجاوز الالتزام القائم ${fromMinorUnits(l.outstanding)}`);
-  const acc = await accountsByCode(d, input.tenantId, ["REFUND_PAYABLE", "REV_RETURN_RETAINED"]);
-  if (acc.missing.length) throw new LedgerError("account", acc.missing.join("، "));
-  return postLedgerTransaction({ tenantId: input.tenantId, sourceBusinessId: o.businessId, kind: "adjustment", idempotencyKey: `order:${o.id}:refund-retained`, effectiveDate: input.date, currency: "EGP", actor: input.actor,
-    entries: [{ accountId: acc.ids.REFUND_PAYABLE, side: "debit", amount: fromMinorUnits(amount), businessId: o.businessId }, { accountId: acc.ids.REV_RETURN_RETAINED, side: "credit", amount: fromMinorUnits(amount), businessId: o.businessId }],
-    description: `احتجاز من مبلغ مرتجع — الأوردر ${o.orderNumber}: ${input.reason.trim()}`, sourceType: "order", sourceReference: String(o.id), guard: refundGuard(input.tenantId, acc.ids.REFUND_PAYABLE, o, amount) } as any, d);
+/**
+ * الاحتفاظ بباقي مستحق العميل (تحويله إلى إيراد) — **معطّل بقرار المالك**: الباقي يظل التزامًا حتى يُرد. الرفض قبل أي قراءة أو
+ * كتابة؛ أسس الخصم المقترحة (رسوم شحن المرتجع، تلف ثابت بالفحص، تنازل كتابي) مؤجلة لقرار منفصل.
+ */
+export async function retainRefundRemainder(_input: { tenantId: number; orderId: number; amount: string; reason: string; date: string; actor: LedgerActor }, _db?: LedgerDb): Promise<never> {
+  throw new LedgerError("retainDisabled");
 }
 
 /** أوردرات عليها التزام رد قائم (للواجهة). */
