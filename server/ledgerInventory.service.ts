@@ -304,6 +304,28 @@ export async function openReturnInspection(input: { businessId: number; orderId:
   });
 }
 
+/**
+ * حماية الجرد من الحركة أثناء العدّ: الفرق يُحسب من لقطة بداية الجرد، فأي حركة لنفس الصنف في نفس المخزن بعد اللقطة (خروج
+ * لمندوب، استلام، مرتجع، تحويل) كانت ستُحسب مرتين (حركتها + «عجز/زيادة» في الجرد). لشركة دفترها مفعّل: الاعتماد يُرفض بقائمة
+ * الأصناف التي تحرّكت، ويُعاد عدّها في جرد جديد. لا يوقف الشحن ولا يغيّر سلوك الشركات الأخرى. الوقت بالثانية ⇒ حركة في
+ * نفس ثانية اللقطة تُعد حركة (جانب الأمان).
+ */
+export async function assertNoMovementDuringStocktake(input: { businessId: number; stocktakeId: number }) {
+  const d = await resolveDb();
+  const ctx = await activeContext(d, input.businessId);
+  if (!ctx) return;
+  const moved = rawRows(await d.execute(sql`SELECT DISTINCT l.inventoryKey AS k, COALESCE(p.name, l.inventoryKey) AS name
+    FROM stocktakes s
+    JOIN stocktake_lines l ON l.stocktakeId = s.id
+    JOIN inventory_balances b ON b.businessId = s.businessId AND b.warehouseId = s.warehouseId AND b.inventoryKey = l.inventoryKey
+    JOIN inventory_transactions t ON t.inventoryBalanceId = b.id AND t.createdAt >= s.createdAt
+    LEFT JOIN products p ON p.id = l.productId
+    WHERE s.id = ${input.stocktakeId} AND s.businessId = ${input.businessId}
+    ORDER BY l.inventoryKey LIMIT 20`));
+  if (moved.length > 0)
+    throw new InventoryLedgerError(`تحرّك مخزون ${moved.length === 20 ? "20+" : moved.length} صنف بعد بدء الجرد (${moved.map((m: any) => m.name).join("، ")}) — الفرق سيُحسب مرتين؛ ابدأ جردًا جديدًا لهذه الأصناف`);
+}
+
 export async function postReturnInspection(input: { businessId: number; inspectionId: number; actor: LedgerActor }) {
   const d = await resolveDb();
   const ctx = await activeContext(d, input.businessId);

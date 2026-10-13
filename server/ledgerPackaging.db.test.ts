@@ -13,6 +13,7 @@ import { ensureDailyAccounts } from "./ledgerDaily.service";
 import { postOrderDelivered, postOrderReturned } from "./ledgerOrders.service";
 import { incomeStatement } from "./ledgerReports.service";
 import { makeInventoryKey } from "./inventoryV2.service";
+import { createStocktake, submitStocktake } from "./stocktake.service";
 import { businessDateKey } from "../shared/businessTime";
 import { createTempSchema, type TempSchema } from "./testTempSchema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
@@ -25,6 +26,7 @@ import { splitMigrationStatements } from "../shared/ledgerV3Spec";
  *  • رصيد التغليف الافتتاحي: المالك فقط، من عدّ يوم Go-live، مرة لكل نشاط.
  *  • استهلاك التغليف عند التسليم لمندوب الشحن من الإعداد المُدخل، مرة واحدة تحت التزامن وإعادة المسح وتغيير الإعداد؛ بلا إعداد
  *    لا قيد؛ مخزون لا يكفي = مراجعة والتسليم ينجح؛ المرتجع لا يعيد التغليف؛ والتكلفة في قائمة الدخل مرة واحدة.
+ *  • الجرد: حركة لنفس الصنف بعد اللقطة = اعتماد مرفوض بلا أي تغيير؛ جرد جديد بعد الحركة يُعتمد بفرق صحيح.
  */
 const CAN = Boolean(process.env.TEST_DATABASE_URL && process.env.JWT_SECRET);
 const sign = (employeeId: number) => jwt.sign({ employeeId }, process.env.JWT_SECRET as string);
@@ -34,7 +36,7 @@ async function code(fn: () => Promise<any>): Promise<string> { try { await fn();
 const insId = (r: any) => Number((Array.isArray(r) ? r[0] : r)?.insertId ?? r?.id);
 const GOLIVE = "2026-10-01";
 
-describe.runIf(CAN)("📦 المرحلة 4 — التغليف والإدخال اليدوي", () => {
+describe.runIf(CAN)("📦 المرحلة 4 — التغليف، الإدخال اليدوي، وحماية الجرد", () => {
   let tmp: TempSchema; let A: CoreTestFixture, B: CoreTestFixture;
   const e: Record<string, number> = {};
   const acc: Record<string, number> = {};
@@ -145,5 +147,30 @@ describe.runIf(CAN)("📦 المرحلة 4 — التغليف والإدخال �
     expect((await q("SELECT COUNT(*) n FROM ledger_transactions WHERE reversalOfTransactionId = (SELECT id FROM ledger_transactions WHERE idempotencyKey = ?)", [`order:${o2}:packaging`]))[0].n).toBe(0);
     const after = await incomeStatement({ tenantId: A.tenantId, from: GOLIVE, to: today, scope: null });
     expect(after.cogs).toBe("3.5000"); // تكلفة المنتج انتقلت لـ«قيد الفحص»؛ التغليف استُهلك فعلًا
+  });
+
+  it("حماية الجرد: خروج لمندوب بعد بدء الجرد = اعتماد مرفوض بلا تغيير (لا فرق مكرر)؛ جرد جديد بعد الحركة يُعتمد", async () => {
+    const owner = await caller(e.ownerA);
+    const onHand = async () => Number((await q("SELECT onHandQuantity n FROM inventory_balances WHERE warehouseId = ? AND inventoryKey = ?", [wh, makeInventoryKey(product)]))[0].n);
+    const st1 = (await createStocktake({ businessId: A.businessId, warehouseId: wh, actor: { id: e.ownerA, name: "مالك" } })).stocktakeId;
+    await new Promise(r => setTimeout(r, 1100)); // الوقت بالثانية — الحركة بعد اللقطة بوضوح
+    const o = await mkOrder();
+    await (await caller(e.whA)).inventoryLedger.handover({ businessId: A.businessId, orderId: o });
+    const before = await onHand();
+    // العدّ الفعلي بعد الخروج = لقطة − 1؛ بدون الحماية كان سيُسجَّل «عجز 1» فوق الخروج نفسه
+    await q("UPDATE stocktake_lines SET countedQuantity = systemQuantity - 1, differenceQuantity = -1 WHERE stocktakeId = ?", [st1]);
+    await submitStocktake({ businessId: A.businessId, stocktakeId: st1 });
+    const err = await owner.accountingV2.stocktakeApprove({ businessId: A.businessId, stocktakeId: st1 }).then(() => null, (x: any) => x);
+    expect(err?.code).toBe("PRECONDITION_FAILED");
+    expect(err?.message).toMatch(/بعد بدء الجرد/);
+    expect((await q("SELECT status FROM stocktakes WHERE id = ?", [st1]))[0].status).toBe("pending_approval");
+    expect(await onHand()).toBe(before);
+    expect(Number((await q("SELECT COUNT(*) n FROM inventory_transactions WHERE sourceType LIKE 'stocktake%'"))[0].n)).toBe(0);
+    // جرد جديد بعد الحركة: اللقطة تشمل الخروج، والعدّ المطابق = لا فرق ويُعتمد
+    await new Promise(r => setTimeout(r, 1100));
+    const st2 = (await createStocktake({ businessId: A.businessId, warehouseId: wh, actor: { id: e.ownerA, name: "مالك" } })).stocktakeId;
+    await submitStocktake({ businessId: A.businessId, stocktakeId: st2 });
+    expect(await code(() => owner.accountingV2.stocktakeApprove({ businessId: A.businessId, stocktakeId: st2 }))).toBe("ok");
+    expect(await onHand()).toBe(before);
   });
 });

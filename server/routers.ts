@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { handoverOrder, InventoryLedgerError, isInventoryLedgerActive, postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
+import { assertNoMovementDuringStocktake, handoverOrder, InventoryLedgerError, isInventoryLedgerActive, postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
 import type { LedgerActor } from "../shared/ledgerV3Core";
 import { TRPCError } from "@trpc/server";
 import { createBostaShipment, isBostaEnabledForBusiness, resolveShipmentImagesForOrder, toPublicImageUrl } from "./bosta.service";
@@ -2383,6 +2383,9 @@ export const appRouter = router({
       .input(z.object({ businessId: z.number(), stocktakeId: z.number() }))
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(ctx, input.businessId);
+        // Ledger V3 (المرحلة 4): حركة لنفس الأصناف أثناء العدّ = رفض قبل أي تغيير (لا فرق مكرر)
+        try { await assertNoMovementDuringStocktake({ businessId, stocktakeId: input.stocktakeId }); }
+        catch (e) { if (e instanceof InventoryLedgerError) throw new TRPCError({ code: "PRECONDITION_FAILED", message: e.message }); throw e; }
         const result = await approveStocktake({
           stocktakeId: input.stocktakeId,
           businessId,
