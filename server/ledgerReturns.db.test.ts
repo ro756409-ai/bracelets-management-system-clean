@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
 import jwt from "jsonwebtoken";
 import { drizzle } from "drizzle-orm/mysql2";
+import mysql from "mysql2/promise";
 import { appRouter } from "./routers";
 import { createContext } from "./_core/context";
 import { __setDbForTests, createEmployee } from "./db";
@@ -154,12 +155,34 @@ describe.runIf(CAN)("↩️ المرتجع بعد التسليم — التحص�
     const other = await delivered("P4B"); await settle("RT-ST-4B", "P4B"); await returned(other.id);
     const o = await delivered("P4");
     await settle("RT-ST-4", "P4"); await returned(o.id);
+    // الخزنة تكفي الطلبين معًا — فلا يوقف التجاوز إلا حماية الالتزام (لا «منع الرصيد السالب» للخزنة)
+    const ids = Object.fromEntries((await q("SELECT id, code FROM ledger_accounts WHERE tenantId = ?", [A.tenantId])).map((r: any) => [r.code, r.id]));
+    await postLedgerTransaction({ tenantId: A.tenantId, sourceBusinessId: A.businessId, kind: "owner_contribution", idempotencyKey: "rt-fund-cash-0001", effectiveDate: "2026-10-15", currency: "EGP",
+      actor: { type: "employee", employeeId: e.ownerA }, description: "تمويل خزنة للاختبار", sourceType: null, sourceReference: null,
+      entries: [{ accountId: ids.OFFICE_CASH, side: "debit", amount: "5000", businessId: A.businessId }, { accountId: ids.OPENING_EQUITY, side: "credit", amount: "5000", businessId: null }] } as any);
     const am = await call(e.amA);
-    const runs = await Promise.allSettled([
+    // تزامن متحكَّم فيه: اتصال مستقل يقفل صف حساب «مبالغ مستحقة للعملاء» FOR UPDATE؛ الطلبان يجتازان الفحص المسبق خارج
+    // الـtransaction ثم ينتظران عند قفل الحسابات. لا نحرّر القفل إلا بعد رؤية انتظارين فعليين على مخطط هذا الاختبار وحده
+    // (performance_schema.data_lock_waits) — فيصلان للحماية متزامنين في كل تشغيل، أيًا كان التوقيت أو الملفات الأخرى.
+    const holder = await mysql.createConnection(tmp.url);
+    const refundAcc = (await q("SELECT id FROM ledger_accounts WHERE tenantId = ? AND code = 'REFUND_PAYABLE'", [A.tenantId]))[0].id;
+    await holder.query("START TRANSACTION");
+    await holder.query("SELECT id FROM ledger_accounts WHERE id = ? FOR UPDATE", [refundAcc]);
+    const pending = Promise.allSettled([
       am.refunds.pay({ orderId: o.id, accountCode: "OFFICE_CASH", amount: "500", date: "2026-10-16" }),
       am.refunds.retain({ orderId: o.id, amount: "500", reason: "تزامن اختبار", date: "2026-10-16" }),
     ]);
+    let waits = 0;
+    for (let i = 0; i < 200 && waits < 2; i++) {
+      waits = Number(((await holder.query("SELECT COUNT(DISTINCT w.REQUESTING_ENGINE_TRANSACTION_ID) n FROM performance_schema.data_lock_waits w JOIN performance_schema.data_locks l ON l.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID WHERE l.OBJECT_SCHEMA = ? AND l.OBJECT_NAME = 'ledger_accounts'", [tmp.name])) as any)[0][0].n);
+      if (waits < 2) await new Promise(r => setTimeout(r, 25));
+    }
+    await holder.query("COMMIT"); await holder.end();
+    expect(waits).toBe(2); // معاملتان منتظرتان (الطلبان) وصلتا معًا لقفل الحساب
+    const runs = await pending;
     expect(runs.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    // الرفض من حماية الالتزام نفسها (داخل transaction القيد)، لا من أي سبب آخر
+    expect((runs.find(r => r.status === "rejected") as PromiseRejectedResult).reason?.message).toMatch(/يتجاوز الالتزام القائم/);
     expect(await orderNet(o.id, "REFUND_PAYABLE", [`bosta-settle:${sh("P4")}:cod`])).toBe("0.0000");
     expect(await orderNet(other.id, "REFUND_PAYABLE", [`bosta-settle:${sh("P4B")}:cod`])).toBe("-500.0000"); // التزام الأوردر الآخر سليم
   });
