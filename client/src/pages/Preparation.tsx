@@ -16,6 +16,7 @@ import {
 import { ResponsiveDataTable, StickyActionBar, type Column, type FilterChip } from "@/components/shared";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { OfflineState } from "@/components/shared";
+import { NEEDS_COMPLETION_LABEL, shippingReadiness } from "@shared/shippingReadiness";
 
 const ITEMS_PER_PAGE = 50;
 const TOUCH = "min-h-11 md:min-h-9";
@@ -171,26 +172,30 @@ export default function Preparation() {
       return;
     }
     if (printing || savePrintLogMutation.isPending) return;
-    // التحقق من البيانات الناقصة قبل التصدير
+    // ناقصة بيانات الشحن (هاتف/عنوان 10 أحرف/محافظة معروفة — نفس قاعدة السيرفر) **تُستبعد** من الشيت؛ يُعرض عددها
+    // وأسبابها، ويُصدَّر الباقي. السيرفر يستبعدها هو أيضًا (ورقة «مستبعدة» داخل الملف).
     const selectedOrders = orders.filter(o => selectedIds.includes(o.id));
-    const incompleteOrders = selectedOrders.filter(o =>
-      !o.customerPhone || String(o.customerPhone).length < 10 ||
-      !o.governorate || !o.governorate.trim() ||
-      !o.customerAddress || String(o.customerAddress).trim().length < 5
-    );
+    const incompleteOrders = selectedOrders
+      .map(o => ({ o, reasons: [
+        ...(!o.customerPhone || String(o.customerPhone).length < 10 ? ["رقم الهاتف غير صحيح"] : []),
+        ...shippingReadiness(o).issues.map(i => i.message),
+      ] }))
+      .filter(x => x.reasons.length > 0);
+    const exportIds = selectedIds.filter(id => !incompleteOrders.some(x => x.o.id === id));
     if (incompleteOrders.length > 0) {
-      const names = incompleteOrders.slice(0, 5).map(o => `#${o.orderNumber}`).join(", ");
+      const lines = incompleteOrders.slice(0, 5).map(x => `#${x.o.orderNumber}: ${x.reasons.join("، ")}`).join(" | ");
       const more = incompleteOrders.length > 5 ? ` و${incompleteOrders.length - 5} آخرين` : "";
-      toast.error(`${incompleteOrders.length} أوردر ببيانات ناقصة (هاتف/عنوان/محافظة): ${names}${more}. يرجى إكمال البيانات أولاً.`, { duration: 8000 });
-      return;
+      const msg = `استُبعد ${incompleteOrders.length} أوردر من شيت الشحن — ${NEEDS_COMPLETION_LABEL}: ${lines}${more}`;
+      if (exportIds.length === 0) { toast.error(`${msg}. لا يوجد أوردر مكتمل للتصدير.`, { duration: 10000 }); return; }
+      toast.warning(msg, { duration: 10000 });
     }
     setPrinting(true);
     const params = new URLSearchParams();
-    params.set("orderIds", selectedIds.join(","));
+    params.set("orderIds", exportIds.join(","));
     window.open(`/api/export/shipping?${params.toString()}`, "_blank");
-    // حفظ سجل الطباعة
-    savePrintLogMutation.mutate({ type: "shipping_sheet", orderIds: [...selectedIds] });
-    toast.success(`جاري تصدير شيت الشحن لـ ${selectedIds.length} أوردر...`);
+    // حفظ سجل الطباعة — بالأوردرات المصدَّرة فعلًا فقط
+    savePrintLogMutation.mutate({ type: "shipping_sheet", orderIds: [...exportIds] });
+    toast.success(`جاري تصدير شيت الشحن لـ ${exportIds.length} أوردر...`);
     setTimeout(() => setPrinting(false), 1500);
   };
 

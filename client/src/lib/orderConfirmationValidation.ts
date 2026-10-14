@@ -1,3 +1,5 @@
+import { shippingReadiness } from "@shared/shippingReadiness";
+
 /**
  * What an order needs before an employee can confirm it. Pulled out of
  * EmployeeDashboard.tsx (Today Confirmations) so the rule is unit-testable without
@@ -27,8 +29,13 @@ export function getMissingConfirmationFields(order: ConfirmableOrder): string[] 
   const missing: string[] = [];
   if (!order.customerName?.trim()) missing.push(FIELD_LABELS.customerName);
   if (!order.customerPhone?.trim()) missing.push(FIELD_LABELS.customerPhone);
+  // العنوان/المحافظة: فارغ ⇒ اسم الحقل؛ موجود لكن غير مكتمل ⇒ سبب «محتاج استكمال بيانات» بنفس قاعدة السيرفر
+  // (عنوان 10 أحرف، محافظة معروفة بمطابقة دقيقة/بديل معتمد) — فالموظف يعرف السبب قبل أن يرفضه السيرفر.
+  const shipping = shippingReadiness(order);
   if (!order.governorate?.trim()) missing.push(FIELD_LABELS.governorate);
+  else for (const i of shipping.issues) if (i.code.startsWith("governorate")) missing.push(i.message);
   if (!order.customerAddress?.trim()) missing.push(FIELD_LABELS.customerAddress);
+  else for (const i of shipping.issues) if (i.code === "address_short") missing.push(i.message);
   if (!order.productName?.trim()) missing.push(FIELD_LABELS.productName);
   if (!(Number(order.totalAmount) > 0)) missing.push(FIELD_LABELS.totalAmount);
   return missing;

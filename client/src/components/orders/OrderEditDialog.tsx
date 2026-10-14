@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/shared";
 import { GovernorateCitySelect } from "./GovernorateCitySelect";
+import { NEEDS_COMPLETION_LABEL, shippingReadiness } from "@shared/shippingReadiness";
 import {
   OrderItemsEditor, newLineKey, linesTotal,
   type EditorLine, type CatalogProduct, type CatalogVariant,
@@ -205,9 +206,8 @@ export function OrderEditDialog({
       out.push("رقم الهاتف غير صحيح (١١ رقم يبدأ بـ010/011/012/015)");
     if (header.customerPhone2.trim() && !isValidEgyptianMobile(header.customerPhone2))
       out.push("التليفون البديل غير صحيح");
-    if (!header.governorate.trim()) out.push("المحافظة مطلوبة");
-    if (header.customerAddress.trim().length < 5)
-      out.push("العنوان قصير جداً (٥ أحرف على الأقل)");
+    // العنوان/المحافظة الناقصان **لا يمنعان الحفظ** — تنبيه «محتاج استكمال بيانات» مستقل تحت (shippingReadiness):
+    // الأوردر الناقص القديم يتفتح ويتعدّل ويتحفظ، لكنه لا يُؤكَّد ولا يُشحن قبل استكماله.
     // Only judge the basket once it has arrived — while the query is in flight `lines` is
     // legitimately empty, and complaining about it flashed a false warning on every open.
     if (!itemsLoading) {
@@ -219,6 +219,7 @@ export function OrderEditDialog({
     }
     return out;
   }, [header, lines, itemsLoading]);
+  const shipping = useMemo(() => shippingReadiness(header), [header]);
 
   function close() {
     setConfirmDiscard(false);
@@ -361,10 +362,12 @@ export function OrderEditDialog({
                     onChange={e => patch({ customerAddress: e.target.value })}
                     placeholder="الشارع، المنطقة، علامة مميزة..."
                     rows={2}
-                    className={`mt-1 ${header.customerAddress.trim().length < 5 ? "border-destructive/30 bg-destructive/10" : ""}`}
+                    className={`mt-1 ${!shipping.ready ? "border-[var(--warning)]/40 bg-[var(--warning)]/10" : ""}`}
                   />
-                  {header.customerAddress.trim().length < 5 && (
-                    <p className="mt-1 text-xs text-destructive">العنوان مطلوب (أكثر من ٥ حروف)</p>
+                  {shipping.issues.some(i => i.code.startsWith("address")) && (
+                    <p className="mt-1 text-xs text-[var(--warning)]" data-testid="edit-address-hint">
+                      {shipping.issues.filter(i => i.code.startsWith("address")).map(i => i.message).join(" — ")} — يُحفظ، لكن لا يُؤكَّد ولا يُشحن قبل استكماله
+                    </p>
                   )}
                 </div>
               </div>
@@ -445,6 +448,18 @@ export function OrderEditDialog({
                 )}
               </div>
             </section>
+
+            {!shipping.ready && (
+              <div className="rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-2" role="status" data-testid="needs-completion">
+                <p className="flex items-center gap-1 text-xs font-semibold text-[var(--warning)]">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  {NEEDS_COMPLETION_LABEL} — يمكن الحفظ، لكن لا تأكيد ولا شحن ولا شيت شحن قبل الاستكمال
+                </p>
+                <ul className="mt-1 list-inside list-disc text-xs text-[var(--warning)]">
+                  {shipping.issues.map(i => <li key={i.code}>{i.message}</li>)}
+                </ul>
+              </div>
+            )}
 
             {issues.length > 0 && (
               <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-2">

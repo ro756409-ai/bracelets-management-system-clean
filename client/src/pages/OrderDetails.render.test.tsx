@@ -63,7 +63,7 @@ const ITEMS = [
 ];
 const ORDER = {
   id: 42, orderNumber: "MJ-1042", businessId: 7, status: "new", source: "facebook",
-  customerName: "منى أحمد", customerPhone: "01012345678", customerPhone2: null, governorate: "القاهرة", city: "مدينة نصر", customerAddress: "شارع 1",
+  customerName: "منى أحمد", customerPhone: "01012345678", customerPhone2: null, governorate: "القاهرة", city: "مدينة نصر", customerAddress: "شارع 1 بجوار المسجد",
   productName: "سوار نحاسي ×3", quantity: 3, totalAmount: "750", shippingFees: 50, projectedShippingCostSnapshot: null, paymentMethod: "cod", collectionStatus: "pending", collectedAmount: null,
   assignedEmployeeId: 5, assignedAt: "2026-10-08T09:00:00Z", confirmedAt: null, printedAt: null, shippedAt: null, deliveredAt: null, createdAt: "2026-10-08T08:00:00Z",
   bostaShipmentId: null, bostaTrackingNumber: null, bostaSentAt: null, bostaStatus: null, bostaLastError: null,
@@ -262,5 +262,27 @@ describe("⏳ Loading / Error / Permission / NotFound / Offline", () => {
     setup();
     render(<OrderDetails />);
     expect(screen.getByTestId("od-section-identity")).toBeTruthy();
+  });
+});
+
+describe("📦 محتاج استكمال بيانات (تنبيه مستقل — ليس حالة)", () => {
+  it("أوردر مؤكد بعنوان قصير ومحافظة غير معروفة: يفتح، يظهر التنبيه بالأسباب، وزر إرسال بوسطة معطّل بالسبب", () => {
+    setup({ ...ORDER, status: "confirmed", customerAddress: "شارع 1", governorate: "ال" });
+    render(<OrderDetails />);
+    const review = screen.getByTestId("od-section-review").textContent!;
+    expect(review).toContain("محتاج استكمال بيانات");
+    expect(review).toContain("العنوان قصير — 10 أحرف على الأقل (الحالي 6)");
+    expect(review).toContain("«ال» غير معروفة");
+    expect((screen.getByTestId("bosta-send") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("bosta-send-block").textContent).toContain("محتاج استكمال بيانات");
+  });
+  it("أوردر مؤكد مكتمل: لا تنبيه، وزر الإرسال متاح؛ حالة «جديد» لا تُظهر أزرار بوسطة أصلًا", () => {
+    setup({ ...ORDER, status: "confirmed" });
+    render(<OrderDetails />);
+    expect(screen.getByTestId("od-section-review").textContent).not.toContain("محتاج استكمال بيانات");
+    expect((screen.getByTestId("bosta-send") as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId("bosta-send-block")).toBeNull();
+    cleanup(); setup(); render(<OrderDetails />);
+    expect(screen.queryByTestId("bosta-controls")).toBeNull();
   });
 });

@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { discardOperation, operationIdFor, persistentOperationIdFor, sessionFingerprint } from "@/lib/operationId";
+import { NEEDS_COMPLETION_LABEL, shippingReadiness } from "@shared/shippingReadiness";
 import {
   OrderEditDialog, type OrderEditSavePayload,
 } from "@/components/orders/OrderEditDialog";
@@ -1998,6 +1999,8 @@ function CreateOrderDialog({
   const opScope = `order.create|orders-page|${sessionFingerprint()}|b${form.businessId || "none"}`;
   const [opConflict, setOpConflict] = useState<string | null>(null);
   const startNewOperation = () => { discardOperation(opScope); setOpConflict(null); };
+  // «محتاج استكمال بيانات» — تنبيه مستقل لا يمنع الحفظ (نفس قاعدة السيرفر للتأكيد والشحن)
+  const createShipping = shippingReadiness({ customerAddress: form.customerAddress, governorate: form.governorate });
 
   const createMutation = trpc.orders.create.useMutation({
     onSuccess: (data) => {
@@ -2162,6 +2165,12 @@ function CreateOrderDialog({
             <Textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="أي ملاحظات إضافية..." className="mt-1" rows={2} />
           </div>
         </div>
+        {(form.customerAddress.trim() || form.governorate) && !createShipping.ready && (
+          <div className="rounded-[var(--radius-brand-md)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 p-3 text-sm" role="status" data-testid="create-needs-completion">
+            <p className="font-semibold text-[var(--warning)]">{NEEDS_COMPLETION_LABEL} — سيُحفظ الأوردر، لكن لا تأكيد ولا شحن قبل الاستكمال</p>
+            <ul className="mt-1 list-inside list-disc text-xs text-[var(--warning)]">{createShipping.issues.map(i => <li key={i.code}>{i.message}</li>)}</ul>
+          </div>
+        )}
         {opConflict && (
           <div className="flex flex-col gap-2 rounded-[var(--radius-brand-md)] border border-destructive/40 bg-destructive/5 p-3 text-sm sm:flex-row sm:items-center" role="alert" data-testid="create-order-conflict">
             <p className="flex flex-1 items-start gap-1.5 text-destructive"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />

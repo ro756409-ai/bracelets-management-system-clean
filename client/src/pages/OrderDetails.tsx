@@ -29,6 +29,7 @@ import { isActionable, money, paymentLabel, COLLECTION_STATUS } from "@/componen
 import { OrderActionBar } from "@/components/orders/OrderActionBar";
 import { CancelOrderDialog, PostponeOrderDialog, NoAnswerDialog } from "@/components/orders/OrderActionDialogs";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
+import { NEEDS_COMPLETION_LABEL, shippingIssuesText, shippingReadiness } from "@shared/shippingReadiness";
 
 const STATUS_LABELS: Record<string, string> = {
   new: "جديد",
@@ -231,8 +232,9 @@ export default function OrderDetails() {
     if (order.needsReview) out.push({ key: "needsReview", text: order.reviewReason ? `يحتاج مراجعة: ${order.reviewReason}` : "يحتاج مراجعة", tone: "warning" });
     if (order.isDuplicate) out.push({ key: "duplicate", text: o.duplicateMarkedAt ? `مكرر — عُلّم في ${fmtDate(o.duplicateMarkedAt)}` : "مكرر", tone: "danger" });
     if (!isValidEgyptianMobile(order.customerPhone ?? "")) out.push({ key: "phone", text: "رقم الهاتف ليس رقم موبايل مصري صالح (01xxxxxxxxx)", tone: "warning" });
-    if (!order.governorate) out.push({ key: "governorate", text: "المحافظة غير محددة", tone: "warning" });
-    if (!order.customerAddress?.trim()) out.push({ key: "address", text: "العنوان فارغ", tone: "warning" });
+    // «محتاج استكمال بيانات» — تنبيه مستقل (ليس حالة): نفس قاعدة السيرفر للتأكيد والشحن وشيت الشحن
+    const shipping = shippingReadiness(order);
+    if (!shipping.ready) out.push({ key: "needsCompletion", text: `${NEEDS_COMPLETION_LABEL}: ${shippingIssuesText(shipping)} — لا تأكيد ولا شحن قبل الاستكمال`, tone: "warning" });
     if (o.contentChangedAfterShipment) out.push({ key: "stale", text: SHIPMENT_STALE_WARNING, tone: "danger" });
     if (order.bostaLastError && !order.bostaShipmentId) out.push({ key: "bosta", text: `خطأ Bosta: ${order.bostaLastError}`, tone: "danger" });
     return out;
@@ -288,6 +290,11 @@ export default function OrderDetails() {
   const items: any[] = Array.isArray(o.items) ? o.items : [];
   const businessName = o.businessId != null ? (businesses.find(b => b.id === o.businessId)?.name ?? null) : null;
   const bostaEligible = order.status === 'confirmed' || order.status === 'printed' || order.status === 'preparing' || order.status === 'shipped';
+  // الإنشاء الجديد للشحنة: نفس شروط السيرفر (الحالة + اكتمال بيانات الشحن) — «تم الشحن» يبقى ظاهرًا لطباعة AWB فقط
+  const shippingReady = shippingReadiness(order);
+  const bostaSendBlock = !["confirmed", "printed", "preparing"].includes(order.status)
+    ? "الإرسال لبوسطة للأوردرات المؤكدة أو قيد التحضير أو المطبوعة فقط"
+    : !shippingReady.ready ? `${NEEDS_COMPLETION_LABEL}: ${shippingIssuesText(shippingReady)}` : null;
   const collection = order.collectionStatus ? COLLECTION_STATUS[order.collectionStatus] : undefined;
   const pay = paymentLabel(order as any);
   const canAct = isActionable(order as any);
@@ -548,8 +555,8 @@ export default function OrderDetails() {
                       orderId: order.id,
                       depositAmount: bostaDeposit ? Math.max(1, Number(bostaDepositAmount) || 0) : undefined,
                     })}
-                    disabled={sendToBostaMutation.isPending || !bostaCanSend}
-                    title={bostaCanSend ? undefined : bostaReason ?? undefined}
+                    disabled={sendToBostaMutation.isPending || !bostaCanSend || !!bostaSendBlock}
+                    title={bostaSendBlock ?? (bostaCanSend ? undefined : bostaReason ?? undefined)}
                     data-testid="bosta-send"
                   >
                     {sendToBostaMutation.isPending ? (
@@ -562,6 +569,7 @@ export default function OrderDetails() {
                 </>
               )}
               {!bostaCanSend && bostaReason && <p className="basis-full text-xs text-muted-foreground">{bostaReason}</p>}
+              {!order.bostaShipmentId && bostaSendBlock && <p className="basis-full text-xs text-[var(--warning)]" data-testid="bosta-send-block">{bostaSendBlock}</p>}
             </div>
           )}
         </SectionCard>

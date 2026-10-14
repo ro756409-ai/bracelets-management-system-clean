@@ -30,6 +30,7 @@ import { isValidEgyptianMobile } from "@/components/orders/OrderEditDialog";
 import { PartnerLogo } from "@/components/brand/PartnerLogo";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { discardOperation, persistentOperationIdFor } from "@/lib/operationId";
+import { NEEDS_COMPLETION_LABEL, shippingIssuesText, shippingReadiness } from "@shared/shippingReadiness";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { ErrorState, OfflineState } from "@/components/shared";
 import { DEFAULT_ORDER_ENTRY_MODE, type OrderEntryMode } from "@shared/orderEntryMode";
@@ -586,6 +587,13 @@ export default function FacebookEntry() {
         <Label htmlFor={`${idp}-address`} className="text-xs flex items-center gap-1"><MapPin className="h-3.5 w-3.5" aria-hidden="true" /> العنوان *</Label>
         <Input id={`${idp}-address`} value={c.customerAddress} onChange={e => set({ ...c, customerAddress: e.target.value })} className={`mt-1 ${TOUCH}`} aria-invalid={!!issues?.customerAddress || undefined} aria-describedby={issues?.customerAddress ? `${idp}-address-error` : undefined} />
         {inlineError(`${idp}-address`, issues?.customerAddress)}
+        {/* «محتاج استكمال بيانات» — تنبيه لا يمنع الحفظ (نفس قاعدة السيرفر للتأكيد والشحن) */}
+        {c.customerAddress.trim() && c.governorate && !shippingReadiness(c).ready && (
+          <p className="mt-1 flex items-center gap-1 text-xs text-[var(--warning)]" data-testid={`${idp}-needs-completion`}>
+            <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
+            {NEEDS_COMPLETION_LABEL}: {shippingIssuesText(shippingReadiness(c))} — يُحفظ، لكن لا تأكيد ولا شحن قبل الاستكمال
+          </p>
+        )}
       </div>
     </div>
   );

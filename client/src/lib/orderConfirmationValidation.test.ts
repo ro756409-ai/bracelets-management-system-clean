@@ -46,3 +46,13 @@ describe("canConfirmOrder", () => {
     expect(canConfirmOrder({ ...COMPLETE, governorate: "" })).toBe(false);
   });
 });
+
+describe("محتاج استكمال بيانات قبل التأكيد (نفس قاعدة السيرفر)", () => {
+  it("عنوان أقل من 10 أحرف أو محافظة غير معروفة ⇒ السبب الواضح يظهر للموظف قبل الإرسال", () => {
+    expect(getMissingConfirmationFields({ ...COMPLETE, customerAddress: "شارع 1" })).toEqual(["العنوان قصير — 10 أحرف على الأقل (الحالي 6)"]);
+    expect(getMissingConfirmationFields({ ...COMPLETE, governorate: "ال" })).toEqual(["المحافظة «ال» غير معروفة — اختر محافظة من القائمة"]);
+    expect(getMissingConfirmationFields({ ...COMPLETE, governorate: "غير محدد" })).toEqual(["المحافظة غير محددة"]);
+    expect(canConfirmOrder({ ...COMPLETE, customerAddress: "123456789" })).toBe(false);
+    expect(canConfirmOrder({ ...COMPLETE, customerAddress: "1234567890", governorate: "الاسكندريه" })).toBe(true);
+  });
+});
