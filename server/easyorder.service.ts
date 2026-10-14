@@ -24,6 +24,7 @@
  * to run rather than guess when a channel has no token configured. The webhook path needs
  * none of this and works today.
  */
+import { canonicalGovernorate, MANUAL_ADDRESS_CONFLICT_PREFIX } from "../shared/shippingReadiness";
 import { normalizeEgyptianPhone } from "../shared/phone";
 import {
   getDb,
@@ -192,37 +193,63 @@ export type FetchLike = (url: string, init?: any) => Promise<{
 }>;
 
 // ==================== Governorate normalization ====================
-const GOVERNORATE_MAP: Record<string, string> = {
-  "القاهره": "القاهرة", "الجيزه": "الجيزة",
-  "الاسكندريه": "الإسكندرية", "الاسكندرية": "الإسكندرية", "اسكندرية": "الإسكندرية", "Alexandria": "الإسكندرية",
-  "اسيوط": "أسيوط", "الاسيوط": "أسيوط", "اسوان": "أسوان",
-  "الاسماعيليه": "الإسماعيلية", "اسماعيلية": "الإسماعيلية", "الاسماعيلية": "الإسماعيلية",
-  "الفيوم": "الفيوم", "فيوم": "الفيوم", "المنيا": "المنيا", "منيا": "المنيا",
-  "بنى سويف": "بني سويف", "بني سويف": "بني سويف", "سوهاج": "سوهاج", "قنا": "قنا",
-  "الدقهليه": "الدقهلية", "الدقهلية": "الدقهلية", "دقهلية": "الدقهلية",
-  "الغربيه": "الغربية", "الغربية": "الغربية", "غربية": "الغربية",
-  "المنوفيه": "المنوفية", "المنوفية": "المنوفية", "منوفية": "المنوفية",
-  "القليوبيه": "القليوبية", "القليوبية": "القليوبية", "قليوبية": "القليوبية",
-  "الشرقيه": "الشرقية", "الشرقية": "الشرقية", "شرقية": "الشرقية",
-  "البحيره": "البحيرة", "البحيرة": "البحيرة", "بحيرة": "البحيرة",
-  "كفر الشيخ": "كفر الشيخ", "كفرالشيخ": "كفر الشيخ",
-  "الاقصر": "الأقصر", "الأقصر": "الأقصر", "اقصر": "الأقصر",
-  "البحر الاحمر": "البحر الأحمر", "البحر الأحمر": "البحر الأحمر",
-  "الوادي الجديد": "الوادي الجديد", "مطروح": "مطروح",
-  "شمال سيناء": "شمال سيناء", "جنوب سيناء": "جنوب سيناء",
-  "بورسعيد": "بورسعيد", "السويس": "السويس", "دمياط": "دمياط",
-};
-
+/**
+ * محافظة EasyOrder → الاسم الرسمي بمطابقة دقيقة أو بديل معتمد فقط (shared/shippingReadiness). **بلا مطابقة جزئية
+ * ولا أول كلمة**: المطابقة الجزئية كانت بتحوّل «ال» أو نص عشوائي لمحافظة حقيقية بصمت. غير المعروف يُحفظ كما هو
+ * (≤30 حرفًا) فيظهر الأوردر «محتاج استكمال بيانات» بدل محافظة مخمَّنة.
+ */
 export function normalizeGovernorate(raw: string | undefined | null): string {
-  if (!raw) return "غير محدد";
-  const trimmed = raw.trim();
-  if (GOVERNORATE_MAP[trimmed]) return GOVERNORATE_MAP[trimmed];
-  for (const [key, val] of Object.entries(GOVERNORATE_MAP)) {
-    if (trimmed.includes(key) || key.includes(trimmed)) return val;
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "غير محدد";
+  return canonicalGovernorate(trimmed) ?? (trimmed.length > 30 ? "غير محدد" : trimmed);
+}
+
+const normSpace = (v: unknown) => String(v ?? "").replace(/\s+/g, " ").trim();
+
+export { MANUAL_ADDRESS_CONFLICT_PREFIX };
+
+/**
+ * حماية العنوان المصحَّح يدويًا من تحديثات EasyOrder (webhook والمزامنة — نفس `upsertEasyOrder`):
+ *  • «يدوي» = العنوان الحالي يختلف عن عنوان آخر payload خزّنّاه من EasyOrder (`externalRawPayload`). بلا payload سابق
+ *    قابل للقراءة ⇒ نعتبر الحالي يدويًا (لا نفقد بيانات بصمت).
+ *  • EasyOrder **لم يغيّر** العنوان (القادم = السابق) ⇒ نحتفظ بالحالي بصمت — المزامنة المتكررة لا تولّد تنبيهات.
+ *  • EasyOrder **غيّره** (القادم ≠ السابق) والحالي يدوي ⇒ نحتفظ باليدوي + تنبيه مراجعة بالقيمة القادمة. غير يدوي ⇒ القادم.
+ *  • تنبيه تعارض قائم لم يُحسم (الحالي ما زال ≠ القادم) يبقى مع التحديثات اللاحقة ولا يُمسح بصمت.
+ *  • المحافظة: لا نستبدل محافظة معروفة بقيمة غير معروفة أبدًا؛ ومعروفة مختلفة تُعامل بنفس قاعدة العنوان.
+ */
+export function reconcileEasyOrderShipping(input: {
+  current: { customerAddress: string | null; governorate: string | null; externalRawPayload: string | null; reviewReason?: string | null };
+  incoming: { customerAddress: string; governorate: string };
+}): { customerAddress: string; governorate: string; conflict: string | null } {
+  let prev: { address: string; governorate: string } | null = null;
+  try {
+    const p = input.current.externalRawPayload ? JSON.parse(input.current.externalRawPayload) : null;
+    if (p && typeof p === "object") prev = { address: String(p.address ?? ""), governorate: normalizeGovernorate(p.government) };
+  } catch { prev = null; }
+  const cur = { address: input.current.customerAddress ?? "", governorate: input.current.governorate ?? "" };
+  const openConflict = String(input.current.reviewReason ?? "").includes(MANUAL_ADDRESS_CONFLICT_PREFIX);
+  const conflicts: string[] = [];
+
+  let customerAddress = input.incoming.customerAddress;
+  const inAddr = normSpace(input.incoming.customerAddress), curAddr = normSpace(cur.address);
+  if (inAddr === curAddr) customerAddress = cur.address;
+  else if (prev && inAddr === normSpace(prev.address)) {
+    customerAddress = cur.address; // EasyOrder لم يغيّره — الحالي (اليدوي) يبقى بصمت
+    if (openConflict) conflicts.push(`العنوان القادم «${inAddr || "فارغ"}»`);
+  } else {
+    const manual = prev ? normSpace(prev.address) !== curAddr : curAddr !== "";
+    if (manual) { customerAddress = cur.address; conflicts.push(`العنوان القادم «${inAddr || "فارغ"}»`); }
   }
-  const firstWord = trimmed.split(/[\s,،]/)[0];
-  if (GOVERNORATE_MAP[firstWord]) return GOVERNORATE_MAP[firstWord];
-  return trimmed.length > 30 ? "غير محدد" : trimmed;
+
+  let governorate = input.incoming.governorate;
+  const curCan = canonicalGovernorate(cur.governorate), inCan = canonicalGovernorate(input.incoming.governorate);
+  const prevCan = prev ? canonicalGovernorate(prev.governorate) : null;
+  if (curCan && !inCan) governorate = cur.governorate; // لا تدهور من معروفة لغير معروفة
+  else if (curCan && inCan && curCan !== inCan) {
+    if (prev && inCan === prevCan) { governorate = cur.governorate; if (openConflict) conflicts.push(`المحافظة القادمة «${inCan}»`); }
+    else if (!prev || prevCan !== curCan) { governorate = cur.governorate; conflicts.push(`المحافظة القادمة «${inCan}»`); }
+  }
+  return { customerAddress, governorate, conflict: conflicts.length ? `${MANUAL_ADDRESS_CONFLICT_PREFIX} (${conflicts.join("، ")}) — تم الاحتفاظ بالعنوان اليدوي، راجِعه` : null };
 }
 
 const DEFAULT_SHIPPING_FEE = 50;
@@ -430,15 +457,24 @@ export async function upsertEasyOrder(
       // الهيدر والبنود في transaction واحدة (صف الأوردر مقفول أولًا). قبل كده كانوا
       // خطوتين منفصلتين، ففشل البنود كان بيسيب هيدر متحدّث وبنود قديمة. التطبيع
       // والتحقق من انتقال الحالة زي `updateOrder` بالظبط.
+      // حماية العنوان اليدوي تُحسب **تحت قفل صف الأوردر** (adjustPatch) — تعديل يدوي متزامن مايضيعش بين القراءة والكتابة.
+      let addressConflict: string | null = null;
       await updateOrderWithItems(existing.id, orderFields as any, itemRows, {
         normalizePhones: true,
+        adjustPatch: current => {
+          const r = reconcileEasyOrderShipping({ current: current as any, incoming: { customerAddress: orderFields.customerAddress, governorate: orderFields.governorate } });
+          addressConflict = r.conflict;
+          const reasons = [reviewReason, r.conflict].filter(Boolean).join(" | ");
+          return { customerAddress: r.customerAddress, governorate: r.governorate, needsReview: needsReview || !!r.conflict, reviewReason: reasons || null };
+        },
       });
+      const finalReason = [reviewReason, addressConflict].filter(Boolean).join(" | ") || undefined;
       return {
         outcome: "updated",
         orderId: existing.id,
         orderNumber: existing.orderNumber,
-        needsReview,
-        reviewReason,
+        needsReview: needsReview || !!addressConflict,
+        reviewReason: finalReason,
       };
     }
 

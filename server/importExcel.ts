@@ -5,6 +5,8 @@ import * as XLSX from "xlsx";
 import * as db from "./db";
 import type { InsertOrder } from "../drizzle/schema";
 import { normalizeEgyptianPhone } from "../shared/phone";
+import { canonicalGovernorate } from "../shared/shippingReadiness";
+import { resolveGovernorate } from "../shared/egyptGovernorates";
 import { findPotentialDuplicates, type ExistingOrderForDuplicateCheck } from "./duplicateDetection";
 import { matchImportItem } from "./productMatching";
 import {
@@ -29,61 +31,6 @@ const upload = multer({
   },
 });
 
-// Normalize Egyptian governorate names
-const GOVERNORATE_MAP: Record<string, string> = {
-  "القاهره": "القاهرة",
-  "الجيزه": "الجيزة",
-  "الاسكندريه": "الإسكندرية",
-  "الاسكندرية": "الإسكندرية",
-  "اسكندرية": "الإسكندرية",
-  "Alexandria": "الإسكندرية",
-  "اسيوط": "أسيوط",
-  "الاسيوط": "أسيوط",
-  "اسوان": "أسوان",
-  "الاسماعيليه": "الإسماعيلية",
-  "الاسماعيلية": "الإسماعيلية",
-  "اسماعيلية": "الإسماعيلية",
-  "الأقصر": "الأقصر",
-  "الفيوم": "الفيوم",
-  "فيوم": "الفيوم",
-  "المنيا": "المنيا",
-  "منيا": "المنيا",
-  "بنى سويف": "بني سويف",
-  "بني سويف": "بني سويف",
-  "سوهاج": "سوهاج",
-  "قنا": "قنا",
-  "الدقهليه": "الدقهلية",
-  "الدقهلية": "الدقهلية",
-  "دقهلية": "الدقهلية",
-  "الغربيه": "الغربية",
-  "الغربية": "الغربية",
-  "غربية": "الغربية",
-  "المنوفيه": "المنوفية",
-  "المنوفية": "المنوفية",
-  "منوفية": "المنوفية",
-  "القليوبيه": "القليوبية",
-  "القليوبية": "القليوبية",
-  "قليوبية": "القليوبية",
-  "الشرقيه": "الشرقية",
-  "الشرقية": "الشرقية",
-  "شرقية": "الشرقية",
-  "البحيره": "البحيرة",
-  "البحيرة": "البحيرة",
-  "بحيرة": "البحيرة",
-  "كفر الشيخ": "كفر الشيخ",
-  "كفرالشيخ": "كفر الشيخ",
-  "دمياط": "دمياط",
-  "بورسعيد": "بورسعيد",
-  "السويس": "السويس",
-  "سيناء": "شمال سيناء",
-  "شمال سيناء": "شمال سيناء",
-  "جنوب سيناء": "جنوب سيناء",
-  "مطروح": "مطروح",
-  "الوادى الجديد": "الوادي الجديد",
-  "الوادي الجديد": "الوادي الجديد",
-  "البحر الاحمر": "البحر الأحمر",
-  "البحر الأحمر": "البحر الأحمر",
-};
 
 /**
  * Normalize Arabic text: unify hamza/alef, ta marbuta, alef maqsura
@@ -301,19 +248,15 @@ export function extractColorSize(text: string): {
   return { color, size, baseName };
 }
 
+/**
+ * المحافظة من نص (عنوان واتساب): الاسم الرسمي بمطابقة دقيقة/بديل معتمد (shared/shippingReadiness)، وإلا محلل
+ * «يقين أو فراغ» للعنوان الحر (shared/egyptGovernorates — اسم محافظة أو مدينة تخص محافظة واحدة ككلمة كاملة).
+ * **بلا مطابقة جزئية ولا أول كلمة** — غير المؤكد = «غير محدد» فيظهر الأوردر «محتاج استكمال بيانات».
+ */
 function normalizeGov(raw: string): string {
-  if (!raw) return "غير محدد";
-  const trimmed = raw.trim();
-  // Check direct match
-  if (GOVERNORATE_MAP[trimmed]) return GOVERNORATE_MAP[trimmed];
-  // Check partial match (city name might be embedded)
-  for (const [key, val] of Object.entries(GOVERNORATE_MAP)) {
-    if (trimmed.includes(key) || key.includes(trimmed)) return val;
-  }
-  // Return first word if it looks like a city name
-  const firstWord = trimmed.split(/[\s,،]/)[0];
-  if (GOVERNORATE_MAP[firstWord]) return GOVERNORATE_MAP[firstWord];
-  return trimmed.length > 30 ? "غير محدد" : trimmed;
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return "غير محدد";
+  return canonicalGovernorate(trimmed) ?? (resolveGovernorate(trimmed).governorate || "غير محدد");
 }
 
 function normalizePhone(raw: string): string {

@@ -31,6 +31,7 @@ import {
   SHIPMENT_STALE_WARNING,
 } from "../shared/orderContent";
 import { orders } from "../drizzle/schema";
+import { canonicalGovernorate, NEEDS_COMPLETION_LABEL, shippingIssuesText, shippingReadiness } from "../shared/shippingReadiness";
 import { eq, and, isNotNull, isNull, ne, inArray, notInArray, or } from "drizzle-orm";
 
 /**
@@ -45,6 +46,14 @@ import { eq, and, isNotNull, isNull, ne, inArray, notInArray, or } from "drizzle
  *   failed     ← بوسطة رفضت الطلب (مفيش شحنة اتعملت) — retry آمن
  */
 const BOSTA_CREATING = "creating";
+/** حالات الأوردر المسموح شحنها لبوسطة — على السيرفر لكل مسار (فردي/جماعي/إعادة محاولة). */
+export const BOSTA_SENDABLE_STATUSES = ["confirmed", "preparing", "printed"] as const;
+const STATUS_LABEL_AR: Record<string, string> = {
+  new: "جديد", confirmed: "مؤكد", postponed: "مؤجل", cancelled: "ملغي", preparing: "قيد التحضير", shipped: "تم الشحن",
+  delivered: "تم التوصيل", no_answer: "لم يرد", returned: "مرتجع", printed: "مطبوع",
+};
+const notSendableMessage = (status: string | null | undefined) =>
+  `لا يمكن إرسال أوردر حالته «${STATUS_LABEL_AR[String(status)] ?? status}» لبوسطة — المسموح: مؤكد، قيد التحضير، مطبوع`;
 const BOSTA_UNCERTAIN = "uncertain";
 const UNCERTAIN_MESSAGE =
   "حالة إنشاء الشحنة غير مؤكدة — راجع بوسطة قبل إعادة المحاولة عشان ما تتعملش شحنة تانية";
@@ -247,17 +256,14 @@ const GOV_TO_BOSTA_CITY: Record<string, BostaCity> = {
   "العاشر": { _id: "FceDyHXwpSYYF9zGW", name: "Cairo" },
 };
 
-function mapGovToBostaCity(governorate: string): BostaCity | null {
-  const lower = governorate.trim().toLowerCase();
-  // Try direct match first (case-insensitive)
-  for (const [key, val] of Object.entries(GOV_TO_BOSTA_CITY)) {
-    if (key.toLowerCase() === lower) return val;
-  }
-  // Partial match fallback
-  for (const [key, val] of Object.entries(GOV_TO_BOSTA_CITY)) {
-    if (lower.includes(key.toLowerCase()) || key.toLowerCase().includes(lower)) return val;
-  }
-  return null; // unknown city
+/**
+ * مدينة بوسطة من المحافظة — **بلا مطابقة جزئية**: الاسم الرسمي (مطابقة دقيقة أو بديل معتمد عبر
+ * `canonicalGovernorate`) ثم مفتاحه في `GOV_TO_BOSTA_CITY`. المطابقة الجزئية القديمة كانت بتربط «ال» بالقاهرة
+ * بصمت — شحنة لمدينة غلط. غير معروف ⇒ null (الأوردر «محتاج استكمال بيانات»).
+ */
+export function mapGovToBostaCity(governorate: string): BostaCity | null {
+  const canonical = canonicalGovernorate(governorate);
+  return canonical ? GOV_TO_BOSTA_CITY[canonical] ?? null : null;
 }
 
 export interface BostaShipmentResult {
@@ -283,9 +289,9 @@ export function validateOrder(order: {
   // قبل تصحيح الحقل نفسه (مش مجرد علم).
   if (!/^01\d{9}$/.test(String(order.customerPhone ?? "").replace(/\D/g, "")))
     return "رقم الهاتف غير صالح — صحّحه قبل الشحن";
-  if (!order.governorate?.trim() || order.governorate.trim() === "غير محدد")
-    return "المحافظة غير محددة — راجع العنوان وحدّد المحافظة قبل الشحن";
-  if (!order.customerAddress?.trim()) return "العنوان مفقود";
+  // اكتمال العنوان والمحافظة — نفس القاعدة المشتركة للتأكيد وشيت الشحن والواجهة
+  const readiness = shippingReadiness(order);
+  if (!readiness.ready) return `${NEEDS_COMPLETION_LABEL}: ${shippingIssuesText(readiness)} — أكمِل البيانات قبل الشحن`;
   const total = parseFloat(String(order.totalAmount));
   if (isNaN(total) || total <= 0) return "الإجمالي غير صحيح";
   return null;
@@ -355,6 +361,12 @@ export async function createBostaShipment(
   // بشرية بدل ما نبعت تاني على الأعمى.
   if (order.bostaStatus === BOSTA_UNCERTAIN || order.bostaStatus === BOSTA_CREATING) {
     return { success: false, error: UNCERTAIN_MESSAGE };
+  }
+
+  // حالة الأوردر على السيرفر (الواجهة كانت البوابة الوحيدة، والإرسال الجماعي بلا فلتر): الشحن فقط لمؤكد/قيد
+  // التحضير/مطبوع. بلا كتابة على حقول بوسطة — دي مش محاولة شحن فاشلة. تُعاد في شرط الحجز الذرّي تحت.
+  if (!BOSTA_SENDABLE_STATUSES.includes(order.status as any)) {
+    return { success: false, error: notSendableMessage(order.status) };
   }
 
   // تحذير (ليس منع): إذا كان نفس رقم التليفون له شحنة بوسطة في أوردر آخر
@@ -511,6 +523,7 @@ export async function createBostaShipment(
     .where(and(
       eq(orders.id, orderId),
       isNull(orders.bostaShipmentId),
+      inArray(orders.status, [...BOSTA_SENDABLE_STATUSES]),
       or(
         isNull(orders.bostaStatus),
         notInArray(orders.bostaStatus, [BOSTA_CREATING, BOSTA_UNCERTAIN])
@@ -528,6 +541,8 @@ export async function createBostaShipment(
         trackingNumber: fresh.bostaTrackingNumber ?? undefined,
       };
     }
+    // الحالة اتغيّرت بين القراءة والحجز (اتلغى/اتأجّل) — مش «غير مؤكد»، مجرد غير قابل للشحن
+    if (fresh && !BOSTA_SENDABLE_STATUSES.includes(fresh.status as any)) return { success: false, error: notSendableMessage(fresh.status) };
     return { success: false, error: UNCERTAIN_MESSAGE };
   }
 

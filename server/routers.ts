@@ -3617,7 +3617,9 @@ export const appRouter = router({
         z.object({
           customerName: z.string().min(2),
           customerPhone: z.string().min(10),
-          customerAddress: z.string().min(5),
+          // العنوان القصير لا يمنع الحفظ — الأوردر يُحفظ «محتاج استكمال بيانات» (shared/shippingReadiness) ولا يُؤكَّد
+          // ولا يُشحن قبل استكماله. فارغ تمامًا مرفوض كما في شاشة الإدخال.
+          customerAddress: z.string().min(1),
           governorate: z.string().min(2),
           productId: z.number(),
           productName: z.string(),
@@ -5520,7 +5522,9 @@ export const appRouter = router({
         z.object({
           customerName: z.string().min(2),
           customerPhone: z.string().min(10),
-          customerAddress: z.string().min(5),
+          // العنوان القصير لا يمنع الحفظ — الأوردر يُحفظ «محتاج استكمال بيانات» (shared/shippingReadiness) ولا يُؤكَّد
+          // ولا يُشحن قبل استكماله. فارغ تمامًا مرفوض كما في شاشة الإدخال.
+          customerAddress: z.string().min(1),
           governorate: z.string().min(2),
           productId: z.number(),
           productName: z.string(),

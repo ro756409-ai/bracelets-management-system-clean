@@ -1,3 +1,4 @@
+import { shippingReadiness } from "../shared/shippingReadiness";
 import { Request, Response, Express } from "express";
 import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import XLSX from "xlsx-js-style";
@@ -181,14 +182,14 @@ interface ValidationResult {
   warnings: { orderId: number; orderNumber: string; issues: string[] }[];
 }
 
-function validateOrdersForShipping(orders: any[]): ValidationResult {
+export function validateOrdersForShipping(orders: any[]): ValidationResult {
   const warnings: ValidationResult['warnings'] = [];
 
   for (const o of orders) {
     const issues: string[] = [];
     if (!o.customerPhone || o.customerPhone.length < 10) issues.push("رقم الهاتف غير صحيح");
-    if (!o.governorate || o.governorate.trim() === "") issues.push("المحافظة غير محددة");
-    if (!o.customerAddress || o.customerAddress.trim().length < 5) issues.push("العنوان ناقص أو غير واضح");
+    // العنوان والمحافظة: نفس قاعدة التأكيد وبوسطة (shared/shippingReadiness)
+    for (const i of shippingReadiness(o).issues) issues.push(i.message);
     if (!o.customerName || o.customerName.trim() === "") issues.push("اسم العميل غير موجود");
 
     if (issues.length > 0) {
@@ -290,13 +291,13 @@ async function exportShippingSheet(req: Request, res: Response) {
       return res.json(result);
     }
 
-    // Check for incomplete data and warn
+    // الأوردرات ناقصة بيانات الشحن **تُستبعد دائمًا** من الشيت (كانت تُصدَّر رغم التحذير): عددها وأسبابها في ورقة
+    // «مستبعدة» داخل الملف وفي ترويسة X-Excluded-Orders. لا شيء صالح للتصدير ⇒ 422 بالأسباب بدل ملف فارغ.
     const validation = validateOrdersForShipping(orders);
-    const skipIncomplete = req.query.skipIncomplete === "true";
-    let exportOrders = orders;
-
-    if (!skipIncomplete && !validation.valid) {
-      // Still export but mark incomplete orders
+    const excludedIds = new Set(validation.warnings.map(w => w.orderId));
+    const exportOrders = orders.filter((o: any) => !excludedIds.has(o.id));
+    if (orders.length > 0 && exportOrders.length === 0) {
+      return res.status(422).json({ error: `كل الأوردرات المحددة (${orders.length}) ناقصة بيانات الشحن — لم يُصدَّر شيء`, excluded: validation.warnings });
     }
 
     const employees = await getAllEmployees();
@@ -503,6 +504,18 @@ async function exportShippingSheet(req: Request, res: Response) {
       const ws = XLSX.utils.aoa_to_sheet([["لا توجد أوردرات مؤكدة للتصدير"]]);
       XLSX.utils.book_append_sheet(wb, ws, "فارغ");
     }
+
+    if (validation.warnings.length > 0) {
+      const ws = XLSX.utils.aoa_to_sheet([
+        [`مستبعدة من الشيت — ناقصة بيانات الشحن: ${validation.warnings.length} أوردر`],
+        ["رقم الأوردر", "أسباب الاستبعاد"],
+        ...validation.warnings.map(w => [w.orderNumber, w.issues.join(" — ")]),
+      ]);
+      ws["!cols"] = [{ wch: 14 }, { wch: 80 }];
+      ws["!dir"] = "rtl";
+      XLSX.utils.book_append_sheet(wb, ws, "مستبعدة");
+    }
+    res.setHeader("X-Excluded-Orders", String(validation.warnings.length));
 
     const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
     const filename = `shipping_sheet_${new Date().toISOString().split("T")[0]}.xlsx`;

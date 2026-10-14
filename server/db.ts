@@ -1,4 +1,5 @@
 import { assertLegacyFinanceWritable } from "./legacyFinanceArchive";
+import { NEEDS_COMPLETION_LABEL, shippingIssuesText, shippingReadiness, withoutAddressConflictReason } from "../shared/shippingReadiness";
 import {
   eq,
   desc,
@@ -1747,11 +1748,15 @@ export async function updateOrderWithItems(
   id: number,
   patch: Partial<InsertOrder>,
   items: OrderItemWrite[],
-  opts: { normalizePhones?: boolean } = {}
+  opts: {
+    normalizePhones?: boolean;
+    /** داخلي: تعديل الـpatch **بعد قفل الصف** بقراءة قيمه الحالية (مثل حماية العنوان اليدوي من EasyOrder). */
+    adjustPatch?: (current: typeof orders.$inferSelect) => Partial<InsertOrder>;
+  } = {}
 ): Promise<void> {
   await runOrderTransaction(async tx => {
     const [current] = await tx
-      .select({ id: orders.id, status: orders.status })
+      .select()
       .from(orders)
       .where(eq(orders.id, id))
       .limit(1)
@@ -1762,9 +1767,10 @@ export async function updateOrderWithItems(
         `لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${patch.status}" مباشرة`
       );
     }
+    const finalPatch = opts.adjustPatch ? { ...patch, ...opts.adjustPatch(current) } : patch;
     await tx
       .update(orders)
-      .set(opts.normalizePhones ? withNormalizedPhoneFields(patch) : patch)
+      .set(opts.normalizePhones ? withNormalizedPhoneFields(finalPatch) : finalPatch)
       .where(eq(orders.id, id));
     await replaceOrderItemsInTransaction(tx, id, items);
   });
@@ -2479,13 +2485,10 @@ export async function confirmOrder(
       throw new OrderStockInconsistencyError(orderId, String(order.status));
     }
 
-    const missingFields: string[] = [];
-    if (!order.governorate || order.governorate.trim() === "" || order.governorate.trim() === "غير محدد")
-      missingFields.push("اسم المحافظة");
-    if (!order.customerAddress || order.customerAddress.trim().length < 5)
-      missingFields.push("العنوان بالتفصيل");
-    if (missingFields.length > 0)
-      throw new OrderConfirmBlockedError(`لا يمكن تأكيد الأوردر - بيانات ناقصة: ${missingFields.join(" و ")}`);
+    // اكتمال بيانات الشحن (قاعدة مشتركة مع بوسطة وشيت الشحن والواجهة): الأوردر الناقص يُحفظ لكنه لا يُؤكَّد.
+    const readiness = shippingReadiness(order);
+    if (!readiness.ready)
+      throw new OrderConfirmBlockedError(`لا يمكن تأكيد الأوردر — ${NEEDS_COMPLETION_LABEL}: ${shippingIssuesText(readiness)}`);
 
     const [business] = await tx
       .select({ accountingGoLiveAt: businesses.accountingGoLiveAt })
@@ -4901,6 +4904,9 @@ export async function editOrderFull(
 
   // Apply updates
   orderUpdates.lastUpdatedBy = editor.id;
+  // الموظف عدّل العنوان/المحافظة بنفسه ⇒ حسم تنبيه «عنوان Easy Order مختلف» (والأسباب الأخرى تفضل كما هي).
+  if ("customerAddress" in orderUpdates || "governorate" in orderUpdates)
+    Object.assign(orderUpdates, withoutAddressConflictReason(currentOrder.reviewReason) ?? {});
   await db.update(orders).set(orderUpdates).where(eq(orders.id, orderId));
 
   // Log edits
