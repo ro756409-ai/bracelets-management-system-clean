@@ -8,6 +8,10 @@ import { handleUnauthorizedRedirect } from "./_core/authRedirect";
 import { completeOperation } from "./lib/operationId";
 import { readOnlyLink } from "./lib/tenantReadOnly";
 import "./index.css";
+import { applyBrandFlag } from "./lib/brandFlag";
+
+// الهوية الجديدة (Matjarak 2.0) خلف متغير وقت البناء VITE_BRAND=v2 فقط — قبل أول رسم، بلا أي بيانات محفوظة.
+applyBrandFlag(document.documentElement, import.meta.env.VITE_BRAND);
 
 const queryClient = new QueryClient();
 

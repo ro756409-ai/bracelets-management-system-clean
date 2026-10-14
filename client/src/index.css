@@ -66,6 +66,9 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-brand-ice: var(--brand-ice, var(--mj-ice));
+  --color-brand-ice-foreground: var(--brand-ice-foreground, var(--mj-ink));
+  --color-brand-ice-soft: var(--brand-ice-soft, var(--mj-ice-soft));
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -302,6 +305,106 @@
   --sidebar-accent-foreground: #F3F2EE;
   --sidebar-border: #2F2E2B;
   --sidebar-ring: #E07A4B;
+}
+
+/* ==================== Matjarak 2.0 — الهوية الجديدة (المرحلة 1A): Oxblood × Ice Blue ====================
+   خلف مفتاح وقت البناء VITE_BRAND=v2 فقط (lib/brandFlag.ts يضع data-brand="v2" على <html>). بلا المفتاح = الهوية
+   الحالية أعلاه كما هي حرفيًا، في كل البيئات. الإلغاء = إزالة المتغير وإعادة البناء؛ لا بيانات ولا تفضيلات محفوظة.
+   • الألوان الأساسية (--mj-*) تُعرَّف مرة واحدة هنا، والقيم الدلالية تحت أسماء shadcn نفسها تشير إليها.
+   • ألوان الحالات (نجاح/تحذير/خطر/معلومات/المالية) لا تتغير — مستقلة عن البراند؛ Oxblood لا يُستخدم لمعنى «خطأ»
+     (اختبار تمييز ΔE في design-audit).
+   • Ice Blue للأسطح والتمييز فقط بنص Ink — لا يُستخدم كنص على الفاتح (1.28:1).
+   • الخطوط والزوايا والظلال والمسافات لا تتغير في هذه الدفعة.
+   • الألوان البديلة المحفوظة للمستخدم (teal/indigo/olive) تبقى فوق الهوية كما اختارها — بنفس الأولوية. */
+:root {
+  --mj-oxblood: #672A39;
+  --mj-oxblood-strong: #51202D;
+  --mj-oxblood-soft: #F3E8EB;
+  --mj-oxblood-dark-mode: #D98B99;
+  --mj-oxblood-dark-mode-text: #E8A9B5;
+  --mj-ice: #C5EAF2;
+  --mj-ice-soft: #EAF7FA;
+  --mj-off-white: #FAF9F7;
+  --mj-ink: #252329;
+  --mj-soft-gray: #E8E5E4;
+}
+:root[data-brand="v2"] {
+  --background: var(--mj-off-white);
+  --foreground: var(--mj-ink);
+  --surface-2: #F4F2EF;
+  --text-2: #4A464D;
+  --card: #FFFFFF;
+  --card-foreground: var(--mj-ink);
+  --popover: #FFFFFF;
+  --popover-foreground: var(--mj-ink);
+  --primary: var(--mj-oxblood);
+  --primary-foreground: #FFFFFF;
+  --primary-text: var(--mj-oxblood);
+  --primary-dark: var(--mj-oxblood-strong);
+  --primary-soft: var(--mj-oxblood-soft);
+  --secondary: #EFEDEA;
+  --secondary-foreground: var(--mj-ink);
+  --muted: #F1EFEC;
+  --muted-foreground: #6A6570;
+  --accent: var(--mj-oxblood-soft);
+  --accent-foreground: var(--mj-oxblood);
+  /* Ice Blue — سطح تمييز بنص Ink */
+  --brand-ice: var(--mj-ice);
+  --brand-ice-foreground: var(--mj-ink);
+  --brand-ice-soft: var(--mj-ice-soft);
+  /* حدود زخرفية بالرمادي الناعم، وحدود الحقول ≥ 3:1 (WCAG 1.4.11) — كانت 1.17–1.27 */
+  --border: var(--mj-soft-gray);
+  --input: #8A8588;
+  --ring: var(--mj-oxblood);
+  --chart-1: var(--mj-oxblood);
+  --gradient-brand: linear-gradient(135deg, #672A39 0%, #51202D 100%);
+  /* الشريط الجانبي يبقى داكنًا في هذه الدفعة (مكوّناته تكتب نصًا أبيض) — Ink، والعلامة النشطة Ice Blue */
+  --sidebar: #1F1D22;
+  --sidebar-foreground: #F3F1F2;
+  --sidebar-primary: var(--mj-ice);
+  --sidebar-primary-foreground: #1F1D22;
+  --sidebar-accent: #2C2930;
+  --sidebar-accent-foreground: #F3F1F2;
+  --sidebar-border: #34313A;
+  --sidebar-ring: var(--mj-ice);
+}
+.dark[data-brand="v2"] {
+  --background: #1A191D;
+  --foreground: #F3F1F2;
+  --surface-2: #211F24;
+  --text-2: #C2BDC4;
+  --card: #222025;
+  --card-foreground: #F3F1F2;
+  --popover: #222025;
+  --popover-foreground: #F3F1F2;
+  /* Oxblood نفسه 1.46:1 على الداكن — درجته الفاتحة من نفس العائلة */
+  --primary: var(--mj-oxblood-dark-mode);
+  --primary-foreground: #1A191D;
+  --primary-text: var(--mj-oxblood-dark-mode-text);
+  --primary-dark: #C77686;
+  --primary-soft: #3A2229;
+  --secondary: #2C2A2F;
+  --secondary-foreground: #F3F1F2;
+  --muted: #262429;
+  --muted-foreground: #A29DA6;
+  --accent: #3A2229;
+  --accent-foreground: var(--mj-oxblood-dark-mode-text);
+  --brand-ice: var(--mj-ice);
+  --brand-ice-foreground: #1A191D;
+  --brand-ice-soft: #23343A;
+  --border: #34313A;
+  --input: #77717C;
+  --ring: var(--mj-oxblood-dark-mode);
+  --chart-1: var(--mj-oxblood-dark-mode);
+  --gradient-brand: linear-gradient(135deg, #D98B99 0%, #C77686 100%);
+  --sidebar: #141317;
+  --sidebar-foreground: #F3F1F2;
+  --sidebar-primary: var(--mj-ice);
+  --sidebar-primary-foreground: #141317;
+  --sidebar-accent: #2A2730;
+  --sidebar-accent-foreground: #F3F1F2;
+  --sidebar-border: #2E2B33;
+  --sidebar-ring: var(--mj-ice);
 }
 
 /* ==================== اللون الرئيسي لكل مستخدم (تخصيص العرض، المرحلة 5) ====================
