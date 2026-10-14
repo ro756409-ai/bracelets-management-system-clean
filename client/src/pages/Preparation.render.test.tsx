@@ -30,7 +30,8 @@ vi.mock("@/components/workspace", () => ({
   ORDER_STATUS: { confirmed: { label: "مؤكد", tone: "success" }, printed: { label: "مطبوع", tone: "neutral" } },
   Pagination: ({ page, total }: any) => <nav data-testid="pagination">{page}/{total}</nav>,
 }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+import { toast } from "sonner";
 vi.mock("@/components/ui/select", () => import("@/test-utils/selectMock"));
 
 import Preparation from "./Preparation";
@@ -77,13 +78,28 @@ describe("🖨️ الطباعة وشيت الشحن", () => {
     act(() => { vi.advanceTimersByTime(2600); });
     expect(screen.queryByTestId("prep-print")).toBeNull(); // التحديد اتفرّغ بعد الطباعة → الشريط اختفى
   });
-  it("شيت الشحن يرفض أوردرًا ببيانات ناقصة ولا يفتح نافذة", () => {
+  it("شيت الشحن يستبعد الأوردر ناقص البيانات بعدده وأسبابه، ويصدّر المكتمل فقط (السجل بالمصدَّر فقط)", () => {
     setup();
     render(<Preparation />);
-    fireEvent.click(screen.getByTestId("prep-select-confirmed")); // يشمل A-2 الناقص
+    fireEvent.click(screen.getByTestId("prep-select-confirmed")); // A-1 مكتمل + A-2 ناقص
+    fireEvent.click(screen.getByTestId("prep-sheet"));
+    expect(st.opened).toHaveLength(1);
+    expect(st.opened[0]).toContain("/api/export/shipping?orderIds=1");
+    expect(st.opened[0]).not.toContain("2");
+    expect(st.mut.printLog.mock.calls[0][0]).toEqual({ type: "shipping_sheet", orderIds: [1] });
+    const warn = String(vi.mocked(toast.warning).mock.calls.at(-1)?.[0]);
+    expect(warn).toContain("استُبعد 1 أوردر");
+    expect(warn).toContain("#A-2: رقم الهاتف غير صحيح، العنوان مفقود، المحافظة غير محددة");
+  });
+  it("شيت الشحن وكل المحدد ناقص ⇒ لا نافذة ولا سجل، ورسالة بالأسباب", () => {
+    setup();
+    render(<Preparation />);
+    const rows = within(screen.getByTestId("responsive-table-table")).getAllByRole("checkbox");
+    fireEvent.click(rows[2]); // A-2 الناقص وحده
     fireEvent.click(screen.getByTestId("prep-sheet"));
     expect(st.opened).toHaveLength(0);
     expect(st.mut.printLog).not.toHaveBeenCalled();
+    expect(String(vi.mocked(toast.error).mock.calls.at(-1)?.[0])).toContain("لا يوجد أوردر مكتمل للتصدير");
   });
   it("شيت الشحن لأوردر كامل → نافذة واحدة وسجل shipping_sheet", () => {
     setup();
