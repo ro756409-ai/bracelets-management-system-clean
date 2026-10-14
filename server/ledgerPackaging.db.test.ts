@@ -44,7 +44,7 @@ describe.runIf(CAN)("📦 المرحلة 4 — التغليف، الإدخال �
   const q = async (s: string, p: unknown[] = []) => ((await tmp.raw.query(s, p)) as any)[0];
   const mkOrder = async (qty = 1) => {
     const id = insId(await q(`INSERT INTO orders (businessId, orderNumber, customerName, customerPhone, customerAddress, governorate, productName, productId, quantity, totalAmount, shippingFees, status, source)
-      VALUES (?, ?, 'عميل', '01000000000', 'عنوان', 'القاهرة', 'أسورة', ?, ?, '500', '0', 'new', 'manual')`, [A.businessId, `PK-${tmp.name.slice(-6)}-${++seq}`, product, qty]));
+      VALUES (?, ?, 'عميل', '01000000000', 'شارع تجريبي رقم 12', 'القاهرة', 'أسورة', ?, ?, '500', '0', 'new', 'manual')`, [A.businessId, `PK-${tmp.name.slice(-6)}-${++seq}`, product, qty]));
     await q("INSERT INTO order_items (orderId, productId, productName, quantity) VALUES (?, ?, 'أسورة', ?)", [id, product, qty]);
     await confirmOrder(id, e.ownerA, "مالك");
     return id;

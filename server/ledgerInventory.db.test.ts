@@ -38,7 +38,7 @@ describe.runIf(CAN)("📦 المرحلة 4 — المخزون وتكلفة ال�
   const balance = async () => (await q("SELECT onHandQuantity h, reservedQuantity r, inventoryValue v, movingAverageCost c FROM inventory_balances WHERE warehouseId = ? AND inventoryKey = ?", [wh, makeInventoryKey(product)]))[0];
   const mkOrder = async (status = "new", qty = 2, f: CoreTestFixture = A) => {
     const id = insId(await q(`INSERT INTO orders (businessId, orderNumber, customerName, customerPhone, customerAddress, governorate, productName, productId, quantity, totalAmount, shippingFees, status, source)
-      VALUES (?, ?, 'عميل', '01000000000', 'عنوان', 'القاهرة', 'أسورة', ?, ?, '500', '0', ?, 'manual')`, [f.businessId, `IN-${tmp.name.slice(-6)}-${++seq}`, product, qty, status]));
+      VALUES (?, ?, 'عميل', '01000000000', 'شارع تجريبي رقم 12', 'القاهرة', 'أسورة', ?, ?, '500', '0', ?, 'manual')`, [f.businessId, `IN-${tmp.name.slice(-6)}-${++seq}`, product, qty, status]));
     await q("INSERT INTO order_items (orderId, productId, productName, quantity) VALUES (?, ?, 'أسورة', ?)", [id, product, qty]);
     return id;
   };
