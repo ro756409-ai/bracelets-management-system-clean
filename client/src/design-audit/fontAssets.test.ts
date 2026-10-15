@@ -2,11 +2,12 @@ import { describe, it, expect } from "vitest";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { ACCENT_IDS, resolvedThemes } from "./cssTokens";
 
 /**
- * Matjarak 2.0 — المرحلة 1C-1: ملفات الخطوط الرسمية + تعريفات @font-face فقط، بلا أي استخدام.
+ * Matjarak 2.0 — المرحلة 1C-1: ملفات الخطوط الرسمية + تعريفات @font-face؛ والمرحلة 1C-2: تفعيلها تحت v2 فقط.
  * يثبّت: الملفات كما هي من مصدرها (SHA-256)، التراخيص بجوارها، التعريفات لا تشير إلا لملفات موجودة،
- * ولا شيء في الواجهة يطلب العائلات الجديدة بعد (فلا تنزيل في v1 ولا v2)، وخط الواجهة الحالي كما هو.
+ * والعائلات الجديدة لا يطلبها إلا --font-brand/--font-brand-en في كتلة v2 (فـv1 لا ينزّل شيئًا وخطه كما هو).
  */
 const ROOT = path.resolve(__dirname, "../../..");
 const PUBLIC = path.join(ROOT, "client/public");
@@ -68,7 +69,7 @@ describe("🔤 المرحلة 1C-1 — ملفات الخطوط والتراخي�
   });
 });
 
-describe("🔤 المرحلة 1C-1 — @font-face معرّفة وغير مستخدمة", () => {
+describe("🔤 المرحلة 1C-1/1C-2 — @font-face معرّفة، ومستخدمة تحت v2 فقط", () => {
   it("خمس تعريفات بالضبط: Plex Arabic 400/500/600/700 + الأرقام الهندية فقط (U+0660–066C)، بلا local() وكل url لملف موجود", () => {
     const faces = fontFaces();
     expect(faces).toHaveLength(5);
@@ -86,8 +87,14 @@ describe("🔤 المرحلة 1C-1 — @font-face معرّفة وغير مستخ
     }
   });
 
-  it("لا أحد يستخدم العائلات الجديدة: لا في --font-brand/--font-brand-en ولا أي font-family في الـCSS ولا مكونات الواجهة", () => {
-    const rest = withoutFontFaces();
+  it("العائلات الجديدة لا تُذكر إلا في --font-brand/--font-brand-en داخل كتلة v2 (1C-2) — v1 كما هو، ولا font-family آخر ولا مكونات", () => {
+    const V2_STACKS = [
+      "--font-brand: 'Noto Kufi Arabic Digits', 'IBM Plex Sans Arabic', 'Segoe UI', 'Tahoma', 'Arial', sans-serif;",
+      "--font-brand-en: 'Noto Kufi Arabic Digits', 'IBM Plex Sans Arabic', 'Segoe UI', 'Arial', sans-serif;",
+    ];
+    const v2Block = css.match(/:root\[data-brand="v2"\]\s*\{([^}]*)\}/)![1];
+    for (const l of V2_STACKS) expect(v2Block, l).toContain(l);
+    let rest = withoutFontFaces(); for (const l of V2_STACKS) rest = rest.replace(l, "");
     for (const fam of NEW_FAMILIES) expect(rest, fam).not.toContain(fam);
     expect(css).toContain("--font-brand: 'DM Sans', 'Noto Kufi Arabic', 'Segoe UI', 'Tahoma', 'Arial', sans-serif;");
     expect(css).toContain("--font-brand-en: 'DM Sans', 'Segoe UI', 'Arial', sans-serif;");
@@ -104,5 +111,56 @@ describe("🔤 المرحلة 1C-1 — @font-face معرّفة وغير مستخ
     const html = read("client/index.html");
     expect(html).not.toContain("/fonts/");
     expect(html).not.toMatch(/rel="preload"/);
+  });
+});
+
+describe("🔤 المرحلة 1C-2 — Plex Arabic تحت v2 فقط بأرقام هندية جدولية", () => {
+  const themes = resolvedThemes(css);
+  const V1 = ["DM Sans", "Noto Kufi Arabic", "Segoe UI"];
+  const fams = (t: string, k: string) => themes[t][k].split(",").map(f => f.trim().replace(/^'|'$/g, ""));
+
+  it("الهوية الحالية (كل الأوضاع والألوان المحفوظة): نفس عائلتي الخط حرفيًا", () => {
+    for (const t of Object.keys(themes).filter(t => !t.includes("v2"))) {
+      expect(fams(t, "--font-brand").slice(0, 3), t).toEqual(V1);
+      expect(fams(t, "--font-brand-en").slice(0, 2), t).toEqual(["DM Sans", "Segoe UI"]);
+    }
+  });
+
+  it("v2 (فاتح وداكن وكل الألوان الأربعة): الأرقام الهندية من Noto Kufi Digits أولًا ثم Plex Arabic — في الواجهة وفي font-en (المبالغ)", () => {
+    const v2 = Object.keys(themes).filter(t => t.includes("v2"));
+    expect(v2.length).toBe(2 + 2 * ACCENT_IDS.length);
+    for (const t of v2) for (const k of ["--font-brand", "--font-brand-en"]) {
+      expect(fams(t, k).slice(0, 2), `${t} ${k}`).toEqual(["Noto Kufi Arabic Digits", "IBM Plex Sans Arabic"]);
+      expect(fams(t, k), `${t} ${k}`).not.toContain("DM Sans");
+    }
+  });
+
+  it("وجه الأرقام لا يأخذ إلا U+0660–066C — فالمسافة واللاتيني والعربي من Plex", () => {
+    const digits = fontFaces().find(f => f.includes('"Noto Kufi Arabic Digits"'))!;
+    expect(digits.match(/unicode-range:\s*([^;]+);/)![1].trim()).toBe("U+0660-066C");
+  });
+});
+
+describe("🧾 تخطيط تحت v2 فقط (1C-2) — بمتغير brand-v2 فلا يتغير v1", () => {
+  it("المتغير brand-v2 معرّف على <html data-brand=\"v2\"> فقط", () => {
+    expect(css).toContain('@custom-variant brand-v2 (&:where([data-brand="v2"] *));');
+  });
+
+  it("جدول الأوردرات: الإجمالي ورسوم الشحن والمحصَّل لا تلتف تحت v2 (brand-v2:whitespace-nowrap) مع tabular-nums وfont-en كما كانت", () => {
+    const src = read("client/src/components/orders/OrdersTable.tsx");
+    for (const v of ["order.totalAmount", "order.projectedShippingCostSnapshot", "order.collectedAmount"]) {
+      const span = src.match(new RegExp(`<span className="([^"]*)">\\{money\\(${v.replace(".", "\\.")}\\)\\}</span>`));
+      expect(span, v).not.toBeNull();
+      const cls = span![1].split(" ");
+      for (const c of ["font-en", "tabular-nums", "brand-v2:whitespace-nowrap"]) expect(cls, `${v} ${c}`).toContain(c);
+      expect(cls, `${v} بلا nowrap عام يمس v1`).not.toContain("whitespace-nowrap");
+    }
+  });
+
+  it("سجل الحركات: عمود «من ← إلى» بعرض أدنى 7.5rem تحت v2 فقط (الخلية والعنوان)", () => {
+    const src = read("client/src/pages/ledger/LedgerTransactions.tsx");
+    const flow = src.match(/\{ id: "flow",[^\n]*/)![0];
+    expect(flow).toContain('className: "brand-v2:min-w-[7.5rem]"');
+    expect(flow).toContain('headerClassName: "brand-v2:min-w-[7.5rem]"');
   });
 });

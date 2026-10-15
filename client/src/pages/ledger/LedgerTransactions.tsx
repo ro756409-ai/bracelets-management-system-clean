@@ -60,7 +60,8 @@ export default function LedgerTransactions() {
     { id: "kind", header: "النوع", alwaysVisible: true, cell: r => <KindBadge row={r} /> },
     { id: "description", header: "البيان", alwaysVisible: true, cell: r => <span className="block max-w-[260px] truncate" title={r.description}>{r.description}</span> },
     { id: "amount", header: "المبلغ", numeric: true, alwaysVisible: true, cell: r => <span className="whitespace-nowrap font-semibold tabular-nums">{money(transactionAmount(r.entries))} ج.م</span> },
-    { id: "flow", header: "من ← إلى", cell: r => { const f = transactionFlow(r.entries); return <span className="text-xs text-muted-foreground">{f.from.join("، ")} ← {f.to.join("، ")}</span>; } },
+    // عرض أدنى للعمود تحت v2 فقط (1C-2): بلا حد كان يضيق إلى ~72px فيلتف النص حتى 10 أسطر
+    { id: "flow", header: "من ← إلى", className: "brand-v2:min-w-[7.5rem]", headerClassName: "brand-v2:min-w-[7.5rem]", cell: r => { const f = transactionFlow(r.entries); return <span className="text-xs text-muted-foreground">{f.from.join("، ")} ← {f.to.join("، ")}</span>; } },
     { id: "actor", header: "المنفّذ", cell: r => actorLabel(r) },
     { id: "actions", header: <span className="sr-only">إجراءات</span>, alwaysVisible: true, sticky: "end", cell: r => (
       <span className="flex items-center justify-end gap-1" onClick={e => e.stopPropagation()}>

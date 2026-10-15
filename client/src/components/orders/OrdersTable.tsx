@@ -186,13 +186,13 @@ export function buildOrdersColumns(ctx: OrdersColumnsContext): Column<OrderRow>[
     {
       // 7. مبلغ التحصيل
       id: "codAmount", header: "مبلغ التحصيل", numeric: true, alwaysVisible: true,
-      cell: order => <span className="font-en text-sm font-bold tabular-nums">{money(order.totalAmount)}</span>,
+      cell: order => <span className="font-en text-sm font-bold tabular-nums brand-v2:whitespace-nowrap">{money(order.totalAmount)}</span>,
     },
     {
       // 8. رسوم الشحن المتوقعة — projectedShippingCostSnapshot فقط
       id: "projectedShipping", header: "رسوم الشحن المتوقعة", numeric: true, alwaysVisible: true,
       cell: order => order.projectedShippingCostSnapshot != null
-        ? <span className="font-en text-sm tabular-nums">{money(order.projectedShippingCostSnapshot)}</span>
+        ? <span className="font-en text-sm tabular-nums brand-v2:whitespace-nowrap">{money(order.projectedShippingCostSnapshot)}</span>
         : <Unavailable />,
     },
     {
@@ -222,7 +222,7 @@ export function buildOrdersColumns(ctx: OrdersColumnsContext): Column<OrderRow>[
           <div className="flex flex-col items-start gap-0.5">
             <StatusBadge status={order.collectionStatus} label={def.label} tone={def.tone} size="sm" />
             {order.collectedAmount != null && order.collectionStatus !== "pending" && (
-              <span className="font-en text-[11px] text-muted-foreground tabular-nums">{money(order.collectedAmount)}</span>
+              <span className="font-en text-[11px] text-muted-foreground tabular-nums brand-v2:whitespace-nowrap">{money(order.collectedAmount)}</span>
             )}
           </div>
         );

@@ -41,10 +41,13 @@ describe("🎨 المرحلة 1A — الهوية الجديدة خلف data-bra
     expect(hex("dark:v2", "primary")).toBe("#D98B99"); // Oxblood نفسه 1.46:1 على الداكن
   });
 
-  it("الهوية الجديدة ألوان فقط: لا خطوط ولا زوايا ولا ظلال ولا مقاسات ولا حركة في كتلتي v2", () => {
+  it("الهوية الجديدة ألوان فقط + عائلة الخط (1C-2): لا مقاسات خط ولا زوايا ولا ظلال ولا مسافات ولا حركة في كتلتي v2", () => {
     const keys = [...Object.keys(blocks["light:v2"]), ...Object.keys(blocks["dark:v2"])];
     // --text-12…30 مقاسات خط (ممنوعة هنا)؛ --text-2 لون نص ثانوي (مسموح)
-    expect(keys.filter(k => /^--(font|radius|text-\d{2}|shadow|control|duration|ease|space|pattern)/.test(k))).toEqual([]);
+    expect(keys.filter(k => /^--(radius|text-\d{2}|shadow|control|duration|ease|space|pattern|font-scale)/.test(k))).toEqual([]);
+    // الخط: عائلتا الواجهة فقط وفي الكتلة الفاتحة وحدها (تشمل الداكن) — لا --font-scale ولا أي font آخر
+    expect(Object.keys(blocks["light:v2"]).filter(k => k.startsWith("--font"))).toEqual(["--font-brand", "--font-brand-en"]);
+    expect(Object.keys(blocks["dark:v2"]).filter(k => k.startsWith("--font"))).toEqual([]);
   });
 
   it("ألوان الحالات مستقلة: النجاح/التحذير/الخطر/المعلومات/الخطأ بنفس قيم الهوية الحالية، ولا تعرّفها كتلتا v2", () => {

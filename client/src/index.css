@@ -2,9 +2,11 @@
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
+/* Matjarak 2.0 (1C-2): تعديلات تخطيط خاصة بالهوية الجديدة فقط — تُطبَّق تحت <html data-brand="v2"> ولا تمس v1 */
+@custom-variant brand-v2 (&:where([data-brand="v2"] *));
 
-/* Matjarak 2.0 — المرحلة 1C-1: تعريفات خطوط فقط، غير مستخدمة بعد في v1 ولا v2 (لا يذكرها --font-brand
-   ولا أي font-family) ⇒ المتصفح لا ينزّل أي ملف منها. ملفات WOFF2 الرسمية كما هي بلا تعديل، مع تراخيصها في
+/* Matjarak 2.0 — المرحلة 1C-1: تعريفات الخطوط؛ تُستخدم تحت v2 فقط منذ 1C-2 (--font-brand في كتلة v2) ⇒ v1 لا ينزّل
+   أي ملف منها. ملفات WOFF2 الرسمية كما هي بلا تعديل، مع تراخيصها في
    نفس المجلد (client/public/fonts). في public وليست assets حتى لا يدمج Vite ملف الأرقام الصغير داخل الـCSS.
    - IBM Plex Sans Arabic 1.1.0 (IBM، OFL 1.1) — الأوزان 400/500/600/700.
    - أرقام هندية جدولية فقط (U+0660–066C) من Noto Kufi Arabic v27 (Google Fonts، OFL 1.1). */
@@ -410,6 +412,11 @@
   --switch-thumb-off: var(--foreground);
 }
 :root[data-brand="v2"] {
+  /* المرحلة 1C-2 — خط الواجهة تحت v2 فقط: IBM Plex Sans Arabic (لاتينيه مطابق لـIBM Plex Sans)، والأرقام الهندية
+     (U+0660–066C) من «Noto Kufi Arabic Digits» أولًا لأنها جدولية — أرقام Plex الهندية متغيرة العرض بلا tnum.
+     نفس الترتيب في --font-brand-en (المبالغ والمعرّفات بـfont-en) حتى تبقى أعمدة المبالغ متحاذية. الأحجام وline-height كما هي. */
+  --font-brand: 'Noto Kufi Arabic Digits', 'IBM Plex Sans Arabic', 'Segoe UI', 'Tahoma', 'Arial', sans-serif;
+  --font-brand-en: 'Noto Kufi Arabic Digits', 'IBM Plex Sans Arabic', 'Segoe UI', 'Arial', sans-serif;
   --background: var(--mj-off-white);
   --foreground: var(--mj-ink);
   --surface-2: #F4F2EF;
