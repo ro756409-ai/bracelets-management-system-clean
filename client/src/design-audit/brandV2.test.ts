@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { ACCENT_IDS, deltaE, parseColor, parseThemeBlocks, resolvedThemes } from "./cssTokens";
+import { ACCENT_IDS, contrast, deltaE, over, parseColor, parseThemeBlocks, resolvedThemes } from "./cssTokens";
 import { measure } from "./contrastPairs";
 
 /**
@@ -17,13 +17,17 @@ const V2 = Object.keys(themes).filter(t => t.includes("v2"));
 const color = (theme: string, token: string) => parseColor(themes[theme][`--${token}`], themes[theme])!;
 const hex = (theme: string, token: string) => { const c = color(theme, token); return `#${[c.r, c.g, c.b].map(v => Math.round(v).toString(16).padStart(2, "0")).join("")}`.toUpperCase(); };
 
-/** بصمة tokens الهوية الحالية (الكتل بلا v2، وبلا الألوان الأساسية --mj-*) عند a3c2fed — أي تغيير فيها يُفشل الاختبار. */
+/** بصمة tokens الهوية الحالية (الكتل بلا v2، وبلا الألوان الأساسية --mj-*) عند a3c2fed — أي تغيير فيها يُفشل الاختبار.
+ *  أسماء المرحلة 1B-1 الجديدة (BRAND_TOKENS/COMPONENT_TOKENS) مستثناة هنا ومثبتة بقيمها في اختبار مستقل أدناه. */
 const V1_FINGERPRINT = "2ebbfad90fa03a21fda2aa7c7fba3c4c11814d526f4ff4c5d08d912246673f34";
+const BRAND_TOKENS = ["--brand-surface", "--brand-surface-strong", "--brand-on-surface", "--brand-mark", "--brand-mark-strong", "--brand-mark-foreground"];
+const COMPONENT_TOKENS = ["--switch-track", "--switch-track-border", "--switch-thumb-off"];
+const NEW_1B1 = new Set([...BRAND_TOKENS, ...COMPONENT_TOKENS]);
 const STATUS = ["success", "warning", "destructive", "info", "error"];
 
 describe("🎨 المرحلة 1A — الهوية الجديدة خلف data-brand=\"v2\"", () => {
   it("الهوية الحالية لم تتغير: بصمة tokens الكتل الحالية = a3c2fed (الافتراضي في كل البيئات)", () => {
-    const sem = (m: Record<string, string>) => Object.fromEntries(Object.entries(m).filter(([k]) => !k.startsWith("--mj-")).sort(([a], [b]) => a.localeCompare(b)));
+    const sem = (m: Record<string, string>) => Object.fromEntries(Object.entries(m).filter(([k]) => !k.startsWith("--mj-") && !NEW_1B1.has(k)).sort(([a], [b]) => a.localeCompare(b)));
     const keys = Object.keys(blocks).filter(k => !k.includes("v2")).sort();
     const canon = JSON.stringify(keys.map(k => [k, sem(blocks[k])]));
     expect(crypto.createHash("sha256").update(canon).digest("hex")).toBe(V1_FINGERPRINT);
@@ -142,5 +146,65 @@ describe("🎚️ المرحلة 1A — أولوية الألوان المحفو
         expect(tokensOf(`${mode}:${a}`)["--background"]).toBe(tokensOf(mode)["--background"]);
       }
     }
+  });
+});
+
+/**
+ * المرحلة 1B-1 — ألوان البراند الثابتة مفصولة عن لون مساحة العمل، وألوان الـSwitch مفصولة عن --input.
+ * في الهوية الحالية الأسماء الجديدة = القيم المستخدمة اليوم حرفيًا (لا تغيير مرئي)، وتحت v2 البراند ثابت مهما كان لون المستخدم.
+ */
+describe("🏛️ المرحلة 1B-1 — البراند الثابت × مساحة العمل × ألوان المكوّنات", () => {
+  const solid = (t: string, k: string) => { const tk = themes[t]; return over(parseColor(tk[`--${k}`], tk)!, parseColor(tk["--card"], tk)!); };
+  const ratio = (t: string, a: string, b: string) => Math.round(contrast(solid(t, a), solid(t, b)) * 100) / 100;
+  const CURRENT = Object.keys(themes).filter(t => !t.includes("v2"));
+
+  it("الهوية الحالية: الأسماء الجديدة تساوي القيم المستخدمة اليوم حرفيًا (فاتح/داكن × الألوان الأربعة)", () => {
+    for (const t of CURRENT) {
+      const tk = themes[t];
+      expect([tk["--brand-surface"], tk["--brand-surface-strong"], tk["--brand-on-surface"], tk["--brand-mark"], tk["--brand-mark-strong"], tk["--brand-mark-foreground"]], t)
+        .toEqual(["var(--primary)", "var(--primary-dark)", "var(--primary-foreground)", "var(--primary)", "var(--primary-dark)", "#FFFFFF"]);
+      expect(tk["--switch-track-border"], t).toBe("transparent");
+      if (t.startsWith("light")) expect([tk["--switch-track"], tk["--switch-thumb-off"]], t).toEqual(["var(--input)", "var(--background)"]);
+      // نفس صيغة Tailwind لمسار الداكن (input بشفافية 80%) ونفس مقبضه (لون foreground)
+      else expect([tk["--switch-track"], tk["--switch-thumb-off"]], t).toEqual(["color-mix(in oklab, var(--input) 80%, transparent)", "var(--foreground)"]);
+      // ولهذا يتبع البراند لون المستخدم في الهوية الحالية كما اليوم بالضبط
+      expect(hex(t, "brand-surface"), t).toBe(hex(t, "primary"));
+    }
+  });
+
+  it("تحت v2: البراند ثابت (Oxblood) في كل لون محفوظ، بينما لون مساحة العمل يتبع اختيار المستخدم", () => {
+    const expected = { light: ["#672A39", "#51202D", "#FFFFFF", "#672A39", "#51202D", "#FFFFFF"], dark: ["#4A1D28", "#2E1118", "#FFFFFF", "#7E3445", "#672A39", "#FFFFFF"] };
+    for (const mode of ["light", "dark"] as const) for (const a of ["", ...ACCENT_IDS.map(x => `:${x}`)]) {
+      const t = `${mode}:v2${a}`;
+      expect(BRAND_TOKENS.map(k => hex(t, k.slice(2))), t).toEqual(expected[mode]);
+      if (a) expect(hex(t, "primary"), t).not.toBe(hex(`${mode}:v2`, "primary")); // مساحة العمل = لون المستخدم
+    }
+  });
+
+  it("كتل الألوان المحفوظة لا تعرّف أي لون براند أو مكوّن — في الهويتين", () => {
+    for (const a of ACCENT_IDS) for (const mode of ["light", "dark"]) {
+      const keys = Object.keys(blocks[`${mode}:${a}`] ?? {});
+      expect(keys.filter(k => NEW_1B1.has(k) || k.startsWith("--brand-")), `${mode}:${a}`).toEqual([]);
+    }
+  });
+
+  it("تباين البراند تحت v2: النص على أسطح البراند ورمز الشعار على دائرته ≥ 4.5:1 في الوضعين", () => {
+    for (const t of ["light:v2", "dark:v2"]) {
+      for (const bg of ["brand-surface", "brand-surface-strong"]) expect(ratio(t, "brand-on-surface", bg), `${t} ${bg}`).toBeGreaterThanOrEqual(4.5);
+      for (const bg of ["brand-mark", "brand-mark-strong"]) expect(ratio(t, "brand-mark-foreground", bg), `${t} ${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect([ratio("light:v2", "brand-on-surface", "brand-surface"), ratio("dark:v2", "brand-on-surface", "brand-surface")]).toEqual([10.68, 14.02]);
+  });
+
+  it("الـSwitch المقفول تحت v2 (الخيار ب): الحد ≥ 3:1 مع الخلفية والبطاقة، والمقبض ≥ 3:1 على المسار وعلى البطاقة — في كل لون محفوظ", () => {
+    for (const t of V2) {
+      expect(ratio(t, "switch-track-border", "background"), `${t} border/bg`).toBeGreaterThanOrEqual(3);
+      expect(ratio(t, "switch-track-border", "card"), `${t} border/card`).toBeGreaterThanOrEqual(3);
+      expect(ratio(t, "switch-thumb-off", "switch-track"), `${t} thumb/track`).toBeGreaterThanOrEqual(3);
+      expect(ratio(t, "switch-thumb-off", "card"), `${t} thumb/card`).toBeGreaterThanOrEqual(3);
+    }
+    // المسار نفسه لم يعد --input: فاتح ناعم بدل الرمادي الداكن
+    expect([hex("light:v2", "switch-track"), hex("light:v2", "input")]).toEqual(["#E8E5E4", "#8A8588"]);
+    expect([ratio("light:v2", "switch-thumb-off", "switch-track"), ratio("dark:v2", "switch-thumb-off", "switch-track")]).toEqual([4.52, 5.35]);
   });
 });

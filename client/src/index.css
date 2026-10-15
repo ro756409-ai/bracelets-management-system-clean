@@ -327,6 +327,33 @@
   --mj-off-white: #FAF9F7;
   --mj-ink: #252329;
   --mj-soft-gray: #E8E5E4;
+  /* Oxblood العميق لأسطح البراند في الوضع الداكن، ودائرة الشعار في الداكن (المرحلة 1B) */
+  --mj-oxblood-deep: #4A1D28;
+  --mj-oxblood-deepest: #2E1118;
+  --mj-oxblood-mark-dark: #7E3445;
+}
+
+/* ==================== المرحلة 1B-1: ألوان البراند الثابتة × ألوان المكوّنات ====================
+   ثلاث طبقات: البراند (ثابت تحت v2، لا يتبع لون المستخدم) · مساحة العمل (--primary وعائلته، يخصّصه كل مستخدم) ·
+   الدلالية (الحالات، ثابتة). هنا قيم الهوية الحالية: أسماء جديدة = نفس القيم المستخدمة اليوم حرفيًا، فلا تغيير مرئي —
+   ولا مكوّن يقرأها بعد (1B-2/1B-3 تنقل شاشات الدخول ودائرة الشعار والـSwitch إليها). كتل الألوان المحفوظة لا تعرّف
+   أيًّا منها أبدًا (اختبار)، فتحت v2 لا يقدر لون مستخدم أن يغيّر البراند. */
+:root {
+  --brand-surface: var(--primary);
+  --brand-surface-strong: var(--primary-dark);
+  --brand-on-surface: var(--primary-foreground);
+  --brand-mark: var(--primary);
+  --brand-mark-strong: var(--primary-dark);
+  --brand-mark-foreground: #FFFFFF;
+  /* Switch المقفول — اليوم: المسار bg-input بلا حد، والمقبض bg-background */
+  --switch-track: var(--input);
+  --switch-track-border: transparent;
+  --switch-thumb-off: var(--background);
+}
+.dark {
+  /* اليوم في الداكن: المسار bg-input/80 (نفس صيغة Tailwind)، والمقبض bg-foreground */
+  --switch-track: color-mix(in oklab, var(--input) 80%, transparent);
+  --switch-thumb-off: var(--foreground);
 }
 :root[data-brand="v2"] {
   --background: var(--mj-off-white);
@@ -358,6 +385,17 @@
   --ring: var(--mj-oxblood);
   --chart-1: var(--mj-oxblood);
   --gradient-brand: linear-gradient(135deg, #672A39 0%, #51202D 100%);
+  /* البراند الثابت (المرحلة 1B) — لا يتبع لون مساحة العمل */
+  --brand-surface: var(--mj-oxblood);
+  --brand-surface-strong: var(--mj-oxblood-strong);
+  --brand-on-surface: #FFFFFF;
+  --brand-mark: var(--mj-oxblood);
+  --brand-mark-strong: var(--mj-oxblood-strong);
+  --brand-mark-foreground: #FFFFFF;
+  /* Switch المقفول (الخيار ب): مسار ناعم + حدّ ≥ 3:1 + مقبض داكن ≥ 3:1 على المسار */
+  --switch-track: var(--mj-soft-gray);
+  --switch-track-border: var(--input);
+  --switch-thumb-off: var(--muted-foreground);
   /* الشريط الجانبي يبقى داكنًا في هذه الدفعة (مكوّناته تكتب نصًا أبيض) — Ink، والعلامة النشطة Ice Blue */
   --sidebar: #1F1D22;
   --sidebar-foreground: #F3F1F2;
@@ -397,6 +435,16 @@
   --ring: var(--mj-oxblood-dark-mode);
   --chart-1: var(--mj-oxblood-dark-mode);
   --gradient-brand: linear-gradient(135deg, #D98B99 0%, #C77686 100%);
+  /* أسطح البراند الداكنة (مبدئية — تُراجع باللقطات قبل الاعتماد) */
+  --brand-surface: var(--mj-oxblood-deep);
+  --brand-surface-strong: var(--mj-oxblood-deepest);
+  --brand-on-surface: #FFFFFF;
+  --brand-mark: var(--mj-oxblood-mark-dark);
+  --brand-mark-strong: var(--mj-oxblood);
+  --brand-mark-foreground: #FFFFFF;
+  --switch-track: #2C2A2F;
+  --switch-track-border: var(--input);
+  --switch-thumb-off: var(--muted-foreground);
   --sidebar: #141317;
   --sidebar-foreground: #F3F1F2;
   --sidebar-primary: var(--mj-ice);
