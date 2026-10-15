@@ -1,0 +1,3 @@
+# نصّا ترخيص الخطوط كما نُشرا رسميًا (IBM بنهايات CRLF، وOFL الخاص بـNoto فيه مسافة أصلية آخر سطر 21): بلا تحويل نهايات أسطر ولا فحص مسافات — sha256 مثبّت في fontAssets.test
+client/public/fonts/ibm-plex-sans-arabic/1.1.0/LICENSE.txt -text -whitespace
+client/public/fonts/noto-kufi-arabic-digits/v27/OFL.txt -text -whitespace
