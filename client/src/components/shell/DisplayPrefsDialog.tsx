@@ -17,8 +17,11 @@ import { accentGroupText, accentPresentation } from "@/lib/accentPresentation";
  */
 type Key = keyof DisplayPrefs;
 
-function OptionGroup<T extends string | number>({ id, label, hint, options, value, onChange, render }: {
+function OptionGroup<T extends string | number>({ id, label, hint, options, value, onChange, render, gridOnPhone = false }: {
   id: Key; label: string; hint?: string; options: readonly T[]; value: T; onChange: (v: T) => void; render: (v: T) => React.ReactNode;
+  /** عمودان متساويان وصفوف متساوية على 390px وما دونها (Matjarak 2.0، 1B-4) — نفس ترتيب DOM فالقراءة RTL والأسهم كما هي؛
+   *  حشوة أفقية أصغر داخل الـGrid فقط ليتسع «عنابي — الافتراضي» في سطر واحد عند 390. */
+  gridOnPhone?: boolean;
 }) {
   const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     const rtl = (document.documentElement.dir || "rtl") === "rtl";
@@ -32,7 +35,7 @@ function OptionGroup<T extends string | number>({ id, label, hint, options, valu
     <fieldset className="space-y-2" data-testid={`prefs-group-${id}`}>
       <legend className="text-sm font-semibold text-foreground">{label}</legend>
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
-      <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-2">
+      <div role="radiogroup" aria-label={label} className={cn("flex flex-wrap gap-2", gridOnPhone && "max-[391px]:grid max-[391px]:grid-cols-2 max-[391px]:auto-rows-fr")}>
         {options.map((opt, i) => {
           const checked = opt === value;
           return (
@@ -46,7 +49,8 @@ function OptionGroup<T extends string | number>({ id, label, hint, options, valu
               onKeyDown={e => onKeyDown(e, i)}
               className={cn(
                 "flex min-h-11 items-center gap-2 rounded-[var(--radius-brand-pill)] border px-3.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                checked ? "border-primary bg-primary-soft text-primary-text" : "border-border bg-card text-muted-foreground hover:text-foreground"
+                checked ? "border-primary bg-primary-soft text-primary-text" : "border-border bg-card text-muted-foreground hover:text-foreground",
+                gridOnPhone && "max-[391px]:px-2.5"
               )}
               data-testid={`prefs-${id}-${String(opt)}`}
             >
@@ -82,7 +86,7 @@ export function DisplayPrefsDialog({ open, onOpenChange }: { open: boolean; onOp
           <OptionGroup id="theme" label="الوضع" options={THEME_MODES} value={prefs.theme} onChange={v => update({ theme: v })} render={v => THEME_LABELS[v]} />
           <OptionGroup
             id="accent" label={accentText.title} hint={accentText.hint}
-            options={ACCENT_IDS} value={prefs.accent} onChange={v => update({ accent: v })}
+            options={ACCENT_IDS} value={prefs.accent} onChange={v => update({ accent: v })} gridOnPhone={brand === "v2"}
             render={v => (
               <>
                 <span className="h-4 w-4 shrink-0 rounded-full border border-border" style={{ backgroundColor: accentPresentation(v, swatchMode, brand).swatch }} aria-hidden="true" data-testid={`prefs-swatch-${v}`} />

@@ -72,6 +72,9 @@
   /* دائرة الشعار المؤقت — لون البراند الثابت (المرحلة 1B-2)، لا لون مساحة العمل */
   --color-brand-mark: var(--brand-mark);
   --color-brand-mark-strong: var(--brand-mark-strong);
+  /* الشعار المعكوس على الأسطح الملوّنة (المرحلة 1B-4) */
+  --color-brand-mark-inverse: var(--brand-mark-inverse);
+  --color-brand-mark-inverse-strong: var(--brand-mark-inverse-strong);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -352,6 +355,12 @@
   --switch-track: var(--input);
   --switch-track-border: transparent;
   --switch-thumb-off: var(--background);
+  /* المرحلة 1B-4 — الهوية الحالية: الشعار «المعكوس» = نفس الشعار العادي حرفيًا، ولا حدّ لبطاقات الدخول */
+  --brand-mark-inverse: var(--brand-mark);
+  --brand-mark-inverse-strong: var(--brand-mark-strong);
+  --brand-mark-inverse-foreground: var(--brand-mark-foreground);
+  --brand-mark-inverse-node: #EDE9FE;
+  --auth-card-border: transparent;
 }
 .dark {
   /* اليوم في الداكن: المسار bg-input/80 (نفس صيغة Tailwind)، والمقبض bg-foreground */
@@ -399,6 +408,12 @@
   --switch-track: var(--mj-soft-gray);
   --switch-track-border: var(--input);
   --switch-thumb-off: var(--muted-foreground);
+  /* الشعار المعكوس (1B-4): دائرة فاتحة وحرف Oxblood ثابت — للأسطح الملوّنة الداكنة (هيدر المخزن) */
+  --brand-mark-inverse: #FFFFFF;
+  --brand-mark-inverse-strong: var(--mj-oxblood-soft);
+  --brand-mark-inverse-foreground: var(--mj-oxblood);
+  --brand-mark-inverse-node: var(--mj-oxblood-strong);
+  --auth-card-border: transparent;
   /* الشريط الجانبي يبقى داكنًا في هذه الدفعة (مكوّناته تكتب نصًا أبيض) — Ink، والعلامة النشطة Ice Blue */
   --sidebar: #1F1D22;
   --sidebar-foreground: #F3F1F2;
@@ -448,6 +463,13 @@
   --switch-track: #2C2A2F;
   --switch-track-border: var(--input);
   --switch-thumb-off: var(--muted-foreground);
+  /* في الداكن أسطح مساحة العمل فاتحة (pastel) ⇒ «المعكوس» = الدائرة الداكنة بحرف أبيض (3.27–4.23 مقابل 2.26–2.92 للفاتحة) */
+  --brand-mark-inverse: var(--brand-mark);
+  --brand-mark-inverse-strong: var(--brand-mark-strong);
+  --brand-mark-inverse-foreground: #FFFFFF;
+  --brand-mark-inverse-node: #EDE9FE;
+  /* حدّ محايد خفيف لبطاقات الدخول في الداكن (1B-4) */
+  --auth-card-border: rgb(255 255 255 / 0.10);
   --sidebar: #141317;
   --sidebar-foreground: #F3F1F2;
   --sidebar-primary: var(--mj-ice);

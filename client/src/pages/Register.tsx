@@ -78,7 +78,7 @@ export default function Register() {
       data-testid="register-page"
     >
       <div className="relative w-full max-w-md">
-        <div className="rounded-[var(--radius-brand-lg,var(--radius-brand-md))] border-0 bg-card/95 shadow-[var(--shadow-card)] backdrop-blur">
+        <div className="rounded-[var(--radius-brand-lg,var(--radius-brand-md))] border-0 bg-card/95 shadow-[var(--shadow-card)] backdrop-blur outline outline-[var(--auth-card-border)] -outline-offset-1">
           <div className="px-6 pb-4 pt-8 text-center">
             <div className="mb-4 flex justify-center">
               <BrandLogo variant="vertical" size="xl" showEnglishName />

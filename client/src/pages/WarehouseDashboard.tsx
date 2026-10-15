@@ -167,7 +167,7 @@ export default function WarehouseDashboard() {
         }}
       >
         <div className="flex items-center gap-3">
-          <BrandMark className="h-9 w-9" />
+          <BrandMark className="h-9 w-9" variant="inverse" />
           <div>
             <h1 className="font-bold text-sm">متجرك</h1>
             <p className="text-xs text-primary-foreground/70">

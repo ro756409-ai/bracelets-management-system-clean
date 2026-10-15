@@ -22,7 +22,9 @@ const hex = (theme: string, token: string) => { const c = color(theme, token); r
 const V1_FINGERPRINT = "2ebbfad90fa03a21fda2aa7c7fba3c4c11814d526f4ff4c5d08d912246673f34";
 const BRAND_TOKENS = ["--brand-surface", "--brand-surface-strong", "--brand-on-surface", "--brand-mark", "--brand-mark-strong", "--brand-mark-foreground"];
 const COMPONENT_TOKENS = ["--switch-track", "--switch-track-border", "--switch-thumb-off"];
-const NEW_1B1 = new Set([...BRAND_TOKENS, ...COMPONENT_TOKENS]);
+const BRAND_TOKENS_1B4 = ["--brand-mark-inverse", "--brand-mark-inverse-strong", "--brand-mark-inverse-foreground", "--brand-mark-inverse-node"];
+const COMPONENT_TOKENS_1B4 = ["--auth-card-border"];
+const NEW_1B1 = new Set([...BRAND_TOKENS, ...COMPONENT_TOKENS, ...BRAND_TOKENS_1B4, ...COMPONENT_TOKENS_1B4]);
 const STATUS = ["success", "warning", "destructive", "info", "error"];
 
 describe("🎨 المرحلة 1A — الهوية الجديدة خلف data-brand=\"v2\"", () => {
@@ -206,5 +208,64 @@ describe("🏛️ المرحلة 1B-1 — البراند الثابت × مسا�
     // المسار نفسه لم يعد --input: فاتح ناعم بدل الرمادي الداكن
     expect([hex("light:v2", "switch-track"), hex("light:v2", "input")]).toEqual(["#E8E5E4", "#8A8588"]);
     expect([ratio("light:v2", "switch-thumb-off", "switch-track"), ratio("dark:v2", "switch-thumb-off", "switch-track")]).toEqual([4.52, 5.35]);
+  });
+});
+
+/**
+ * المرحلة 1B-4 — تلميع بصري تحت v2 فقط: الشعار المعكوس لهيدر المخزن، وحدّ بطاقات الدخول في الداكن.
+ * الهوية الحالية: نفس ألوان الشعار العادي حرفيًا ولا حدّ (transparent) — بلا تغيير مرئي.
+ */
+describe("✨ المرحلة 1B-4 — الشعار المعكوس وحدّ بطاقات الدخول", () => {
+  const solid = (t: string, k: string) => { const tk = themes[t]; return over(parseColor(tk[k.startsWith("--") ? k : `--${k}`], tk)!, parseColor(tk["--card"], tk)!); };
+  const rgbOf = (h: string) => parseColor(h, {})!;
+  const ratioRaw = (a: { r: number; g: number; b: number; a: number }, b: { r: number; g: number; b: number; a: number }) => Math.round(contrast(a, b) * 100) / 100;
+  const CURRENT = Object.keys(themes).filter(t => !t.includes("v2"));
+
+  it("الهوية الحالية: المعكوس = الشعار العادي حرفيًا، والحد شفاف — في الوضعين وكل الألوان المحفوظة", () => {
+    for (const t of CURRENT) {
+      const tk = themes[t];
+      expect([tk["--brand-mark-inverse"], tk["--brand-mark-inverse-strong"], tk["--brand-mark-inverse-foreground"], tk["--brand-mark-inverse-node"], tk["--auth-card-border"]], t)
+        .toEqual(["var(--brand-mark)", "var(--brand-mark-strong)", "var(--brand-mark-foreground)", "#EDE9FE", "transparent"]);
+    }
+  });
+
+  it("تحت v2 فاتح: دائرة فاتحة وحرف Oxblood ثابت — الدائرة ≥ 3:1 على هيدر المخزن بكل لون، والحرف ≥ 4.5:1 على الدائرة", () => {
+    for (const a of ["", ...ACCENT_IDS.map(x => `:${x}`)]) {
+      const t = `light:v2${a}`;
+      expect([hex(t, "brand-mark-inverse"), hex(t, "brand-mark-inverse-strong"), hex(t, "brand-mark-inverse-foreground")], t).toEqual(["#FFFFFF", "#F3E8EB", "#672A39"]);
+      // الهيدر = تدرّج --primary-dark → --primary (لون مساحة العمل)
+      for (const head of ["primary", "primary-dark"]) for (const c of ["brand-mark-inverse", "brand-mark-inverse-strong"])
+        expect(ratioRaw(solid(t, c), solid(t, head)), `${t} ${c}/${head}`).toBeGreaterThanOrEqual(3);
+      for (const c of ["brand-mark-inverse", "brand-mark-inverse-strong"])
+        expect(ratioRaw(solid(t, "brand-mark-inverse-foreground"), solid(t, c)), `${t} glyph/${c}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("تحت v2 داكن: هيدر مساحة العمل فاتح ⇒ المعكوس = الدائرة الداكنة بحرف أبيض — ≥ 3:1 على متوسط الهيدر بكل لون، والحرف ≥ 4.5:1", () => {
+    for (const a of ["", ...ACCENT_IDS.map(x => `:${x}`)]) {
+      const t = `dark:v2${a}`;
+      expect([hex(t, "brand-mark-inverse"), hex(t, "brand-mark-inverse-strong"), hex(t, "brand-mark-inverse-foreground")], t).toEqual(["#7E3445", "#672A39", "#FFFFFF"]);
+      const avg = (x: string, y: string) => { const p = solid(t, x), q = solid(t, y); return { r: (p.r + q.r) / 2, g: (p.g + q.g) / 2, b: (p.b + q.b) / 2, a: 1 }; };
+      expect(ratioRaw(avg("brand-mark-inverse", "brand-mark-inverse-strong"), avg("primary", "primary-dark")), `${t} circle/header`).toBeGreaterThanOrEqual(3);
+      for (const c of ["brand-mark-inverse", "brand-mark-inverse-strong"])
+        expect(ratioRaw(solid(t, "brand-mark-inverse-foreground"), solid(t, c)), `${t} glyph/${c}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("حدّ بطاقات الدخول: شفاف في الفاتح، وأبيض 10% محايد في الداكن تحت v2 — ولا يتأثر باللون المحفوظ", () => {
+    for (const a of ["", ...ACCENT_IDS.map(x => `:${x}`)]) {
+      expect(themes[`light:v2${a}`]["--auth-card-border"]).toBe("transparent");
+      expect(themes[`dark:v2${a}`]["--auth-card-border"]).toBe("rgb(255 255 255 / 0.10)");
+    }
+    const edge = over(rgbOf("rgb(255 255 255 / 0.10)"), rgbOf("#222025"));
+    expect(ratioRaw(edge, rgbOf("#4A1D28"))).toBeGreaterThan(ratioRaw(rgbOf("#222025"), rgbOf("#4A1D28")));
+  });
+
+  it("Ice Blue في سايدبار المدير يبقى كما هو تحت v2 (قرار المالك) — غير مرتبط بلون مساحة العمل", () => {
+    for (const a of ["", ...ACCENT_IDS.map(x => `:${x}`)]) for (const mode of ["light", "dark"]) {
+      const t = `${mode}:v2${a}`;
+      if (!a) expect(hex(t, "sidebar-primary"), t).toBe("#C5EAF2");
+      else expect(themes[t]["--sidebar-primary"], t).toBe(blocks[`${mode}:${a.slice(1)}`]?.["--sidebar-primary"] ?? blocks[`light:${a.slice(1)}`]["--sidebar-primary"]);
+    }
   });
 });

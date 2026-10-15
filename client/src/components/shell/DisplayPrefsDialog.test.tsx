@@ -144,3 +144,40 @@ describe("🏷️ Matjarak 2.0 (v2) — «لون مساحة العمل» و«ع�
     expect(Object.keys(localStorage).filter(k => k.startsWith("matjarak:"))).toEqual([KEY]);
   });
 });
+
+describe("📱 Matjarak 2.0 (1B-4) — ألوان مساحة العمل في عمودين متساويين على 390px وما دونها", () => {
+  afterEach(() => document.documentElement.removeAttribute("data-brand"));
+  const GRID = ["max-[391px]:grid", "max-[391px]:grid-cols-2", "max-[391px]:auto-rows-fr"];
+  const groupOf = (name: string) => screen.getByRole("radiogroup", { name });
+
+  it("تحت v2: مجموعة الألوان وحدها تأخذ الـGrid على الهاتف، وتبقى flex على الديسكتوب؛ ترتيب الخيارات وأسماؤها وقيمها كما هي", () => {
+    document.documentElement.setAttribute("data-brand", "v2");
+    mountDialog();
+    const accent = groupOf("لون مساحة العمل");
+    for (const c of [...GRID, "flex", "flex-wrap", "gap-2"]) expect(accent.className.split(" "), c).toContain(c);
+    expect(within(accent).getAllByRole("radio").map(b => b.getAttribute("data-testid"))).toEqual(["copper", "teal", "indigo", "olive"].map(a => `prefs-accent-${a}`));
+    for (const b of within(accent).getAllByRole("radio")) expect([b.className.includes("max-[391px]:px-2.5"), b.className.includes("px-3.5")]).toEqual([true, true]);
+    for (const g of screen.getAllByRole("radiogroup").filter(g => g !== accent)) {
+      for (const c of GRID) expect(g.className, g.getAttribute("aria-label")!).not.toContain(c);
+      for (const b of within(g).getAllByRole("radio")) expect(b.className).not.toContain("max-[391px]");
+    }
+  });
+
+  it("بدون v2: لا Grid في أي مجموعة — مظهر الهوية الحالية كما هو", () => {
+    mountDialog();
+    for (const g of screen.getAllByRole("radiogroup")) {
+      expect(g.className, g.getAttribute("aria-label")!).toBe("flex flex-wrap gap-2");
+      for (const b of within(g).getAllByRole("radio")) expect(b.className).not.toContain("max-[391px]");
+    }
+  });
+
+  it("لوحة المفاتيح داخل الـGrid كما هي: RTL السهم الأيسر = التالي، والقيمة المحفوظة نفس المعرّف القديم", () => {
+    document.documentElement.setAttribute("data-brand", "v2");
+    mountDialog();
+    const copper = screen.getByTestId("prefs-accent-copper");
+    copper.focus(); fireEvent.keyDown(copper, { key: "ArrowLeft" });
+    expect([root().getAttribute("data-accent"), document.activeElement?.getAttribute("data-testid")]).toEqual(["teal", "prefs-accent-teal"]);
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect([root().getAttribute("data-accent"), JSON.parse(localStorage.getItem("matjarak:display-prefs:v1:u:3")!).accent]).toEqual(["copper", "copper"]);
+  });
+});
