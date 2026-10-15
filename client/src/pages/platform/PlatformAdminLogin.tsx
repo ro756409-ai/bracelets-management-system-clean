@@ -41,7 +41,7 @@ export default function PlatformAdminLogin() {
   };
 
   return (
-    <main dir="rtl" className="flex min-h-screen items-center justify-center p-4" style={{ background: "linear-gradient(135deg, var(--primary-dark) 0%, var(--sidebar, var(--foreground)) 100%)" }} data-testid="platform-login">
+    <main dir="rtl" className="flex min-h-screen items-center justify-center p-4" style={{ background: "linear-gradient(135deg, var(--brand-surface-strong) 0%, var(--sidebar, var(--foreground)) 100%)" }} data-testid="platform-login">
       <div className="w-full max-w-sm">
         <div className="rounded-[var(--radius-brand-lg,var(--radius-brand-md))] bg-card shadow-[var(--shadow-card)]">
           <div className="px-6 pb-4 pt-8 text-center">

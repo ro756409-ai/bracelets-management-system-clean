@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
-import { applyBrandFlag, brandFromEnv } from "./brandFlag";
+import { activeBrand, applyBrandFlag, brandFromEnv } from "./brandFlag";
 import { ACCENT_IDS, DEFAULT_PREFS, applyPrefsToRoot, loadPrefs, savePrefs, type SessionIdentity } from "./displayPrefs";
 
 /**
@@ -61,10 +61,24 @@ describe("🏷️ مفتاح الهوية VITE_BRAND", () => {
     expect(Object.keys(before.local).filter(k => k.startsWith("matjarak:display-prefs:v1:")).length).toBe(4);
   });
 
-  it("فصل تام: كود التفضيلات لا يعرف المفتاح، وكود المفتاح لا يلمس أي تخزين أو شبكة", () => {
+  it("فصل تام: كود حفظ التفضيلات لا يعرف المفتاح، والنافذة تقرأه للعرض فقط، وكود المفتاح/العرض لا يلمس أي تخزين أو شبكة", () => {
     const read = (f: string) => fs.readFileSync(path.resolve(__dirname, f), "utf-8");
-    for (const f of ["displayPrefs.ts", "../contexts/DisplayPrefsContext.tsx", "../components/shell/DisplayPrefsDialog.tsx"])
-      expect(read(f), f).not.toMatch(/data-brand|brandFlag|VITE_BRAND/);
-    expect(read("brandFlag.ts")).not.toMatch(/localStorage|sessionStorage|document\.cookie|indexedDB|fetch\(|trpc|savePrefs|loadPrefs/);
+    for (const f of ["displayPrefs.ts", "../contexts/DisplayPrefsContext.tsx"])
+      expect(read(f), f).not.toMatch(/data-brand|brandFlag|VITE_BRAND|accentPresentation/);
+    // النافذة (1B-3): تقرأ الهوية المطبَّقة لاسم/لون العرض فقط — بلا مفتاح البناء وبلا أي تخزين مباشر
+    const dialog = read("../components/shell/DisplayPrefsDialog.tsx");
+    expect(dialog).toMatch(/activeBrand\(\)/);
+    expect(dialog).not.toMatch(/VITE_BRAND|applyBrandFlag|localStorage|sessionStorage|savePrefs|loadPrefs/);
+    for (const f of ["brandFlag.ts", "accentPresentation.ts"])
+      expect(read(f), f).not.toMatch(/localStorage|sessionStorage|document\.cookie|indexedDB|fetch\(|trpc|savePrefs|loadPrefs|setAttribute\("data-accent/);
+  });
+
+  it("activeBrand يقرأ الهوية المطبَّقة فقط (بلا كتابة): v2 مع data-brand=\"v2\"، وإلا null", () => {
+    const root = document.documentElement;
+    expect(activeBrand(root)).toBeNull();
+    applyBrandFlag(root, "v2"); expect(activeBrand(root)).toBe("v2");
+    root.setAttribute("data-brand", "v3"); expect(activeBrand(root)).toBeNull();
+    applyBrandFlag(root, undefined); expect(activeBrand(root)).toBeNull();
+    expect(activeBrand(null)).toBeNull();
   });
 });

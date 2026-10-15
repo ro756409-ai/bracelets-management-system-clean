@@ -3,10 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useDisplayPrefs } from "@/contexts/DisplayPrefsContext";
 import {
-  ACCENTS, ACCENT_IDS, DENSITIES, DENSITY_LABELS, FONT_SCALES, FONT_SCALE_LABELS, MOTION_LABELS, MOTION_PREFS, THEME_LABELS, THEME_MODES,
+  ACCENT_IDS, DENSITIES, DENSITY_LABELS, FONT_SCALES, FONT_SCALE_LABELS, MOTION_LABELS, MOTION_PREFS, THEME_LABELS, THEME_MODES,
   type DisplayPrefs,
 } from "@/lib/displayPrefs";
 import { cn } from "@/lib/utils";
+import { activeBrand } from "@/lib/brandFlag";
+import { accentGroupText, accentPresentation } from "@/lib/accentPresentation";
 
 /**
  * نافذة «تخصيص العرض» (المرحلة 5) — تُفتح من الشريط العلوي. كل مجموعة = `radiogroup` بأزرار ≥44px
@@ -60,6 +62,9 @@ function OptionGroup<T extends string | number>({ id, label, hint, options, valu
 export function DisplayPrefsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { prefs, update, reset, canPersist, resolvedTheme, isDesktop } = useDisplayPrefs();
   const swatchMode = resolvedTheme;
+  // عرض فقط حسب الهوية المطبَّقة (Matjarak 2.0) — القيمة المحفوظة لا تتغير
+  const brand = activeBrand();
+  const accentText = accentGroupText(brand);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* على الهاتف: الارتفاع ≤ الشاشة − 8rem فيبقى أسفل النافذة (الاستعادة/تم) فوق منطقة MobileBottomNav
@@ -76,12 +81,12 @@ export function DisplayPrefsDialog({ open, onOpenChange }: { open: boolean; onOp
           <OptionGroup id="fontScale" label="حجم الخط" options={FONT_SCALES} value={prefs.fontScale} onChange={v => update({ fontScale: v })} render={v => <span className="font-en tabular-nums">{FONT_SCALE_LABELS[v]}</span>} />
           <OptionGroup id="theme" label="الوضع" options={THEME_MODES} value={prefs.theme} onChange={v => update({ theme: v })} render={v => THEME_LABELS[v]} />
           <OptionGroup
-            id="accent" label="اللون الرئيسي" hint="ألوان الحالات (نجاح/تحذير/خطر) لا تتغير مع اللون الرئيسي."
+            id="accent" label={accentText.title} hint={accentText.hint}
             options={ACCENT_IDS} value={prefs.accent} onChange={v => update({ accent: v })}
             render={v => (
               <>
-                <span className="h-4 w-4 shrink-0 rounded-full border border-border" style={{ backgroundColor: ACCENTS[v][swatchMode].primary }} aria-hidden="true" data-testid={`prefs-swatch-${v}`} />
-                {ACCENTS[v].label}
+                <span className="h-4 w-4 shrink-0 rounded-full border border-border" style={{ backgroundColor: accentPresentation(v, swatchMode, brand).swatch }} aria-hidden="true" data-testid={`prefs-swatch-${v}`} />
+                {accentPresentation(v, swatchMode, brand).label}
               </>
             )}
           />

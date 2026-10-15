@@ -7,7 +7,7 @@
 export function BrandMark({ className = "h-8 w-8" }: { className?: string }) {
   return (
     <div
-      className={`${className} rounded-full shrink-0 bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center`}
+      className={`${className} rounded-full shrink-0 bg-gradient-to-br from-brand-mark to-brand-mark-strong flex items-center justify-center`}
       role="img"
       aria-label="متجرك"
     >

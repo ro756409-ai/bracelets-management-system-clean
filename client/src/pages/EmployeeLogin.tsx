@@ -88,7 +88,7 @@ export default function EmployeeLogin() {
     <main
       dir="rtl"
       className="flex min-h-screen items-center justify-center p-4"
-      style={{ background: "linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%)" }}
+      style={{ background: "linear-gradient(135deg, var(--brand-surface) 0%, var(--brand-surface-strong) 100%)" }}
       data-testid="employee-login-page"
     >
       <div className="relative w-full max-w-sm">

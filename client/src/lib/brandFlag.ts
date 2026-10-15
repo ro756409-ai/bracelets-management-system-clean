@@ -17,3 +17,11 @@ export function applyBrandFlag(root: HTMLElement, value: unknown): Brand | null 
   else root.removeAttribute("data-brand");
   return brand;
 }
+
+/**
+ * الهوية المطبَّقة فعلًا على الصفحة (قراءة فقط من `<html data-brand>` الذي وضعه applyBrandFlag) — للعرض فقط
+ * (مثل اسم اللون الافتراضي في نافذة تخصيص العرض)، فتتطابق التسمية دائمًا مع الألوان الظاهرة.
+ */
+export function activeBrand(root: HTMLElement | null = typeof document === "undefined" ? null : document.documentElement): Brand | null {
+  return brandFromEnv(root?.getAttribute("data-brand"));
+}

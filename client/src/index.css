@@ -69,6 +69,9 @@
   --color-brand-ice: var(--brand-ice, var(--mj-ice));
   --color-brand-ice-foreground: var(--brand-ice-foreground, var(--mj-ink));
   --color-brand-ice-soft: var(--brand-ice-soft, var(--mj-ice-soft));
+  /* دائرة الشعار المؤقت — لون البراند الثابت (المرحلة 1B-2)، لا لون مساحة العمل */
+  --color-brand-mark: var(--brand-mark);
+  --color-brand-mark-strong: var(--brand-mark-strong);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);

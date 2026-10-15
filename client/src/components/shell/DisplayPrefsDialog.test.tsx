@@ -108,3 +108,39 @@ describe("🔝 الزر في الشريط العلوي", () => {
     expect(screen.queryByTestId("display-prefs-dialog")).toBeNull();
   });
 });
+
+describe("🏷️ Matjarak 2.0 (v2) — «لون مساحة العمل» و«عنابي — الافتراضي» عرضًا فقط", () => {
+  afterEach(() => document.documentElement.removeAttribute("data-brand"));
+  const KEY = "matjarak:display-prefs:v1:u:3";
+
+  it("تحت v2: عنوان المجموعة «لون مساحة العمل»، والافتراضي «عنابي — الافتراضي» بلون Oxblood، والباقي كما هو", () => {
+    document.documentElement.setAttribute("data-brand", "v2");
+    mountDialog();
+    expect(screen.getByRole("radiogroup", { name: "لون مساحة العمل" })).toBeTruthy();
+    expect(screen.queryByRole("radiogroup", { name: "اللون الرئيسي" })).toBeNull();
+    const def = screen.getByTestId("prefs-accent-copper");
+    expect([def.textContent, def.getAttribute("aria-checked")]).toEqual(["عنابي — الافتراضي", "true"]);
+    expect((screen.getByTestId("prefs-swatch-copper") as HTMLElement).style.backgroundColor).toBe("rgb(103, 42, 57)");
+    for (const id of ["teal", "indigo", "olive"] as const) expect(screen.getByTestId(`prefs-accent-${id}`).textContent).toBe(ACCENTS[id].label);
+    expect(screen.getByText(/ثابت على الشعار وشاشات الدخول/)).toBeTruthy();
+  });
+
+  it("بدون v2: العنوان والاسم كما كانا حرفيًا («اللون الرئيسي» و«نحاسي»)", () => {
+    mountDialog();
+    expect(screen.getByRole("radiogroup", { name: "اللون الرئيسي" })).toBeTruthy();
+    expect(screen.getByTestId("prefs-accent-copper").textContent).toBe("نحاسي");
+  });
+
+  it("التفضيلات المحفوظة كما هي: فتح النافذة تحت v2 لا يغيّر التخزين، والاختيار يحفظ نفس القيم القديمة (teal ثم copper)", () => {
+    const saved = { fontScale: 1.1, theme: "light", accent: "copper", density: "comfortable", motion: "system" };
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    document.documentElement.setAttribute("data-brand", "v2");
+    mountDialog();
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual(saved);
+    fireEvent.click(screen.getByTestId("prefs-accent-teal"));
+    expect([root().getAttribute("data-accent"), JSON.parse(localStorage.getItem(KEY)!).accent]).toEqual(["teal", "teal"]);
+    fireEvent.click(screen.getByTestId("prefs-accent-copper"));
+    expect([root().getAttribute("data-accent"), JSON.parse(localStorage.getItem(KEY)!).accent]).toEqual(["copper", "copper"]);
+    expect(Object.keys(localStorage).filter(k => k.startsWith("matjarak:"))).toEqual([KEY]);
+  });
+});
