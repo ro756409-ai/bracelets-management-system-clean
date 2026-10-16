@@ -175,6 +175,9 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
+/** حجم نص صريح في className الخارجي (text-xs…text-9xl أو text-[Npx]) — لو موجود، حجم v2 الافتراضي مايتطبقش فوقه. */
+const HAS_TEXT_SIZE = /(?:^|\s)(?:[\w-]+:)*text-(?:xs|sm|base|lg|xl|[2-9]xl|\[\d[^\]]*\])(?=\s|$)/;
+
 function DialogTitle({
   className,
   ...props
@@ -182,7 +185,8 @@ function DialogTitle({
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-lg leading-none font-semibold", className)}
+      // Matjarak 2.0 (1C-4): عنوان النافذة أكبر تحت v2 فقط، إلا لو المستدعي حدد حجمه بنفسه
+      className={cn("text-lg leading-none font-semibold", !HAS_TEXT_SIZE.test(className ?? "") && "brand-v2:text-xl", className)}
       {...props}
     />
   );

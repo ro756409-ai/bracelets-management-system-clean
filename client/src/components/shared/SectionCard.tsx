@@ -38,7 +38,7 @@ export function SectionCard({
         <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
           <div className="min-w-0 space-y-1">
             {title && (
-              <CardTitle className="flex items-center gap-2 text-base">
+              <CardTitle className="flex items-center gap-2 text-base brand-v2:text-[17px]">
                 {icon}
                 {title}
               </CardTitle>

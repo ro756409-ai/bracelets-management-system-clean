@@ -42,7 +42,7 @@ export function PageHeader({
           )}
           <div className="min-w-0 space-y-1">
             {/* No truncation: an Arabic page title must be readable in full. */}
-            <h1 className="text-xl font-bold sm:text-2xl">{title}</h1>
+            <h1 className="text-xl font-bold sm:text-2xl brand-v2:text-2xl brand-v2:sm:text-[28px]">{title}</h1>
             {description && (
               <p className="text-sm text-muted-foreground">{description}</p>
             )}

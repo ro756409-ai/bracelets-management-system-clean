@@ -32,7 +32,7 @@ export function FormSection({
     <section className={cn("space-y-3", className)}>
       {(title || description) && (
         <div className="space-y-0.5">
-          {title && <h3 className="text-sm font-semibold">{title}</h3>}
+          {title && <h3 className="text-sm font-semibold brand-v2:text-[15px]">{title}</h3>}
           {description && <p className="text-xs text-muted-foreground">{description}</p>}
         </div>
       )}

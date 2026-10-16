@@ -9,7 +9,8 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        // Matjarak 2.0 (1C-4): الزر الأساسي semibold تحت v2 فقط
+        default: "bg-primary text-primary-foreground hover:bg-primary/90 brand-v2:font-semibold",
         destructive:
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
@@ -36,6 +37,9 @@ const buttonVariants = cva(
   }
 );
 
+/** وزن خط صريح في className الخارجي — لو موجود، وزن v2 الافتراضي مايتطبقش فوقه. */
+const HAS_FONT_WEIGHT = /(?:^|\s)(?:[\w-]+:)*font-(?:thin|extralight|light|normal|medium|semibold|bold|extrabold|black|\[\d+\])(?=\s|$)/;
+
 function Button({
   className,
   variant,
@@ -51,10 +55,14 @@ function Button({
   return (
     <Comp
       data-slot="button"
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={cn(withoutBrandWeight(buttonVariants({ variant, size }), className), className)}
       {...props}
     />
   );
+}
+
+function withoutBrandWeight(classes: string, className?: string): string {
+  return className && HAS_FONT_WEIGHT.test(className) ? classes.replace(/(^|\s)brand-v2:font-semibold(?=\s|$)/, "$1") : classes;
 }
 
 export { Button, buttonVariants };
