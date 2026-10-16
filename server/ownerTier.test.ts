@@ -87,10 +87,11 @@ describe("منح دور المالك", () => {
     expect(compact).toContain("if (isOwnerRole(ctx.employee?.role)) return;");
   });
 
-  it("🔑 استثناء التأسيس — أول مالك ممكن يتعمل وقت ما مفيش مالك", () => {
-    expect(compact).toContain(
-      "if (grants && (await countActiveOwnerEmployees()) === 0) return;"
-    );
+  it("🔑 لا استثناء تأسيس داخل التطبيق — صفر ملاك لا يفتح ترقية ذاتية (SEC-2)", () => {
+    expect(compact).not.toContain("(await countActiveOwnerEmployees()) === 0) return;");
+    expect(compact).toContain('message: "لازم يفضل مالك نشط واحد على الأقل للشركة"');
+    expect(compact).toContain('if (isOwnerRole(target.role)) await writeOwnerAccountChange(ctx, id, { kind: "update", data });');
+    expect(compact).toContain('if (isOwnerRole(target.role)) await writeOwnerAccountChange(ctx, input.id, { kind: "delete" });');
   });
 
   it("السحب بيتفحص كمان مش المنح بس", () => {

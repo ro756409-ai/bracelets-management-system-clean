@@ -876,9 +876,10 @@ const OWNER_ROLES_FOR_QUERY = ["super_admin"] as const;
 
 /** Number of currently-active admin-tier employees (super_admin/admin/manager). */
 /**
- * Active accounts holding the owner tier. Used to decide whether granting the
- * owner role is a bootstrap (no owner exists yet — any admin may create the
- * first one) or an escalation (an owner exists — only an owner may grant it).
+ * Active accounts holding the owner tier (platform-wide). There is no in-app bootstrap:
+ * the first owner comes from platform signup approval or a documented operator step.
+ * The per-tenant «keep at least one active owner» rule is enforced atomically by
+ * writeEmployeeKeepingAnOwner (SEC-2).
  */
 export async function countActiveOwnerEmployees(
   excludeId?: number
@@ -972,6 +973,54 @@ export async function deleteEmployee(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(employees).where(eq(employees.id, id));
+}
+
+export type OwnerAccountChange = { kind: "update"; data: Partial<InsertEmployee> } | { kind: "delete" };
+
+/**
+ * كتابة على حساب مالك مع ضمان بقاء مالك نشط واحد على الأقل في الشركة — **ذريًا** (SEC-2):
+ * قفل صف الشركة (`tenants … FOR UPDATE`) يسلسل كل تغييرات ملاك نفس الشركة، ثم قراءة الهدف وعدّ الملاك الآخرين
+ * بقراءات قافلة (أحدث بيانات ملتزمة) والكتابة — كلها داخل نفس المعاملة. طلبان متزامنان (مالكان يعطّلان بعض) يتسلسلان:
+ * الأول ينجح والثاني يرى صفر ملاك آخرين فيُرفض بلا كتابة. القراءة والكتابة مقيّدتان بـ(id + tenantId) معًا:
+ * «not_found» = الهدف مش موجود أو تابع لشركة أخرى، و«no_tenant» = صف الشركة غير موجود — وفي الحالتين لا كتابة.
+ */
+export async function writeEmployeeKeepingAnOwner(
+  tenantId: number,
+  employeeId: number,
+  change: OwnerAccountChange
+): Promise<"ok" | "last_owner" | "not_found" | "no_tenant"> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const isOwner = (role: string | null | undefined) => (OWNER_ROLES_FOR_QUERY as readonly string[]).includes(role ?? "");
+  return db.transaction(async (tx) => {
+    const [tenant] = await tx.select({ id: tenants.id }).from(tenants).where(eq(tenants.id, tenantId)).for("update");
+    if (!tenant) return "no_tenant";
+    const ofTenant = and(eq(employees.id, employeeId), eq(employees.tenantId, tenantId));
+    const [target] = await tx.select().from(employees).where(ofTenant).limit(1).for("update");
+    if (!target) return "not_found";
+    const losesOwner =
+      isOwner(target.role) &&
+      target.isActive &&
+      (change.kind === "delete" ||
+        change.data.isActive === false ||
+        (change.data.role !== undefined && !isOwner(change.data.role)));
+    if (losesOwner) {
+      const others = await tx
+        .select({ id: employees.id })
+        .from(employees)
+        .where(and(
+          eq(employees.tenantId, tenantId),
+          eq(employees.isActive, true),
+          inArray(employees.role, OWNER_ROLES_FOR_QUERY),
+          sql`${employees.id} != ${employeeId}`,
+        ))
+        .for("update");
+      if (others.length === 0) return "last_owner";
+    }
+    if (change.kind === "delete") await tx.delete(employees).where(ofTenant);
+    else await tx.update(employees).set(change.data).where(ofTenant);
+    return "ok";
+  });
 }
 
 // ==================== PRODUCTS ====================

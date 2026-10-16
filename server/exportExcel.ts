@@ -1,4 +1,5 @@
 import { shippingReadiness } from "../shared/shippingReadiness";
+import { randomBytes } from "crypto";
 import { Request, Response, Express } from "express";
 import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import XLSX from "xlsx-js-style";
@@ -60,6 +61,19 @@ function formatAddress(address: string | null | undefined, governorate?: string)
     clean = clean.slice(0, -governorate.length).trim().replace(/[,،\-]+$/, "").trim();
   }
   return clean || governorate || "";
+}
+
+/**
+ * يهرّب أي قيمة قبل وضعها في HTML (محتوى أو قيمة attribute). بيانات الأوردر (اسم/عنوان/ملاحظات/منتج) بتيجي من
+ * عملاء متاجر Easy Order والإدخال اليدوي والاستيراد — لازم تتعامل كنص، مش HTML (SEC-1).
+ */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function extractEngravingType(fullName: string): string {
@@ -586,7 +600,7 @@ async function generateQRDataURL(text: string): Promise<string> {
   }
 }
 
-async function buildLabelHTML(order: any, _shippingCost?: number): Promise<string> {
+export async function buildLabelHTML(order: any, _shippingCost?: number): Promise<string> {
   const products = parseOrderProducts(order);
   const cleanAddress = formatAddress(order.customerAddress, order.governorate);
   const totalCost = Number(order.totalAmount);
@@ -601,33 +615,33 @@ async function buildLabelHTML(order: any, _shippingCost?: number): Promise<strin
       const parts = String(it.productName || "").split(" - ");
       const name = parts[0] || it.productName || "صنف";
       const variant = parts[1] || "";
-      return `<tr><td class="lbl">${name}${variant ? ` (${variant})` : ""}</td><td>× ${it.quantity || 1}</td></tr>`;
+      return `<tr><td class="lbl">${escapeHtml(name)}${variant ? ` (${escapeHtml(variant)})` : ""}</td><td>× ${escapeHtml(it.quantity || 1)}</td></tr>`;
     }).join("");
     const totalQty = orderItems.reduce((s: number, it: any) => s + (Number(it.quantity) || 0), 0);
-    productInfoHTML += `<tr><td class="lbl"><strong>إجمالي القطع</strong></td><td><strong>${totalQty || order.quantity || 1}</strong></td></tr>`;
-    if (order.color) productInfoHTML += `<tr><td class="lbl">اللون</td><td>${order.color}</td></tr>`;
-    if (order.size) productInfoHTML += `<tr><td class="lbl">المقاس</td><td>${order.size}</td></tr>`;
+    productInfoHTML += `<tr><td class="lbl"><strong>إجمالي القطع</strong></td><td><strong>${escapeHtml(totalQty || order.quantity || 1)}</strong></td></tr>`;
+    if (order.color) productInfoHTML += `<tr><td class="lbl">اللون</td><td>${escapeHtml(order.color)}</td></tr>`;
+    if (order.size) productInfoHTML += `<tr><td class="lbl">المقاس</td><td>${escapeHtml(order.size)}</td></tr>`;
   } else if (products.length <= 1) {
     const productName = products[0] || order.productName || "N/A";
     const parts = productName.split(" - ");
     const name = parts[0] || productName;
     const variant = parts[1] || "";
       productInfoHTML = `
-      <tr><td class="lbl">المنتج</td><td>${name}</td></tr>
-      ${variant ? `<tr><td class="lbl">النوع</td><td>${variant}</td></tr>` : ''}
-      ${order.color ? `<tr><td class="lbl">اللون</td><td>${order.color}</td></tr>` : ''}
-      ${order.size ? `<tr><td class="lbl">المقاس</td><td>${order.size}</td></tr>` : ''}
-      <tr><td class="lbl">الكمية</td><td>${order.quantity || 1}</td></tr>
+      <tr><td class="lbl">المنتج</td><td>${escapeHtml(name)}</td></tr>
+      ${variant ? `<tr><td class="lbl">النوع</td><td>${escapeHtml(variant)}</td></tr>` : ''}
+      ${order.color ? `<tr><td class="lbl">اللون</td><td>${escapeHtml(order.color)}</td></tr>` : ''}
+      ${order.size ? `<tr><td class="lbl">المقاس</td><td>${escapeHtml(order.size)}</td></tr>` : ''}
+      <tr><td class="lbl">الكمية</td><td>${escapeHtml(order.quantity || 1)}</td></tr>
     `;
   } else {
     productInfoHTML = products.map((p: string, i: number) => {
       const parts = p.split(" - ");
       const name = parts[0] || p;
       const variant = parts[1] || "";
-      return `<tr><td class="lbl">منتج ${i + 1}</td><td>${name}${variant ? ` (${variant})` : ""}</td></tr>`;
+      return `<tr><td class="lbl">منتج ${i + 1}</td><td>${escapeHtml(name)}${variant ? ` (${escapeHtml(variant)})` : ""}</td></tr>`;
     }).join("");
     productInfoHTML += `
-      <tr><td class="lbl">الكمية</td><td>${order.quantity || products.length}</td></tr>
+      <tr><td class="lbl">الكمية</td><td>${escapeHtml(order.quantity || products.length)}</td></tr>
     `;
   }
 
@@ -639,18 +653,18 @@ async function buildLabelHTML(order: any, _shippingCost?: number): Promise<strin
     <div class="label" dir="rtl">
       <!-- HEADER: Logo + Title + QR -->
       <div class="label-header" style="border-bottom-color: ${branding.color}">
-        <img src="${branding.logo}" alt="${branding.name}" class="brand-logo" />
+        <img src="${escapeHtml(branding.logo)}" alt="${escapeHtml(branding.name)}" class="brand-logo" />
         <div class="header-center">
           <h1 class="title" style="color: ${branding.color}">بوليصة شحن</h1>
           <div class="order-meta">
-            <span><strong>#</strong> ${order.orderNumber || order.id}</span>
-            ${orderDate ? `<span>${orderDate}</span>` : ''}
-            <span class="source-badge" style="background: ${branding.color}">${branding.name}</span>
+            <span><strong>#</strong> ${escapeHtml(order.orderNumber || order.id)}</span>
+            ${orderDate ? `<span>${escapeHtml(orderDate)}</span>` : ''}
+            <span class="source-badge" style="background: ${branding.color}">${escapeHtml(branding.name)}</span>
           </div>
         </div>
         <div class="qr-block">
-          ${qrDataURL ? `<img src="${qrDataURL}" alt="QR" class="qr-img" />` : ''}
-          <div class="serial-num">${qrText}</div>
+          ${qrDataURL ? `<img src="${escapeHtml(qrDataURL)}" alt="QR" class="qr-img" />` : ''}
+          <div class="serial-num">${escapeHtml(qrText)}</div>
         </div>
       </div>
 
@@ -659,12 +673,12 @@ async function buildLabelHTML(order: any, _shippingCost?: number): Promise<strin
         <div class="col">
           <div class="col-title" style="color:${branding.color}">بيانات العميل</div>
           <table class="info-table">
-            <tr><td class="lbl">الاسم</td><td>${order.customerName || 'N/A'}</td></tr>
-            <tr><td class="lbl">التليفون</td><td>${order.customerPhone || 'N/A'}</td></tr>
-            ${order.customerPhone2 ? `<tr><td class="lbl">بديل</td><td>${order.customerPhone2}</td></tr>` : ''}
-            <tr><td class="lbl">المحافظة</td><td>${order.governorate || 'غير محدد'}</td></tr>
-            ${order.city ? `<tr><td class="lbl">المدينة</td><td>${order.city}</td></tr>` : ''}
-            <tr><td class="lbl">العنوان</td><td class="addr">${cleanAddress}</td></tr>
+            <tr><td class="lbl">الاسم</td><td>${escapeHtml(order.customerName || 'N/A')}</td></tr>
+            <tr><td class="lbl">التليفون</td><td>${escapeHtml(order.customerPhone || 'N/A')}</td></tr>
+            ${order.customerPhone2 ? `<tr><td class="lbl">بديل</td><td>${escapeHtml(order.customerPhone2)}</td></tr>` : ''}
+            <tr><td class="lbl">المحافظة</td><td>${escapeHtml(order.governorate || 'غير محدد')}</td></tr>
+            ${order.city ? `<tr><td class="lbl">المدينة</td><td>${escapeHtml(order.city)}</td></tr>` : ''}
+            <tr><td class="lbl">العنوان</td><td class="addr">${escapeHtml(cleanAddress)}</td></tr>
           </table>
         </div>
         <div class="col">
@@ -674,7 +688,7 @@ async function buildLabelHTML(order: any, _shippingCost?: number): Promise<strin
           </table>
           <div class="payment-box" style="border-color:${branding.color}">
             <span class="pay-label">المبلغ المطلوب:</span>
-            <span class="pay-amount" style="color:${branding.color}">${totalCost.toLocaleString()} ج.م</span>
+            <span class="pay-amount" style="color:${branding.color}">${escapeHtml(totalCost.toLocaleString())} ج.م</span>
           </div>
         </div>
       </div>
@@ -682,7 +696,7 @@ async function buildLabelHTML(order: any, _shippingCost?: number): Promise<strin
       ${cleanNotes ? `
       <div class="notes-row">
         <span class="notes-title">ملاحظات:</span>
-        <span class="notes-val">${cleanNotes}</span>
+        <span class="notes-val">${escapeHtml(cleanNotes)}</span>
       </div>` : ''}
     </div>
   `;
@@ -730,6 +744,8 @@ async function exportPrintLabels(req: Request, res: Response) {
     await markOrdersAsPrinted(ownedIds, scopeToAllowed(allowed));
 
     const labelsHTML = (await Promise.all(orders.map((order: any) => buildLabelHTML(order)))).join("");
+    // دفاع إضافي (SEC-1): سكربت الطباعة الوحيد بـnonce، ومنع أي سكربت/اتصال/تضمين غيره حتى لو فلت نص.
+    const nonce = randomBytes(16).toString("base64");
 
     const fullHTML = `
 <!DOCTYPE html>
@@ -780,12 +796,13 @@ async function exportPrintLabels(req: Request, res: Response) {
 <body>
   <div class="print-bar no-print">
     <span>Shipping Labels — ${orders.length} order(s)</span>
-    <button onclick="window.print()">\u{1F5A8} Print / Save as PDF</button>
+    <button id="print-btn" type="button">\u{1F5A8} Print / Save as PDF</button>
   </div>
   <div class="labels-container">
     ${labelsHTML}
   </div>
-  <script>
+  <script nonce="${nonce}">
+    document.getElementById('print-btn').addEventListener('click', function() { window.print(); });
     window.addEventListener('load', function() {
       setTimeout(function() { window.print(); }, 500);
     });
@@ -794,6 +811,12 @@ async function exportPrintLabels(req: Request, res: Response) {
 </html>`;
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader(
+      "Content-Security-Policy",
+      `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data: https://d2xsxph8kpxj0f.cloudfront.net; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
+    );
     res.send(fullHTML);
   } catch (error: any) {
     console.error("Print labels error:", error);
