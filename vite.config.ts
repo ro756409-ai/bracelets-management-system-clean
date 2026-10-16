@@ -5,6 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
+import { brandFromEnv } from "./client/src/lib/brandFlag";
+import { assertNoGoogleFonts, stripGoogleFonts } from "./client/src/lib/brandHtml";
 
 // =============================================================================
 // Manus Debug Collector - Vite Plugin
@@ -177,6 +179,24 @@ function optionalAnalyticsPlugin(): Plugin {
   };
 }
 
+// Matjarak 2.0 (1C-3B): HTML بتاع v2 بلا روابط Google Fonts (خطوط v2 مستضافة ذاتيًا). القيمة من config.env —
+// نفس import.meta.env.VITE_BRAND اللي الواجهة بتاخده — وبنفس brandFromEnv، فالبناء والواجهة مايختلفوش. v1 بلا أي تغيير.
+function brandHtmlPlugin(): Plugin {
+  let brand: ReturnType<typeof brandFromEnv> = null;
+  return {
+    name: "matjarak-brand-html",
+    configResolved(config) {
+      brand = brandFromEnv(config.env.VITE_BRAND);
+    },
+    transformIndexHtml(html) {
+      if (brand !== "v2") return html;
+      const out = stripGoogleFonts(html);
+      assertNoGoogleFonts(out);
+      return out;
+    },
+  };
+}
+
 const plugins = [
   react(),
   tailwindcss(),
@@ -184,6 +204,7 @@ const plugins = [
   vitePluginManusRuntime(),
   vitePluginManusDebugCollector(),
   optionalAnalyticsPlugin(),
+  brandHtmlPlugin(),
 ];
 
 export default defineConfig({
