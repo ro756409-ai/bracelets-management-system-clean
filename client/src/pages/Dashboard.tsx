@@ -196,7 +196,7 @@ export default function Dashboard() {
   const dateLabel = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
   return (
-    <div className="space-y-6" data-testid="dashboard-page">
+    <div className="space-y-6 brand-v2:space-y-8 brand-v2:pb-4" data-testid="dashboard-page">
       <PageHeader
         title={`أهلاً ${user?.name ?? ""}`}
         description={`${dateLabel} — ${activeBusiness ? `نشاط «${activeBusiness.name}»` : businesses.length > 1 ? "كل الأنشطة" : "ملخص اليوم"} · أهم ما يحتاج تدخّلك`}
@@ -223,7 +223,7 @@ export default function Dashboard() {
         title="ملخص التشغيل"
         description={`الفترة المختارة ضمن ${activeBusiness ? "النشاط الحالي" : "النطاق الحالي"}`}
         icon={<BarChart3 className="h-4 w-4" aria-hidden="true" />}
-        className="border-0 bg-transparent shadow-none"
+        className="border-0 bg-transparent shadow-none brand-v2:rounded-2xl brand-v2:border brand-v2:border-border/60 brand-v2:bg-card/50 brand-v2:p-4 brand-v2:sm:p-5 brand-v2:gap-3 brand-v2:[&>[data-slot=card-header]]:px-0"
         contentClassName="p-0"
       >
         {!isAdmin || !canViewStats ? (
@@ -235,7 +235,7 @@ export default function Dashboard() {
         ) : isLoading ? (
           <LoadingSkeleton variant="cards" rows={5} />
         ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5" data-testid="dashboard-kpis">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 brand-v2:gap-4 brand-v2:xl:grid-cols-6 brand-v2:2xl:grid-cols-5 brand-v2:xl:max-2xl:[&>*]:col-span-2 brand-v2:xl:max-2xl:[&>*:nth-child(n+4)]:col-span-3 brand-v2:2xl:[&>*]:col-span-1" data-testid="dashboard-kpis">
             <StatCard label="أوردرات الفترة" value={fmt(totalOrders)} hint="أوردرات أُنشئت في الفترة المختارة (كل الحالات)" icon={<ShoppingCart className="h-5 w-5" aria-hidden="true" />} tone="info"
               onClick={canOpen("/orders") ? () => setLocation("/orders") : undefined} className="min-h-11" />
             <StatCard label="تحتاج قرار" value={fmt(Number(newCount))} hint="بحالة «جديد» — بانتظار التأكيد أو الإلغاء" icon={<Clock className="h-5 w-5" aria-hidden="true" />} tone="warning"
@@ -310,7 +310,7 @@ export default function Dashboard() {
 
       {/* ==================== 3. أداء الحالات خلال الفترة ==================== */}
       {isAdmin && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 brand-v2:gap-5">
           <SectionCard
             title="أوردرات آخر 14 يومًا"
             description="عدد الأوردرات يوميًا حسب تاريخ الإنشاء — الإجمالي والمؤكد (شاملًا المطبوع/المجهّز/المشحون/الموصَّل) والملغي"
