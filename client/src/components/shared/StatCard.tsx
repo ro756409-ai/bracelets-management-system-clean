@@ -171,8 +171,11 @@ export function StatCard({
   // Design System V2: label on top, large number below, trend last; the tinted icon tile sits
   // opposite the text (visually left in RTL) rather than leading it.
   const body = (
-    <CardContent className="flex h-full items-start justify-between gap-3 p-4" data-slot="stat-card-body">
-      <div className="flex min-w-0 flex-1 flex-col gap-1 text-right">
+    <CardContent
+      className="flex h-full items-start justify-between gap-3 p-4 max-[420px]:brand-v2:gap-2 max-[420px]:brand-v2:p-3"
+      data-slot="stat-card-body"
+    >
+      <div className="flex min-w-0 flex-1 flex-col gap-1 text-right brand-v2:gap-2">
         {/* على الهاتف: حجز سطرين للعنوان فتتطابق محاذاة القيمة وارتفاع البطاقات بين الصفوف */}
         <p className="line-clamp-2 min-h-[2lh] text-xs font-medium text-muted-foreground md:min-h-0">{label}</p>
         {loading ? (
@@ -212,6 +215,8 @@ export function StatCard({
         <span
           className={cn(
             "flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-brand-md)]",
+            "brand-v2:rounded-xl",
+            "max-[420px]:brand-v2:h-9 max-[420px]:brand-v2:w-9",
             TONE_ICON_BG[tone]
           )}
         >
@@ -225,7 +230,15 @@ export function StatCard({
     return (
       // gap-0 py-0: Card الأساسي يضيف py-6 gap-6 فوق p-4 → فراغ ≈40px أعلى وأسفل (أوضح ما يكون مع القيمة صفر)؛
       // h-full: البطاقات في صف الشبكة الواحد بنفس الارتفاع دون فراغ داخلي مزعج.
-      <Card className={cn("h-full gap-0 py-0 shadow-[var(--shadow-card)]", className)}>{body}</Card>
+      <Card
+        className={cn(
+          "h-full gap-0 py-0 shadow-[var(--shadow-card)]",
+          "brand-v2:rounded-2xl brand-v2:border-border/70 brand-v2:shadow-sm",
+          className
+        )}
+      >
+        {body}
+      </Card>
     );
   }
 
@@ -245,6 +258,11 @@ export function StatCard({
         "h-full cursor-pointer gap-0 py-0 shadow-[var(--shadow-card)] transition-colors",
         "hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         active && "border-primary ring-1 ring-primary",
+        // v2: الحد الخافت للبطاقة غير المحددة فقط — حتى لا يغطي brand-v2:border-border/70 على border-primary للبطاقة المحددة
+        "brand-v2:rounded-2xl brand-v2:shadow-sm",
+        !active && "brand-v2:border-border/70",
+        "brand-v2:hover:border-primary/30 brand-v2:hover:shadow-md",
+        "brand-v2:focus-visible:ring-2",
         className
       )}
     >
