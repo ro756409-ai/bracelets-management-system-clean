@@ -20,6 +20,8 @@ const COLS: Record<1 | 2 | 3, string> = {
  * A titled group of fields inside a form, laid out on a responsive grid: one column on
  * mobile always, so a long Arabic label and its input never fight for a half-width column
  * on a 360px screen.
+ *
+ * Matjarak 2.0 (1C-5C): تحت v2 فقط — عنوان القسم بخط فاصل محايد تحته ومسافة ثابتة 16px قبل الحقول.
  */
 export function FormSection({
   title,
@@ -29,10 +31,10 @@ export function FormSection({
   className,
 }: FormSectionProps) {
   return (
-    <section className={cn("space-y-3", className)}>
+    <section className={cn("space-y-3 brand-v2:space-y-4", className)}>
       {(title || description) && (
-        <div className="space-y-0.5">
-          {title && <h3 className="text-sm font-semibold brand-v2:text-[15px]">{title}</h3>}
+        <div className="space-y-0.5 brand-v2:space-y-1 brand-v2:border-b brand-v2:border-border/60 brand-v2:pb-2">
+          {title && <h3 className="text-sm font-semibold brand-v2:text-[15px] brand-v2:text-foreground">{title}</h3>}
           {description && <p className="text-xs text-muted-foreground">{description}</p>}
         </div>
       )}
