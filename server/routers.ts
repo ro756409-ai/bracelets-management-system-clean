@@ -648,9 +648,12 @@ import {
   createEmployee,
   updateEmployee,
   deleteEmployee,
+  writeEmployeeKeepingAnOwner,
+  type OwnerAccountChange,
+  updateEmployeeIfUnchanged,
+  deleteEmployeeIfUnchanged,
   searchEmployees,
   countActiveAdminTierEmployees,
-  countActiveOwnerEmployees,
   getAllProducts,
   getProductById,
   createProduct,
@@ -841,12 +844,110 @@ async function assertMayAssignOwnerRole(
   if (!grants && !revokes) return;
   if (isOwnerRole(ctx.employee?.role)) return;
 
-  if (grants && (await countActiveOwnerEmployees()) === 0) return; // bootstrap
-
+  // لا استثناء «تأسيس» داخل التطبيق (SEC-2): كان أي أدمن أو مدير يقدر يرقّي نفسه مالكًا لو عدد الملاك النشطين
+  // بقى صفرًا. أول مالك يُنشأ بطريق محكوم: موافقة طلب التسجيل من لوحة المنصة (بتنشئ super_admin)، أو إجراء
+  // تشغيلي موثّق خارج التطبيق. وآخر مالك نشط مايتسحبش ولا يتعطّل ولا يتحذف (writeOwnerAccountChange، ذريًا).
   throw new TRPCError({
     code: "FORBIDDEN",
     message: "صلاحية المالك لا يمنحها أو يسحبها إلا المالك",
   });
+}
+
+type EmployeeRow = NonNullable<Awaited<ReturnType<typeof getEmployeeById>>>;
+
+/** الموظف الهدف أو NOT_FOUND صريح — قبل أي فحص أو كتابة. */
+async function getEmployeeOrNotFound(id: number): Promise<EmployeeRow> {
+  const target = await getEmployeeById(id);
+  if (!target) throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
+  return target;
+}
+
+/**
+ * حماية حساب المالك وتدرّج الأدوار (SEC-2) — قبل أي كتابة على موظف:
+ *  • حساب المالك (super_admin): أي تعديل/تعطيل/حذف/بيانات دخول/كلمة سر = للمالك فقط.
+ *  • لا يدير أحد حسابًا أعلى من دوره (المدير لا يلمس الأدمن)، ولا يمنح دورًا أعلى من دوره (المدير لا يمنح admin).
+ *    منح دور المالك نفسه للمالك فقط (assertMayAssignOwnerRole).
+ */
+const ROLE_TIER: Record<string, number> = { super_admin: 3, admin: 2, manager: 1 };
+const roleTier = (role: string | null | undefined) => ROLE_TIER[role ?? ""] ?? 0;
+async function assertMayManageEmployee(
+  ctx: { employee?: { role?: string | null; tenantId?: number | null } | null; tenantId?: number | null },
+  target: { role?: string | null } | null | undefined,
+  nextRole?: string
+): Promise<void> {
+  const actorRole = ctx.employee?.role;
+  if (isOwnerRole(target?.role) && !isOwnerRole(actorRole))
+    throw new TRPCError({ code: "FORBIDDEN", message: "حساب المالك يديره المالك فقط" });
+  if (roleTier(target?.role) > roleTier(actorRole))
+    throw new TRPCError({ code: "FORBIDDEN", message: "لا يمكنك إدارة حساب بدور أعلى من دورك" });
+  if (nextRole !== undefined && !isOwnerRole(nextRole) && roleTier(nextRole) > roleTier(actorRole))
+    throw new TRPCError({ code: "FORBIDDEN", message: "لا يمكنك منح دور أعلى من دورك" });
+  // H1: المدير ممنوع من أي صلاحية مالية (permissionProcedure). دور بيحمل صلاحية مالية في إعدادات الشركة الفعلية
+  // (المحاسب افتراضيًا، أو أي دور منحته الشركة صلاحية مالية) أعلى منه: مايمنحهوش ومايديرش حسابه — وإلا يعمل حساب
+  // محاسب (أو يغيّر كلمة سر محاسب) ويدخل بيه.
+  if (actorRole === "manager") {
+    const tenantId = ctx.tenantId ?? ctx.employee?.tenantId ?? null;
+    for (const role of [target?.role, nextRole]) {
+      if (role && !isAdminTierRole(role) && (await roleCarriesFinance(tenantId, role)))
+        throw new TRPCError({ code: "FORBIDDEN", message: "المدير لا يدير حسابات بأدوار مالية (المحاسب أو أي دور بصلاحيات مالية) — للمالك فقط" });
+    }
+  }
+}
+
+/** الدور بيحمل أي صلاحية مالية في إعدادات الشركة الفعلية (الافتراضي + تجاوزات الشركة). بلا شركة = الافتراضي. */
+async function roleCarriesFinance(tenantId: number | null, role: string): Promise<boolean> {
+  const financial = ALL_PERMISSIONS.filter(p => isFinancialPermission(p));
+  if (tenantId == null) return financial.some(p => permissionsForRole(role).includes(p));
+  return (await Promise.all(financial.map(p => hasTenantPermission(tenantId, role, p)))).some(Boolean);
+}
+
+/**
+ * الكتابة على موظف (غير مسار حساب المالك الذرّي) بشرط إن دوره وشركته لسه زي ما اتفحصوا — TOCTOU: لو اترقّى بين الفحص
+ * والكتابة (لمالك أو لدور مالي)، مفيش كتابة و CONFLICT.
+ */
+async function writeCheckedEmployee(
+  target: { id: number; role?: string | null; tenantId?: number | null },
+  change: OwnerAccountChange
+): Promise<void> {
+  const expected = { role: target.role ?? null, tenantId: target.tenantId ?? null };
+  const written = change.kind === "delete"
+    ? await deleteEmployeeIfUnchanged(target.id, expected)
+    : await updateEmployeeIfUnchanged(target.id, expected, change.data);
+  if (!written)
+    throw new TRPCError({ code: "CONFLICT", message: "بيانات الموظف اتغيّرت أثناء الطلب — لم يُحفظ شيء، أعد المحاولة" });
+}
+
+/**
+ * أي كتابة على حساب مالك تمر من هنا: «يفضل مالك نشط واحد على الأقل» يُفحص ويُكتب ذريًا تحت قفل صف الشركة
+ * (writeEmployeeKeepingAnOwner) — مالكان يعطّلان بعضهما بالتزامن لا يتركان الشركة بلا مالك.
+ */
+async function writeOwnerAccountChange(
+  ctx: { tenantId: number | null },
+  employeeId: number,
+  change: OwnerAccountChange
+): Promise<void> {
+  if (ctx.tenantId == null) throw new TRPCError({ code: "FORBIDDEN", message: "تعذّر تحديد الشركة — لم يُحفظ شيء" });
+  const result = await writeEmployeeKeepingAnOwner(ctx.tenantId, employeeId, change);
+  if (result === "no_tenant") throw new TRPCError({ code: "FORBIDDEN", message: "تعذّر تحديد الشركة — لم يُحفظ شيء" });
+  if (result === "not_found") throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
+  if (result === "last_owner")
+    throw new TRPCError({ code: "FORBIDDEN", message: "لازم يفضل مالك نشط واحد على الأقل للشركة" });
+}
+
+/**
+ * بوابة المدير (employeePortal.*): الهدف موجود (NOT_FOUND صريح)، وحساب المالك لا يُدار من البوابة إطلاقًا — يُدار من
+ * لوحة الإدارة بحراسها الكاملة — ثم نفس قواعد التدرّج.
+ */
+async function loadPortalManagedEmployee(
+  ctx: { employee?: { role?: string | null; tenantId?: number | null } | null; tenantId?: number | null },
+  id: number,
+  nextRole?: string
+): Promise<EmployeeRow> {
+  const target = await getEmployeeOrNotFound(id);
+  if (isOwnerRole(target.role))
+    throw new TRPCError({ code: "FORBIDDEN", message: "حساب المالك يُدار من لوحة الإدارة فقط" });
+  await assertMayManageEmployee(ctx, target, nextRole);
+  return target;
 }
 
 // Helper: resolve the real employee ID for audit fields
@@ -2530,6 +2631,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await assertMayManageEmployee(ctx, null, input.role);
         await assertMayAssignOwnerRole(ctx, input.role, null);
         // النشاط لازم يتحدّد — مايرجعش null (منع تكرار businessId=NULL).
         const businessId = await resolveEmployeeBusinessId(
@@ -2567,6 +2669,7 @@ export const appRouter = router({
           data.businessId = await scopeBusinessId(ctx, data.businessId);
         }
 
+        await assertMayManageEmployee(ctx, target, data.role);
         await assertMayAssignOwnerRole(ctx, data.role, target.role);
 
         const revokesAdminAccess =
@@ -2595,7 +2698,8 @@ export const appRouter = router({
           }
         }
 
-        await updateEmployee(id, data);
+        if (isOwnerRole(target.role)) await writeOwnerAccountChange(ctx, id, { kind: "update", data });
+        else await writeCheckedEmployee(target, { kind: "update", data });
         return { success: true };
       }),
     delete: adminProcedure
@@ -2608,6 +2712,7 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الموظف غير موجود",
           });
+        await assertMayManageEmployee(ctx, target);
 
         if (isAdminTierRole(target.role) && target.isActive) {
           const actingEmployeeId = await resolveActingEmployeeId(ctx);
@@ -2626,7 +2731,8 @@ export const appRouter = router({
           }
         }
 
-        await deleteEmployee(input.id);
+        if (isOwnerRole(target.role)) await writeOwnerAccountChange(ctx, input.id, { kind: "delete" });
+        else await writeCheckedEmployee(target, { kind: "delete" });
         return { success: true };
       }),
     setCredentials: adminProcedure
@@ -2639,6 +2745,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "employee", input.id);
+        const target = await getEmployeeOrNotFound(input.id);
+        await assertMayManageEmployee(ctx, target);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         // Check username uniqueness
@@ -2654,10 +2762,7 @@ export const appRouter = router({
           });
         }
         const passwordHash = await bcrypt.hash(input.password, 10);
-        await db
-          .update(employees)
-          .set({ username: input.username, passwordHash })
-          .where(eq(employees.id, input.id));
+        await writeCheckedEmployee(target, { kind: "update", data: { username: input.username, passwordHash } });
         return { success: true };
       }),
     changePassword: adminProcedure
@@ -2671,13 +2776,12 @@ export const appRouter = router({
         // كتابة `passwordHash` على موظف شركة تانية = دخول بهويته. الحارس هنا أهم
         // حارس في الملف كله.
         await requireOwned(ctx, "employee", input.id);
+        const target = await getEmployeeOrNotFound(input.id);
+        await assertMayManageEmployee(ctx, target);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
-        await db
-          .update(employees)
-          .set({ passwordHash })
-          .where(eq(employees.id, input.id));
+        await writeCheckedEmployee(target, { kind: "update", data: { passwordHash } });
         return { success: true };
       }),
 
@@ -5060,7 +5164,8 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
         const { id, ...data } = input;
-        await updateEmployee(id, data);
+        const target = await loadPortalManagedEmployee(ctx, id, data.role);
+        await writeCheckedEmployee(target, { kind: "update", data });
         return { success: true };
       }),
 
@@ -5069,7 +5174,8 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
-        await deleteEmployee(input.id);
+        const target = await loadPortalManagedEmployee(ctx, input.id);
+        await writeCheckedEmployee(target, { kind: "delete" });
         return { success: true };
       }),
 
@@ -5084,6 +5190,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
+        const target = await loadPortalManagedEmployee(ctx, input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const existing = await db
@@ -5098,10 +5205,7 @@ export const appRouter = router({
           });
         }
         const passwordHash = await bcrypt.hash(input.password, 10);
-        await db
-          .update(employees)
-          .set({ username: input.username, passwordHash })
-          .where(eq(employees.id, input.id));
+        await writeCheckedEmployee(target, { kind: "update", data: { username: input.username, passwordHash } });
         return { success: true };
       }),
 
@@ -5115,13 +5219,9 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const target = await loadPortalManagedEmployee(ctx, input.id);
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
-        await db
-          .update(employees)
-          .set({ passwordHash })
-          .where(eq(employees.id, input.id));
+        await writeCheckedEmployee(target, { kind: "update", data: { passwordHash } });
         return { success: true };
       }),
 

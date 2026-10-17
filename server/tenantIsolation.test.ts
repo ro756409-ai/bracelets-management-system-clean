@@ -118,6 +118,19 @@ vi.mock("./db", async importOriginal => {
     updateEmployee: async (id: number, data: any) => {
       state.writes.push({ table: "employees", id, data });
     },
+    // Hotfix V2 (TOCTOU): الكتابة بشرط إن الدور/الشركة لسه زي ما اتفحصوا — نفس دلالة الدالة الحقيقية على الحالة الوهمية.
+    updateEmployeeIfUnchanged: async (id: number, expected: { role: string | null; tenantId: number | null }, data: any) => {
+      const emp = state.employees.find(e => e.id === id);
+      if (!emp || (emp.role ?? null) !== expected.role || (emp.tenantId ?? null) !== expected.tenantId) return false;
+      state.writes.push({ table: "employees", id, data });
+      return true;
+    },
+    deleteEmployeeIfUnchanged: async (id: number, expected: { role: string | null; tenantId: number | null }) => {
+      const emp = state.employees.find(e => e.id === id);
+      if (!emp || (emp.role ?? null) !== expected.role || (emp.tenantId ?? null) !== expected.tenantId) return false;
+      state.writes.push({ table: "employees:delete", id });
+      return true;
+    },
     getCategoryById: async (id: number) => state.categories.find(c => c.id === id),
     createCategory: async (data: any) => {
       state.writes.push({ table: "categories", data });
