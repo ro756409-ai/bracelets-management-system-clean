@@ -1,3 +1,4 @@
+import { ClientSafeError } from "./logSafety";
 import { eq, inArray } from "drizzle-orm";
 import {
   categories,
@@ -53,14 +54,14 @@ const ENTITIES = {
 export type ScopedEntity = keyof typeof ENTITIES;
 
 /** يترمى لما السجل مش تابع لنطاق الجلسة — نفس رسالة `scopeBusinessId`. */
-export class OutOfScopeError extends Error {
+export class OutOfScopeError extends ClientSafeError {
   readonly code = "FORBIDDEN" as const;
   constructor(message = "لا يمكنك الوصول لبيانات هذا الفرع/النشاط") {
     super(message);
   }
 }
 
-export class RecordNotFoundError extends Error {
+export class RecordNotFoundError extends ClientSafeError {
   readonly code = "NOT_FOUND" as const;
 }
 
@@ -102,7 +103,7 @@ async function businessIdOf(
  * على **نفس** مصدر الحقيقة اللي `scopeBusinessId` بتستخدمه — مفيش قاعدة عزل تانية.
  * `null` معناها الداتابيز مش متاحة، ونفس سلوك `scopeBusinessId`: مانمنعش لسبب غلط.
  */
-export class ScopeUnavailableError extends Error {
+export class ScopeUnavailableError extends ClientSafeError {
   constructor() {
     super("تعذر التحقق من ملكية السجل (قاعدة البيانات غير متاحة أو نطاق الجلسة غير محدد) — رُفض الطلب احتياطًا");
     this.name = "ScopeUnavailableError";

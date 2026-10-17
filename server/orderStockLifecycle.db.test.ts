@@ -6,7 +6,7 @@ import { createContext } from "./_core/context";
 import {
   __setDbForTests, createEmployee, createProduct, createProductWithVariants, createOrderWithItems,
   confirmOrder, cancelOrder, postponeOrder, updateOrder, editOrderFull, replaceOrderItemsFromEditor,
-  StockShortfallError, OrderConfirmBlockedError, OrderStockInconsistencyError,
+  StockShortfallError, OrderConfirmBlockedError, OrderStockInconsistencyError, OrderLineScopeError,
 } from "./db";
 import { upsertEasyOrder, type EasyOrderPayload } from "./easyorder.service";
 import { applyExternalStatus } from "./easyorderWebhook";
@@ -297,14 +297,15 @@ describe.runIf(CAN)("🔑 DATA-4 — دورة حياة مخزون الأوردر
     const id = await order(A, [{ productId: PA.p, variantId: PA.a, quantity: 1 }]);
     await confirmOrder(id, ownerA);
     const e = await failure(() => replaceOrderItemsFromEditor(id, [line(PB.p, PB.a, 2)], undefined, editor(ownerA)));
-    expect(e).toBeInstanceOf(OrderConfirmBlockedError);
+    // المرحلة 1 (M1): طبقة الكتابة بترفض الصنف الغريب قبل مطابقة المخزون (OrderLineScopeError) — نفس النتيجة: لا تغيير
+    expect(e).toBeInstanceOf(OrderLineScopeError);
     expect([await vStock(PA.a), await vStock(PB.a), await pStock(PB.p)]).toEqual([9, 10, 100]);
-    expect((await failure(() => editOrderFull(id, { productId: PB.p, variantId: PB.b }, editor(ownerA))))).toBeInstanceOf(OrderConfirmBlockedError);
+    expect((await failure(() => editOrderFull(id, { productId: PB.p, variantId: PB.b }, editor(ownerA))))).toBeInstanceOf(OrderLineScopeError);
     expect([await vStock(PB.b), await vStock(PA.a)]).toEqual([10, 9]);
     // أوردر جديد ببند من الشركة الأخرى لا يتأكد
-    const id2 = await order(A, [{ productId: PB.p, variantId: PB.a, quantity: 1 }]);
-    expect(await failure(() => confirmOrder(id2, ownerA))).toBeInstanceOf(OrderConfirmBlockedError);
-    expect([await vStock(PB.a), await status(id2)]).toEqual([10, "new"]);
+    // أوردر جديد ببند من الشركة الأخرى: الإنشاء نفسه بيترفض (المرحلة 1 — M1)، ومخزون B ما بيتحركش
+    expect(await failure(() => order(A, [{ productId: PB.p, variantId: PB.a, quantity: 1 }]))).toBeInstanceOf(OrderLineScopeError);
+    expect(await vStock(PB.a)).toBe(10);
   });
 
   it("حركة يدوية مربوطة بالأوردر: قبل التأكيد = تعارض (CONFLICT) بلا تغيير كما كان؛ بعد التأكيد الإلغاء لا يرجّعها", async () => {

@@ -66,7 +66,12 @@ export const paymentLabel = (order: OrderRow): string | null => {
   return p === "cod" ? "دفع عند الاستلام" : String(p);
 };
 export const isActionable = (order: OrderRow) => order.status === "new" || order.status === "postponed";
-export const canReturn = (order: OrderRow, isAdmin: boolean) => isAdmin && ["confirmed", "shipped", "delivered", "preparing"].includes(order.status);
+/**
+ * نفس قاعدة السيرفر (DATA-4 / D4): المشحون أو المُسلَّم، أو المؤكد/قيد التجهيز **بشحنة بوسطة** — غير كده الأوردر لسه في
+ * المخزن ومساره الإلغاء (السيرفر بيرفض المرتجع)، فالخيار مايتعرضش.
+ */
+export const canReturn = (order: OrderRow, isAdmin: boolean) =>
+  isAdmin && (["shipped", "delivered"].includes(order.status) || (["confirmed", "preparing"].includes(order.status) && Boolean(order.bostaShipmentId)));
 /**
  * حالات قائمة الدرج («مؤكد» من زر التأكيد، و«تم التسليم» من بوسطة أو المسار المعتمد — لا من هنا). المشحون مايتلغيش
  * (DATA-4: الإلغاء بيرجّع المخزون والبضاعة مع شركة الشحن) — السيرفر بيرفضه برضه، ده بس عشان مايتعرضش.

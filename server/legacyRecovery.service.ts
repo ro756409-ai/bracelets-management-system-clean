@@ -1,3 +1,4 @@
+import { ClientSafeError } from "./logSafety";
 import { sql } from "drizzle-orm";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import { postFinancialTransactionInTransaction } from "./accountingV2.service";
@@ -32,7 +33,7 @@ import { tenantAccessEnforcementEnabled } from "./tenantAccess";
  *   5. حدث lift ثم الترحيل ثم إعادة القراءة: كل هدف = رصيد الصورة بالضبط وإلا يُلغى كل شيء؛ ثم حدث recovery بالنتيجة وبصمتها.
  *   أي فشل ⇒ rollback كامل: لا lift، لا ترحيل، الحظر قائم، والشركة تبقى متوقفة. رفع الإيقاف خطوة لاحقة منفصلة لمدير المنصة.
  */
-export class LegacyRecoveryError extends Error {
+export class LegacyRecoveryError extends ClientSafeError {
   constructor(readonly code: string, message: string) { super(message); this.name = "LegacyRecoveryError"; }
 }
 /** عبارة تأكيد السكربت (apply) — باسم الشركة والقاعدة. */

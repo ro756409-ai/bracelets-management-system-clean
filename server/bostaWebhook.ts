@@ -17,6 +17,7 @@
  * الحالة الحقيقية كانت هتفعّله لأول مرة وتولّد أثرًا ماليًا — وده خارج نطاق استقبال الحالات.
  */
 import { Request, Response, Express } from "express";
+import { safeErrorText } from "./logSafety";
 import { afterCarrierOrderUpdate } from "./ledgerOrders.service";
 import { openReturnInspection } from "./ledgerInventory.service";
 import { timingSafeEqual } from "crypto";
@@ -41,17 +42,8 @@ function safeCompare(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-/**
- * نص خطأ آمن للّوج ولسجل الحدث: رسالة خطأ الـORM بتحمل نص الاستعلام **والـparams** — ومنها
- * الـpayload الخام — فمابتتطبعش ولا بتتخزّن أبدًا. بيرجع كود الخطأ بس.
- */
-export function safeErrorText(err: unknown): string {
-  const e = err as { code?: unknown; cause?: { code?: unknown; errno?: unknown } } | null;
-  const code = e?.cause?.code ?? e?.code ?? e?.cause?.errno;
-  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  if (code != null || /^Failed query/i.test(message)) return `خطأ داخلي${code != null ? ` (${String(code).slice(0, 40)})` : ""}`;
-  return message ? message.slice(0, 200) : "خطأ داخلي";
-}
+/** نص خطأ آمن للّوج ولسجل الحدث (بلا نص الاستعلام ولا params) — اتنقل لـlogSafety.ts ومُعاد تصديره هنا. */
+export { safeErrorText };
 
 export interface ApplyResult {
   status: Exclude<InboxStatus, "received" | "failed">;

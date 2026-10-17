@@ -104,12 +104,15 @@ describe("🔑 Bosta webhook — الشركة من الشحنة مش من الـ
     expect(safeErrorText(orm)).toBe("خطأ داخلي (ER_DATA_TOO_LONG)");
     expect(safeErrorText(new Error("Failed query: update `orders` set ...\nparams: سر"))).toBe("خطأ داخلي");
     expect(safeErrorText(Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:3306"), { code: "ECONNREFUSED" }))).toBe("خطأ داخلي (ECONNREFUSED)");
-    expect(safeErrorText(new Error("Database not available"))).toBe("Database not available");
+    expect(safeErrorText(new Error("Database not available"))).toBe("خطأ داخلي"); // رسالة مكتبة/تشغيل مش أعمال
+    expect(safeErrorText(new Error("الأوردر مش موجود"))).toBe("الأوردر مش موجود"); // رسالة أعمال عربي قصيرة
     expect(safeErrorText({ payload: "x" })).toBe("خطأ داخلي");
-    expect(safeErrorText(new Error("م".repeat(900))).length).toBe(200);
-    // ولا استخدام مباشر لرسالة الخطأ في المعالج — الاستخدام الوحيد داخل safeErrorText نفسها
-    expect((code.match(/err(or)?\.message/g) ?? []).length).toBe(1);
-    const helper = code.slice(code.indexOf("export function safeErrorText"), code.indexOf("export interface ApplyResult"));
+    expect(safeErrorText(new Error("م".repeat(900)))).toBe("خطأ داخلي"); // الطويلة مش رسالة أعمال
+    // ولا استخدام مباشر لرسالة الخطأ في المعالج — الاستخدام الوحيد داخل safeErrorText نفسها، اللي اتنقلت لـlogSafety.ts
+    // (المرحلة 2: مشتركة مع Easy Order) ومُعاد تصديرها من bostaWebhook
+    expect((code.match(/err(or)?\.message/g) ?? []).length).toBe(0);
+    expect(code).toContain("export { safeErrorText };");
+    const helper = fs.readFileSync("server/logSafety.ts", "utf-8");
     expect(helper).toMatch(/err\.message/);
     expect(code).not.toContain("String(err)");
   });

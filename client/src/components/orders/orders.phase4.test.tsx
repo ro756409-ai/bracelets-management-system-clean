@@ -136,6 +136,9 @@ describe("📋 buildOrdersColumns — ترتيب أعمدة الديسكتوب �
   it("بوابات الصلاحية: canReturn للمدير فقط وبحالات محددة؛ isActionable للجديد/المؤجل فقط", () => {
     expect(isActionable({ id: 1, status: "new" })).toBe(true); expect(isActionable({ id: 1, status: "postponed" })).toBe(true); expect(isActionable({ id: 1, status: "confirmed" })).toBe(false);
     expect(canReturn({ id: 1, status: "shipped" }, true)).toBe(true); expect(canReturn({ id: 1, status: "shipped" }, false)).toBe(false); expect(canReturn({ id: 1, status: "new" }, true)).toBe(false);
+    // D4: مؤكد/قيد التجهيز بلا شحنة = لا مرتجع (السيرفر بيرفضه)، وبشحنة بوسطة = مسموح
+    expect(canReturn({ id: 1, status: "confirmed" }, true)).toBe(false); expect(canReturn({ id: 1, status: "preparing" }, true)).toBe(false);
+    expect(canReturn({ id: 1, status: "confirmed", bostaShipmentId: "SH1" }, true)).toBe(true); expect(canReturn({ id: 1, status: "delivered" }, true)).toBe(true);
   });
 
   it("DATA-4: قائمة حالات الدرج ما تعرضش «ملغي» للأوردر المشحون؛ باقي الحالات زي ما هي", () => {

@@ -1,5 +1,4 @@
 import { trpc } from "@/lib/trpc";
-import * as XLSX from "xlsx";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -25,6 +24,10 @@ import { usePermissions } from "@/hooks/usePermission";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { canSeeNav } from "@/config/navigation";
 import { gateForPath } from "@/components/shell/CreateMenu";
+import { activeBrand } from "@/lib/brandFlag";
+
+/** محاور الرسوم: 12px تحت v2 (Master Audit §6 — كانت 10px)، وv1 كما هو. */
+const axisFontSize = () => (activeBrand() === "v2" ? 12 : 10);
 
 /**
  * لوحة التحكم الرئيسية — Copper Signature × Clean Spatial (المرحلة 7A).
@@ -120,7 +123,9 @@ export default function Dashboard() {
   const todayConfirmedCount = todayConfirmedData?.total ?? 0;
   const todayTotalRevenue = todayConfirmedOrders.reduce((sum, o) => sum + Number(o.totalAmount ?? 0), 0);
 
-  function exportTodayConfirmedToExcel() {
+  async function exportTodayConfirmedToExcel() {
+    // PERF-2: xlsx (~400KB) بيتحمّل وقت التصدير بس — مش جزء من الحزمة الأولى لكل صفحة.
+    const XLSX = await import("xlsx");
     const today = new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
     const rows = todayConfirmedOrders.map((o, idx) => ({
       '#': idx + 1,
@@ -333,8 +338,8 @@ export default function Dashboard() {
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={barData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} stroke="var(--border)" />
-                      <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} stroke="var(--border)" allowDecimals={false} />
+                      <XAxis dataKey="date" tick={{ fontSize: axisFontSize(), fill: "var(--muted-foreground)" }} stroke="var(--border)" />
+                      <YAxis tick={{ fontSize: axisFontSize(), fill: "var(--muted-foreground)" }} stroke="var(--border)" allowDecimals={false} />
                       <Tooltip
                         contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--foreground)' }}
                         labelStyle={{ color: 'var(--foreground)' }}

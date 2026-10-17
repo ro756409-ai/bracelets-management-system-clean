@@ -35,6 +35,7 @@
  * behaves identically (same matching, same idempotency, same review flagging).
  * Manual "Sync Now" is deliberately NOT wired up — it has no documented endpoint.
  */
+import { safeErrorText } from "./logSafety";
 import { Request, Response, Express } from "express";
 import {
   getDb, getSalesChannelByWebhookSecret, getSalesChannelWithSecrets, getOrderByExternalId, updateOrder, confirmOrder,
@@ -151,15 +152,19 @@ type WebhookLogInsert = {
 };
 
 async function addLog(entry: WebhookLogInsert): Promise<void> {
+  // سجل بلا نشاط معروف (قبل تحديد القناة) مابيتحفظش: عمود businessId قيمته الافتراضية 1، فكان بيتسجّل تحت تاجر
+  // حقيقي ويظهر في سجلاته (INT-2 / SEC-7). سطر مختصر في اللوج بدل كده، من غير أي بيانات.
+  if (entry.businessId == null) {
+    console.warn(`[EasyOrder Webhook] ${entry.eventType}/${entry.status} (no channel): ${entry.message.slice(0, 160)}`);
+    return;
+  }
   try {
     const drizzle = await getDb();
     if (!drizzle) return;
     await drizzle.insert(webhookLogs).values({
       eventType: entry.eventType,
       status: entry.status,
-      // نختم businessId لما يكون معروف (بعد تحديد القناة). لو مش معروف نسيبه للـdefault
-      // بدل ما ننسبه غلط لتينانت.
-      ...(entry.businessId != null ? { businessId: entry.businessId } : {}),
+      businessId: entry.businessId,
       externalOrderId: entry.externalOrderId ?? null,
       customerName: entry.customerName ?? null,
       customerPhone: entry.customerPhone ?? null,
@@ -171,7 +176,7 @@ async function addLog(entry: WebhookLogInsert): Promise<void> {
       message: entry.message,
     });
   } catch (err) {
-    console.error("[Webhook] Failed to save log:", err);
+    console.error(`[Webhook] Failed to save log: ${safeErrorText(err)}`);
   }
 }
 
@@ -191,7 +196,7 @@ export async function getWebhookLog(businessIds: number[], limit = 200) {
       .orderBy(desc(webhookLogs.receivedAt))
       .limit(limit);
   } catch (err) {
-    console.error("[Webhook] Failed to get log:", err);
+    console.error(`[Webhook] Failed to get log: ${safeErrorText(err)}`);
     return [];
   }
 }
@@ -207,12 +212,13 @@ function extractSecret(req: Request): string | undefined {
 
 // ==================== Main handler ====================
 async function handleEasyOrderWebhook(req: Request, res: Response) {
+  let channel: Awaited<ReturnType<typeof getSalesChannelByWebhookSecret>> | undefined;
   try {
     const receivedSecret = extractSecret(req);
     const mode = getEnforcementMode();
 
     // ---- Resolve the channel from the secret ----
-    let channel = receivedSecret ? await getSalesChannelByWebhookSecret(receivedSecret) : undefined;
+    channel = receivedSecret ? await getSalesChannelByWebhookSecret(receivedSecret) : undefined;
     const authenticated = Boolean(channel);
 
     // كل سجلات الويبهوك تُختم بنشاط القناة للعزل. قبل تحديد القناة (فشل auth) بيفضل
@@ -221,9 +227,8 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       addLog({ ...entry, businessId: channel?.businessId });
 
     if (!authenticated) {
-      const detail = receivedSecret
-        ? `سر غير معروف (${receivedSecret.slice(0, 6)}…)`
-        : "لم يُرسَل أي سر";
+      // بلا أي جزء من السر في السجل/اللوج
+      const detail = receivedSecret ? "سر غير معروف" : "لم يُرسَل أي سر";
       if (mode === "enforce") {
         await logWebhook({
           eventType: "auth",
@@ -260,9 +265,9 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
 
     return await processEasyOrderBody(channel, req.body, logWebhook, res);
   } catch (err: any) {
-    console.error("[EasyOrder Webhook] Error:", err);
-    // خطأ عام خارج نطاق القناة — بلا businessId (يُترك للـdefault).
-    await addLog({ eventType: "unknown", status: "error", message: `خطأ داخلي: ${err.message}` });
+    // نص آمن بس (رسالة الـORM فيها params = بيانات العميل)، وتحت نشاط القناة لو اتحددت — من غير قناة مابيتحفظش.
+    console.error(`[EasyOrder Webhook] Error: ${safeErrorText(err)}`);
+    await addLog({ eventType: "unknown", status: "error", businessId: channel?.businessId, message: `خطأ داخلي: ${safeErrorText(err)}` });
     return res.status(500).json({ error: "Internal server error" });
   }
 }
@@ -478,8 +483,9 @@ async function processEasyOrderBody(channel: EasyOrderChannel, body: any, logWeb
       payloadSource,
     });
   } catch (err: any) {
-    console.error("[EasyOrder Webhook] Error:", err);
-    await addLog({ eventType: "unknown", status: "error", message: `خطأ داخلي: ${err.message}` });
+    // كان بيتسجّل تحت التاجر 1 (بلا businessId) وبرسالة فيها بيانات العميل — دلوقتي تحت نشاط القناة وبنص آمن.
+    console.error(`[EasyOrder Webhook] Error: ${safeErrorText(err)}`);
+    await logWebhook({ eventType: "unknown", status: "error", message: `خطأ داخلي: ${safeErrorText(err)}` });
     return res.status(500).json({ error: "Internal server error" });
   }
 }

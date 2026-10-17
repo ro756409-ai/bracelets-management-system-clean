@@ -53,8 +53,8 @@ describe("حذف الأوردرات", () => {
   });
 
   it("يجب أن تحذف عدة أوردرات بنجاح", async () => {
-    await deleteOrders([1, 2, 3]);
-    expect(deleteOrders).toHaveBeenCalledWith([1, 2, 3]);
+    await deleteOrders([1, 2, 3], [7]);
+    expect(deleteOrders).toHaveBeenCalledWith([1, 2, 3], [7]);
     expect(deleteOrders).toHaveBeenCalledTimes(1);
   });
 });

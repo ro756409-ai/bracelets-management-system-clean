@@ -495,7 +495,9 @@ export function registerBostaWebhookInboxDbSuite(CAN: boolean) {
       expect(everything).not.toContain(secretA);
       expect(everything).not.toContain(KEY_A);
       expect(everything).not.toContain("سري-جدًا");
-      expect(logged.join("\n")).toContain("[REDACTED]");
+      // المرحلة 2 (INT-5): لوج رد بوسطة مابقاش فيه جسم الرد أصلًا (الحالة والمعرّفات بس) — أقوى من التنقيح
+      expect(logged.join("\n")).toContain("[Bosta] Response:");
+      expect(logged.join("\n")).not.toContain("webhookCustomHeaders");
       expect(String((await orderRow(badId)).bostaLastError)).toContain("[REDACTED]");
     });
 

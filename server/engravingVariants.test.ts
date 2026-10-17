@@ -106,8 +106,10 @@ describe("🔑 مصدر واحد لنوع الحفر", () => {
     expect(details).toContain("it.variantName");
   });
   it("🔒 الكتابة بتشتق اسم البند من الكتالوج (مش من المتصل)", () => {
-    expect(dbSrc).toContain("items = await withCatalogProductNames(tx, items);");
-    expect(dbSrc).toContain("lines = await withCatalogProductNames(tx, lines);");
+    // الاسم من كتالوج **نشاط الأوردر** بس (المرحلة 1 — M1: مايرجّعش اسم منتج تاجر تاني)
+    expect(dbSrc).toContain("items = await withCatalogProductNames(tx, items, order.businessId);");
+    expect(dbSrc).toContain("lines = await withCatalogProductNames(tx, lines, order.businessId);");
+    expect(dbSrc).toContain(".where(and(inArray(products.id, ids), eq(products.businessId, businessId)));");
   });
 });
 

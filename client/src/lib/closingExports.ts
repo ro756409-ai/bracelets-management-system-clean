@@ -1,6 +1,7 @@
-import * as XLSX from "xlsx";
 
-export function exportClosingWorkbook(detail: any) {
+/** PERF-2: xlsx بيتحمّل وقت التصدير بس. */
+export async function exportClosingWorkbook(detail: any) {
+  const XLSX = await import("xlsx");
   const workbook = XLSX.utils.book_new();
   const totals = detail.totals ?? {};
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([

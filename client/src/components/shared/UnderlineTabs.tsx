@@ -66,7 +66,7 @@ export function UnderlineTabs({ tabs, value, onChange, ariaLabel = "تبويبا
               {tab.icon && <tab.icon className="h-4 w-4 shrink-0" aria-hidden="true" />}
               {tab.label}
               {tab.count != null && (
-                <span className={cn("rounded-[var(--radius-brand-pill)] px-1.5 py-0.5 text-[11px] tabular-nums", active ? "bg-primary-soft text-primary-text" : "bg-muted text-muted-foreground")}>
+                <span className={cn("rounded-[var(--radius-brand-pill)] px-1.5 py-0.5 text-[11px] tabular-nums brand-v2:text-xs", active ? "bg-primary-soft text-primary-text" : "bg-muted text-muted-foreground")}>
                   {tab.count}
                 </span>
               )}

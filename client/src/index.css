@@ -427,6 +427,9 @@
   --popover-foreground: var(--mj-ink);
   --primary: var(--mj-oxblood);
   --primary-foreground: #FFFFFF;
+  /* لون البراند الثابت لنغمة «primary» في شارات الحالة — مابيتبعش لون العرض اللي المستخدم اختاره (data-accent)،
+     زي باقي ألوان الحالات الدلالية (Master Audit §6: StatusBadge بيتبع لون التاجر). */
+  --status-brand: var(--mj-oxblood);
   --primary-text: var(--mj-oxblood);
   --primary-dark: var(--mj-oxblood-strong);
   --primary-soft: var(--mj-oxblood-soft);
@@ -484,6 +487,7 @@
   --popover-foreground: #F3F1F2;
   /* Oxblood نفسه 1.46:1 على الداكن — درجته الفاتحة من نفس العائلة */
   --primary: var(--mj-oxblood-dark-mode);
+  --status-brand: var(--mj-oxblood-dark-mode-text);
   --primary-foreground: #1A191D;
   --primary-text: var(--mj-oxblood-dark-mode-text);
   --primary-dark: #C77686;

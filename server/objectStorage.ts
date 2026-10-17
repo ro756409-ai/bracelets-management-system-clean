@@ -68,6 +68,8 @@ async function getClient(config: ObjectStorageConfig): Promise<S3ClientType> {
   if (cachedClient && cachedConfigJson === key) return cachedClient;
   const { S3Client } = await import("@aws-sdk/client-s3");
   cachedClient = new S3Client({
+    // INT-4: رفع/قراءة معلّقة مايقفلوش الطلب (اتصال 5ث، الطلب كله 30ث)
+    requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 },
     region: config.region,
     endpoint: config.endpoint,
     forcePathStyle: config.forcePathStyle,

@@ -42,7 +42,7 @@ describe("مفيش مسار فلوس تاني", () => {
   });
 
   it("🔑 itemUpdate نفسه مابيلمسش أي جدول مالي", () => {
-    const i = routers.indexOf("    itemUpdate: adminProcedure");
+    const i = routers.indexOf("    itemUpdate: permissionProcedure(\"payroll.manage\")");
     const section = routers.slice(i, routers.indexOf("\n    period", i + 10));
     for (const forbidden of ["financialTransaction", "treasuryTransaction", "expenses"]) {
       expect(section, forbidden).not.toContain(forbidden);
@@ -63,7 +63,7 @@ describe("السلف مش قابلة للتعديل", () => {
   });
 
   it("🔑 itemUpdate مابيقبلش advances أصلاً — الحاجز على السيرفر مش في الواجهة", () => {
-    const i = routers.indexOf("    itemUpdate: adminProcedure");
+    const i = routers.indexOf("    itemUpdate: permissionProcedure(\"payroll.manage\")");
     const input = routers.slice(i, routers.indexOf(".mutation(", i));
     expect(input).toContain("bonuses");
     expect(input).toContain("deductions");

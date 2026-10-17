@@ -1,3 +1,4 @@
+import { ClientSafeError } from "./logSafety";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   businessEvents,
@@ -52,6 +53,46 @@ export function makeInventoryKey(productId: number, variantId?: number | null): 
  * of its own (see getLowStockProducts), so a variant line moves the variant counter and
  * never the parent's.
  */
+/** صنف/تركيبة/مخزن في حركة مخزون لا يتبع نشاط الحركة — رفض بلا أي كتابة (عزل التجار). */
+export class InventoryScopeError extends ClientSafeError {
+  constructor(message = "صنف أو مخزن في هذه العملية لا يتبع هذا النشاط — لم يُحفظ شيء") {
+    super(message);
+    this.name = "InventoryScopeError";
+  }
+}
+
+/**
+ * كل منتج في البنود تابع للنشاط، وكل تركيبة تابعة لمنتج سطرها، والمخزن تابع للنشاط. بيتنادى عند إنشاء/تعديل الإذن
+ * **وتاني** عند الاعتماد والإلغاء جوه نفس المعاملة — بند قديم اتحفظ قبل الفحص ده مايحرّكش مخزون تاجر تاني.
+ */
+export async function assertInventoryLinesInBusiness(
+  tx: any,
+  businessId: number,
+  warehouseId: number | null,
+  lines: Array<{ productId: number; variantId?: number | null }>
+): Promise<void> {
+  const productIds = Array.from(new Set(lines.map(l => l.productId)));
+  if (productIds.length > 0) {
+    const owned = await tx.select({ id: products.id }).from(products)
+      .where(and(inArray(products.id, productIds), eq(products.businessId, businessId)));
+    if (owned.length !== productIds.length) throw new InventoryScopeError();
+  }
+  const variantIds = Array.from(new Set(lines.map(l => l.variantId).filter((v): v is number => v != null)));
+  if (variantIds.length > 0) {
+    const vs = await tx.select({ id: productVariants.id, productId: productVariants.productId }).from(productVariants)
+      .where(inArray(productVariants.id, variantIds));
+    const owner = new Map(vs.map((v: { id: number; productId: number }) => [v.id, v.productId]));
+    if (lines.some(l => l.variantId != null && owner.get(l.variantId) !== l.productId)) throw new InventoryScopeError();
+  }
+  if (warehouseId != null) {
+    const [w] = await tx.select({ id: warehouses.id }).from(warehouses)
+      .where(and(eq(warehouses.id, warehouseId), eq(warehouses.businessId, businessId))).limit(1);
+    if (!w) throw new InventoryScopeError();
+  }
+}
+
+const affectedRows = (r: any): number => Number((Array.isArray(r) ? r[0] : r)?.affectedRows ?? 0);
+
 export async function mirrorLegacyStock(
   tx: any,
   input: {
@@ -67,6 +108,8 @@ export async function mirrorLegacyStock(
   }
 ) {
   if (input.quantityDelta === 0) return;
+  // الرصيد القديم مايتحركش إلا لصنف تابع لنشاط الحركة (والتركيبة لمنتجها) — قبل أي كتابة.
+  await assertInventoryLinesInBusiness(tx, input.businessId, null, [{ productId: input.productId, variantId: input.variantId }]);
   await tx.insert(inventoryMovements).values({
     businessId: input.businessId,
     warehouseId: input.warehouseId,
@@ -79,16 +122,18 @@ export async function mirrorLegacyStock(
     performedBy: input.performedBy,
   });
   if (input.variantId != null) {
-    await tx
+    const r = await tx
       .update(productVariants)
       .set({ currentStock: sql`${productVariants.currentStock} + ${input.quantityDelta}` })
-      .where(eq(productVariants.id, input.variantId));
+      .where(and(eq(productVariants.id, input.variantId), eq(productVariants.productId, input.productId)));
+    if (affectedRows(r) !== 1) throw new InventoryScopeError();
     return;
   }
-  await tx
+  const r = await tx
     .update(products)
     .set({ currentStock: sql`${products.currentStock} + ${input.quantityDelta}` })
-    .where(eq(products.id, input.productId));
+    .where(and(eq(products.id, input.productId), eq(products.businessId, input.businessId)));
+  if (affectedRows(r) !== 1) throw new InventoryScopeError();
 }
 
 export async function getInventoryControlData(businessId: number) {
@@ -134,6 +179,7 @@ export async function createPurchaseReceiptDraft(input: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.transaction(async tx => {
+    await assertInventoryLinesInBusiness(tx, input.businessId, input.warehouseId, input.items);
     if (input.receiptType === "opening_inventory") {
       const [existing] = await tx.select({ id: inventoryTransactions.id }).from(inventoryTransactions)
         .where(eq(inventoryTransactions.businessId, input.businessId)).limit(1);
@@ -210,6 +256,7 @@ export async function updatePurchaseReceiptDraft(input: {
     if (!receipt) throw new Error("Purchase Receipt is outside this business");
     if (receipt.status !== "draft")
       throw new Error("مايتعدّلش إلا المسودة — الإذن المُرسل أو المعتمد للمالك");
+    await assertInventoryLinesInBusiness(tx, input.businessId, input.warehouseId ?? receipt.warehouseId, input.items);
     const total = input.items.reduce(
       (sum, item) => sum + toMinorUnits(item.unitCost) * BigInt(item.quantity),
       0n,
@@ -529,6 +576,7 @@ export async function approvePurchaseReceipt(input: {
       throw new Error("الاعتماد يتطلب مستند — ضيف رابط الفاتورة على الإذن الأول");
     const lines = await tx.select().from(purchaseReceiptItems).where(eq(purchaseReceiptItems.receiptId, receipt.id));
     if (lines.length === 0) throw new Error("Purchase Receipt has no items");
+    await assertInventoryLinesInBusiness(tx, input.businessId, receipt.warehouseId, lines);
     const keys = lines.map(line => makeInventoryKey(line.productId, line.variantId));
     let balances = await tx.select().from(inventoryBalances).where(and(
       eq(inventoryBalances.businessId, input.businessId),
@@ -664,6 +712,7 @@ export async function voidPurchaseReceipt(input: {
     }
 
     const lines = await tx.select().from(purchaseReceiptItems).where(eq(purchaseReceiptItems.receiptId, receipt.id));
+    await assertInventoryLinesInBusiness(tx, input.businessId, receipt.warehouseId, lines);
     const keys = lines.map((line: typeof purchaseReceiptItems.$inferSelect) => makeInventoryKey(line.productId, line.variantId));
     const balances = await tx.select().from(inventoryBalances).where(and(
       eq(inventoryBalances.businessId, input.businessId),

@@ -1,3 +1,4 @@
+import { ClientSafeError } from "./logSafety";
 import { assertLegacyFinanceWritable } from "./legacyFinanceArchive";
 import { createHash } from "crypto";
 import {
@@ -50,7 +51,7 @@ export function payloadHash(payload: unknown): string {
 }
 
 /** نفس مفتاح الـidempotency بحمولة مختلفة — ليس نجاحًا ولا تكرارًا: تعارض يُرفض صراحةً. */
-export class IdempotencyConflictError extends Error {
+export class IdempotencyConflictError extends ClientSafeError {
   constructor(message = "نفس معرّف العملية أُعيد استخدامه ببيانات مختلفة — رُفض لمنع تسجيل حركة خاطئة") {
     super(message);
     this.name = "IdempotencyConflictError";

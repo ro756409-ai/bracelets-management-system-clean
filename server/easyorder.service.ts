@@ -26,6 +26,7 @@
  */
 import { canonicalGovernorate, MANUAL_ADDRESS_CONFLICT_PREFIX } from "../shared/shippingReadiness";
 import { normalizeEgyptianPhone } from "../shared/phone";
+import { safeErrorText } from "./logSafety";
 import {
   getDb,
   createExternalOrderOnce,
@@ -514,7 +515,8 @@ export async function upsertEasyOrder(
 
     return { outcome: "created", orderId: created.orderId, orderNumber, needsReview, reviewReason };
   } catch (err: any) {
-    return { outcome: "failed", needsReview, error: String(err?.message ?? err) };
+    // نص آمن: رسالة الـORM فيها params الاستعلام (بيانات العميل) — كانت بتتكتب في سجل الويبهوك كما هي (INT-2).
+    return { outcome: "failed", needsReview, error: safeErrorText(err) };
   }
 }
 
@@ -587,6 +589,7 @@ export class EasyOrderClient {
     const res = await this.fetchImpl(url.toString(), {
       method: "GET",
       headers: { Accept: "application/json", ...EASYORDER_ENDPOINT.authHeaders(this.token) },
+      signal: AbortSignal.timeout(15_000), // INT-4: الويبهوك مستني الرد — نداء معلّق مايقفلوش
     });
 
     if (!res.ok) {
@@ -704,7 +707,8 @@ export async function fetchEasyOrderById(
       ? { order }
       : { order: null, error: "استجابة الـ API لا تحتوي بيانات أوردر صالحة" };
   } catch (err: any) {
-    return { order: null, error: sanitizeErrorMessage(String(err?.message ?? err), token) };
+    // بيتكتب في سجل الـWebhook: رد الـAPI (جسم حتى 300 حرف ممكن يحمل بيانات عميل) مابيتنسخش — كود الحالة بس.
+    return { order: null, error: safeErrorText(err) };
   }
 }
 
@@ -764,7 +768,7 @@ export async function syncOrdersByDateRange(opts: {
       isRetryable: isRetryableHttpError,
     });
   } catch (err: any) {
-    return fail(String(err?.message ?? err));
+    return fail(safeErrorText(err));
   }
 
   const catalog = await getMatchCatalog(channel.businessId);

@@ -30,7 +30,8 @@ export type StatusTone =
 
 const TONE_CLASS: Record<StatusTone, string> = {
   neutral: "bg-muted text-muted-foreground border-border",
-  primary: "bg-accent text-accent-foreground border-primary/30",
+  // v1 كما هو. تحت v2 لون البراند الثابت (--status-brand) — مش لون العرض اللي اختاره المستخدم
+  primary: "bg-accent text-accent-foreground border-primary/30 brand-v2:bg-[var(--status-brand)]/10 brand-v2:text-[var(--status-brand)] brand-v2:border-[var(--status-brand)]/30",
   success: "bg-[var(--success)]/10 text-[var(--success)] border-[var(--success)]/30",
   warning: "bg-[var(--warning)]/10 text-[var(--warning)] border-[var(--warning)]/30",
   danger: "bg-destructive/10 text-destructive border-destructive/30",
@@ -132,7 +133,7 @@ export function StatusBadge({
     <span
       className={cn(
         "inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-brand-pill)] border font-semibold whitespace-nowrap",
-        size === "sm" ? "px-2.5 py-0.5 text-[11px]" : "px-3 py-1 text-xs",
+        size === "sm" ? "px-2.5 py-0.5 text-[11px] brand-v2:text-xs" : "px-3 py-1 text-xs",
         TONE_CLASS[resolvedTone],
         className
       )}

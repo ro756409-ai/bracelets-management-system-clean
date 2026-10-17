@@ -1,3 +1,5 @@
+import { safeErrorText } from "./logSafety";
+import { isLocalDeployEnv } from "./deployEnv";
 import { z } from "zod";
 import { assertNoMovementDuringStocktake, handoverOrder, InventoryLedgerError, isInventoryLedgerActive, postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
 import type { LedgerActor } from "../shared/ledgerV3Core";
@@ -205,6 +207,7 @@ import {
   sendToWorkshop,
   receiveFromWorkshop,
   listWorkshopBatches,
+  InventoryScopeError,
 } from "./inventoryV2.service";
 import {
   createConfiguredShipment,
@@ -436,6 +439,111 @@ async function withOrderStockErrors<T>(fn: () => Promise<T>): Promise<T> {
     if (err instanceof OrderStockInconsistencyError)
       throw new TRPCError({ code: "CONFLICT", message: err.message });
     throw err;
+  }
+}
+
+/**
+ * حركة مخزون يدوية (H2): السبب مايبدأش بأسباب حركات الأوردرات المحجوزة، والأوردر المربوط (لو فيه) في نطاق الجلسة
+ * ومن نفس نشاط الصنف — كان الويب بيقبل orderId لأي تاجر، فحركة واحدة كانت بتعطّل أوردرات تاجر تاني.
+ */
+/**
+ * M1: كل منتج/تركيبة جاي من العميل في بنود أو رأس أوردر لازم يكون في نطاق الجلسة (FORBIDDEN واضح). تبعية التركيبة
+ * لمنتجها وتبعية المنتج لنشاط الأوردر بالظبط بتتفحص تاني في طبقة الكتابة (assertOrderLinesInBusiness).
+ */
+async function requireOrderLinesOwned(
+  scope: ScopeCtx,
+  lines: Array<{ productId?: number | null; variantId?: number | null }>,
+  /** نشاط الأوردر بالظبط لما يكون معروف قبل الكتابة (الإنشاء): المنتج لازم يتبعه هو، مش أي نشاط في النطاق. */
+  exactBusinessId?: number
+): Promise<void> {
+  const productIds = Array.from(new Set(lines.map(l => l.productId).filter((v): v is number => v != null)));
+  if (productIds.length > 0) await requireAllOwned(scope, "product", productIds);
+  for (const vid of Array.from(new Set(lines.map(l => l.variantId).filter((v): v is number => v != null))))
+    await requireOwned(scope, "variant", vid);
+  if (exactBusinessId == null) return;
+  for (const pid of productIds) {
+    const p = await getProductById(pid);
+    if (!p || p.businessId !== exactBusinessId)
+      throw new TRPCError({ code: "FORBIDDEN", message: "المنتج لا يتبع النشاط المختار للأوردر" });
+  }
+  for (const l of lines) {
+    if (l.variantId == null) continue;
+    const v = await getVariantById(l.variantId);
+    if (!v || v.productId !== l.productId)
+      throw new TRPCError({ code: "BAD_REQUEST", message: "نوع الحفر لا يتبع المنتج المختار" });
+  }
+}
+
+/**
+ * كتابة على فريق (إعادة تسمية/تعطيل/أعضاء/قائد) في أنشطة الجلسة بس — نفس نطاق قراءته (getTeam). القراءة والإنشاء
+ * كانوا مقيّدين بالأنشطة والكتابة بالشركة بس، فدور غير إداري اتمنح teams.manage كان يقدر يعدّل فرق نشاط تاني.
+ */
+async function requireTeamInSessionScope(ctx: any, teamId: number): Promise<void> {
+  await teamsSvc.getTeam(ctx.tenantId, teamId, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []));
+}
+async function teamIdOfMembership(tenantId: number, membershipId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const [r] = ((await db.execute(sql`SELECT teamId FROM team_memberships WHERE id = ${membershipId} AND tenantId = ${tenantId} LIMIT 1`)) as any)[0] as any[];
+  if (!r) throw new TRPCError({ code: "NOT_FOUND", message: "العضوية غير موجودة" });
+  return Number(r.teamId);
+}
+
+/** L3: التصنيف المربوط بمنتج جديد تابع لنفس نشاطه (كان أي categoryId مقبول). */
+async function assertCategoryInBusiness(categoryId: number | null | undefined, businessId: number): Promise<void> {
+  if (categoryId == null) return;
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+  const { categories } = await import("../drizzle/schema");
+  const [c] = await db.select({ id: categories.id }).from(categories)
+    .where(and(eq(categories.id, categoryId), eq(categories.businessId, businessId))).limit(1);
+  if (!c) throw new TRPCError({ code: "FORBIDDEN", message: "التصنيف لا يتبع هذا النشاط" });
+}
+
+/** PERF-4: سقف القوائم اللي بيطلبها العميل (أعلى قيمة في الواجهة 1000) — كان مفيش حد، فطلب واحد يقدر يسحب كل الصفوف. التصدير الداخلي مش متأثر (بينادي getOrders مباشرة). */
+const MAX_LIST_LIMIT = 1000;
+
+/** INT-6: حدود الإرسال الجماعي لبوسطة. */
+const BOSTA_BULK_MAX = 200;
+const BOSTA_BULK_CONCURRENCY = 5;
+
+/** زي Promise.allSettled لكن بحد أقصى للمهام الشغالة في نفس الوقت — النتائج بنفس ترتيب المدخلات. */
+async function settleWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      try { results[i] = { status: "fulfilled", value: await fn(items[i]) }; }
+      catch (reason) { results[i] = { status: "rejected", reason }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** صنف/مخزن من نشاط تاني في عملية مخزون V2 = FORBIDDEN برسالة واضحة (مش 500). */
+async function withInventoryScope<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof InventoryScopeError) throw new TRPCError({ code: "FORBIDDEN", message: err.message });
+    throw err;
+  }
+}
+
+async function assertManualMovementLink(
+  scope: ScopeCtx,
+  input: { reason?: string | null; orderId?: number | null },
+  productBusinessId: number
+): Promise<void> {
+  if (isReservedOrderMovementReason(input.reason))
+    throw new TRPCError({ code: "BAD_REQUEST", message: "السبب ده محجوز لحركات الأوردرات التلقائية — اكتب سببًا آخر للحركة اليدوية" });
+  if (input.orderId != null) {
+    await requireOwned(scope, "order", input.orderId);
+    const linked = await getOrderById(input.orderId);
+    if (!linked || linked.businessId !== productBusinessId)
+      throw new TRPCError({ code: "BAD_REQUEST", message: "الأوردر المربوط والصنف من نشاطين مختلفين" });
   }
 }
 
@@ -891,6 +999,7 @@ import {
   insertOrderParseAudit,
   makeSlug,
   isOrderNumberCollision,
+  isReservedOrderMovementReason,
   findTakenSkusInBusiness,
   isSkuTakenInBusiness,
   updateProduct,
@@ -1109,11 +1218,11 @@ async function getEmployeeOrNotFound(id: number): Promise<EmployeeRow> {
  */
 const ROLE_TIER: Record<string, number> = { super_admin: 3, admin: 2, manager: 1 };
 const roleTier = (role: string | null | undefined) => ROLE_TIER[role ?? ""] ?? 0;
-function assertMayManageEmployee(
-  ctx: { employee?: { role?: string | null } | null },
+async function assertMayManageEmployee(
+  ctx: { employee?: { role?: string | null; tenantId?: number | null } | null; tenantId?: number | null },
   target: { role?: string | null } | null | undefined,
   nextRole?: string
-): void {
+): Promise<void> {
   const actorRole = ctx.employee?.role;
   if (isOwnerRole(target?.role) && !isOwnerRole(actorRole))
     throw new TRPCError({ code: "FORBIDDEN", message: "حساب المالك يديره المالك فقط" });
@@ -1121,7 +1230,24 @@ function assertMayManageEmployee(
     throw new TRPCError({ code: "FORBIDDEN", message: "لا يمكنك إدارة حساب بدور أعلى من دورك" });
   if (nextRole !== undefined && !isOwnerRole(nextRole) && roleTier(nextRole) > roleTier(actorRole))
     throw new TRPCError({ code: "FORBIDDEN", message: "لا يمكنك منح دور أعلى من دورك" });
+  // المدير تشغيلي بحت وممنوع من أي صلاحية مالية (permissionProcedure). دور بيحمل صلاحية مالية في إعدادات الشركة
+  // (المحاسب افتراضيًا، أو أي دور اتمنح مالي) أعلى منه: مايمنحهوش ومايديرش حسابه (بيانات دخول/كلمة سر/تعطيل/حذف)
+  // — وإلا يعمل حساب محاسب ويدخل بيه.
+  if (actorRole === "manager") {
+    const tenantId = ctx.tenantId ?? ctx.employee?.tenantId ?? null;
+    for (const role of [target?.role, nextRole]) {
+      if (role && !isAdminTierRole(role) && (await roleCarriesFinance(tenantId, role)))
+        throw new TRPCError({ code: "FORBIDDEN", message: "المدير لا يدير حسابات بأدوار مالية (المحاسب أو أي دور بصلاحيات مالية) — للمالك أو الأدمن" });
+    }
+  }
 }
+
+/** الدور بيحمل أي صلاحية مالية في إعدادات الشركة الفعلية (الافتراضي + تجاوزات الشركة). بلا شركة = الافتراضي. */
+async function roleCarriesFinance(tenantId: number | null, role: string): Promise<boolean> {
+  const perms = tenantId != null ? await tenantPermissionsForRole(tenantId, role) : permissionsForRole(role);
+  return perms.some(p => isFinancialPermission(p));
+}
+
 
 /**
  * أي كتابة على حساب مالك تمر من هنا: «يفضل مالك نشط واحد على الأقل» يُفحص ويُكتب ذريًا تحت قفل صف الشركة
@@ -1152,7 +1278,7 @@ async function loadPortalManagedEmployee(
   const target = await getEmployeeOrNotFound(id);
   if (isOwnerRole(target.role))
     throw new TRPCError({ code: "FORBIDDEN", message: "حساب المالك يُدار من لوحة الإدارة فقط" });
-  assertMayManageEmployee(ctx, target, nextRole);
+  await assertMayManageEmployee(ctx, target, nextRole);
   await assertMayManageAccountsManager(ctx, nextRole, target.role);
   return target;
 }
@@ -1350,7 +1476,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const businessId = await requireScopedBusinessId(ctx, input.businessId);
         try { return await handoverOrder({ businessId, orderId: input.orderId, actor: await requireActor(ctx) }); }
-        catch (e) { throw new TRPCError({ code: e instanceof InventoryLedgerError ? "PRECONDITION_FAILED" : "BAD_REQUEST", message: (e as Error).message }); }
+        catch (e) { throw new TRPCError({ code: e instanceof InventoryLedgerError ? "PRECONDITION_FAILED" : "BAD_REQUEST", message: safeErrorText(e) }); }
       }),
   }),
 
@@ -1478,6 +1604,12 @@ export const appRouter = router({
             message:
               "إعدادات العملة وتاريخ التشغيل لا تتغير بعد بدء الحركات المحاسبية",
           });
+        // المخزن الافتراضي تابع لنفس النشاط (كان أي warehouseId مقبول — حتى مخزن تاجر تاني).
+        const { warehouses: warehousesTable } = await import("../drizzle/schema");
+        const [ownWarehouse] = await db.select({ id: warehousesTable.id }).from(warehousesTable)
+          .where(and(eq(warehousesTable.id, input.defaultWarehouseId), eq(warehousesTable.businessId, businessId))).limit(1);
+        if (!ownWarehouse)
+          throw new TRPCError({ code: "FORBIDDEN", message: "المخزن الافتراضي لا يتبع هذا النشاط" });
         await db
           .update(businessesTable)
           .set({
@@ -2095,7 +2227,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) =>
-        approvePurchaseReceipt({
+        withInventoryScope(async () => approvePurchaseReceipt({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx,
@@ -2105,7 +2237,7 @@ export const appRouter = router({
           // المالك بس. الموظف اللي سجّل الإذن لسه مايقدرش يعتمده — شوف الشرح على
           // approvePurchaseReceipt.
           allowSelfApproval: isOwnerRole(ctx.employee?.role),
-        })
+        }))
       ),
 
     // تحويل مخزون بين مخزنين — مسار الورشة. صلاحية manage مش approve: ده نقل عهدة
@@ -2291,14 +2423,14 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) =>
-        voidPurchaseReceipt({
+        withInventoryScope(async () => voidPurchaseReceipt({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
-        })
+        }))
       ),
 
     purchaseReceiptCreate: permissionProcedure("inventory_costing.manage")
@@ -2337,14 +2469,14 @@ export const appRouter = router({
               "إضافة مخزون بتكلفة صفر استثناء للمالك ويتطلب سببًا موثقًا",
           });
         }
-        return createPurchaseReceiptDraft({
+        return withInventoryScope(async () => createPurchaseReceiptDraft({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
-        });
+        }));
       }),
 
     purchaseReceiptSubmit: permissionProcedure("inventory_costing.manage")
@@ -2391,14 +2523,14 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) =>
-        updatePurchaseReceiptDraft({
+        withInventoryScope(async () => updatePurchaseReceiptDraft({
           ...input,
           businessId: await requireScopedBusinessId(
             ctx,
             input.businessId
           ),
           actor: await requireActor(ctx),
-        })
+        }))
       ),
 
     /**
@@ -2987,6 +3119,9 @@ export const appRouter = router({
   // ==================== SEED ====================
   seed: router({
     init: protectedProcedure.mutation(async () => {
+      // DATA-12: بيانات البذرة بتتكتب على النشاط 1 (لو الجدول فاضي على المنصة كلها) — مسار تطوير بس، مايلمسش
+      // أي قاعدة خارج development/test.
+      if (!isLocalDeployEnv()) return { success: true, skipped: true as const };
       await seedInitialData();
       return { success: true };
     }),
@@ -3048,7 +3183,8 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        assertMayManageEmployee(ctx, null, input.role);
+        await requireSessionPermission(ctx, "employees.manage"); // M3: خريطة صلاحيات الشركة تُحترم على الويب كمان
+        await assertMayManageEmployee(ctx, null, input.role);
         await assertMayAssignOwnerRole(ctx, input.role, null);
         await assertMayManageAccountsManager(ctx, input.role, null);
         // النشاط لازم يتحدّد — مايرجعش null (منع تكرار businessId=NULL).
@@ -3072,6 +3208,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireSessionPermission(ctx, "employees.manage"); // M3: خريطة صلاحيات الشركة تُحترم على الويب كمان
         const { id, ...data } = input;
         // الحارس الأول قبل أي حاجة: الموظف ده أصلاً بتاعي؟
         //
@@ -3087,7 +3224,7 @@ export const appRouter = router({
           data.businessId = await scopeBusinessId(ctx, data.businessId);
         }
 
-        assertMayManageEmployee(ctx, target, data.role);
+        await assertMayManageEmployee(ctx, target, data.role);
         await assertMayAssignOwnerRole(ctx, data.role, target.role);
         await assertMayManageAccountsManager(ctx, data.role, target.role);
 
@@ -3107,7 +3244,7 @@ export const appRouter = router({
               message: "لا يمكنك إلغاء صلاحيتك الإدارية عن حسابك الخاص",
             });
           }
-          const remaining = await countActiveAdminTierEmployees(id);
+          const remaining = await countActiveAdminTierEmployees(ctx.tenantId, id);
           if (remaining === 0) {
             throw new TRPCError({
               code: "FORBIDDEN",
@@ -3124,6 +3261,7 @@ export const appRouter = router({
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
+        await requireSessionPermission(ctx, "employees.manage"); // M3: خريطة صلاحيات الشركة تُحترم على الويب كمان
         await requireOwned(ctx, "employee", input.id);
         const target = await getEmployeeById(input.id);
         if (!target)
@@ -3131,7 +3269,7 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الموظف غير موجود",
           });
-        assertMayManageEmployee(ctx, target);
+        await assertMayManageEmployee(ctx, target);
         await assertMayManageAccountsManager(ctx, undefined, target.role);
 
         if (isAdminTierRole(target.role) && target.isActive) {
@@ -3142,7 +3280,7 @@ export const appRouter = router({
               message: "لا يمكنك حذف حسابك الخاص",
             });
           }
-          const remaining = await countActiveAdminTierEmployees(input.id);
+          const remaining = await countActiveAdminTierEmployees(ctx.tenantId, input.id);
           if (remaining === 0) {
             throw new TRPCError({
               code: "FORBIDDEN",
@@ -3164,9 +3302,10 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireSessionPermission(ctx, "employees.manage"); // M3: خريطة صلاحيات الشركة تُحترم على الويب كمان
         await requireOwned(ctx, "employee", input.id);
         const target = await getEmployeeOrNotFound(input.id);
-        assertMayManageEmployee(ctx, target);
+        await assertMayManageEmployee(ctx, target);
         await assertMayManageAccountsManager(ctx, undefined, target.role);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -3197,11 +3336,12 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireSessionPermission(ctx, "employees.manage"); // M3: خريطة صلاحيات الشركة تُحترم على الويب كمان
         // كتابة `passwordHash` على موظف شركة تانية = دخول بهويته. الحارس هنا أهم
         // حارس في الملف كله.
         await requireOwned(ctx, "employee", input.id);
         const target = await getEmployeeOrNotFound(input.id);
-        assertMayManageEmployee(ctx, target);
+        await assertMayManageEmployee(ctx, target);
         await assertMayManageAccountsManager(ctx, undefined, target.role);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
@@ -3256,6 +3396,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireSessionPermission(ctx, "employees.manage"); // M3: خريطة صلاحيات الشركة تُحترم على الويب كمان
         await requireOwned(ctx, "employee", input.employeeId);
         const result = await reclaimEmployeeOrders(
           input.employeeId,
@@ -3316,6 +3457,7 @@ export const appRouter = router({
             message: "اختار Business واحد عند إنشاء المنتج",
           });
         const businessId = scopedBusinessIds[0];
+        await assertCategoryInBusiness(input.categoryId, businessId);
         if (input.currentStock !== 0)
           await assertLegacyInventoryMutationAllowed(businessId);
         if (input.sku && (await isSkuTaken(input.sku))) {
@@ -3365,6 +3507,7 @@ export const appRouter = router({
             message: "اختار Business واحد عند إنشاء المنتج",
           });
         const businessId = scopedBusinessIds[0];
+        await assertCategoryInBusiness(input.categoryId, businessId);
 
         // 2) كل تركيبة لازم يكون ليها بُعد واحد على الأقل (لون أو مقاس أو اسم).
         for (const v of input.variants) {
@@ -3531,6 +3674,7 @@ export const appRouter = router({
             message: "المنتج غير موجود",
           });
         await requireScopedBusinessId(ctx, product.businessId);
+        await assertManualMovementLink(ctx, input, product.businessId);
         await assertLegacyInventoryMutationAllowed(product.businessId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await addInventoryMovement({
@@ -3545,7 +3689,7 @@ export const appRouter = router({
         z.object({
           productId: z.number().optional(),
           variantId: z.number().optional(),
-          limit: z.number().default(50),
+          limit: z.number().max(MAX_LIST_LIMIT).default(50),
           businessId: z.number().optional(),
           businessIds: z.array(z.number()).optional(),
         })
@@ -3581,7 +3725,7 @@ export const appRouter = router({
           adName: z.string().optional(),
           search: z.string().optional(),
           page: z.number().default(1),
-          limit: z.number().default(50),
+          limit: z.number().max(MAX_LIST_LIMIT).default(50),
           businessId: z.number().optional(),
           businessIds: z.array(z.number()).optional(),
           websiteId: z.number().optional(),
@@ -3652,7 +3796,7 @@ export const appRouter = router({
           dateTo: z.date().optional(),
           websiteId: z.number().optional(),
           page: z.number().default(1),
-          limit: z.number().default(50),
+          limit: z.number().max(MAX_LIST_LIMIT).default(50),
           businessIds: z.array(z.number()).optional(),
         })
       )
@@ -3675,16 +3819,19 @@ export const appRouter = router({
       }),
 
     // جلب أسماء البيدج المميزة (لفلتر البيدج)
-    distinctAdNames: protectedProcedure.query(async () => {
+    distinctAdNames: protectedProcedure.query(async ({ ctx }) => {
       const db = await getDb();
       if (!db) return [];
+      // أسماء إعلانات أنشطة الجلسة بس (كانت من كل التجار).
+      const scope = (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS];
       const rows = await db
         .selectDistinct({ adName: ordersTable.adName })
         .from(ordersTable)
         .where(
           and(
             sql`${ordersTable.adName} IS NOT NULL`,
-            sql`${ordersTable.adName} != ''`
+            sql`${ordersTable.adName} != ''`,
+            inArray(ordersTable.businessId, scope)
           )
         );
       return rows.map(r => r.adName).filter(Boolean) as string[];
@@ -3700,8 +3847,9 @@ export const appRouter = router({
         // سياسة القراءة بالمعرّفات: نرجّع المملوك بس (زي فلاتر businessIds التانية) —
         // مش نرفض الطلب كله. كده مفيش تسريب حتى عن **وجود** معرّف تابع لشركة تانية.
         const allowed = await sessionBusinessIds(ctx);
+        // fail-closed: تعذّر تحديد النطاق = صفر صفوف (كان بيرجّع كل الصفوف المطلوبة).
+        if (allowed == null) return [];
         const rows = await getOrdersByIds(input.ids);
-        if (allowed == null) return rows;
         const allowedSet = new Set(allowed);
         return rows.filter((o: any) => allowedSet.has(o.businessId));
       }),
@@ -3745,6 +3893,7 @@ export const appRouter = router({
           ctx,
           input.businessId
         );
+        await requireOrderLinesOwned(ctx, [{ productId: input.productId, variantId: input.variantId }], businessId);
         const actor = await requireActor(ctx);
         const acting = await resolveActingEmployeeIdAndName(ctx);
         const db = await getDb();
@@ -3851,6 +4000,8 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
+        // الموظف المعيَّن في نطاق الجلسة (زي bulkAssign والبوابة) — كان بيقبل موظف تاجر تاني.
+        await requireOwned(ctx, "employee", input.employeeId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await assignOrderToEmployee(
           input.orderId,
@@ -3926,8 +4077,8 @@ export const appRouter = router({
           })
           .optional()
       )
-      .query(async ({ input }) => {
-        return getOrdersNeedingReview(input?.limit ?? 100);
+      .query(async ({ ctx, input }) => {
+        return getOrdersNeedingReview(input?.limit ?? 100, (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS]);
       }),
     /** Resolves a review-flagged order by assigning the correct product/variant. */
     resolveReview: adminProcedure
@@ -3949,11 +4100,12 @@ export const appRouter = router({
           });
         // بيكتب الهيدر والبنود مع بعض في transaction واحدة — البنود هي المصدر اللي
         // بوسطة بتقرا منه، فتعيين المنتج في الهيدر لوحده كان بيسيبها على الاسم الخام.
-        await resolveOrderReviewProduct(input.orderId, {
+        await requireOrderLinesOwned(ctx, [{ productId: input.productId, variantId: input.variantId ?? null }]);
+        await withStatusGuard(() => resolveOrderReviewProduct(input.orderId, {
           productId: input.productId,
           variantId: input.variantId ?? null,
           productName: input.productName,
-        });
+        }));
         await addActivityLog({
           action: "resolve_order_review",
           entityType: "order",
@@ -4003,7 +4155,8 @@ export const appRouter = router({
     bulkSendToBosta: adminProcedure
       .input(
         z.object({
-          orderIds: z.array(z.number()),
+          // INT-6: حد أقصى للدفعة (كانت بلا حد — مئات النداءات المتوازية لبوسطة من طلب واحد)
+          orderIds: z.array(z.number()).min(1).max(BOSTA_BULK_MAX),
           /** غير مُمرَّر = إعداد حساب الشحن (allowOpenPackageDefault). */
           allowToOpenPackage: z.boolean().optional(),
           /** ديبوزيت مطلوب من العميل (escrowInfo) — اختياري، ≤ تحصيل الأوردر. */
@@ -4020,10 +4173,9 @@ export const appRouter = router({
         const gateOk = (await Promise.all(gateBiz.map(b => isBostaEnabledForBusiness(b)))).some(Boolean);
         if (gateBiz.length > 0 && !gateOk)
           throw new TRPCError({ code: "PRECONDITION_FAILED", message: NOT_CONNECTED_MESSAGE });
-        const results = await Promise.allSettled(
-          input.orderIds.map(id =>
-            createBostaShipment(id, { allowToOpenPackage: input.allowToOpenPackage, depositAmount: input.depositAmount })
-          )
+        // INT-6: توازي محدود (كان Promise.all على الكل مرة واحدة) — نفس الترتيب ونفس شكل النتيجة.
+        const results = await settleWithConcurrency(input.orderIds, BOSTA_BULK_CONCURRENCY, id =>
+          createBostaShipment(id, { allowToOpenPackage: input.allowToOpenPackage, depositAmount: input.depositAmount })
         );
         let success = 0,
           failed = 0;
@@ -4149,6 +4301,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
+        await requireOrderLinesOwned(ctx, [{ productId: (input as any).productId, variantId: (input as any).variantId }]);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const { orderId, ...updates } = input;
         const result = await withOrderStockErrors(() => editOrderFull(orderId, updates, {
@@ -4255,6 +4408,7 @@ export const appRouter = router({
         const order = await getOrderById(input.orderId);
         if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
         await requireScopedBusinessId(ctx, order.businessId);
+        await requireOrderLinesOwned(ctx, input.items);
         const editor = resolveOrderEditor(ctx);
         const result = await withOrderStockErrors(() => replaceOrderItemsFromEditor(
           input.orderId,
@@ -4330,7 +4484,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         // حذف جماعي — الرفض قبل أي مسح لو أي أوردر برّه النطاق.
         await requireAllOwned(ctx, "order", input.orderIds);
-        await withStatusGuard(() => deleteOrders(input.orderIds));
+        await withStatusGuard(async () => deleteOrders(input.orderIds, (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS]));
         await addActivityLog({
           action: "bulk_delete_orders",
           entityType: "order",
@@ -4548,8 +4702,10 @@ export const appRouter = router({
             code: "INTERNAL_SERVER_ERROR",
             message: "DB error",
           });
+        // أوردرات أنشطة الجلسة بس — الـUPDATE الخام كان على كل التجار.
+        const scope = (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS];
         const [result] = await db.execute(
-          sql`UPDATE orders SET assignedEmployeeId = NULL, assignedAt = NULL WHERE assignedEmployeeId = ${input.employeeId}`
+          sql`UPDATE orders SET assignedEmployeeId = NULL, assignedAt = NULL WHERE assignedEmployeeId = ${input.employeeId} AND businessId IN (${sql.join(scope.map(id => sql`${id}`), sql`, `)})`
         );
         const count = (result as any).affectedRows || 0;
         if (count > 0) {
@@ -4574,14 +4730,15 @@ export const appRouter = router({
         z.object({
           status: z.string().optional(),
           page: z.number().default(1),
-          limit: z.number().default(200),
+          limit: z.number().max(MAX_LIST_LIMIT).default(200),
           // تاريخ التوزيع - افتراضياً اليوم بتوقيت القاهرة
           assignedDate: z.string().optional(), // YYYY-MM-DD, defaults to today Cairo time
         })
       )
       .query(async ({ ctx, input }) => {
-        const emps = await getAllEmployees();
-        const emp = emps.find(e => e.userId === ctx.user.id);
+        // الموظف من الجلسة نفسها: البحث بـuserId في موظفين كل التجار ماكانش بيطابق أبدًا (المعرّف الصناعي سالب)،
+        // فالقايمة كانت فاضية دايمًا. والنتيجة مقيّدة بأنشطة الجلسة.
+        const emp = ctx.employee;
         if (!emp) return { orders: [], total: 0 };
 
         // حساب بداية ونهاية يوم التوزيع بتوقيت القاهرة (UTC+2)
@@ -4595,6 +4752,7 @@ export const appRouter = router({
           assignedEmployeeId: emp.id,
           assignedDateFrom,
           assignedDateTo,
+          businessIds: (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS],
         });
       }),
 
@@ -4607,15 +4765,14 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        const emps = await getAllEmployees();
-        const emp = emps.find((e: any) => e.userId === ctx.user.id);
-        const scannedBy = emp?.id ?? ctx.user!.id;
-        const scannedByName = emp?.name ?? ctx.user.name ?? "موظف";
+        // الفاعل من الجلسة نفسها (مش بحث في موظفين كل التجار)، والبحث مقيّد بأنشطة الجلسة.
+        const acting = await resolveActingEmployeeIdAndName(ctx);
         const result = await scanOrderBySerial(
           input.serialNumber,
-          scannedBy,
-          scannedByName,
-          input.deviceInfo
+          acting.id ?? 0,
+          acting.name ?? ctx.user.name ?? "موظف",
+          input.deviceInfo,
+          (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS]
         );
         return result;
       }),
@@ -4625,14 +4782,14 @@ export const appRouter = router({
         z.object({
           orderId: z.number().optional(),
           scannedBy: z.number().optional(),
-          limit: z.number().default(100),
+          limit: z.number().max(MAX_LIST_LIMIT).default(100),
         })
       )
       .query(async ({ ctx, input }) => {
         // الفلتر اختياري — بيتفحص لما يتبعت بس. من غيره القايمة مقصوصة أصلاً تحت.
         if (input.orderId != null)
           await requireOwned(ctx, "order", input.orderId);
-        return getScanLogs(input);
+        return getScanLogs(input, (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS]);
       }),
 
     todayConfirmed: protectedProcedure
@@ -4907,7 +5064,7 @@ export const appRouter = router({
         z.object({
           status: z.string().optional(),
           page: z.number().default(1),
-          limit: z.number().default(200),
+          limit: z.number().max(MAX_LIST_LIMIT).default(200),
           assignedDate: z.string().optional(), // YYYY-MM-DD, defaults to today Cairo time
           dateFrom: z.date().optional(), // فلتر تاريخ مخصص - بداية
           dateTo: z.date().optional(), // فلتر تاريخ مخصص - نهاية
@@ -5257,23 +5414,8 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         const tenantId = requireTenantId(emp);
         const filterBusinessIds = await scopeBusinessIds(empScope(ctx), input);
-        // تفلتر بتاريخ التوزيع اليوم بتوقيت القاهرة
-        const cairoOffset = 2 * 60 * 60 * 1000;
-        const cairoNow = new Date(Date.now() + cairoOffset);
-        const assignedDateFrom = new Date(
-          Date.UTC(
-            cairoNow.getUTCFullYear(),
-            cairoNow.getUTCMonth(),
-            cairoNow.getUTCDate(),
-            0,
-            0,
-            0,
-            0
-          ) - cairoOffset
-        );
-        const assignedDateTo = new Date(
-          assignedDateFrom.getTime() + 24 * 60 * 60 * 1000 - 1
-        );
+        // تفلتر بتاريخ التوزيع اليوم بتوقيت القاهرة الفعلي (DATA-1: كان +2 ثابت بيتجاهل التوقيت الصيفي)
+        const { from: assignedDateFrom, to: assignedDateTo } = cairoTodayRange();
         const result = await getOrders({
           assignedEmployeeId: emp.id,
           assignedDateFrom,
@@ -5326,6 +5468,7 @@ export const appRouter = router({
           orderId,
           "لا يمكنك تعديل أوردر غير مسند إليك"
         );
+        await requireOrderLinesOwned(empScope(ctx), [{ productId: (updates as any).productId, variantId: (updates as any).variantId }]);
         const result = await withOrderStockErrors(() => editOrderFull(orderId, updates, {
           id: emp.id,
           name: emp.name,
@@ -5438,6 +5581,7 @@ export const appRouter = router({
           input.orderId,
           "لا يمكنك تعديل بنود أوردر غير مسند إليك"
         );
+        await requireOrderLinesOwned(empScope(ctx), input.items);
         const result = await withOrderStockErrors(() => replaceOrderItemsFromEditor(
           input.orderId,
           input.items.map(i => ({
@@ -5520,7 +5664,8 @@ export const appRouter = router({
           input.serialNumber,
           scannedBy,
           scannedByName,
-          input.deviceInfo
+          input.deviceInfo,
+          (await scopeBusinessIds(empScope(ctx))) ?? [NO_BUSINESS]
         );
         return result;
       }),
@@ -5562,7 +5707,7 @@ export const appRouter = router({
           dateTo: z.date().optional(),
           search: z.string().optional(),
           page: z.number().default(1),
-          limit: z.number().default(50),
+          limit: z.number().max(MAX_LIST_LIMIT).default(50),
         })
       )
       .query(async ({ ctx, input }) => {
@@ -5774,9 +5919,8 @@ export const appRouter = router({
         await requireOwned(empScope(ctx), "product", input.productId);
         const product = await getProductById(input.productId);
         if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "المنتج غير موجود" });
-        // الربط بأوردر اختياري — بيتفحص لما يتبعت بس.
-        if (input.orderId != null)
-          await requireOwned(empScope(ctx), "order", input.orderId);
+        // الربط بأوردر اختياري — بيتفحص لما يتبعت بس، والسبب مايبدأش بأسباب حركات الأوردرات المحجوزة.
+        await assertManualMovementLink(empScope(ctx), input, product.businessId);
         await addInventoryMovement({
           ...input,
           businessId: product.businessId,
@@ -5789,7 +5933,7 @@ export const appRouter = router({
       .input(
         z.object({
           productId: z.number().optional(),
-          limit: z.number().default(50),
+          limit: z.number().max(MAX_LIST_LIMIT).default(50),
         })
       )
       .query(async ({ ctx, input }) => {
@@ -6051,7 +6195,9 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
-        await requireOwned(empScope(ctx), "order", input.orderId);
+        // نفس قاعدة الملكية في التأكيد/الإلغاء: الموظف غير الإداري يعلّم أوردراته المعيّنة له بس (التعليم بيدخل الأوردر
+        // في «حذف كل المكررات»).
+        await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -6074,11 +6220,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(
-          empScope(ctx),
-          "order",
-          input.orderId
-        );
+        await assertEmployeeOwnsOrder((ctx as any).employee, input.orderId, "هذا الأوردر غير مخصص لك");
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -6097,14 +6239,15 @@ export const appRouter = router({
   // ==================== الأوردرات المكررة (لوحة المدير) ====================
   duplicates: router({
     // جلب كل الأوردرات المعلمة كمكررة
-    list: adminProcedure.query(async () => {
+    list: adminProcedure.query(async ({ ctx }) => {
       const db = await getDb();
       if (!db) return [];
       const { orders } = await import("../drizzle/schema");
+      const scope = (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS];
       return db
         .select()
         .from(orders)
-        .where(eq(orders.isDuplicate, true))
+        .where(and(eq(orders.isDuplicate, true), inArray(orders.businessId, scope)))
         .orderBy(desc(orders.duplicateMarkedAt));
     }),
 
@@ -6150,18 +6293,19 @@ export const appRouter = router({
       }),
 
     // حذف جميع المكررات
-    deleteAll: ownerProcedure.mutation(async () => {
+    deleteAll: ownerProcedure.mutation(async ({ ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
       const { orders } = await import("../drizzle/schema");
-      // بنجيب المعرّفات الأول وبعدين نمرّها على نفس helper الحذف — عشان الأصناف تتمسح
-      // مع الأوردرات (مش db.delete(orders) خام اللي كان بيسيب أصناف يتيمة).
+      // مكررات أنشطة الجلسة بس — كان بيمسح مكررات **كل التجار**. المعرّفات بتعدّي على نفس helper الحذف (الأصناف
+      // مع الأوردرات)، وهو بيعيد فحص النطاق جوه المعاملة.
+      const scope = (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS];
       const dupRows = await db
         .select({ id: orders.id })
         .from(orders)
-        .where(eq(orders.isDuplicate, true));
+        .where(and(eq(orders.isDuplicate, true), inArray(orders.businessId, scope)));
       const ids = dupRows.map(r => r.id);
-      await withStatusGuard(() => deleteOrders(ids));
+      await withStatusGuard(() => deleteOrders(ids, scope));
       return { deleted: ids.length };
     }),
   }),
@@ -6290,6 +6434,8 @@ export const appRouter = router({
               .map(p => p.productId)
               .filter((id): id is number => id != null)
           );
+          // التركيبة العامة (fallback الهيدر) في نطاق الموظف برضه — تبعيتها للمنتج بتتفحص في طبقة الكتابة.
+          if (input.variantId != null) await requireOwned(empScope(ctx), "variant", input.variantId);
           // تحقّق **الملكية والتركيب** لكل بند — مش المخزون.
           //
           // المخزون مابيمنعش تسجيل أوردر: العميل طلب قطعتين والمتاح واحدة = أوردر حقيقي
@@ -6620,6 +6766,7 @@ export const appRouter = router({
           "product",
           input.selectedProducts.map(p => p.productId)
         );
+        if (input.variantId != null) await requireOwned(empScope(ctx), "variant", input.variantId);
         const catalogNames = await getOwnedProductNames(
           order.businessId,
           input.selectedProducts.map(p => p.productId)
@@ -6790,7 +6937,7 @@ export const appRouter = router({
           result: z
             .enum(["success", "failed", "duplicate", "cancelled"])
             .optional(),
-          limit: z.number().default(500),
+          limit: z.number().max(MAX_LIST_LIMIT).default(500),
         })
       )
       .query(async ({ ctx, input }) => {
@@ -6844,7 +6991,8 @@ export const appRouter = router({
             governorate: orders.governorate,
           })
           .from(scanLogsTable)
-          .leftJoin(orders, eq(scanLogsTable.orderId, orders.id))
+          // بيانات الأوردر بتظهر بس لأوردر في نطاق الموظف (سجلات قديمة من قبل تقييد المسح ممكن تشاور على تاجر تاني)
+          .leftJoin(orders, and(eq(scanLogsTable.orderId, orders.id), inArray(orders.businessId, (await scopeBusinessIds(empScope(ctx))) ?? [NO_BUSINESS])))
           .where(and(...conditions))
           .orderBy(desc(scanLogsTable.createdAt))
           .limit(input.limit);
@@ -7015,57 +7163,37 @@ export const appRouter = router({
         z.object({
           dateFrom: z.date().optional(),
           dateTo: z.date().optional(),
-          limit: z.number().default(100),
+          limit: z.number().max(MAX_LIST_LIMIT).default(100),
         })
       )
-      .query(async ({ input }) => {
-        const mysql = await import("mysql2/promise");
-        const conn = await mysql.default.createConnection(
-          process.env.DATABASE_URL!
-        );
-        try {
-          let query = "SELECT * FROM merge_logs";
-          const params: any[] = [];
-          const conditions: string[] = [];
-          if (input.dateFrom) {
-            conditions.push("createdAt >= ?");
-            params.push(input.dateFrom);
-          }
-          if (input.dateTo) {
-            conditions.push("createdAt <= ?");
-            params.push(input.dateTo);
-          }
-          if (conditions.length) query += " WHERE " + conditions.join(" AND ");
-          const safeLimit = Math.min(
-            Math.max(1, Math.floor(Number(input.limit))),
-            1000
-          );
-          query += ` ORDER BY createdAt DESC LIMIT ${safeLimit}`;
-          const [rows] = await conn.execute(query, params);
-          return { logs: rows as any[] };
-        } finally {
-          await conn.end();
-        }
+      .query(async ({ ctx, input }) => {
+        // أنشطة الجلسة فقط (كان SELECT * من كل التجار — أسماء وهواتف عملاء). عبر قاعدة التطبيق نفسها.
+        const db = await getDb();
+        if (!db) return { logs: [] as any[] };
+        const { mergeLogs } = await import("../drizzle/schema");
+        const scope = (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS];
+        const conditions: any[] = [inArray(mergeLogs.businessId, scope)];
+        if (input.dateFrom) conditions.push(gte(mergeLogs.createdAt, input.dateFrom));
+        if (input.dateTo) conditions.push(lte(mergeLogs.createdAt, input.dateTo));
+        const safeLimit = Math.min(Math.max(1, Math.floor(Number(input.limit))), 1000);
+        const logs = await db.select().from(mergeLogs).where(and(...conditions)).orderBy(desc(mergeLogs.createdAt)).limit(safeLimit);
+        return { logs: logs as any[] };
       }),
 
-    // عدد الدمج في آخر 24 ساعة (للتنبيه)
-    mergeAlert: adminProcedure.query(async () => {
-      const mysql = await import("mysql2/promise");
-      const conn = await mysql.default.createConnection(
-        process.env.DATABASE_URL!
-      );
-      try {
-        const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const [rows] = (await conn.execute(
-          "SELECT COUNT(*) as count, SUM(mergedQty) as totalMergedQty FROM merge_logs WHERE createdAt >= ?",
-          [since]
-        )) as any;
-        const count = Number(rows[0].count);
-        const totalMergedQty = Number(rows[0].totalMergedQty || 0);
-        return { count, totalMergedQty, hasAlert: count > 0 };
-      } finally {
-        await conn.end();
-      }
+    // عدد الدمج في آخر 24 ساعة (للتنبيه) — أنشطة الجلسة فقط
+    mergeAlert: adminProcedure.query(async ({ ctx }) => {
+      const db = await getDb();
+      if (!db) return { count: 0, totalMergedQty: 0, hasAlert: false };
+      const { mergeLogs } = await import("../drizzle/schema");
+      const scope = (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS];
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const [row] = await db
+        .select({ count: sql<number>`COUNT(*)`, totalMergedQty: sql<number>`COALESCE(SUM(${mergeLogs.mergedQty}), 0)` })
+        .from(mergeLogs)
+        .where(and(inArray(mergeLogs.businessId, scope), gte(mergeLogs.createdAt, since)));
+      const count = Number(row?.count ?? 0);
+      const totalMergedQty = Number(row?.totalMergedQty ?? 0);
+      return { count, totalMergedQty, hasAlert: count > 0 };
     }),
   }),
 
@@ -7127,7 +7255,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => attendanceSvc.updateShift(webAttendanceActor(ctx), input.id, input.version, input.shift, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
     setShiftActive: permissionProcedure("attendance.manage_shifts")
       .input(z.object({ id: z.number().int().positive(), isActive: z.boolean() }).strict())
-      .mutation(async ({ ctx, input }) => attendanceSvc.setShiftActive(webAttendanceActor(ctx), input.id, input.isActive)),
+      .mutation(async ({ ctx, input }) => attendanceSvc.setShiftActive(webAttendanceActor(ctx), input.id, input.isActive, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
     assignments: permissionProcedure("attendance.manage_shifts").query(async ({ ctx }) => {
       if (!attendanceSvc.attendanceEnabled()) return { enabled: false as const, rows: [] as any[] };
       return { enabled: true as const, rows: await attendanceSvc.listAssignments(ctx.tenantId) };
@@ -7137,7 +7265,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => attendanceSvc.assignShift(webAttendanceActor(ctx), input, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
     endAssignment: permissionProcedure("attendance.manage_shifts")
       .input(z.object({ id: z.number().int().positive() }).strict())
-      .mutation(async ({ ctx, input }) => attendanceSvc.endAssignment(webAttendanceActor(ctx), input.id)),
+      .mutation(async ({ ctx, input }) => attendanceSvc.endAssignment(webAttendanceActor(ctx), input.id, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
     review: authenticatedProcedure
       .input(z.object({ requestId: z.number().int().positive(), decision: z.enum(["approve", "reject"]), reviewReason: z.string().max(500).nullable().optional() }).strict())
       .mutation(async ({ ctx, input }) => {
@@ -7191,17 +7319,17 @@ export const appRouter = router({
     create: permissionProcedure("teams.manage").input(teamsSvc.createTeamInput)
       .mutation(async ({ ctx, input }) => teamsSvc.createTeam(webTeamsActor(ctx), input, denyWhenEmpty((await sessionBusinessIds(ctx)) ?? []))),
     rename: permissionProcedure("teams.manage").input(teamsSvc.renameTeamInput)
-      .mutation(async ({ ctx, input }) => teamsSvc.renameTeam(webTeamsActor(ctx), input)),
+      .mutation(async ({ ctx, input }) => { await requireTeamInSessionScope(ctx, input.teamId); return teamsSvc.renameTeam(webTeamsActor(ctx), input); }),
     deactivate: permissionProcedure("teams.manage").input(teamsSvc.deactivateTeamInput)
-      .mutation(async ({ ctx, input }) => teamsSvc.deactivateTeam(webTeamsActor(ctx), input)),
+      .mutation(async ({ ctx, input }) => { await requireTeamInSessionScope(ctx, input.teamId); return teamsSvc.deactivateTeam(webTeamsActor(ctx), input); }),
     addMember: permissionProcedure("teams.manage").input(teamsSvc.addMemberInput)
-      .mutation(async ({ ctx, input }) => teamsSvc.addMember(webTeamsActor(ctx), input)),
+      .mutation(async ({ ctx, input }) => { await requireTeamInSessionScope(ctx, input.teamId); return teamsSvc.addMember(webTeamsActor(ctx), input); }),
     endMembership: permissionProcedure("teams.manage").input(teamsSvc.endMembershipInput)
-      .mutation(async ({ ctx, input }) => teamsSvc.endMembership(webTeamsActor(ctx), input)),
+      .mutation(async ({ ctx, input }) => { await requireTeamInSessionScope(ctx, await teamIdOfMembership(ctx.tenantId, input.membershipId)); return teamsSvc.endMembership(webTeamsActor(ctx), input); }),
     setLeader: permissionProcedure("teams.manage").input(teamsSvc.setLeaderInput)
-      .mutation(async ({ ctx, input }) => teamsSvc.setLeader(webTeamsActor(ctx), input)),
+      .mutation(async ({ ctx, input }) => { await requireTeamInSessionScope(ctx, input.teamId); return teamsSvc.setLeader(webTeamsActor(ctx), input); }),
     endLeadership: permissionProcedure("teams.manage").input(teamsSvc.endLeadershipInput)
-      .mutation(async ({ ctx, input }) => teamsSvc.endLeadership(webTeamsActor(ctx), input)),
+      .mutation(async ({ ctx, input }) => { await requireTeamInSessionScope(ctx, input.teamId); return teamsSvc.endLeadership(webTeamsActor(ctx), input); }),
   }),
 
   // ==================== BROADCAST (Admin OAuth) ====================
@@ -7264,7 +7392,7 @@ export const appRouter = router({
       .input(
         z.object({
           page: z.number().default(1),
-          limit: z.number().default(50),
+          limit: z.number().max(MAX_LIST_LIMIT).default(50),
           governorate: z.string().optional(),
           returnReason: z.string().optional(),
           dateFrom: z.date().optional(),
@@ -8426,6 +8554,7 @@ export const appRouter = router({
             message: "الصنف غير موجود",
           });
         await requireScopedBusinessId(ctx, product.businessId);
+        await assertManualMovementLink(ctx, input, product.businessId);
         await assertLegacyInventoryMutationAllowed(product.businessId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         await addVariantInventoryMovement({
@@ -9237,7 +9366,7 @@ export const appRouter = router({
         return getPayrollSettings(businessId);
       }),
 
-    settingsSave: adminProcedure.use(frozenWhileAccountingDisabled)
+    settingsSave: permissionProcedure("payroll.manage") // كان adminProcedure: المدير (ممنوع من المالي) كان هيعدّيه أول ما المحاسبة تتفعّل
       .input(
         z.object({
           businessId: z.number(),
@@ -9688,7 +9817,7 @@ export const appRouter = router({
         });
       }),
 
-    itemUpdate: adminProcedure.use(frozenWhileAccountingDisabled)
+    itemUpdate: permissionProcedure("payroll.manage") // نفس سبب settingsSave
       .input(
         z.object({
           id: z.number(),

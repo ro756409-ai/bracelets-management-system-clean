@@ -1,3 +1,4 @@
+import { safeErrorText } from "../logSafety";
 import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
@@ -110,7 +111,8 @@ async function startServer() {
           tenantId: anyCtx?.tenantId ?? null,
           userId: anyCtx?.user?.id ?? null,
           employeeId: anyCtx?.employee?.id ?? null,
-          message: error.message,
+          // نص آمن: رسالة الـORM فيها params الاستعلام (بيانات عملاء) — كانت بتتكتب في stderr كما هي
+          message: safeErrorText(error.cause ?? error),
         });
       },
     })

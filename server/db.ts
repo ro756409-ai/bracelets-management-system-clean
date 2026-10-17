@@ -1,3 +1,4 @@
+import { ClientSafeError } from "./logSafety";
 import { assertLegacyFinanceWritable } from "./legacyFinanceArchive";
 import { NEEDS_COMPLETION_LABEL, shippingIssuesText, shippingReadiness, withoutAddressConflictReason } from "../shared/shippingReadiness";
 import {
@@ -899,11 +900,14 @@ export async function countActiveOwnerEmployees(
 }
 
 export async function countActiveAdminTierEmployees(
+  /** شركة الحساب المستهدف — العدّ جوه الشركة بس (كان على المنصة كلها، فحارس «آخر إداري» مابيشتغلش). */
+  tenantId: number,
   excludeId?: number
 ): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const conditions: any[] = [
+    eq(employees.tenantId, tenantId),
     eq(employees.isActive, true),
     inArray(employees.role, ADMIN_TIER_ROLES_FOR_QUERY),
   ];
@@ -1648,6 +1652,7 @@ async function createOrderInTransaction(
     .from(businesses)
     .where(eq(businesses.id, businessId))
     .limit(1);
+  await assertOrderLinesInBusiness(tx, businessId, [{ productId: data.productId ?? null, variantId: data.variantId ?? null }]);
   const isAfterGoLive = Boolean(
     business?.accountingGoLiveAt &&
       (data.createdAt ?? new Date()) >= business.accountingGoLiveAt
@@ -1851,6 +1856,11 @@ export async function updateOrderWithItems(
     const itemsKept =
       (await isOrderStockLocked(tx, current)) &&
       !sameStockLines(existingItems, items.map(i => ({ productId: i.productId ?? null, variantId: i.variantId ?? null, quantity: i.quantity })));
+    if (!itemsKept && ("productId" in finalPatch || "variantId" in finalPatch))
+      await assertOrderLinesInBusiness(tx, current.businessId, [{
+        productId: "productId" in finalPatch ? finalPatch.productId ?? null : current.productId,
+        variantId: "variantId" in finalPatch ? finalPatch.variantId ?? null : current.variantId,
+      }]);
     if (itemsKept) {
       if ((opts.onStockLockedItems ?? "reject") === "reject") throw new OrderStatusGuardError(STOCK_LOCKED_ITEMS_MESSAGE);
       const { productId: _p, variantId: _v, productName: _n, quantity: _q, totalAmount: _t, shippingFees: _s, size: _z, color: _c, ...rest } = finalPatch as any;
@@ -2044,19 +2054,55 @@ export function isValidOrderStatusTransition(
  * للمخزون، ومرتجع بوسطة مابيسجّلش صف مرتجع) — بعد الانتقال مابقاش فيه طريقة نفرّقه عن أوردر جديد عادي، فالحسم هنا:
  * تعارض بلا تغيير. أوردر رجع مخزونه فعلًا (حركة «مرتجع - أوردر») صافيه صفر فيعدّي.
  */
-async function assertReactivationFromReturnSafe(d: any, orderId: number, from: string, to: string): Promise<void> {
+async function assertReactivationFromReturnSafe(d: any, order: { id: number; businessId: number }, from: string, to: string): Promise<void> {
   if (from !== "returned" || to === "returned") return;
-  if (!Array.from((await orderNetDeductions(d, orderId)).values()).some(l => l.qty !== 0)) return;
-  throw new OrderStockInconsistencyError(orderId, from,
+  if (!Array.from((await orderNetDeductions(d, order)).values()).some(l => l.qty !== 0)) return;
+  throw new OrderStockInconsistencyError(order.id, from,
     "تعارض في المخزون: أوردر مرتجع وخصمه لسه محسوب ولا يوجد دليل على رجوع المخزون — إعادة تفعيله تحتاج قرار مراجعة يدوي");
 }
 
 /** انتقال حالة ممنوع بالسياسة (مش بسبب خطأ تقني) — الراوتر بيحوّله لـBAD_REQUEST. */
-export class OrderStatusGuardError extends Error {
+export class OrderStatusGuardError extends ClientSafeError {
   constructor(message: string) {
     super(message);
     this.name = "OrderStatusGuardError";
   }
+}
+
+/** صنف/تركيبة في بنود أوردر لا يتبع نشاط الأوردر (أو تركيبة لا تتبع منتجها) — رفض بلا أي كتابة (M1). */
+export class OrderLineScopeError extends OrderStatusGuardError {
+  constructor() {
+    super("صنف في الأوردر لا يتبع نشاط هذا الأوردر — لم يُحفظ شيء");
+    this.name = "OrderLineScopeError";
+  }
+}
+
+/**
+ * كل منتج في البنود/الهيدر تابع لنشاط الأوردر، وكل تركيبة تابعة لمنتج سطرها (أو لمنتج من النشاط لو السطر بلا منتج). بيتنادى في كل
+ * كاتب لبنود الأوردر (الإنشاء، استبدال البنود، المحرر، التعديل الكامل، حسم المراجعة) — المنتج الغريب كان بيتكتب
+ * ويرجّع اسمه في البنود (كشف كتالوج تاجر تاني).
+ */
+async function assertOrderLinesInBusiness(
+  tx: any,
+  businessId: number,
+  lines: Array<{ productId?: number | null; variantId?: number | null }>
+): Promise<void> {
+  const variantIds = Array.from(new Set(lines.map(l => l.variantId).filter((v): v is number => v != null)));
+  const owner = new Map<number, number>();
+  if (variantIds.length > 0) {
+    const vs = await tx.select({ id: productVariants.id, productId: productVariants.productId }).from(productVariants)
+      .where(inArray(productVariants.id, variantIds));
+    for (const v of vs as Array<{ id: number; productId: number }>) owner.set(v.id, v.productId);
+    if (owner.size !== variantIds.length) throw new OrderLineScopeError();
+  }
+  // تركيبة من غير منتج في السطر (بنود قديمة/مستوردة): منتجها هو اللي لازم يتبع النشاط.
+  const productIds = Array.from(new Set(lines.flatMap(l => l.productId != null ? [l.productId] : l.variantId != null ? [owner.get(l.variantId)!] : [])));
+  if (productIds.length > 0) {
+    const owned = await tx.select({ id: products.id }).from(products)
+      .where(and(inArray(products.id, productIds), eq(products.businessId, businessId)));
+    if (owned.length !== productIds.length) throw new OrderLineScopeError();
+  }
+  if (lines.some(l => l.productId != null && l.variantId != null && owner.get(l.variantId) !== l.productId)) throw new OrderLineScopeError();
 }
 
 export async function updateOrder(id: number, data: Partial<InsertOrder>, eventCtx?: OrderEventContext) {
@@ -2078,7 +2124,7 @@ export async function updateOrder(id: number, data: Partial<InsertOrder>, eventC
   if (!db) throw new Error("Database not available");
   if (data.status) {
     const [current] = await db
-      .select({ status: orders.status })
+      .select({ id: orders.id, status: orders.status, businessId: orders.businessId })
       .from(orders)
       .where(eq(orders.id, id))
       .limit(1);
@@ -2087,7 +2133,7 @@ export async function updateOrder(id: number, data: Partial<InsertOrder>, eventC
         `لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${data.status}" مباشرة`
       );
     }
-    if (current) await assertReactivationFromReturnSafe(db, id, current.status, data.status);
+    if (current) await assertReactivationFromReturnSafe(db, current, current.status, data.status);
     // «مؤكد» بالتعديل المباشر كان بيعدّي من غير خصم المخزون، وبعدها confirmOrder بيرجع بلا
     // خصم لأن الحالة مؤكدة فعلًا. التأكيد التشغيلي له مسار واحد: confirmOrder.
     if (current && data.status === "confirmed" && current.status !== "confirmed")
@@ -2123,7 +2169,7 @@ async function updateOrderStatusWithEvent(id: number, data: Partial<InsertOrder>
     if (!current) return;
     if (!isValidOrderStatusTransition(current.status, to as any))
       throw new OrderStatusGuardError(`لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${to}" مباشرة`);
-    await assertReactivationFromReturnSafe(tx, id, current.status, to);
+    await assertReactivationFromReturnSafe(tx, current, current.status, to);
     if (to === "confirmed" && current.status !== "confirmed")
       throw new OrderStatusGuardError("تأكيد الأوردر يتم من زر التأكيد فقط (يخصم المخزون) — لا يُحوَّل لمؤكد بالتعديل المباشر");
     if (to === "delivered" && current.status !== "delivered")
@@ -2224,10 +2270,16 @@ export async function scanOrderBySerial(
   serialNumber: string,
   scannedBy: number,
   scannedByName: string,
-  deviceInfo?: string
+  deviceInfo: string | undefined,
+  /**
+   * أنشطة الجلسة الموثوقة (من الراوتر، مش من العميل). كل بحث وكل كتابة مقيّدة بيها: رقم الأوردر تسلسلي على مستوى
+   * المنصة، فالبحث من غير القيد ده كان بيلاقي أوردر تاجر تاني ويعلّمه «متجهز» ويرجّع بيانات عميله.
+   */
+  allowedBusinessIds: number[]
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const inScope = inArray(orders.businessId, allowedBusinessIds.length > 0 ? allowedBusinessIds : [-1]);
 
   // Clean up the scanned value (trim whitespace, remove URL prefixes if any)
   let searchValue = serialNumber.trim();
@@ -2252,27 +2304,27 @@ export async function scanOrderBySerial(
   let orderRows = await db
     .select()
     .from(orders)
-    .where(eq(orders.orderNumber, searchValue))
+    .where(and(eq(orders.orderNumber, searchValue), inScope))
     .limit(1);
   if (!orderRows.length) {
     orderRows = await db
       .select()
       .from(orders)
-      .where(eq(orders.bostaTrackingNumber, searchValue))
+      .where(and(eq(orders.bostaTrackingNumber, searchValue), inScope))
       .limit(1);
   }
   if (!orderRows.length) {
     orderRows = await db
       .select()
       .from(orders)
-      .where(eq(orders.serialNumber, searchValue))
+      .where(and(eq(orders.serialNumber, searchValue), inScope))
       .limit(1);
   }
   if (!orderRows.length) {
     orderRows = await db
       .select()
       .from(orders)
-      .where(eq(orders.bostaShipmentId, searchValue))
+      .where(and(eq(orders.bostaShipmentId, searchValue), inScope))
       .limit(1);
   }
   // Try partial match - Bosta tracking numbers often start with N- followed by digits
@@ -2280,7 +2332,7 @@ export async function scanOrderBySerial(
     orderRows = await db
       .select()
       .from(orders)
-      .where(sql`${orders.bostaTrackingNumber} LIKE ${`%${searchValue}%`}`)
+      .where(and(sql`${orders.bostaTrackingNumber} LIKE ${`%${searchValue}%`}`, inScope))
       .limit(1);
   }
   // Try searching by customer phone if the scanned value looks like a phone number
@@ -2296,7 +2348,8 @@ export async function scanOrderBySerial(
       .where(
         and(
           sql`${orders.customerPhone} LIKE ${`%${phone}%`}`,
-          eq(orders.isPrepared, false)
+          eq(orders.isPrepared, false),
+          inScope
         )
       )
       .limit(1);
@@ -2356,7 +2409,7 @@ export async function scanOrderBySerial(
     await db
       .update(orders)
       .set({ scanCount: (order.scanCount ?? 0) + 1, lastScannedAt: new Date() })
-      .where(eq(orders.id, order.id));
+      .where(and(eq(orders.id, order.id), inScope));
     return {
       success: false,
       result: "duplicate" as const,
@@ -2377,7 +2430,7 @@ export async function scanOrderBySerial(
       scanCount: (order.scanCount ?? 0) + 1,
       lastScannedAt: now,
     })
-    .where(eq(orders.id, order.id));
+    .where(and(eq(orders.id, order.id), inScope));
 
   await db
     .insert(scanLogs)
@@ -2405,35 +2458,63 @@ export async function scanOrderBySerial(
   };
 }
 
-export async function getScanLogs(filters: {
-  orderId?: number;
-  scannedBy?: number;
-  limit?: number;
-}) {
+export async function getScanLogs(
+  filters: {
+    orderId?: number;
+    scannedBy?: number;
+    limit?: number;
+  },
+  /** أنشطة الجلسة. scan_logs مالوش businessId: السجل بيظهر بس لو أوردره موجود وتابع للنطاق — المسح الفاشل
+   *  (orderId = 0) أو سجل أوردر اتمسح ملكيته مش ممكن إثباتها، فمابيظهرش. */
+  allowedBusinessIds: number[]
+) {
   const db = await getDb();
   if (!db) return [];
-  const conditions = [];
+  const conditions = [inArray(orders.businessId, allowedBusinessIds.length > 0 ? allowedBusinessIds : [-1])];
   if (filters.orderId) conditions.push(eq(scanLogs.orderId, filters.orderId));
   if (filters.scannedBy)
     conditions.push(eq(scanLogs.scannedBy, filters.scannedBy));
   const rows = await db
-    .select()
+    .select({
+      id: scanLogs.id,
+      orderId: scanLogs.orderId,
+      serialNumber: scanLogs.serialNumber,
+      scannedBy: scanLogs.scannedBy,
+      scannedByName: scanLogs.scannedByName,
+      result: scanLogs.result,
+      deviceInfo: scanLogs.deviceInfo,
+      createdAt: scanLogs.createdAt,
+    })
     .from(scanLogs)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .innerJoin(orders, eq(scanLogs.orderId, orders.id))
+    .where(and(...conditions))
     .orderBy(desc(scanLogs.createdAt))
     .limit(filters.limit ?? 100);
   return rows;
 }
 
-/** حذف مجموعة أوردرات — نفس منطق `deleteOrder`: الأصناف مع الأوردرات في ترانزاكشن واحدة. */
-export async function deleteOrders(ids: number[]) {
+/**
+ * حذف مجموعة أوردرات — نفس منطق `deleteOrder`: الأصناف مع الأوردرات في ترانزاكشن واحدة.
+ * `allowedBusinessIds` (أنشطة الجلسة) **إلزامي** — مفيش حذف من غير نطاق تاجر (مفيش مستخدم داخلي موثوق بيحتاج حذفًا
+ * عابرًا للتجار). غيابه أو قيمة مش مصفوفة = رفض قبل أي قراءة؛ المصفوفة الفاضية = صفر نطاق = رفض. إعادة فحص النطاق
+ * **جوه** المعاملة تحت قفل الصفوف — أي معرّف برّه النطاق أو مش موجود = رفض كامل برسالة مابتذكرش أرقام أوردرات حد
+ * تاني، والحذف نفسه مقيّد بالنطاق.
+ */
+export async function deleteOrders(ids: number[], allowedBusinessIds: readonly number[]) {
+  if (!Array.isArray(allowedBusinessIds))
+    throw new OrderStatusGuardError("حذف الأوردرات يحتاج نطاق التاجر — لم يُحذف شيء");
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (ids.length === 0) return;
+  const unique = Array.from(new Set(ids));
+  const scope = inArray(orders.businessId, allowedBusinessIds.length > 0 ? [...allowedBusinessIds] : [-1]);
   await runOrderTransaction(async tx => {
-    await assertDeletable(tx, ids);
-    await tx.delete(orderItems).where(inArray(orderItems.orderId, ids));
-    await tx.delete(orders).where(inArray(orders.id, ids));
+    const owned = await tx.select({ id: orders.id }).from(orders).where(and(inArray(orders.id, unique), scope)).for("update");
+    if (owned.length !== unique.length)
+      throw new OrderStatusGuardError("بعض الأوردرات المطلوب حذفها خارج نطاقك أو غير موجودة — لم يُحذف شيء");
+    await assertDeletable(tx, unique);
+    await tx.delete(orderItems).where(inArray(orderItems.orderId, unique));
+    await tx.delete(orders).where(and(inArray(orders.id, unique), scope));
   });
 }
 
@@ -2527,7 +2608,7 @@ async function assignOrdersWithEvents(orderIds: number[], employeeId: number, up
 }
 
 /** عجز مخزون عند التأكيد — يُرفض التأكيد كله بلا أي خصم جزئي، برسالة عربية لكل صنف. */
-export class StockShortfallError extends Error {
+export class StockShortfallError extends ClientSafeError {
   readonly code = "STOCK_SHORTFALL" as const;
   constructor(public readonly shortfalls: { label: string; available: number; needed: number }[]) {
     super(shortfalls.map(s => `المتاح من ${s.label} ${s.available} والمطلوب ${s.needed}`).join(" · "));
@@ -2536,7 +2617,7 @@ export class StockShortfallError extends Error {
 }
 
 /** التأكيد ممنوع لسبب في بيانات الأوردر (سطر ناقص/غير صالح/أوردر قديم بلا بنود) — لا شيء يتغيّر. */
-export class OrderConfirmBlockedError extends Error {
+export class OrderConfirmBlockedError extends ClientSafeError {
   readonly code = "ORDER_CONFIRM_BLOCKED" as const;
   constructor(message: string) {
     super(message);
@@ -2545,7 +2626,7 @@ export class OrderConfirmBlockedError extends Error {
 }
 
 /** حركة صرف موجودة لأوردر حالته مش confirmed — تعارض يحتاج مراجعة بشرية، مش نجاح صامت. */
-export class OrderStockInconsistencyError extends Error {
+export class OrderStockInconsistencyError extends ClientSafeError {
   readonly code = "ORDER_STOCK_INCONSISTENCY" as const;
   constructor(public readonly orderId: number, status: string, message?: string) {
     super(message ?? `تعارض في المخزون: توجد حركة صرف لهذا الأوردر بينما حالته «${status}» — راجعه قبل التأكيد`);
@@ -2592,9 +2673,9 @@ function sameStockLines(
 const STOCK_FREE_STATUSES = ["new", "postponed", "no_answer", "cancelled"];
 
 /** الأوردر خارج من المخزون: حالته بعد التأكيد، أو عليه صافي حركة مسجّلة (مثلًا مؤجل/لم يرد بعد التأكيد — D1). */
-async function isOrderStockLocked(tx: any, order: { id: number; status: string }): Promise<boolean> {
+async function isOrderStockLocked(tx: any, order: { id: number; businessId: number; status: string }): Promise<boolean> {
   if (!STOCK_FREE_STATUSES.includes(order.status)) return true;
-  return Array.from((await orderNetDeductions(tx, order.id)).values()).some(l => l.qty !== 0);
+  return Array.from((await orderNetDeductions(tx, order)).values()).some(l => l.qty !== 0);
 }
 
 /**
@@ -2603,8 +2684,15 @@ async function isOrderStockLocked(tx: any, order: { id: number; status: string }
  * شرط: قفل الأوردر لازم يكون **أول قراءة** في معاملة المتصل — القراءة هنا عادية (مفيش فهرس على orderId، فـFOR UPDATE
  * كان هيقفل الجدول كله)، فلو لقطة REPEATABLE READ اتثبتت قبل القفل هتشوف حركات قديمة.
  */
-async function orderNetDeductions(tx: any, orderId: number): Promise<Map<string, StockLine>> {
-  const moves = await tx.select().from(inventoryMovements).where(eq(inventoryMovements.orderId, orderId));
+async function orderNetDeductions(tx: any, order: { id: number; businessId: number }): Promise<Map<string, StockLine>> {
+  // حركات **أصناف نشاط الأوردر** بس: حركة مربوطة بالأوردر لصنف تاجر تاني (من مسار قديم ماكانش بيتحقق من orderId)
+  // ماتدخلش صافيه — لا تعطّله ولا تتسجّل كإرجاع لصنف حد تاني. الفلتر على منتج الحركة مش على
+  // inventory_movements.businessId (قيمته الافتراضية 1 في صفوف قديمة، فمش دليل).
+  const moves = (await tx
+    .select({ m: inventoryMovements })
+    .from(inventoryMovements)
+    .innerJoin(products, eq(products.id, inventoryMovements.productId))
+    .where(and(eq(inventoryMovements.orderId, order.id), eq(products.businessId, order.businessId)))).map((r: any) => r.m);
   const net = new Map<string, StockLine>();
   for (const m of moves) {
     if (!ORDER_STOCK_MOVEMENT_REASON.test(m.reason ?? "")) continue;
@@ -2704,7 +2792,7 @@ async function reconcileOrderStock(
   performedBy: number
 ): Promise<void> {
   const want = aggregateStockLines(target);
-  const have = await orderNetDeductions(tx, order.id);
+  const have = await orderNetDeductions(tx, order);
   await assertTrustworthyOrderNet(tx, order, have, currentLines);
   const keys = Array.from(new Set([...want.keys(), ...have.keys()])).sort();
   const changes: { line: StockLine; delta: number }[] = [];
@@ -2779,7 +2867,7 @@ async function reconcileEditedOrderStock(
     return x.size === y.size && Array.from(x).every(([k, l]) => y.get(k)?.qty === l.qty);
   };
   // أي صافي غير صفري (حتى السالب) يدخل المطابقة — هناك يتفحص إنه موثوق قبل أي حركة.
-  const holds = Array.from((await orderNetDeductions(tx, order.id)).values()).some(l => l.qty !== 0);
+  const holds = Array.from((await orderNetDeductions(tx, order)).values()).some(l => l.qty !== 0);
   if (!holds) {
     if (STOCK_HOLDING_STATUSES.includes(order.status) && !sameLines(asLines(before), asLines(after)))
       throw new OrderStatusGuardError("أوردر مؤكد بلا حركة مخزون مسجّلة — تعديل الأصناف أو الكميات يحتاج مراجعة المخزون يدويًا (إلغاء ثم إعادة تأكيد)");
@@ -2854,7 +2942,8 @@ export async function confirmOrder(
     const foreignOut = (await tx
       .select({ reason: inventoryMovements.reason })
       .from(inventoryMovements)
-      .where(and(eq(inventoryMovements.orderId, orderId), eq(inventoryMovements.type, "out"))))
+      .innerJoin(products, eq(products.id, inventoryMovements.productId))
+      .where(and(eq(inventoryMovements.orderId, orderId), eq(inventoryMovements.type, "out"), eq(products.businessId, order.businessId))))
       .some((m: { reason: string | null }) => !ORDER_STOCK_MOVEMENT_REASON.test(m.reason ?? ""));
     if (foreignOut) {
       console.error(`[confirmOrder] INCONSISTENCY: order ${orderId} (${order.orderNumber}) has a non-order stock-out movement linked to it (status=${order.status})`);
@@ -2874,7 +2963,7 @@ export async function confirmOrder(
     const accountingInventoryActive = Boolean(business?.accountingGoLiveAt);
     const legacyMode = (await getOrderEntryMode(order.businessId)) === "bracelets_legacy";
     // نشاط بتقييم مخزون: المخزون القديم لا يتحرك هنا؛ خصم قديم مسجّل للأوردر = تعارض يحتاج مراجعة (كالسابق).
-    if (accountingInventoryActive && Array.from((await orderNetDeductions(tx, orderId)).values()).some(l => l.qty > 0)) {
+    if (accountingInventoryActive && Array.from((await orderNetDeductions(tx, order)).values()).some(l => l.qty > 0)) {
       console.error(`[confirmOrder] INCONSISTENCY: order ${orderId} (${order.orderNumber}) has legacy stock deductions after Go-Live (status=${order.status})`);
       throw new OrderStockInconsistencyError(orderId, String(order.status));
     }
@@ -3019,6 +3108,11 @@ export async function postponeOrder(
 // «مرتجع - أوردر»: المرتجعات قبل سياسة المرحلة 0.5 كانت بترجّع الكمية للمخزون بالسبب ده (in) — جزء من صافي الأوردر.
 const ORDER_STOCK_MOVEMENT_REASON = /^(تأكيد أوردر|تعديل أوردر|تعديل كمية أوردر|تعديل بنود أوردر|إلغاء أوردر|مرتجع - أوردر)/;
 
+/** سبب محجوز لحركات الأوردرات التلقائية — الحركة اليدوية مايتسمحلهاش تنتحله (كان بيلخبط صافي مخزون الأوردر). */
+export function isReservedOrderMovementReason(reason: string | null | undefined): boolean {
+  return ORDER_STOCK_MOVEMENT_REASON.test((reason ?? "").trim());
+}
+
 export async function cancelOrder(
   orderId: number,
   cancelReason: string,
@@ -3058,22 +3152,12 @@ export async function cancelOrder(
     const cancelItems = (await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId)))
       .filter((i: OrderItem) => i.productId != null && i.quantity > 0)
       .map((i: OrderItem) => ({ productId: i.productId!, variantId: i.variantId ?? null, qty: i.quantity }));
-    await assertTrustworthyOrderNet(tx, order, await orderNetDeductions(tx, orderId), cancelItems.length > 0 ? cancelItems : headerStockLine(order));
-    const moves = await tx
-      .select()
-      .from(inventoryMovements)
-      .where(eq(inventoryMovements.orderId, orderId))
-      .for("update");
-    // حركات **الأوردر نفسه** فقط (تأكيد/تعديل/إلغاء سابق) — الحركة اليدوية المربوطة بالأوردر
-    // كمرجع تبقى كما هي ولا تدخل الحساب.
-    const net = new Map<string, { productId: number; variantId: number | null; qty: number }>();
-    for (const m of moves) {
-      if (!ORDER_STOCK_MOVEMENT_REASON.test(m.reason ?? "")) continue;
-      const key = `${m.productId}:${m.variantId ?? "p"}`;
-      const row = net.get(key) ?? { productId: m.productId, variantId: m.variantId ?? null, qty: 0 };
-      row.qty += m.type === "out" ? m.quantity : -m.quantity;
-      net.set(key, row);
-    }
+    const cancelNet = await orderNetDeductions(tx, order);
+    await assertTrustworthyOrderNet(tx, order, cancelNet, cancelItems.length > 0 ? cancelItems : headerStockLine(order));
+    // الإرجاع = الصافي الموثوق نفسه (حركات الأوردر بأسبابه، لأصناف نشاطه) — صف بصف لنفس المنتج/التركيبة. قفل صف
+    // الأوردر (أول قراءة في المعاملة) بيسلسل كل كتّاب مخزون الأوردر، فمفيش داعي لـFOR UPDATE على الحركات (كان مسح
+    // كامل للجدول لعدم وجود فهرس على orderId).
+    const net = cancelNet;
     let restored = 0;
     for (const row of net.values()) {
       if (row.qty <= 0) continue;
@@ -3354,33 +3438,32 @@ export async function getDailyOrdersChart(
     businessFilter = sql``;
   }
 
-  // Use CONVERT_TZ to get Cairo date correctly
+  // DATA-1: اليوم بتوقيت القاهرة الفعلي (بالتوقيت الصيفي) — كان CONVERT_TZ('+02:00') ثابت، فطلبات منتصف الليل في الصيف
+  // كانت بتتحسب على اليوم الغلط. التجميع بالساعة (epoch hours — مستقل عن منطقة جلسة MySQL)، وكل ساعة بتتنسب لتاريخها
+  // في القاهرة (إزاحة القاهرة ساعات كاملة) — بحد أقصى 24 صف لكل يوم بدل صفوف الأوردرات.
   const result = await db.execute(sql`
-    SELECT order_date as date,
+    SELECT FLOOR(UNIX_TIMESTAMP(createdAt) / 3600) as h,
       COUNT(*) as total,
       SUM(CASE WHEN status IN ('confirmed','printed','preparing','shipped','delivered') THEN 1 ELSE 0 END) as confirmed,
       SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
       SUM(CASE WHEN status IN ('shipped','delivered') THEN 1 ELSE 0 END) as shipped
-    FROM (
-      SELECT DATE(CONVERT_TZ(createdAt, '+00:00', '+02:00')) as order_date, status
-      FROM orders
-      WHERE createdAt >= ${dateFrom} ${businessFilter}
-    ) t
-    GROUP BY order_date
-    ORDER BY order_date ASC
+    FROM orders
+    WHERE createdAt >= ${dateFrom} ${businessFilter}
+    GROUP BY h
   `);
 
   const rows = Array.isArray(result) ? result[0] : (result as unknown as any[]);
-  return (rows as any[]).map((r: any) => ({
-    date:
-      r.date instanceof Date
-        ? r.date.toISOString().split("T")[0]
-        : String(r.date),
-    total: Number(r.total),
-    confirmed: Number(r.confirmed),
-    cancelled: Number(r.cancelled),
-    shipped: Number(r.shipped ?? 0),
-  }));
+  const byDay = new Map<string, { date: string; total: number; confirmed: number; cancelled: number; shipped: number }>();
+  for (const r of rows as any[]) {
+    const date = businessDateKey(new Date(Number(r.h) * 3_600_000), CAIRO_TIMEZONE);
+    const day = byDay.get(date) ?? { date, total: 0, confirmed: 0, cancelled: 0, shipped: 0 };
+    day.total += Number(r.total);
+    day.confirmed += Number(r.confirmed ?? 0);
+    day.cancelled += Number(r.cancelled ?? 0);
+    day.shipped += Number(r.shipped ?? 0);
+    byDay.set(date, day);
+  }
+  return Array.from(byDay.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 // ==================== ORDER EDIT WITH INVENTORY ====================
@@ -4480,13 +4563,13 @@ export async function getOrderByExternalId(
 }
 
 /** Orders flagged for manual product review (unmatched/ambiguous external items). */
-export async function getOrdersNeedingReview(limit = 100) {
+export async function getOrdersNeedingReview(limit: number, allowedBusinessIds: number[]) {
   const db = await getDb();
   if (!db) return [];
   return db
     .select()
     .from(orders)
-    .where(eq(orders.needsReview, true))
+    .where(and(eq(orders.needsReview, true), inArray(orders.businessId, allowedBusinessIds.length > 0 ? allowedBusinessIds : [-1])))
     .orderBy(desc(orders.createdAt))
     .limit(limit);
 }
@@ -5108,6 +5191,9 @@ export async function resolveOrderReviewProduct(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.transaction(async tx => {
+    const [target] = await tx.select({ businessId: orders.businessId }).from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
+    if (!target) throw new Error("الأوردر غير موجود");
+    await assertOrderLinesInBusiness(tx, target.businessId, [{ productId: input.productId, variantId: input.variantId ?? null }]);
     await tx
       .update(orders)
       .set({
@@ -5236,6 +5322,13 @@ export async function editOrderFull(
       // `existingItems.length === 0`: أوردر قديم بلا بنود — الهيدر مصدره الوحيد.
     }
 
+    // الصنف والتركيبة الجداد تابعين لنشاط الأوردر (والتركيبة لمنتجها) — قبل أي حركة.
+    if ("productId" in orderUpdates || "variantId" in orderUpdates)
+      await assertOrderLinesInBusiness(tx, currentOrder.businessId, [{
+        productId: "productId" in orderUpdates ? orderUpdates.productId ?? null : currentOrder.productId,
+        variantId: "variantId" in orderUpdates ? orderUpdates.variantId ?? null : currentOrder.variantId,
+      }]);
+
     // المخزون: نفس قاعدة التأكيد لكل تركيبة (قبل Go-Live). بعد Go-Live المخزون القديم لا يتحرك من هنا — تغيير الكمية
     // على أوردر مؤكد مرفوض كما كان (addInventoryMovement كانت بترفض).
     if (["productId", "variantId", "quantity"].some(f => f in orderUpdates)) {
@@ -5320,14 +5413,16 @@ export async function editOrderFull(
  */
 async function withCatalogProductNames<T extends { productId?: number | null; productName: string }>(
   tx: any,
-  items: T[]
+  items: T[],
+  /** نشاط الأوردر — الاسم بيتقري من كتالوجه بس (مايرجّعش اسم منتج تاجر تاني). */
+  businessId: number
 ): Promise<T[]> {
   const ids = [...new Set(items.map(item => item.productId).filter((id): id is number => id != null))];
   if (ids.length === 0) return items;
   const rows = await tx
     .select({ id: products.id, name: products.name })
     .from(products)
-    .where(inArray(products.id, ids));
+    .where(and(inArray(products.id, ids), eq(products.businessId, businessId)));
   const nameById = new Map<number, string>(
     rows.map((row: { id: number; name: string }) => [row.id, row.name])
   );
@@ -5641,7 +5736,8 @@ async function replaceOrderItemsInTransaction(
     throw new Error("كمية بند الأوردر غير صالحة");
 
   // الاسم من الكتالوج مش من المتصل — ده اللي بيمنع نوع حفر قديم يعيش جوه الاسم.
-  items = await withCatalogProductNames(tx, items);
+  await assertOrderLinesInBusiness(tx, order.businessId, items);
+  items = await withCatalogProductNames(tx, items, order.businessId);
 
   const [business] = await tx
     .select()
@@ -5806,7 +5902,8 @@ export async function replaceOrderItemsFromEditor(
     // اللي كان محفوظ. لو الاسم ده كان مركّب من قبل («أسورة نحاس - ذكر التحصين»)،
     // البند بيبقى فيه اختيارين: القديم في الاسم والجديد في المعرّف. الاشتقاق هنا
     // بيقفل ده مهما كان اللي المتصل بعته.
-    lines = await withCatalogProductNames(tx, lines);
+    await assertOrderLinesInBusiness(tx, order.businessId, lines);
+    lines = await withCatalogProductNames(tx, lines, order.businessId);
 
     // Same guard replaceOrderItemsInTransaction enforces: once stock has left the warehouse
     // or cost has been captured, the lines are an accounting record and editing them in
@@ -8656,6 +8753,10 @@ export async function cancelPayrollPeriod(
     .limit(1);
   if (!period) throw new Error("الدورة غير موجودة");
   if (period.status === "cancelled") throw new Error("الدورة ملغاة بالفعل");
+  // DATA-9: الدورة المدفوعة بنظام V2 (حركة مالية + حركة خزنة، بلا expenseId) — الإلغاء هنا بيعكس expenseId بس، فكان
+  // بيسيب الفلوس مصروفة ويرجّع السلف «معلّقة» فتتخصم تاني. لحد ما يتبني عكس الصرف من الدفتر: رفض بلا أي تغيير.
+  if (period.status === "paid" && !period.expenseId)
+    throw new Error("الدورة مدفوعة من الخزنة بالنظام الجديد — إلغاؤها يحتاج عكس الصرف من الدفتر (غير متاح بعد)؛ لم يتغير شيء");
 
   if (period.expenseId) {
     await deleteExpense(period.expenseId, actor);

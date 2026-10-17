@@ -94,8 +94,10 @@ export async function updateShift(actor: AttendanceActor, id: number, version: n
   if (v.businessId != null && !allowedBusinessIds.includes(v.businessId)) throw forbidden("النشاط خارج نطاقك");
   const crosses = hms(v.endTime) < hms(v.startTime);
   return runAttendanceTx(async tx => {
-    const cur = await one(tx, sql`SELECT id, version FROM attendance_shifts WHERE id = ${id} AND tenantId = ${actor.tenantId} FOR UPDATE`);
+    const cur = await one(tx, sql`SELECT id, version, businessId FROM attendance_shifts WHERE id = ${id} AND tenantId = ${actor.tenantId} FOR UPDATE`);
     if (!cur) throw new TRPCError({ code: "NOT_FOUND", message: "الوردية غير موجودة" });
+    // نشاط الوردية **الحالي** في النطاق كمان (مش الجديد بس) — وإلا تتنقل وردية نشاط تاني لنشاطك.
+    if (cur.businessId != null && !allowedBusinessIds.includes(Number(cur.businessId))) throw forbidden("النشاط خارج نطاقك");
     if (Number(cur.version) !== version) throw conflict("الوردية تغيّرت منذ فتحها — أعد التحميل");
     await tx.execute(sql`UPDATE attendance_shifts SET businessId = ${v.businessId}, name = ${v.name}, startTime = ${hms(v.startTime)}, endTime = ${hms(v.endTime)}, crossesMidnight = ${crosses ? 1 : 0}, workDaysMask = ${maskFromDays(v.workDays)},
       graceMinutes = ${v.graceMinutes}, allowedBreakMinutes = ${v.allowedBreakMinutes}, overtimeStartsAfterMinutes = ${v.overtimeStartsAfterMinutes}, earlyClockInLimitMinutes = ${v.earlyClockInLimitMinutes},
@@ -105,10 +107,11 @@ export async function updateShift(actor: AttendanceActor, id: number, version: n
   });
 }
 
-export async function setShiftActive(actor: AttendanceActor, id: number, isActive: boolean) {
+export async function setShiftActive(actor: AttendanceActor, id: number, isActive: boolean, allowedBusinessIds: number[]) {
   return runAttendanceTx(async tx => {
-    const cur = await one(tx, sql`SELECT id FROM attendance_shifts WHERE id = ${id} AND tenantId = ${actor.tenantId} FOR UPDATE`);
+    const cur = await one(tx, sql`SELECT id, businessId FROM attendance_shifts WHERE id = ${id} AND tenantId = ${actor.tenantId} FOR UPDATE`);
     if (!cur) throw new TRPCError({ code: "NOT_FOUND", message: "الوردية غير موجودة" });
+    if (cur.businessId != null && !allowedBusinessIds.includes(Number(cur.businessId))) throw forbidden("النشاط خارج نطاقك");
     await tx.execute(sql`UPDATE attendance_shifts SET isActive = ${isActive ? 1 : 0}, version = version + 1 WHERE id = ${id} AND tenantId = ${actor.tenantId}`);
     return { id, isActive };
   });
@@ -168,11 +171,12 @@ export async function assignShift(actor: AttendanceActor, input: AssignmentInput
   });
 }
 
-export async function endAssignment(actor: AttendanceActor, id: number) {
+export async function endAssignment(actor: AttendanceActor, id: number, allowedBusinessIds: number[]) {
   return runAttendanceTx(async tx => {
     await tx.execute(sql`SELECT id FROM tenants WHERE id = ${actor.tenantId} FOR UPDATE`);
-    const a = await one(tx, sql`SELECT id, endedAt FROM attendance_assignments WHERE id = ${id} AND tenantId = ${actor.tenantId} FOR UPDATE`);
+    const a = await one(tx, sql`SELECT id, endedAt, businessId FROM attendance_assignments WHERE id = ${id} AND tenantId = ${actor.tenantId} FOR UPDATE`);
     if (!a) throw new TRPCError({ code: "NOT_FOUND", message: "التعيين غير موجود" });
+    if (a.businessId != null && !allowedBusinessIds.includes(Number(a.businessId))) throw forbidden("النشاط خارج نطاقك");
     if (a.endedAt != null) return { id, ended: true };
     await tx.execute(sql`UPDATE attendance_assignments SET endedAt = NOW(3), endedByEmployeeId = ${actor.employeeId} WHERE id = ${id}`);
     return { id, ended: true };

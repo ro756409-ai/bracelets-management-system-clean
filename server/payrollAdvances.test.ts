@@ -110,7 +110,7 @@ describe("🔑 السلفة بتتقرا تلقائيًا — ومفيش خان�
   const page = codeOnly(fs.readFileSync("client/src/pages/SalaryProfiles.tsx", "utf-8"));
 
   it("🔑 itemUpdate مابيقبلش advances — فمستحيل تتكتب بالإيد", () => {
-    const start = routers.indexOf("itemUpdate: adminProcedure");
+    const start = routers.indexOf("itemUpdate: permissionProcedure(\"payroll.manage\")");
     const input = routers.slice(start, routers.indexOf(".mutation", start));
     expect(input).toContain("bonuses:");
     expect(input).toContain("deductions:");

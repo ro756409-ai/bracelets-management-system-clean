@@ -14,6 +14,10 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import {
   PageHeader, StatCard, SectionCard, StatusBadge, ResponsiveDataTable, EmptyState, LoadingSkeleton, OfflineState, PermissionDeniedState, type Column,
 } from "@/components/shared";
+import { activeBrand } from "@/lib/brandFlag";
+
+/** محاور الرسوم: 12px تحت v2 (Master Audit §6 — كانت 10px)، وv1 كما هو. */
+const axisFontSize = () => (activeBrand() === "v2" ? 12 : 10);
 
 type DateRange = "today" | "week" | "month";
 
@@ -178,8 +182,8 @@ export default function Reports() {
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={barData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
-                    <YAxis tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
+                    <XAxis dataKey="date" tick={{ fontSize: axisFontSize(), fill: "var(--muted-foreground)" }} />
+                    <YAxis tick={{ fontSize: axisFontSize(), fill: "var(--muted-foreground)" }} />
                     <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "var(--muted)" }} />
                     <Bar dataKey="total" name="الإجمالي" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="confirmed" name="مؤكد" fill="var(--chart-3)" radius={[4, 4, 0, 0]} />

@@ -4,6 +4,7 @@
  * Requires env: BOSTA_API_KEY, BOSTA_BASE_URL (optional), BOSTA_PICKUP_ADDRESS_ID (optional)
  */
 
+import { resolveDeployEnv } from "./deployEnv";
 import { Request, Response, Express } from "express";
 import {
   getDb,
@@ -84,14 +85,28 @@ export function describeFetchError(err: unknown): string {
 // مفيش ثوابت عامة هنا. العنوان المكتوب تحت بيتستخدم فقط مع مفتاح البيئة في فترة
 // الانتقال (`legacy`)، وبيروح مع حذف `BOSTA_API_KEY` من البيئة.
 
+/** INT-4: مهلات النداءات الخارجية لبوسطة. */
+const BOSTA_CREATE_TIMEOUT_MS = 20_000;
+const BOSTA_AWB_TIMEOUT_MS = 30_000;
+
 // Bosta delivery type 10 = Deliver (COD)
 const DELIVERY_TYPE = 10;
 
 /** الرابط العام لاستقبال حالات الشحن — قابل للتغيير للـStaging عبر BOSTA_WEBHOOK_URL. */
 const DEFAULT_BOSTA_WEBHOOK_URL = "https://matjarak.net/api/webhooks/bosta";
-export function bostaWebhookUrl(): string {
-  const fromEnv = process.env.BOSTA_WEBHOOK_URL?.trim();
-  return fromEnv && /^https:\/\//i.test(fromEnv) ? fromEnv : DEFAULT_BOSTA_WEBHOOK_URL;
+export const BOSTA_WEBHOOK_URL_MISSING_MESSAGE =
+  "رابط Webhook بوسطة غير مضبوط لهذه البيئة (BOSTA_WEBHOOK_URL) — لا يُستخدم رابط Production تلقائيًا خارج production";
+/**
+ * INT-1: نفس قاعدة resolveBostaEndpoint (فشل مغلق). staging/preview من غير BOSTA_WEBHOOK_URL صالح (https) = رفض، بدل ما
+ * شحنات Staging تسجّل Webhook الإنتاج (أحداث Staging كانت بتوصل الإنتاج). production وdevelopment/test كما كانوا
+ * (في التطوير عنوان بوسطة نفسه وهمي، فالرابط مابيوصلش لبوسطة أصلًا).
+ */
+export function bostaWebhookUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = env.BOSTA_WEBHOOK_URL?.trim();
+  if (fromEnv && /^https:\/\//i.test(fromEnv)) return fromEnv;
+  const deploy = resolveDeployEnv(env);
+  if (deploy !== "production" && deploy !== "development" && deploy !== "test") throw new Error(BOSTA_WEBHOOK_URL_MISSING_MESSAGE);
+  return DEFAULT_BOSTA_WEBHOOK_URL;
 }
 
 /** أصل الموقع العام (https) الذي تجلب منه بوسطة الصور المرفوعة عندنا — نفس أصل رابط الـWebhook. */
@@ -320,6 +335,8 @@ export async function createBostaShipment(
   // عنوان بوسطة لهذه البيئة أولًا (فشل مغلق برسالة إعداد — لا Live تلقائيًا خارج production).
   const endpoint = resolveBostaEndpoint();
   if (!endpoint.ok) return { success: false, error: endpoint.error };
+  // INT-1: رابط Webhook (وأصل صور الشحنة) لازم يتبع البيئة — رفض واضح قبل أي حجز أو نداء لو مش مضبوط في staging/preview.
+  try { bostaWebhookUrl(); } catch (err) { return { success: false, error: (err as Error).message }; }
   const conn = await resolveBostaConnection(order.businessId);
   if (!conn) return { success: false, error: NOT_CONNECTED_MESSAGE };
 
@@ -571,10 +588,16 @@ export async function createBostaShipment(
         ...authHeader(conn.authScheme, conn.apiKey),
       },
       body: JSON.stringify(payload),
+      // INT-4: نداء معلّق مايقفلش الطلب للأبد — المهلة بتدخل مسار «uncertain» تحت (بلا retry تلقائي)
+      signal: AbortSignal.timeout(BOSTA_CREATE_TIMEOUT_MS),
     });
 
     const responseBody = await response.json() as Record<string, unknown>;
-    console.log("[Bosta] Response:", redact(JSON.stringify({ orderId, status: response.status, body: responseBody })));
+    // INT-5: رد بوسطة بيرجّع بيانات المستلم (اسم/هاتف/عنوان) — اللوج فيه الحالة والمعرّفات بس
+    console.log("[Bosta] Response:", redact(JSON.stringify({
+      orderId, status: response.status, shipmentId: responseBody._id ?? null, trackingNumber: responseBody.trackingNumber ?? null,
+      ...(response.ok ? {} : { message: String((responseBody as any).message ?? "").slice(0, 200) }),
+    })));
 
     if (response.ok && responseBody._id) {
       const shipmentId = String(responseBody._id);
@@ -688,6 +711,7 @@ export async function fetchBostaAwb(
     const response = await fetchImpl(url, {
       method: "GET",
       headers: authHeader(conn.authScheme, conn.apiKey),
+      signal: AbortSignal.timeout(BOSTA_AWB_TIMEOUT_MS), // INT-4
     });
 
     const contentType = response.headers.get("content-type") || "";

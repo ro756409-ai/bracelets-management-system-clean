@@ -14,7 +14,7 @@ import { getDb, createEmployee, insertOrderWithItems, createProductWithVariants,
 import { businessCarrierAccounts, businessConfigurationValues, employees, orders, orderItems, products, productVariants } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { connectCarrierAccount, probeBostaKey, BOSTA_ENDPOINT_MISSING_MESSAGE, BOSTA_LIVE_BASE_URL, __resetBostaEndpointWarningForTests } from "./carrierAccounts.service";
-import { createBostaShipment, fetchBostaAwb, isBostaEnabledForBusiness } from "./bosta.service";
+import { createBostaShipment, fetchBostaAwb, isBostaEnabledForBusiness, BOSTA_WEBHOOK_URL_MISSING_MESSAGE } from "./bosta.service";
 import { registerPackageImageRoutes, STORAGE_NOT_CONFIGURED_MESSAGE } from "./packageImageUpload";
 import { __resetObjectStorageClientForTests } from "./objectStorage";
 import { PACKAGE_IMAGE_URL_PREFIX } from "../shared/packageImages";
@@ -39,7 +39,7 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
       "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_ENDPOINT", "S3_REGION", "S3_FORCE_PATH_STYLE"] as const;
     let savedEnv: Record<string, string | undefined> = {};
     const setEnv = (o: Record<string, string | undefined>) => { for (const [k, v] of Object.entries(o)) { if (v == null) delete process.env[k]; else process.env[k] = v; } __resetObjectStorageClientForTests(); __resetBostaEndpointWarningForTests(); };
-    const resetCase = () => setEnv({ BOSTA_BASE_URL: undefined, DEPLOY_ENV: undefined, S3_BUCKET: undefined, S3_ACCESS_KEY_ID: undefined, S3_SECRET_ACCESS_KEY: undefined, S3_ENDPOINT: undefined });
+    const resetCase = () => setEnv({ BOSTA_BASE_URL: undefined, BOSTA_WEBHOOK_URL: undefined, DEPLOY_ENV: undefined, S3_BUCKET: undefined, S3_ACCESS_KEY_ID: undefined, S3_SECRET_ACCESS_KEY: undefined, S3_ENDPOINT: undefined });
 
     // خادم S3 وهمي داخل العملية (PUT/GET/HEAD path-style) — يسجّل المفاتيح ويمكن إفشاله.
     const bucket = new Map<string, { body: Buffer; type: string }>();
@@ -206,7 +206,7 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
 
     // ═══ 2) نداءات بوسطة — عنوان البيئة فقط ═══
     it("🔒 Staging + BOSTA_BASE_URL: الإنشاء وAWB واختبار المفتاح على Staging فقط — حتى لو الصف المخزّن يشير إلى Live", async () => {
-      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG });
+      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_WEBHOOK_URL: "https://staging.example.test/api/webhooks/bosta" });
       await setStoredBase(BOSTA_LIVE_BASE_URL); // صف منسوخ من Production
       const { calls, f } = recorder(okReply);
       const oid = await mkOrder();
@@ -223,7 +223,7 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
     });
 
     it("🔒 Staging + BOSTA_BASE_URL يفشل (401/timeout): لا نداء Live، uncertain بعد timeout بلا محاولة ثانية", async () => {
-      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG });
+      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_WEBHOOK_URL: "https://staging.example.test/api/webhooks/bosta" });
       const oid = await mkOrder();
       const r401 = recorder(url => url.endsWith("/deliveries") ? new Response(JSON.stringify({ message: "Unauthorized" }), { status: 401 }) : okReply(url));
       const r1 = await createBostaShipment(oid, { allowToOpenPackage: true }, r401.f);
@@ -238,6 +238,17 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
       const again = recorder(okReply);
       expect((await createBostaShipment(oid2, { allowToOpenPackage: true }, again.f)).success).toBe(false);
       expect(again.calls).toHaveLength(0);
+    });
+
+    it("🔒 INT-1 · Staging + BOSTA_BASE_URL بلا BOSTA_WEBHOOK_URL → فشل مغلق قبل الشبكة (لا تسجيل Webhook الإنتاج)، والأوردر لا يُمس", async () => {
+      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_WEBHOOK_URL: undefined });
+      const { calls, f } = recorder(okReply);
+      const oid = await mkOrder();
+      const r = await createBostaShipment(oid, { allowToOpenPackage: true }, f);
+      expect(r).toEqual({ success: false, error: BOSTA_WEBHOOK_URL_MISSING_MESSAGE });
+      expect(calls).toHaveLength(0);
+      const row = (await (await db()).select().from(orders).where(eq(orders.id, oid)))[0];
+      expect([row.bostaStatus, row.bostaShipmentId]).toEqual([null, null]);
     });
 
     it("🔒 Staging بلا BOSTA_BASE_URL → فشل مغلق قبل الشبكة في كل العمليات (صفر نداء)، والأوردر لا يُمس", async () => {

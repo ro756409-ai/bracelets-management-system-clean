@@ -70,7 +70,7 @@ export function ReceiptPrediction({ probability, reasons, compact = false, class
         </span>
       )}
       {!compact && reasons && reasons.length > 0 && (
-        <ul className="m-0 list-none p-0 text-[11px] leading-snug text-muted-foreground" data-testid="receipt-prediction-reasons">
+        <ul className="m-0 list-none p-0 text-[11px] leading-snug text-muted-foreground brand-v2:text-xs" data-testid="receipt-prediction-reasons">
           {reasons.map(r => <li key={r}>• {r}</li>)}
         </ul>
       )}

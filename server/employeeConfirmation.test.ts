@@ -258,7 +258,7 @@ describe("تسوية المخزون بعد تعديل البنود", () => {
   });
 
   it("🔑 قفل الأوردر أول قراءة في المعاملة (لقطة REPEATABLE READ بعد القفل)", () => {
-    expect(fn.indexOf('.for("update")')).toBeLessThan(fn.indexOf("withCatalogProductNames(tx, lines)"));
+    expect(fn.indexOf('.for("update")')).toBeLessThan(fn.indexOf("withCatalogProductNames(tx, lines, order.businessId)"));
   });
 
   it("🔑 التسوية جوه نفس الـtransaction — فشلها بيرجّع البنود معاها", () => {

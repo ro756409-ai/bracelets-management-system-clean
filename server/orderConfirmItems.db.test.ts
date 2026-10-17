@@ -152,11 +152,10 @@ describe.runIf(CAN)("🔑 تأكيد الأوردر يخصم من التركيب
   it("🔒 variant من نشاط آخر داخل بنود أوردر A → التأكيد يُرفض ولا يخصم من B", async () => {
     const d = (await getDb())!;
     // بنود مباشرة (تجاوز فحص addOrder) لمحاكاة بيانات قديمة/ملوّثة
-    const oid = await insertOrderWithItems({
+    const oid = await pollutedOrder({
       orderNumber: `CFI-X-${tag}`.slice(0, 20), businessId: A.businessId, customerName: "c", customerPhone: "01000000012", governorate: "القاهرة",
       customerAddress: "عنوان تفصيلي كافٍ", productName: "أسورة نحاس", quantity: 1, totalAmount: "240.00", source: "manual", status: "new", assignedEmployeeId: confirmA,
-    } as any, [{ productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vB[0], unitPrice: 190 }]);
-    ids.orderIds.push(oid);
+    }, [{ productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: vB[0], unitPrice: 190 }]);
     const beforeB = await stockOf(vB[0]);
     const r = await fail(() => caller(confirmA).employeePortal.confirm({ orderId: oid }));
     expect(r.code).toBe("BAD_REQUEST"); expect(r.message).toContain("نوع الحفر في السطر رقم 1 لا يتبع المنتج");
@@ -173,6 +172,13 @@ describe.runIf(CAN)("🔑 تأكيد الأوردر يخصم من التركيب
     } as any;
     // أوردر تاريخي بلا بنود: إدراج مباشر في orders (مسار الكتابة الحالي بيرفض بنودًا فاضية).
     const oid = items ? await insertOrderWithItems(values, items) : insId(await (await getDb())!.insert(orders).values(values));
+    ids.orderIds.push(oid); return oid;
+  };
+  /** بيانات قديمة/ملوّثة: إدراج مباشر للهيدر والبنود متجاوزًا طبقة الكتابة (اللي بقت ترفض صنفًا لا يتبع النشاط — DATA-4/M1). */
+  const pollutedOrder = async (values: Record<string, any>, items: any[]) => {
+    const d = (await getDb())!;
+    const oid = insId(await d.insert(orders).values(values as any));
+    for (const it of items) await d.insert(orderItems).values({ orderId: oid, ...it, unitPrice: String(it.unitPrice ?? 0) } as any);
     ids.orderIds.push(oid); return oid;
   };
   const snapshot = async () => Promise.all(vA.map(stockOf));
@@ -203,7 +209,10 @@ describe.runIf(CAN)("🔑 تأكيد الأوردر يخصم من التركيب
     const other = await createProductWithVariants(A.businessId, { name: "منتج آخر" }, [{ name: "نوع", sku: `OTH-${tag}`, currentStock: 10, price: "100" }]);
     ids.productIds.push(other.productId);
     const before = await snapshot();
-    const oid = await rawOrder([{ productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: other.variantIds[0], unitPrice: 190 }]);
+    const oid = await pollutedOrder({
+      orderNumber: `CFI-V-${tag}`.slice(0, 20), businessId: A.businessId, customerName: "c", customerPhone: "01000000013", governorate: "القاهرة",
+      customerAddress: "عنوان تفصيلي كافٍ", productName: "أسورة نحاس", quantity: 1, totalAmount: "190.00", source: "manual", status: "new", assignedEmployeeId: confirmA, productId: prodA,
+    }, [{ productId: prodA, productName: "أسورة نحاس", quantity: 1, variantId: other.variantIds[0], unitPrice: 190 }]);
     const r = await fail(() => caller(confirmA).employeePortal.confirm({ orderId: oid }));
     expect(r.message).toBe("لا يمكن تأكيد الأوردر: نوع الحفر في السطر رقم 1 لا يتبع المنتج");
     expect(await snapshot()).toEqual(before); expect(await stockOf(other.variantIds[0])).toBe(10);

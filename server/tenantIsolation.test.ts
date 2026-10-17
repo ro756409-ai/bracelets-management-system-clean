@@ -676,7 +676,7 @@ describe("🔑 Bulk — كتابة بترفض كله، قراءة بترجّع �
     const routers = fs.readFileSync("server/routers.ts", "utf-8");
     for (const proc of ["bulkDelete", "bulkSendToBosta"]) {
       const i = routers.indexOf(`${proc}:`);
-      const body = routers.slice(i, i + 700);
+      const body = routers.slice(i, routers.indexOf(".mutation(", i) + 400);
       expect(body, proc).toContain('requireAllOwned(ctx, "order", input.orderIds)');
     }
   });

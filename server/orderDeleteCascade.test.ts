@@ -32,8 +32,14 @@ describe("🔑 حذف الأوردر بيمسح أصنافه (منع الـorpha
   it("🔑 deleteOrders: transaction + مسح order_items بالـinArray", () => {
     const body = fnBody(db, "export async function deleteOrders(");
     expect(body).toMatch(/db\.transaction\(|runOrderTransaction\(/); // transaction واحدة (مع إعادة محاولة عند deadlock)
-    expect(body).toContain("delete(orderItems).where(inArray(orderItems.orderId, ids))");
-    expect(body).toContain("delete(orders).where(inArray(orders.id, ids))");
+    expect(body).toContain("delete(orderItems).where(inArray(orderItems.orderId, unique))");
+    // المرحلة 1 (C2): النطاق بيتعاد فحصه جوه المعاملة قبل أي حذف
+    expect(body.indexOf("owned.length !== unique.length")).toBeLessThan(body.indexOf("delete(orderItems)"));
+    // النطاق إلزامي: مفيش فرع «من غير نطاق» — الرفض قبل أي قراءة، والحذف نفسه مقيّد بالنطاق دايمًا
+    expect(body).toContain("allowedBusinessIds: readonly number[])");
+    expect(body.indexOf("if (!Array.isArray(allowedBusinessIds))")).toBeLessThan(body.indexOf("getDb()"));
+    expect(body).toContain("delete(orders).where(and(inArray(orders.id, unique), scope))");
+    expect(body).not.toMatch(/scope \? |allowedBusinessIds\?/);
   });
 
   it("🔑 مفيش أي مسار في routers بيمسح orders خام — كله على الـhelper", () => {
@@ -45,7 +51,7 @@ describe("🔑 حذف الأوردر بيمسح أصنافه (منع الـorpha
   it("🔑 مسارات الحذف بتستخدم deleteOrder/deleteOrders", () => {
     // نفس الـhelper، ومغلّف بحارس السياسة (حذف المؤكد مرفوض → BAD_REQUEST).
     expect(routers).toContain("withStatusGuard(() => deleteOrder(input.orderId))");
-    expect(routers).toContain("withStatusGuard(() => deleteOrders(ids))");
+    expect(routers).toContain("withStatusGuard(() => deleteOrders(ids, scope))");
     expect(routers).not.toMatch(/await deleteOrders?\(/);
   });
 });

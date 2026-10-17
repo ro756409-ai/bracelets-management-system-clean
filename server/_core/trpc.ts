@@ -1,6 +1,7 @@
 import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
+import { safeErrorText } from "../logSafety";
 import type { TrpcContext } from "./context";
 import { resolveTenantAccess, tenantAccessEnforcementEnabled, tenantAccessError } from "../tenantAccess";
 import { trpcCallAllowed } from "@shared/tenantAccess";
@@ -8,6 +9,13 @@ import { hasTenantPermission, isFinancialPermission, isFrozenAccountingWrite, AC
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
+  // رسالة الخطأ الداخلي للعميل: بتعدّي بس لو اتصنّفت صراحةً رسالة أعمال (safeErrorText) — غير كده (ORM، driver، runtime،
+  // مكتبة، رد API) «خطأ داخلي (كود)». والـstack (بيبدأ بنص الرسالة الأصلي، وبيتبعت في وضع التطوير) مابيتبعتش.
+  errorFormatter({ shape, error }) {
+    if (error.code !== "INTERNAL_SERVER_ERROR") return shape;
+    const { stack: _stack, ...data } = (shape.data ?? {}) as typeof shape.data & { stack?: string };
+    return { ...shape, message: safeErrorText(error.cause ?? error), data: data as typeof shape.data };
+  },
 });
 
 export const router = t.router;

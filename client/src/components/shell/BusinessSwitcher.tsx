@@ -51,7 +51,7 @@ export function BusinessSwitcher({
       {!collapsed && (
         <div className={`min-w-0 text-right ${inSidebar ? "" : "hidden sm:block"}`}>
           <p className={`truncate text-sm font-bold leading-tight ${textColor}`} data-testid="business-name">{name || "—"}</p>
-          {businesses.length > 1 && <p className={`truncate text-[11px] ${subColor}`}>تبديل النشاط</p>}
+          {businesses.length > 1 && <p className={`truncate text-[11px] brand-v2:text-xs ${subColor}`}>تبديل النشاط</p>}
         </div>
       )}
     </div>

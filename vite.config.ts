@@ -197,11 +197,19 @@ function brandHtmlPlugin(): Plugin {
   };
 }
 
+/**
+ * PERF-1: أدوات بيئة التطوير (Manus runtime المضمّن في HTML حوالي 367KB، ووسوم jsx-loc على كل عنصر) في `vite dev` بس —
+ * كانت بتتضمّن في بناء الإنتاج وبتتحمّل وتتنفّذ مع كل صفحة.
+ */
+type AnyPlugin = Plugin | Plugin[] | false | null | undefined;
+const serveOnly = (p: AnyPlugin): AnyPlugin =>
+  Array.isArray(p) ? (p.map(serveOnly) as Plugin[]) : p ? ({ ...p, apply: "serve" } as Plugin) : p;
+
 const plugins = [
   react(),
   tailwindcss(),
-  jsxLocPlugin(),
-  vitePluginManusRuntime(),
+  serveOnly(jsxLocPlugin() as AnyPlugin),
+  serveOnly(vitePluginManusRuntime() as AnyPlugin),
   vitePluginManusDebugCollector(),
   optionalAnalyticsPlugin(),
   brandHtmlPlugin(),

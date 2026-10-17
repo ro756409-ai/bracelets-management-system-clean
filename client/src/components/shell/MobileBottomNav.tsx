@@ -34,7 +34,7 @@ export function MobileBottomNav({ destinations }: { destinations: NavDestination
             key={dest.key}
             type="button"
             onClick={() => setLocation(dest.path)}
-            className={`flex min-h-[56px] min-w-11 flex-1 flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium transition-colors ${
+            className={`flex min-h-[56px] min-w-11 flex-1 flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium brand-v2:text-xs transition-colors ${
               active ? "text-primary-text" : "text-muted-foreground"
             }`}
             aria-current={active ? "page" : undefined}
@@ -48,7 +48,7 @@ export function MobileBottomNav({ destinations }: { destinations: NavDestination
       <button
         type="button"
         onClick={() => setOpenMobile(true)}
-        className="flex min-h-[56px] min-w-11 flex-1 flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium text-muted-foreground"
+        className="flex min-h-[56px] min-w-11 flex-1 flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium brand-v2:text-xs text-muted-foreground"
         aria-label="المزيد"
         data-testid="bottom-nav-more"
       >

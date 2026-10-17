@@ -150,6 +150,7 @@ export async function probeBostaKey(
         const res = await fetchImpl(`${baseUrl}/pickup-locations`, {
           method: "GET",
           headers: { "Content-Type": "application/json", ...authHeader(authScheme, apiKey) },
+          signal: AbortSignal.timeout(15_000), // INT-4: اختبار الاتصال مايعلّقش
         });
         if (res.ok) {
           const body = await res.json().catch(() => null);

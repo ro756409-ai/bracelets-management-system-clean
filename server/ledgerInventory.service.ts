@@ -1,3 +1,4 @@
+import { ClientSafeError } from "./logSafety";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { businesses, inventoryBalances, inventoryReservations, orderItems, orders, returnInspectionItems, returnInspections, stocktakeLines, stocktakes, warehouses } from "../drizzle/schema";
 import { ledgerAccounts, ledgerTransactions } from "../drizzle/ledgerV3.schema";
@@ -19,7 +20,7 @@ import { getCarrierSettingValues } from "./ledgerCarrierOps.service";
  *  • قيمة المخزون الافتتاحية من جرد فعلي معتمد يوم Go-live (المالك فقط) — مرة واحدة لكل مخزن، لا من أرصدة قديمة.
  *  • فروق الجرد اللاحقة، والمرتجع المفحوص (إرجاع للمخزون/إعدام) → قيود V3 بمفاتيح دائمة، بلا تكلفة مكررة.
  */
-export class InventoryLedgerError extends Error {}
+export class InventoryLedgerError extends ClientSafeError {}
 
 async function activeContext(d: LedgerDb, businessId: number) {
   const [b] = await d.select({ tenantId: businesses.tenantId, timezone: businesses.timezone, goLiveAt: businesses.accountingGoLiveAt, warehouseId: businesses.defaultWarehouseId })

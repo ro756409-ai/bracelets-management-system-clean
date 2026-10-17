@@ -111,7 +111,7 @@ describe("المدينة بتتحفظ لموظف إدخال البيانات", (
 
   it("🔑 السيرفر بيكتب المدينة فعلًا في الأوردر", () => {
     const proc = routers.slice(routers.indexOf("    updateOrder: requireEmployeeTenantPermission(\"orders.create\")"));
-    expect(proc.slice(0, 4000)).toContain("city: input.city ?? null");
+    expect(proc.slice(0, proc.indexOf("\n    }),"))).toContain("city: input.city ?? null");
   });
 
   it("فورم الإنشاء لسه بيبعت المدينة", () => {

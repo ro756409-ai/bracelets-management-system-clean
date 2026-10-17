@@ -82,7 +82,7 @@ export function MobileOrderCard({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-0.5 text-end">
             <span className="font-en text-xs text-muted-foreground tabular-nums" dir="ltr">{orderNumber}</span>
-            {dateLabel && <span className="text-[11px] text-muted-foreground">{dateLabel}</span>}
+            {dateLabel && <span className="text-[11px] text-muted-foreground brand-v2:text-xs">{dateLabel}</span>}
           </div>
         </div>
 
