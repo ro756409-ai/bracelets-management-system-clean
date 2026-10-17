@@ -55,7 +55,7 @@ import { usePermission } from "@/hooks/usePermission";
 import { DataToolbar } from "@/components/workspace";
 // المرحلة 4 — أجزاء العرض فقط (التبويبات/الجدول/بطاقة الموبايل)؛ الاستعلامات والـmutations والنوافذ تبقى هنا.
 import { OrdersTabs, TODAY_TAB_KEY } from "@/components/orders/OrdersTabs";
-import { OrdersTable, buildOrdersColumns, type OrdersColumnsContext, type OrdersRowActions } from "@/components/orders/OrdersTable";
+import { OrdersTable, buildOrdersColumns, drawerStatusOptions, type OrdersColumnsContext, type OrdersRowActions } from "@/components/orders/OrdersTable";
 import { renderOrdersMobileRow } from "@/components/orders/OrdersMobileList";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { useDisplayPrefs } from "@/contexts/DisplayPrefsContext";
@@ -1614,7 +1614,7 @@ export default function Orders() {
                 <SelectTrigger data-readonly-write className="h-9 w-44" aria-busy={updateStatusMutation.isPending || undefined} data-testid="drawer-status-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {/* «مؤكد» من زر التأكيد (يخصم المخزون)، و«تم التسليم» من بوسطة أو المسار اليدوي المعتمد — لا من هنا */}
-                  {["new", "postponed", "no_answer", "preparing", "shipped", "cancelled"].map(v => (
+                  {drawerStatusOptions(drawerOrder.status).map(v => (
                     <SelectItem key={v} value={v}>{STATUS_LABEL(v)}</SelectItem>
                   ))}
                 </SelectContent>

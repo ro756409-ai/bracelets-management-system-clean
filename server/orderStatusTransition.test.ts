@@ -43,9 +43,15 @@ describe("isValidOrderStatusTransition", () => {
     expect(isValidOrderStatusTransition("confirmed", "postponed")).toBe(true);
     expect(isValidOrderStatusTransition("confirmed", "no_answer")).toBe(true);
     expect(isValidOrderStatusTransition("preparing", "confirmed")).toBe(true);
-    expect(isValidOrderStatusTransition("shipped", "cancelled")).toBe(true);
     expect(isValidOrderStatusTransition("shipped", "returned")).toBe(true);
     expect(isValidOrderStatusTransition("cancelled", "confirmed")).toBe(true);
+  });
+
+  it("DATA-4: بعد الشحن مفيش إلغاء (كان بيرجّع المخزون والبضاعة مع شركة الشحن) ولا رجوع لمؤكد", () => {
+    expect(isValidOrderStatusTransition("shipped", "cancelled")).toBe(false);
+    expect(isValidOrderStatusTransition("shipped", "confirmed")).toBe(false);
+    expect(isValidOrderStatusTransition("printed", "confirmed")).toBe(false);
+    expect(isValidOrderStatusTransition("printed", "cancelled")).toBe(true); // قبل الشحن الإلغاء باقي
   });
 
   it("still rejects an unknown status as the source", () => {

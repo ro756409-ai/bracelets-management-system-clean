@@ -65,12 +65,15 @@ async function inspectOrdersColumns(d: any): Promise<{ cols: Set<string>; extras
 }
 
 describe("🔑 حراس المصدر — سياسة تأكيد/خصم المخزون (من البنود، لكل تركيبة، ذرّي، يرفض العجز)", () => {
-  const fn = db.slice(db.indexOf("export async function confirmOrder"), db.indexOf("export async function postponeOrder"));
+  // التأكيد + قاعدة المطابقة الموحّدة اللي بيخصم بيها (DATA-4: reconcileOrderStock)
+  const fn = db.slice(db.indexOf("// ==================== مطابقة مخزون الأوردر (DATA-4)"), db.indexOf("export async function postponeOrder"));
   it("🔑 الخصم من بنود الأوردر (order_items) مجمّعة لكل تركيبة — مش من الهيدر", () => {
     expect(fn).toContain("from(orderItems).where(eq(orderItems.orderId, orderId))");
     expect(fn).toContain("cur.qty += l.qty"); // تجميع نفس التركيبة
     expect(fn).toContain("update(productVariants)");
-    expect(fn).toContain("currentStock: sql`${productVariants.currentStock} - ${e.qty}`");
+    expect(fn).toContain("currentStock: sql`${productVariants.currentStock} + ${signed}`");
+    expect(fn).toContain('const target = lines.map(l => ({ productId: l.productId, variantId: l.variantId, qty: l.qty }));');
+    expect(fn).toContain('await reconcileOrderStock(tx, order, target, target, "تأكيد أوردر", updatedBy);');
   });
   it("🔒 العجز = رفض كامل بلا خصم جزئي، برسالة «المتاح من X n والمطلوب m»", () => {
     expect(db).toContain("export class StockShortfallError");

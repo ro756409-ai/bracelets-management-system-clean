@@ -158,9 +158,16 @@ describe.runIf(CAN)("🔒 المرحلة 0.5 — الأعطال التشغيلي
     const r3 = await fail(() => owner(A.tenantId).orders.update({ id: eo, status: "delivered" as any }));
     expect(r3.code).toBe("BAD_REQUEST");
     expect((await orderRow(eo)).status).toBe("shipped");
+    // DATA-4: إلغاء المشحون مرفوض (كان بيرجّع المخزون والبضاعة مع شركة الشحن) — رجوعها من مسار المرتجعات
+    const r4 = await fail(() => owner(A.tenantId).orders.update({ id: manual, status: "cancelled" as any }));
+    expect(r4.code).toBe("BAD_REQUEST"); expect(r4.message).toContain("لا يمكن إلغاء أوردر اتشحن");
+    expect((await orderRow(manual)).status).toBe("shipped");
     // الانتقالات التشغيلية الأخرى ما زالت تعمل من نفس المسار
-    await owner(A.tenantId).orders.update({ id: manual, status: "cancelled" as any });
-    expect((await orderRow(manual)).status).toBe("cancelled");
+    const fresh = await mkOrder(A, prodA, varA, { status: "new" });
+    await owner(A.tenantId).orders.update({ id: fresh, status: "no_answer" as any });
+    expect((await orderRow(fresh)).status).toBe("no_answer");
+    await owner(A.tenantId).orders.update({ id: fresh, status: "cancelled" as any });
+    expect((await orderRow(fresh)).status).toBe("cancelled");
   });
 
   it("🔑 2) Bosta 45 عبر المسار الرسمي وحده يسلّم: مرة واحدة، المكرر لا يكرر التحديث، ونشاط آخر لا يصل للأوردر", async () => {
@@ -268,9 +275,14 @@ describe.runIf(CAN)("🔒 المرحلة 0.5 — الأعطال التشغيلي
     const oid = await mkOrder(A, prodA, varA);
     await confirmOrder(oid, 1, "owner");
     const vBefore = await stockOf(varA); const pBefore = await prodStock(prodA);
+    // D4 (DATA-4): مؤكد لم يُشحن = لا مرتجع (الإلغاء هو اللي بيرجّع المخزون)
+    const notShipped = await fail(() => owner(A.tenantId).returns.markAsReturned({ orderId: oid, returnReason: "customer_refused" } as any));
+    expect(notShipped.code).toBe("BAD_REQUEST"); expect(notShipped.message).toContain("لم يُشحن");
+    expect((await orderRow(oid)).status).toBe("confirmed");
+    await (await d()).update(orders).set({ status: "shipped" }).where(eq(orders.id, oid));
     const rejected = await fail(() => owner(A.tenantId).returns.markAsReturned({ orderId: oid, returnReason: "customer_refused", restoreStock: true } as any));
     expect(rejected.code).toBe("BAD_REQUEST"); expect(rejected.message).toContain("لا يعود للمخزون");
-    expect((await orderRow(oid)).status).toBe("confirmed");
+    expect((await orderRow(oid)).status).toBe("shipped");
     const ok: any = await owner(A.tenantId).returns.markAsReturned({ orderId: oid, returnReason: "customer_refused" } as any);
     expect(ok.stockRestored).toBe(false);
     expect((await orderRow(oid)).status).toBe("returned");

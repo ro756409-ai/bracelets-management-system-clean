@@ -28,7 +28,9 @@ import { canonicalGovernorate, MANUAL_ADDRESS_CONFLICT_PREFIX } from "../shared/
 import { normalizeEgyptianPhone } from "../shared/phone";
 import {
   getDb,
-  createOrderWithItems,
+  createExternalOrderOnce,
+  STOCK_LOCKED_ITEMS_REVIEW,
+  isOrderNumberCollision,
   updateOrderWithItems,
   generateOrderNumber,
   getOrderByExternalId,
@@ -459,8 +461,11 @@ export async function upsertEasyOrder(
       // والتحقق من انتقال الحالة زي `updateOrder` بالظبط.
       // حماية العنوان اليدوي تُحسب **تحت قفل صف الأوردر** (adjustPatch) — تعديل يدوي متزامن مايضيعش بين القراءة والكتابة.
       let addressConflict: string | null = null;
-      await updateOrderWithItems(existing.id, orderFields as any, itemRows, {
+      // أوردر خارج من المخزون: الأصناف/الكميات المتغيّرة من الموقع ماتتطبّقش (المسار ده مابيطابقش المخزون — DATA-4 / D3)؛
+      // بيانات العميل تتحدّث والأوردر يتعلّم للمراجعة.
+      const { itemsKept } = await updateOrderWithItems(existing.id, orderFields as any, itemRows, {
         normalizePhones: true,
+        onStockLockedItems: "keepItems",
         adjustPatch: current => {
           const r = reconcileEasyOrderShipping({ current: current as any, incoming: { customerAddress: orderFields.customerAddress, governorate: orderFields.governorate } });
           addressConflict = r.conflict;
@@ -468,31 +473,46 @@ export async function upsertEasyOrder(
           return { customerAddress: r.customerAddress, governorate: r.governorate, needsReview: needsReview || !!r.conflict, reviewReason: reasons || null };
         },
       });
-      const finalReason = [reviewReason, addressConflict].filter(Boolean).join(" | ") || undefined;
+      const finalReason = [reviewReason, addressConflict, itemsKept ? STOCK_LOCKED_ITEMS_REVIEW : null].filter(Boolean).join(" | ") || undefined;
       return {
         outcome: "updated",
         orderId: existing.id,
         orderNumber: existing.orderNumber,
-        needsReview: needsReview || !!addressConflict,
+        needsReview: needsReview || !!addressConflict || itemsKept,
         reviewReason: finalReason,
       };
     }
 
-    const orderNumber = await generateOrderNumber();
-    // الهيدر (بنفس منطق `createOrder`) والبنود في transaction واحدة. قبل كده البنود
-    // كانت transaction تانية بعد ما الهيدر اتكتب — فلو فشلت (deadlock، أو بنود فاضية)
-    // كان بيفضل أوردر يتيم بلا بنود والنتيجة «failed» برضه.
-    const orderId = await createOrderWithItems(
-      {
-        ...orderFields,
-        orderNumber,
-        status: "new",
-        createdAt: normalized.createdAt ?? new Date(),
-      } as any,
-      itemRows
-    );
+    // الهيدر (بنفس منطق `createOrder`) والبنود في transaction واحدة، **ومرة واحدة لكل رقم خارجي في النشاط** حتى لو
+    // نفس الـWebhook اتسلّم مرتين في نفس اللحظة (DATA-4D): الفحص فوق بلا قفل، فالحسم تحت قفل صف النشاط هنا.
+    // رقم الأوردر MAX+1 عام لكل الشركات: تسليمان متزامنان (حتى لنشاطين مختلفين) ممكن ياخدوا نفس الرقم — نفس إعادة
+    // المحاولة اللي في إنشاء الأوردر اليدوي (routers) بدل «failed».
+    let orderNumber = "";
+    let created!: Awaited<ReturnType<typeof createExternalOrderOnce>>;
+    for (let attempt = 1; ; attempt++) {
+      orderNumber = await generateOrderNumber();
+      try {
+        created = await createExternalOrderOnce(
+          opts.businessId,
+          normalized.externalOrderId,
+          {
+            ...orderFields,
+            orderNumber,
+            status: "new",
+            createdAt: normalized.createdAt ?? new Date(),
+          } as any,
+          itemRows
+        );
+        break;
+      } catch (err) {
+        if (!isOrderNumberCollision(err) || attempt >= 3) throw err;
+        await new Promise(r => setTimeout(r, 10 * attempt + Math.random() * 20));
+      }
+    }
+    // اتنشأ بالتوازي من تسليم تاني لنفس الأوردر: نكمّل بمسار الموجود (مقارنة updated_at) — الـpayload ده ممكن يكون أحدث.
+    if (!created.created) return upsertEasyOrder(payload, opts);
 
-    return { outcome: "created", orderId, orderNumber, needsReview, reviewReason };
+    return { outcome: "created", orderId: created.orderId, orderNumber, needsReview, reviewReason };
   } catch (err: any) {
     return { outcome: "failed", needsReview, error: String(err?.message ?? err) };
   }

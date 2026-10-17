@@ -211,9 +211,9 @@ describe("كتابة بنود الأوردر", () => {
 });
 
 /**
- * confirmOrder() بتخصم المخزون من رأس الأوردر (productId × quantity) قبل الـGo-Live.
- * تعديل البنود بيعيد كتابة الرأس، فلو مافيش تسوية بيفضل الخصم على الرقم القديم:
- * تأكيد قطعتين، تعديل لخمسة، المخزن بيطلّع خمسة والدفاتر شايفة اتنين.
+ * DATA-4B: تعديل البنود بعد التأكيد بيطابق صافي خصم الأوردر **لكل تركيبة** مع البنود الجديدة (نفس قاعدة التأكيد) —
+ * مش فرق على المنتج الأب من رأس الأوردر (كان بيرجّع للأب وبعدين الإلغاء يرجّع للتركيبة ⇒ تضخم المخزون).
+ * السلوك نفسه متغطي على MySQL حقيقي في orderStockLifecycle.db.test.ts.
  */
 describe("تسوية المخزون بعد تعديل البنود", () => {
   // محدودة بالدالة نفسها: `db.slice(indexOf(...))` لوحدها بتاخد باقي الملف كله،
@@ -223,49 +223,47 @@ describe("تسوية المخزون بعد تعديل البنود", () => {
     start,
     db.indexOf("\nexport async function replaceOrderItems(", start)
   );
+  const reconcile = db.slice(db.indexOf("async function reconcileOrderStock("), db.indexOf("async function reconcileEditedOrderStock("));
+  const edited = db.slice(db.indexOf("async function reconcileEditedOrderStock("), db.indexOf("export async function confirmOrder("));
 
-  it("🔑 التسوية بتحصل للأوردر المؤكد بس — غير المؤكد مااتخصمش أصلاً", () => {
-    expect(fn).toContain('if (order.status === "confirmed" && !business?.accountingGoLiveAt)');
+  it("🔑 التسوية بالقاعدة الموحّدة لكل تركيبة — قبل Go-Live فقط، ومن البنود القديمة والجديدة مش من الرأس", () => {
+    expect(fn).toContain('await reconcileEditedOrderStock(tx, order, existing, lines, "تعديل بنود أوردر", editor.id)');
+    expect(fn).toContain("if (!business?.accountingGoLiveAt)");
+    expect(fn).not.toContain("oldQuantity");
   });
 
-  it("🔑 نفس المنتج: الفرق بس", () => {
-    expect(fn).toContain("const diff = totalQuantity - oldQuantity;");
-    expect(fn).toContain("moves.push({ productId: oldProductId, delta: -diff })");
+  it("🔑 الفرق بس، لكل مفتاح (تركيبة أو منتج بسيط)، والصافي من حركات الأوردر نفسه", () => {
+    expect(reconcile).toContain("const delta = (w?.qty ?? 0) - (h?.qty ?? 0);");
+    // صافي مشكوك فيه (سالب/مرتجع بلا دليل/مش مطابق للبنود) = تعارض قبل أي حركة، مش تسوية صامتة
+    expect(reconcile).toContain("await assertTrustworthyOrderNet(tx, order, have, currentLines);");
+    expect(db).toContain("const stockLineKey = (l: { productId: number; variantId: number | null }) => (l.variantId != null ? `v${l.variantId}` : `p${l.productId}`);");
+    expect(db).toContain("if (!ORDER_STOCK_MOVEMENT_REASON.test(m.reason ?? \"\")) continue;");
   });
 
-  it("🔑 المنتج اتغيّر: القديم بيرجع كامل والجديد بيتخصم كامل", () => {
-    expect(fn).toContain("moves.push({ productId: oldProductId, delta: oldQuantity })");
-    expect(fn).toContain("moves.push({ productId: head.productId, delta: -totalQuantity })");
-  });
-
-  it("🔑 الحركة بتتكتب مرة واحدة — مش زي editOrderFull اللي بيحرّك المخزون مرتين", () => {
-    // editOrderFull بينادي updateProductStock ثم addInventoryMovement، والتانية
-    // بتنادي updateProductStock جوّاها — فالكمية بتتخصم مرتين. المسار ده بيكتب
-    // صف حركة واحد وبيطبّق الفرق مرة واحدة.
-    expect(fn).toContain("await tx.insert(inventoryMovements).values({");
-    expect(fn).toContain("currentStock: sql`${products.currentStock} + ${move.delta}`");
-    // على الكود مش على النص: التعليق اللي فوق الدالة بيشرح بق editOrderFull وبيذكر
-    // اسمي الدالتين، فالفحص لازم يكون على استدعاء فعلي (`await ...(`) مش على ورودهم.
+  it("🔑 الحركة بتتكتب مرة واحدة لكل مفتاح وبتتطبق على التركيبة أو المنتج", () => {
+    expect(reconcile).toContain("await tx.insert(inventoryMovements).values({");
+    expect(reconcile).toContain("update(productVariants).set({ currentStock: sql`${productVariants.currentStock} + ${signed}` })");
     expect(fn).not.toContain("await updateProductStock(");
     expect(fn).not.toContain("await addInventoryMovement(");
   });
 
-  it("مخزون غير كافي بيرفض التعديل قبل ما يتكتب", () => {
-    expect(fn).toContain("if (move.delta < 0 && product.currentStock < -move.delta)");
-    expect(fn).toContain("المخزون غير كافي للتعديل");
+  it("مخزون غير كافي أو صنف من نشاط تاني بيرفض التعديل قبل أي كتابة", () => {
+    expect(reconcile).toContain("if (shortfalls.length) throw new StockShortfallError(shortfalls);");
+    expect(reconcile.indexOf("throw new StockShortfallError")).toBeLessThan(reconcile.indexOf("await tx.insert(inventoryMovements)"));
+    expect(reconcile).toContain("p.businessId !== order.businessId");
   });
 
-  it("منتج اتمسح من الكتالوج مابيكسرش التعديل", () => {
-    expect(fn).toContain("if (!product) continue;");
+  it("أوردر مؤكد بلا خصم مسجّل: تعديل الأصناف مرفوض بدل تخمين خصم قديم", () => {
+    expect(edited).toContain("أوردر مؤكد بلا حركة مخزون مسجّلة");
+  });
+
+  it("🔑 قفل الأوردر أول قراءة في المعاملة (لقطة REPEATABLE READ بعد القفل)", () => {
+    expect(fn.indexOf('.for("update")')).toBeLessThan(fn.indexOf("withCatalogProductNames(tx, lines)"));
   });
 
   it("🔑 التسوية جوه نفس الـtransaction — فشلها بيرجّع البنود معاها", () => {
-    const block = fn.slice(fn.indexOf("if (order.status === \"confirmed\""));
+    const block = fn.slice(fn.indexOf("await reconcileEditedOrderStock("));
     expect(block.slice(0, block.indexOf("const headerUpdates"))).not.toContain("await db.");
-  });
-
-  it("بعد Go-Live متستثناة — المخزون هناك حجز وصرف مش عمود currentStock", () => {
-    expect(fn).toContain("!business?.accountingGoLiveAt");
   });
 });
 

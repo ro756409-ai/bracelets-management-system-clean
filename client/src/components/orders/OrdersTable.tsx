@@ -67,6 +67,12 @@ export const paymentLabel = (order: OrderRow): string | null => {
 };
 export const isActionable = (order: OrderRow) => order.status === "new" || order.status === "postponed";
 export const canReturn = (order: OrderRow, isAdmin: boolean) => isAdmin && ["confirmed", "shipped", "delivered", "preparing"].includes(order.status);
+/**
+ * حالات قائمة الدرج («مؤكد» من زر التأكيد، و«تم التسليم» من بوسطة أو المسار المعتمد — لا من هنا). المشحون مايتلغيش
+ * (DATA-4: الإلغاء بيرجّع المخزون والبضاعة مع شركة الشحن) — السيرفر بيرفضه برضه، ده بس عشان مايتعرضش.
+ */
+export const drawerStatusOptions = (status: string) =>
+  ["new", "postponed", "no_answer", "preparing", "shipped", "cancelled"].filter(v => !(v === "cancelled" && status === "shipped"));
 
 const Unavailable = () => <span className="text-xs text-muted-foreground">{UNAVAILABLE_LABEL}</span>;
 

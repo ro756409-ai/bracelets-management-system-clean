@@ -370,6 +370,9 @@ async function withStatusGuard<T>(fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     if (err instanceof OrderStatusGuardError)
       throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    // صافي مخزون مشكوك فيه (DATA-4) — تعارض للمراجعة، مش 500.
+    if (err instanceof OrderStockInconsistencyError)
+      throw new TRPCError({ code: "CONFLICT", message: err.message });
     throw err;
   }
 }
@@ -414,6 +417,21 @@ async function confirmOrderOrReject(orderId: number, updatedBy: number, confirme
     if (err instanceof StockShortfallError)
       throw new TRPCError({ code: "BAD_REQUEST", message: `المخزون غير كافٍ: ${err.message}` });
     if (err instanceof OrderConfirmBlockedError)
+      throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    if (err instanceof OrderStockInconsistencyError)
+      throw new TRPCError({ code: "CONFLICT", message: err.message });
+    throw err;
+  }
+}
+
+/** نفس تحويل confirmOrderOrReject لمسارات تعديل محتوى الأوردر (DATA-4): عجز/صنف غير صالح/تعارض/سياسة = رسالة واضحة مش 500. */
+async function withOrderStockErrors<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof StockShortfallError)
+      throw new TRPCError({ code: "BAD_REQUEST", message: `المخزون غير كافٍ: ${err.message}` });
+    if (err instanceof OrderConfirmBlockedError || err instanceof OrderStatusGuardError)
       throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
     if (err instanceof OrderStockInconsistencyError)
       throw new TRPCError({ code: "CONFLICT", message: err.message });
@@ -4040,13 +4058,14 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
-        await postponeOrder(
+        const postponeEventCtx = await webEventCtx(ctx, "admin_ui", input.operationId);
+        await withStatusGuard(() => postponeOrder(
           input.orderId,
           input.postponedTo,
           input.notes,
           actingEmpId ?? 0,
-          await webEventCtx(ctx, "admin_ui", input.operationId)
-        );
+          postponeEventCtx
+        ));
         return { success: true };
       }),
 
@@ -4062,13 +4081,14 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
-        await cancelOrder(
+        const cancelEventCtx = await webEventCtx(ctx, "admin_ui", input.operationId);
+        await withStatusGuard(() => cancelOrder(
           input.orderId,
           input.cancelReason,
           input.notes,
           actingEmpId ?? 0,
-          await webEventCtx(ctx, "admin_ui", input.operationId)
-        );
+          cancelEventCtx
+        ));
         await addActivityLog({
           action: "cancel_order",
           entityType: "order",
@@ -4131,11 +4151,11 @@ export const appRouter = router({
         await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const { orderId, ...updates } = input;
-        const result = await editOrderFull(orderId, updates, {
+        const result = await withOrderStockErrors(() => editOrderFull(orderId, updates, {
           id: actingEmpId ?? 0,
           name: ctx.user.name || "Admin",
           role: "admin",
-        });
+        }));
         return { success: true, order: result };
       }),
 
@@ -4236,7 +4256,7 @@ export const appRouter = router({
         if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
         await requireScopedBusinessId(ctx, order.businessId);
         const editor = resolveOrderEditor(ctx);
-        const result = await replaceOrderItemsFromEditor(
+        const result = await withOrderStockErrors(() => replaceOrderItemsFromEditor(
           input.orderId,
           input.items.map(i => ({
             productId: i.productId,
@@ -4250,7 +4270,7 @@ export const appRouter = router({
           })),
           input.shippingFees,
           editor
-        );
+        ));
         await addActivityLog({
           action: "edit_order_items",
           entityType: "order",
@@ -4969,13 +4989,13 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         // Ownership check: agents can only postpone their own assigned orders
         await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
-        await postponeOrder(
+        await withStatusGuard(() => postponeOrder(
           input.orderId,
           input.postponedTo,
           input.notes,
           emp.id,
           portalEventCtx(ctx, "employee_portal", input.operationId)
-        );
+        ));
         await addActivityLog({
           action: "postpone_order",
           entityType: "order",
@@ -5002,13 +5022,13 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         // Ownership check: agents can only cancel their own assigned orders
         await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
-        await cancelOrder(
+        await withStatusGuard(() => cancelOrder(
           input.orderId,
           input.cancelReason,
           input.notes,
           emp.id,
           portalEventCtx(ctx, "employee_portal", input.operationId)
-        );
+        ));
         await addActivityLog({
           action: "cancel_order",
           entityType: "order",
@@ -5097,13 +5117,13 @@ export const appRouter = router({
                 message: "سبب الإلغاء مطلوب",
               });
             }
-            await cancelOrder(
+            await withStatusGuard(() => cancelOrder(
               input.orderId,
-              input.cancelReason,
+              input.cancelReason!,
               input.notes,
               emp.id,
               statusEventCtx
-            );
+            ));
             break;
           case "postponed":
             if (!input.postponedTo) {
@@ -5112,24 +5132,24 @@ export const appRouter = router({
                 message: "تاريخ التأجيل مطلوب",
               });
             }
-            await postponeOrder(
+            await withStatusGuard(() => postponeOrder(
               input.orderId,
-              input.postponedTo,
+              input.postponedTo!,
               input.notes,
               emp.id,
               statusEventCtx
-            );
+            ));
             break;
           case "new":
             // الرجوع لـ"جديد" بيمسح طابع الإلغاء وسببه، وإلا الأوردر يفضل شكله جديد
             // وسجلّه بيقول إنه ملغي — والـtimeline في صفحة الأوردرات بيقرا الطوابع دي.
-            await updateOrder(input.orderId, {
+            await withStatusGuard(() => updateOrder(input.orderId, {
               status: "new",
               lastUpdatedBy: emp.id,
               cancelledAt: null,
               cancelReason: null,
               postponedTo: null,
-            }, statusEventCtx);
+            }, statusEventCtx));
             break;
         }
 
@@ -5306,11 +5326,11 @@ export const appRouter = router({
           orderId,
           "لا يمكنك تعديل أوردر غير مسند إليك"
         );
-        const result = await editOrderFull(orderId, updates, {
+        const result = await withOrderStockErrors(() => editOrderFull(orderId, updates, {
           id: emp.id,
           name: emp.name,
           role: emp.role,
-        });
+        }));
         return { success: true, order: result };
       }),
 
@@ -5418,7 +5438,7 @@ export const appRouter = router({
           input.orderId,
           "لا يمكنك تعديل بنود أوردر غير مسند إليك"
         );
-        const result = await replaceOrderItemsFromEditor(
+        const result = await withOrderStockErrors(() => replaceOrderItemsFromEditor(
           input.orderId,
           input.items.map(i => ({
             productId: i.productId,
@@ -5432,7 +5452,7 @@ export const appRouter = router({
           })),
           input.shippingFees,
           { id: emp.id, name: emp.name, role: emp.role }
-        );
+        ));
         await addActivityLog({
           action: "edit_order_items",
           entityType: "order",
@@ -6618,7 +6638,9 @@ export const appRouter = router({
         // الهيدر والبنود في transaction واحدة، وصف الأوردر مقفول بالـPK أولًا
         // (`updateOrderWithItems`): تحديثين متزامنين بيتسلسلوا، والبنود بتطلع من تحديث
         // واحد كامل. الأرقام بتتكتب زي ما هي (مفيش تطبيع هنا من زمان).
-        await updateOrderWithItems(
+        // أوردر خارج من المخزون: تغيير الأصناف/الكميات/نوع الحفر من هنا مرفوض بوضوح (المسار ده مابيطابقش المخزون —
+        // DATA-4 / D3)؛ نفس الأصناف + بيانات العميل تتحدّث عادي.
+        await withStatusGuard(() => updateOrderWithItems(
           input.orderId,
           {
             customerName: input.customerName,
@@ -6655,8 +6677,8 @@ export const appRouter = router({
                 ? (input.color ?? undefined)
                 : undefined,
           })),
-          { normalizePhones: false }
-        );
+          { normalizePhones: false, onStockLockedItems: "reject" }
+        ));
         return { success: true };
       }),
 

@@ -112,9 +112,11 @@ describe("🔑 P1-2/P1-3 · الحركة الذرّية والقفل — على 
     );
     expect(fn).toContain("db.transaction");
     expect(fn).toContain('.for("update")');
-    // الخصم جوّه نفس الـtx: حركة مخزون + تحديث المخزون (تركيبة للمنتجات متعددة الخيارات).
-    expect(fn).toContain("tx.insert(inventoryMovements)");
-    expect(fn).toContain("update(productVariants)");
+    // الخصم جوّه نفس الـtx بالقاعدة الموحّدة (DATA-4): حركة مخزون + تحديث المخزون لكل تركيبة.
+    expect(fn).toContain("await reconcileOrderStock(tx, order,");
+    const reconcile = db.slice(db.indexOf("async function reconcileOrderStock("), db.indexOf("async function reconcileEditedOrderStock("));
+    expect(reconcile).toContain("tx.insert(inventoryMovements)");
+    expect(reconcile).toContain("update(productVariants)");
     // فحص «اتأكد خلاص» جوّه القفل — الخصم مرة واحدة (idempotent؛ بيرجع بدري).
     expect(fn).toContain('if (order.status === "confirmed")');
   });
@@ -141,9 +143,11 @@ describe("🔑 P1-2/P1-3 · الحركة الذرّية والقفل — على 
     );
     const qtyBlock = fn.slice(fn.indexOf('"quantity" in orderUpdates'));
     const region = qtyBlock.slice(0, qtyBlock.indexOf("addActivityLog"));
-    // updateProductStock المنفصل اتشال — الحركة الذرّية بس اللي بتحرّك الرصيد.
+    // updateProductStock المنفصل اتشال — المطابقة الموحّدة لكل تركيبة جوه نفس المعاملة هي اللي بتحرّك الرصيد (DATA-4C).
     expect(region).not.toContain("await updateProductStock(");
-    expect(region).toContain("addInventoryMovement({");
+    expect(region).not.toContain("addInventoryMovement(");
+    expect(region).toContain('await reconcileEditedOrderStock(tx, currentOrder, before, after, "تعديل كمية أوردر", editor.id);');
+    expect(fn).toContain("const outcome = await runOrderTransaction(async tx => {");
   });
 });
 

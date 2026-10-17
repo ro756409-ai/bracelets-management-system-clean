@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, within, act } from "@testing-library/react";
 
 import { OrdersTabs, TODAY_TAB_KEY } from "./OrdersTabs";
-import { OrdersTable, buildOrdersColumns, ORDERS_DESKTOP_COLUMN_ORDER, COLLECTION_STATUS, isActionable, canReturn, type OrdersColumnsContext, type OrdersRowActions } from "./OrdersTable";
+import { OrdersTable, buildOrdersColumns, ORDERS_DESKTOP_COLUMN_ORDER, COLLECTION_STATUS, isActionable, canReturn, drawerStatusOptions, type OrdersColumnsContext, type OrdersRowActions } from "./OrdersTable";
 import { OrdersMobileCard, renderOrdersMobileRow } from "./OrdersMobileList";
 import { createInFlightGuard } from "./confirmGuard";
 import { UNAVAILABLE_LABEL } from "@/components/shared";
@@ -136,6 +136,12 @@ describe("📋 buildOrdersColumns — ترتيب أعمدة الديسكتوب �
   it("بوابات الصلاحية: canReturn للمدير فقط وبحالات محددة؛ isActionable للجديد/المؤجل فقط", () => {
     expect(isActionable({ id: 1, status: "new" })).toBe(true); expect(isActionable({ id: 1, status: "postponed" })).toBe(true); expect(isActionable({ id: 1, status: "confirmed" })).toBe(false);
     expect(canReturn({ id: 1, status: "shipped" }, true)).toBe(true); expect(canReturn({ id: 1, status: "shipped" }, false)).toBe(false); expect(canReturn({ id: 1, status: "new" }, true)).toBe(false);
+  });
+
+  it("DATA-4: قائمة حالات الدرج ما تعرضش «ملغي» للأوردر المشحون؛ باقي الحالات زي ما هي", () => {
+    expect(drawerStatusOptions("shipped")).toEqual(["new", "postponed", "no_answer", "preparing", "shipped"]);
+    for (const s of ["new", "postponed", "no_answer", "preparing", "printed", "confirmed"])
+      expect(drawerStatusOptions(s), s).toEqual(["new", "postponed", "no_answer", "preparing", "shipped", "cancelled"]);
   });
 });
 
