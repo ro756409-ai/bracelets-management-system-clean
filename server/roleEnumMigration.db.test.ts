@@ -26,7 +26,10 @@ describe("0045 — المواصفة والملف", () => {
     expect(evaluateRoleColumn(base).state).toBe("not_applied");
     expect(evaluateRoleColumn({ ...base, columnType: AFTER_TYPE }).state).toBe("applied");
     expect(evaluateRoleColumn({ ...base, columnType: enumColumnType(["warehouse", "agent", ...EMPLOYEE_ROLE_ENUM_BEFORE_0045.slice(2)]) }).state).toBe("partial");
-    expect(evaluateRoleColumn({ ...base, columnType: enumColumnType([...EMPLOYEE_ROLE_ENUM_BEFORE_0045.slice(0, -1)]) }).state).toBe("partial");
+    // أول 12 بلا moderator = الشكل الفعلي في الإنتاج: «قبل» معروف (قرار 0045-ب)، مش partial
+    expect(evaluateRoleColumn({ ...base, columnType: enumColumnType([...EMPLOYEE_ROLE_ENUM_BEFORE_0045.slice(0, -1)]) }).state).toBe("not_applied");
+    // قيمة ناقصة من النص (viewer) لسه partial
+    expect(evaluateRoleColumn({ ...base, columnType: enumColumnType(EMPLOYEE_ROLE_ENUM_BEFORE_0045.filter(v => v !== "viewer")) }).state).toBe("partial");
     expect(evaluateRoleColumn({ ...base, nullable: true }).state).toBe("partial");
     expect(evaluateRoleColumn({ ...base, defaultValue: "viewer" }).state).toBe("partial");
     expect(evaluateRoleColumn({ ...base, comment: "x" }).state).toBe("partial");

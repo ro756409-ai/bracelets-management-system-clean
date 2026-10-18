@@ -24,6 +24,7 @@ import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { PageHeader, StatCard, SectionCard, StatusBadge, EmptyState, LoadingSkeleton, OfflineState } from "@/components/shared";
 import { toast } from "sonner";
 import { CheckCircle, XCircle, Clock, Phone, MapPin, Package, Calendar, Edit2, ChevronRight, ChevronLeft, Briefcase } from "lucide-react";
+import { cairoDateKey } from "@/lib/cairoDate";
 
 const TOUCH = "min-h-11 md:min-h-9";
 
@@ -55,13 +56,8 @@ export default function AgentWorkspace() {
   const { values: GOVERNORATES } = useGovernorateOptions();
   const canEditItems = usePermission("orders.edit_items");
 
-  // تاريخ التوزيع - افتراضياً اليوم
-  const todayCairo = useMemo(() => {
-    const now = new Date();
-    const cairoOffset = 2 * 60 * 60 * 1000;
-    const cairoNow = new Date(now.getTime() + cairoOffset);
-    return cairoNow.toISOString().slice(0, 10); // YYYY-MM-DD
-  }, []);
+  // تاريخ التوزيع - افتراضياً اليوم (يوم القاهرة الفعلي، صيفي أو شتوي)
+  const todayCairo = useMemo(() => cairoDateKey(), []);
   const [assignedDate, setAssignedDate] = useState<string>(todayCairo);
 
   const queryParams = useMemo(() => ({

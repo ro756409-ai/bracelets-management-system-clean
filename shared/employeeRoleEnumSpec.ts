@@ -16,6 +16,12 @@ export const EMPLOYEE_ROLE_ENUM_BEFORE_0045 = [
   "super_admin", "admin", "data_entry", "order_confirmation", "shipping", "accountant", "viewer",
   "moderator",
 ] as const;
+/**
+ * الشكل الفعلي في الإنتاج (فحص نسخة مسترجعة 2026-10-18): أول 12 قيمة من القائمة أعلاه **بنفس الترتيب حرفيًا** بلا
+ * `moderator` — لأن ملف drizzle/manual/accounting-reorg.sql اتطبّق جزئيًا (employee_bonuses موجود، وتعديل الـENUM لا).
+ * 0045 بتقبله كحالة «قبل» معروفة وتكمّل القيم الناقصة في **الآخر** فقط (moderator ثم accounts_manager).
+ */
+export const EMPLOYEE_ROLE_ENUM_LEGACY_WITHOUT_MODERATOR = EMPLOYEE_ROLE_ENUM_BEFORE_0045.slice(0, 12);
 export const ACCOUNTS_MANAGER_ROLE = "accounts_manager" as const;
 export const EMPLOYEE_ROLE_ENUM_AFTER_0045 = [...EMPLOYEE_ROLE_ENUM_BEFORE_0045, ACCOUNTS_MANAGER_ROLE] as const;
 

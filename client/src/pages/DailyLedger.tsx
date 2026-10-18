@@ -1,3 +1,4 @@
+import { cairoMiddayInstant } from "@/lib/cairoDate";
 import { useMemo, useState } from "react";
 import {
   Wallet, Receipt, ArrowDownCircle, ArrowUpCircle, HandCoins, CalendarDays,
@@ -207,9 +208,9 @@ export default function DailyLedger() {
     // Collection carries its brand through the order; the other three need one chosen.
     if (action !== "collection" && chosenBusinessId == null) return;
     const value = Number(amount);
-    // The date carries the accountant's chosen day at midday Cairo, so the row lands inside
-    // that day's window no matter which hour they are actually typing.
-    const when = new Date(`${dateKey}T12:00:00+02:00`);
+    // The date carries the accountant's chosen day at midday Cairo (real offset, DST-aware), so the
+    // row lands inside that day's window no matter which hour they are actually typing.
+    const when = cairoMiddayInstant(dateKey);
     try {
       if (action === "collection") {
         await collectionMutation.mutateAsync({

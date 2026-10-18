@@ -5,6 +5,8 @@
 -- باقي أعمدة الدور (tenant_role_permissions/memberships/attendance_assignments.role ولقطات السجلات) نصية وتكفي — لا تتغير.
 -- لا يُشغَّل إلا عبر scripts/migrate-0045-roles: فحص مسبق يطابق التعريف الحالي **حرفيًا** (غير ذلك = partial ورفض
 -- بلا أي DDL)، عبارة تأكيد «APPLY 0045 TO <db>»، تحقق بعد التطبيق، وفي هذه المرحلة على Docker محلي مؤقت فقط.
+-- حالتا «قبل» مقبولتان حرفيًا: الـ13 قيمة أعلاه، أو أول 12 منها بلا 'moderator' (الشكل الفعلي في الإنتاج — accounting-reorg.sql
+-- اتطبّق جزئيًا). في الحالتين نفس الـALTER تحت بيضيف القيم الناقصة في الآخر فقط.
 
 ALTER TABLE `employees` MODIFY COLUMN `role` enum('agent','warehouse','manager','facebook_entry','scanner','super_admin','admin','data_entry','order_confirmation','shipping','accountant','viewer','moderator','accounts_manager') NOT NULL DEFAULT 'agent';
 

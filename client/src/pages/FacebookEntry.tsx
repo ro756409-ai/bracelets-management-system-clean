@@ -498,7 +498,12 @@ export default function FacebookEntry() {
       governorate: editCust.governorate.trim(),
       city: editCust.city.trim() || undefined,
       customerAddress: editCust.customerAddress.trim(),
-      selectedProducts: editItems.map(it => ({ productId: it.productId, productName: it.productName, quantity: it.quantity })),
+      // تركيبة/نقشة كل بند معاه (زي الإضافة) — مش تركيبة البند الأول للأوردر كله.
+      selectedProducts: editItems.map(it => ({
+        productId: it.productId, productName: it.productName, quantity: it.quantity,
+        variantId: it.variantId ?? undefined, color: it.color ?? undefined, size: it.size ?? undefined,
+        unitPrice: it.unitPrice,
+      })),
       totalAmount: editTotal,
       adName: editCust.adName.trim() || undefined,
       notes: editCust.notes.trim() || undefined,

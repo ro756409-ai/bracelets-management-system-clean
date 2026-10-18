@@ -975,6 +975,8 @@ import {
   updateEmployee,
   deleteEmployee,
   writeEmployeeKeepingAnOwner,
+  updateEmployeeIfUnchanged,
+  deleteEmployeeIfUnchanged,
   type OwnerAccountChange,
   searchEmployees,
   countActiveAdminTierEmployees,
@@ -1264,6 +1266,22 @@ async function writeOwnerAccountChange(
   if (result === "not_found") throw new TRPCError({ code: "NOT_FOUND", message: "الموظف غير موجود" });
   if (result === "last_owner")
     throw new TRPCError({ code: "FORBIDDEN", message: "لازم يفضل مالك نشط واحد على الأقل للشركة" });
+}
+
+/**
+ * الكتابة على موظف (غير مسار حساب المالك الذرّي) بشرط إن دوره وشركته لسه زي ما اتفحصوا — TOCTOU: لو اترقّى بين الفحص
+ * والكتابة (لمالك أو لدور مالي)، مفيش كتابة و CONFLICT.
+ */
+async function writeCheckedEmployee(
+  target: { id: number; role?: string | null; tenantId?: number | null },
+  change: OwnerAccountChange
+): Promise<void> {
+  const expected = { role: target.role ?? null, tenantId: target.tenantId ?? null };
+  const written = change.kind === "delete"
+    ? await deleteEmployeeIfUnchanged(target.id, expected)
+    : await updateEmployeeIfUnchanged(target.id, expected, change.data);
+  if (!written)
+    throw new TRPCError({ code: "CONFLICT", message: "بيانات الموظف اتغيّرت أثناء الطلب — لم يُحفظ شيء، أعد المحاولة" });
 }
 
 /**
@@ -3255,7 +3273,7 @@ export const appRouter = router({
         }
 
         if (isOwnerRole(target.role)) await writeOwnerAccountChange(ctx, id, { kind: "update", data });
-        else await updateEmployee(id, data);
+        else await writeCheckedEmployee(target, { kind: "update", data });
         return { success: true };
       }),
     delete: adminProcedure
@@ -3290,7 +3308,7 @@ export const appRouter = router({
         }
 
         if (isOwnerRole(target.role)) await writeOwnerAccountChange(ctx, input.id, { kind: "delete" });
-        else await deleteEmployee(input.id);
+        else await writeCheckedEmployee(target, { kind: "delete" });
         return { success: true };
       }),
     setCredentials: adminProcedure
@@ -3322,10 +3340,7 @@ export const appRouter = router({
           });
         }
         const passwordHash = await bcrypt.hash(input.password, 10);
-        await db
-          .update(employees)
-          .set({ username: input.username, passwordHash })
-          .where(eq(employees.id, input.id));
+        await writeCheckedEmployee(target, { kind: "update", data: { username: input.username, passwordHash } });
         return { success: true };
       }),
     changePassword: adminProcedure
@@ -3346,10 +3361,7 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
-        await db
-          .update(employees)
-          .set({ passwordHash })
-          .where(eq(employees.id, input.id));
+        await writeCheckedEmployee(target, { kind: "update", data: { passwordHash } });
         return { success: true };
       }),
 
@@ -6086,8 +6098,8 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
         const { id, ...data } = input;
-        await loadPortalManagedEmployee(ctx, id, data.role);
-        await updateEmployee(id, data);
+        const target = await loadPortalManagedEmployee(ctx, id, data.role);
+        await writeCheckedEmployee(target, { kind: "update", data });
         return { success: true };
       }),
 
@@ -6096,8 +6108,8 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
-        await loadPortalManagedEmployee(ctx, input.id);
-        await deleteEmployee(input.id);
+        const target = await loadPortalManagedEmployee(ctx, input.id);
+        await writeCheckedEmployee(target, { kind: "delete" });
         return { success: true };
       }),
 
@@ -6112,7 +6124,7 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
-        await loadPortalManagedEmployee(ctx, input.id);
+        const target = await loadPortalManagedEmployee(ctx, input.id);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const existing = await db
@@ -6127,10 +6139,7 @@ export const appRouter = router({
           });
         }
         const passwordHash = await bcrypt.hash(input.password, 10);
-        await db
-          .update(employees)
-          .set({ username: input.username, passwordHash })
-          .where(eq(employees.id, input.id));
+        await writeCheckedEmployee(target, { kind: "update", data: { username: input.username, passwordHash } });
         return { success: true };
       }),
 
@@ -6144,14 +6153,9 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(empScope(ctx), "employee", input.id);
-        await loadPortalManagedEmployee(ctx, input.id);
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+        const target = await loadPortalManagedEmployee(ctx, input.id);
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
-        await db
-          .update(employees)
-          .set({ passwordHash })
-          .where(eq(employees.id, input.id));
+        await writeCheckedEmployee(target, { kind: "update", data: { passwordHash } });
         return { success: true };
       }),
 
@@ -6718,6 +6722,16 @@ export const appRouter = router({
                 productId: z.number().int().min(1),
                 productName: z.string().min(1),
                 quantity: z.number().int().min(1).optional(),
+                /**
+                 * نوع الحفر/التركيبة لـ**البند ده بالذات** (زي addOrder). قبل كده التعديل كان بيبعت تركيبة
+                 * البند الأول بس على مستوى الأوردر، فالسيرفر كان بيدّيها لكل بنود نفس المنتج ويشيلها من
+                 * بنود المنتجات التانية — نقشة البند التاني بتضيع أو تتبدّل. اختياري للعملاء القدامى.
+                 */
+                variantId: z.number().int().optional(),
+                size: z.string().optional(),
+                color: z.string().optional(),
+                /** سعر وحدة البند (زي addOrder). من غيره الإجمالي كان بيتوزّع على البنود بالكمية فأسعار البنود بتتساوى. */
+                unitPrice: z.number().min(0).optional(),
               })
             )
             .min(1),
@@ -6767,6 +6781,8 @@ export const appRouter = router({
           input.selectedProducts.map(p => p.productId)
         );
         if (input.variantId != null) await requireOwned(empScope(ctx), "variant", input.variantId);
+        // تركيبة كل بند: في نطاق الموظف، والمنتج تابع لنشاط الأوردر، والتركيبة تابعة لمنتج بندها بالظبط.
+        await requireOrderLinesOwned(empScope(ctx), input.selectedProducts, order.businessId);
         const catalogNames = await getOwnedProductNames(
           order.businessId,
           input.selectedProducts.map(p => p.productId)
@@ -6807,22 +6823,21 @@ export const appRouter = router({
             size: input.size ?? null,
             color: input.color ?? null,
           },
+          // تركيبة البند نفسه أولًا؛ مستوى الأوردر (عميل قديم) بس كبديل لبنود المنتج الأول اللي مالهاش تركيبة.
           itemsWithQty.map(p => ({
             productId: p.productId,
             productName: p.productName,
             quantity: p.quantity,
+            unitPrice: p.unitPrice,
             variantId:
-              p.productId === firstProductId
-                ? (input.variantId ?? undefined)
-                : undefined,
+              p.variantId ??
+              (p.productId === firstProductId ? (input.variantId ?? undefined) : undefined),
             size:
-              p.productId === firstProductId
-                ? (input.size ?? undefined)
-                : undefined,
+              p.size ??
+              (p.productId === firstProductId ? (input.size ?? undefined) : undefined),
             color:
-              p.productId === firstProductId
-                ? (input.color ?? undefined)
-                : undefined,
+              p.color ??
+              (p.productId === firstProductId ? (input.color ?? undefined) : undefined),
           })),
           { normalizePhones: false, onStockLockedItems: "reject" }
         ));

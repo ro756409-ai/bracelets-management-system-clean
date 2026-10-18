@@ -1,3 +1,4 @@
+import { cairoDateKey, previousDateKey } from "@/lib/cairoDate";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
@@ -101,13 +102,11 @@ const DEFAULT_CANCEL_REASONS = [
 const OTHER_CANCEL_REASON = "__other__";
 
 /**
- * «أمس» بتوقيت القاهرة (UTC+2) كـYYYY-MM-DD — نفس الحساب اللي كان مكتوب مرتين جوه زرار
- * «أمس» (مرة للضغط ومرة لتمييزه نشط)، اتجمع في مكان واحد بدون أي تغيير في النتيجة.
+ * «أمس» بتوقيت القاهرة الفعلي (صيفي UTC+3 أو شتوي UTC+2) كـYYYY-MM-DD — مكان واحد لزرار «أمس»
+ * (للضغط ولتمييزه نشط). كان بيزوّد ساعتين ثابتين، فيطلع يوم غلط بين 00:00 و01:00 في التوقيت الصيفي.
  */
 function cairoYesterdayISO(): string {
-  const yesterday = new Date(Date.now() + 2*60*60*1000);
-  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-  return yesterday.toISOString().slice(0, 10);
+  return previousDateKey(cairoDateKey());
 }
 
 export default function EmployeeDashboard() {

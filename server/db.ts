@@ -979,6 +979,36 @@ export async function deleteEmployee(id: number) {
   await db.delete(employees).where(eq(employees.id, id));
 }
 
+/**
+ * كتابة/حذف موظف **بشرط** إن دوره وشركته لسه زي ما اتفحصوا (compare-and-set ذري ضد TOCTOU — Hotfix V2): الراوتر بيفحص
+ * دور الهدف ثم يكتب، فلو الهدف اترقّى (لمالك أو لدور مالي) بين الفحص والكتابة، شرط `role`/`tenantId` في نفس جملة
+ * الكتابة بيتقيّم على آخر قيمة ملتزمة تحت قفل الصف، فمايلمسش الحساب المرقّى. false = ماتكتبش حاجة.
+ */
+export type EmployeeWriteExpectation = { role: string | null; tenantId: number | null };
+const unchangedEmployee = (id: number, expected: EmployeeWriteExpectation) =>
+  and(
+    eq(employees.id, id),
+    sql`${employees.role} <=> ${expected.role}`,
+    sql`${employees.tenantId} <=> ${expected.tenantId}`,
+  );
+const affected = (result: any) => Number((Array.isArray(result) ? result[0] : result)?.affectedRows ?? 0);
+
+export async function updateEmployeeIfUnchanged(
+  id: number,
+  expected: EmployeeWriteExpectation,
+  data: Partial<InsertEmployee>
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return affected(await db.update(employees).set(data).where(unchangedEmployee(id, expected))) > 0;
+}
+
+export async function deleteEmployeeIfUnchanged(id: number, expected: EmployeeWriteExpectation): Promise<boolean> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return affected(await db.delete(employees).where(unchangedEmployee(id, expected))) > 0;
+}
+
 export type OwnerAccountChange = { kind: "update"; data: Partial<InsertEmployee> } | { kind: "delete" };
 
 /**

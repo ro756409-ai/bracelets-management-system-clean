@@ -1,14 +1,19 @@
 import mysql from "mysql2/promise";
 import { looksLikeProductionTarget } from "../shared/balanceReconciliation";
 import {
-  ACCOUNTS_MANAGER_ROLE, EMPLOYEE_ROLE_ENUM_AFTER_0045, EMPLOYEE_ROLE_ENUM_BEFORE_0045, ROLE_REFERENCE_COLUMNS, enumColumnType,
+  ACCOUNTS_MANAGER_ROLE, EMPLOYEE_ROLE_ENUM_AFTER_0045, EMPLOYEE_ROLE_ENUM_BEFORE_0045, EMPLOYEE_ROLE_ENUM_LEGACY_WITHOUT_MODERATOR,
+  ROLE_REFERENCE_COLUMNS, enumColumnType,
 } from "../shared/employeeRoleEnumSpec";
 import { migrationGate } from "./handMigration.service";
 
 /**
  * Migration 0045 (دور accounts_manager) — نفس انضباط المحرّك اليدوي، لعبارة «تعديل ENUM» واحدة:
- *   • check (افتراضي، قراءة فقط): يقرأ تعريف employees.role ويحكم: not_applied (التعريف القديم حرفيًا) / applied
- *     (الجديد حرفيًا) / partial (أي شكل آخر: قيم أو ترتيب مختلف، nullable، افتراضي مختلف، تعليق، EXTRA).
+ *   • check (افتراضي، قراءة فقط): يقرأ تعريف employees.role ويحكم: not_applied (أحد تعريفَي «قبل» المعروفين حرفيًا:
+ *     الـ13 قيمة، أو الـ12 قيمة بلا moderator = الشكل الفعلي في الإنتاج) / applied (الجديد حرفيًا) / partial (أي شكل
+ *     آخر: قيم أو ترتيب مختلف، قيمة ناقصة في النص، accounts_manager بلا moderator، nullable، افتراضي مختلف، تعليق، EXTRA).
+ *   • من أي «قبل» معروف، التطبيق ALTER واحد للتعريف الجديد: بيضيف القيم الناقصة في **الآخر** فقط — مفيش حذف ولا
+ *     إعادة ترتيب، فكل قيمة مخزّنة بتفضل بنفس رقمها ومعناها.
+ *   • rollback بيرجّع لتعريف الـ13 (بيشيل accounts_manager بس)؛ moderator بيفضل لأن الكود بيعرفه — مش بيرجّع للـ12.
  *   • apply: بوابات البيئة والتأكيد قبل أي اتصال كتابة؛ applied ⇒ replay بلا تغيير؛ partial ⇒ رفض بلا DDL؛
  *     not_applied ⇒ ALTER واحد يعيد charset/collation العمود الحالية صراحةً، ثم تحقق أن كل الخصائص كما هي.
  *   • rollback: نفس البوابات + يُرفض لو أي عمود يخزّن الدور (ROLE_REFERENCE_COLUMNS) يستخدم القيمة الجديدة.
@@ -22,7 +27,10 @@ export type RoleEnumResult = {
 };
 
 export const BEFORE_TYPE = enumColumnType(EMPLOYEE_ROLE_ENUM_BEFORE_0045);
+export const LEGACY_BEFORE_TYPE = enumColumnType(EMPLOYEE_ROLE_ENUM_LEGACY_WITHOUT_MODERATOR);
 export const AFTER_TYPE = enumColumnType(EMPLOYEE_ROLE_ENUM_AFTER_0045);
+/** تعريفات «قبل 0045» المعروفة حرفيًا — أي شكل غيرها = partial. */
+export const KNOWN_BEFORE_TYPES: readonly string[] = [BEFORE_TYPE, LEGACY_BEFORE_TYPE];
 
 async function readRoleColumn(conn: mysql.Connection): Promise<RoleColumn | null> {
   const [r] = await conn.query(`SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, CHARACTER_SET_NAME, COLLATION_NAME, COLUMN_COMMENT, EXTRA
@@ -41,7 +49,7 @@ export function evaluateRoleColumn(c: RoleColumn | null): { state: RoleEnumState
   if (c.defaultValue !== "agent") issues.push(`القيمة الافتراضية ${c.defaultValue ?? "NULL"} (المتوقع 'agent')`);
   if (c.comment) issues.push("للعمود تعليق غير متوقع");
   if (c.extra) issues.push(`EXTRA غير متوقع: ${c.extra}`);
-  if (c.columnType !== BEFORE_TYPE && c.columnType !== AFTER_TYPE) issues.push(`تعريف ENUM مختلف عن المتوقع: ${c.columnType}`);
+  if (c.columnType !== AFTER_TYPE && !KNOWN_BEFORE_TYPES.includes(c.columnType)) issues.push(`تعريف ENUM مختلف عن المتوقع: ${c.columnType}`);
   if (issues.length) return { state: "partial", issues };
   return { state: c.columnType === AFTER_TYPE ? "applied" : "not_applied", issues };
 }
@@ -71,6 +79,8 @@ export async function runRoleEnumMigration(opts: { databaseUrl: string; mode: "c
     const column = await readRoleColumn(conn);
     const { state, issues } = evaluateRoleColumn(column);
     lines.push(`حالة 0045: ${state === "applied" ? "مطبَّقة" : state === "not_applied" ? "غير مطبَّقة" : "⚠️ جزئية/شكل مختلف"}`);
+    if (state === "not_applied" && column?.columnType === LEGACY_BEFORE_TYPE)
+      lines.push("  · الشكل الحالي: 12 قيمة بلا moderator (الإنتاج) — التطبيق بيضيف moderator ثم accounts_manager في الآخر");
     for (const i of issues) lines.push(`  ✗ ${i}`);
     const out = { ...base, state, column, issues };
 
@@ -87,7 +97,7 @@ export async function runRoleEnumMigration(opts: { databaseUrl: string; mode: "c
         lines.push("✗ بعد التنفيذ: التعريف لا يطابق المتوقع — راجع يدويًا");
         return { ...out, state: ev.state, column: after, issues: [...ev.issues, ...(same ? [] : ["charset/collation تغيّرت"])], refused: "verify" };
       }
-      lines.push("✓ 0045 مطبَّقة: القيم القديمة وترتيبها كما هي + accounts_manager في الآخر، والخصائص كما هي");
+      lines.push(`✓ 0045 مطبَّقة: القيم القديمة وترتيبها كما هي + ${column!.columnType === LEGACY_BEFORE_TYPE ? "moderator ثم accounts_manager" : "accounts_manager"} في الآخر، والخصائص كما هي`);
       return { ...out, ok: true, applied: true, state: "applied", column: after };
     }
 
