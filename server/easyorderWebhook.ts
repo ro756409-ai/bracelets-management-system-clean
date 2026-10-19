@@ -151,16 +151,17 @@ type WebhookLogInsert = {
   message: string;
 };
 
-async function addLog(entry: WebhookLogInsert): Promise<void> {
+/** true = السطر اتحفظ فعلًا (المسار المؤجل محتاج يعرف: لو ماتحفظش، الـpayload هيضيع لو رجّعنا 202). */
+async function addLog(entry: WebhookLogInsert): Promise<boolean> {
   // سجل بلا نشاط معروف (قبل تحديد القناة) مابيتحفظش: عمود businessId قيمته الافتراضية 1، فكان بيتسجّل تحت تاجر
   // حقيقي ويظهر في سجلاته (INT-2 / SEC-7). سطر مختصر في اللوج بدل كده، من غير أي بيانات.
   if (entry.businessId == null) {
     console.warn(`[EasyOrder Webhook] ${entry.eventType}/${entry.status} (no channel): ${entry.message.slice(0, 160)}`);
-    return;
+    return false;
   }
   try {
     const drizzle = await getDb();
-    if (!drizzle) return;
+    if (!drizzle) return false;
     await drizzle.insert(webhookLogs).values({
       eventType: entry.eventType,
       status: entry.status,
@@ -175,8 +176,10 @@ async function addLog(entry: WebhookLogInsert): Promise<void> {
       rawPayload: entry.rawPayload ?? null,
       message: entry.message,
     });
+    return true;
   } catch (err) {
     console.error(`[Webhook] Failed to save log: ${safeErrorText(err)}`);
+    return false;
   }
 }
 
@@ -223,8 +226,9 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
 
     // كل سجلات الويبهوك تُختم بنشاط القناة للعزل. قبل تحديد القناة (فشل auth) بيفضل
     // businessId غير معروف → addLog بيسيبه للـdefault فمايتنسبش لتينانت بعينه.
-    const logWebhook = (entry: Omit<WebhookLogInsert, "businessId">) =>
-      addLog({ ...entry, businessId: channel?.businessId });
+    const logWebhook = async (entry: Omit<WebhookLogInsert, "businessId">): Promise<void> => {
+      await addLog({ ...entry, businessId: channel?.businessId });
+    };
 
     if (!authenticated) {
       // بلا أي جزء من السر في السجل/اللوج
@@ -258,8 +262,12 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     const access = await resolveTenantAccessForBusiness(channel.businessId);
     if (!access.processWebhooks) {
       const raw = JSON.stringify(req.body ?? null);
-      if (raw.length > DEFERRED_PAYLOAD_MAX) return res.status(503).set("Retry-After", "3600").json({ received: false, deferred: true });
-      await logWebhook({ eventType: DEFERRED_EVENT, status: "error", rawPayload: raw, message: `${deferredMarker(channel.id)} ⏸️ مؤجل — الشركة غير مفعّلة للكتابة؛ يُعالج تلقائيًا بعد إعادة التفعيل` });
+      // الحد بالبايت مش بعدد الحروف: العمود TEXT = 65,535 بايت، والحرف العربي 2 بايت — payload عربي 22k–60k حرف كان
+      // بيفشل في الحفظ ويترجع 202 فيضيع للأبد.
+      if (Buffer.byteLength(raw, "utf8") > DEFERRED_PAYLOAD_MAX) return res.status(503).set("Retry-After", "3600").json({ received: false, deferred: true });
+      const saved = await addLog({ businessId: channel.businessId, eventType: DEFERRED_EVENT, status: "error", rawPayload: raw, message: `${deferredMarker(channel.id)} ⏸️ مؤجل — الشركة غير مفعّلة للكتابة؛ يُعالج تلقائيًا بعد إعادة التفعيل` });
+      // ماتحفظش = مفيش نسخة نعالجها بعدين → 503 عشان المرسل يعيد، بدل 202 كاذب.
+      if (!saved) return res.status(503).set("Retry-After", "600").json({ received: false, deferred: false });
       return res.status(202).json({ received: true, action: "deferred" });
     }
 
@@ -441,8 +449,11 @@ async function processEasyOrderBody(channel: EasyOrderChannel, body: any, logWeb
         externalOrderId: payload.id,
         customerName: payload.full_name,
         rawPayload: JSON.stringify(body).slice(0, 4000),
-        message: `فشل حفظ الأوردر: ${result.error}`,
+        message: `فشل حفظ الأوردر${result.permanent ? " (خطأ دائم — يحتاج إدخال/مراجعة يدوية)" : ""}: ${result.error}`,
       });
+      // الدائم (بيانات أطول من العمود / رفض بسياسة زي Go-Live) = 422: إعادة نفس الطلب مش هتنجح، فـ500 كان بيخلّي
+      // Easy Order يعيد للأبد. المؤقت (قاعدة بيانات/deadlock) يفضل 500 عشان يتعاد.
+      if (result.permanent) return res.status(422).json({ error: "Order rejected — needs manual review", permanent: true });
       return res.status(500).json({ error: "Failed to create order" });
     }
 
@@ -516,10 +527,21 @@ export async function drainDeferredEasyOrders(tenantId: number, limit = 200): Pr
     let outcome = "تعذّر إيجاد قناة فعّالة — لم يُعالج";
     if (channel && channel.isActive && channel.businessId === row.businessId) {
       const res: ResLike & { code: number; body: any } = { code: 200, body: null, status(c: number) { this.code = c; return this as any; }, json(b: any) { this.body = b; return this as any; } } as any;
-      const logWebhook: WebhookLogFn = entry => addLog({ ...entry, businessId: channel.businessId });
-      await processEasyOrderBody(channel, JSON.parse(row.rawPayload ?? "null"), logWebhook, res);
-      outcome = `عولج بعد إعادة التفعيل (HTTP ${res.code}${res.body?.action ? ` · ${res.body.action}` : ""})`;
-      processed++;
+      const logWebhook: WebhookLogFn = async entry => { await addLog({ ...entry, businessId: channel.businessId }); };
+      let body: unknown;
+      try { body = JSON.parse(row.rawPayload ?? "null"); } catch { body = undefined; }
+      if (body === undefined) {
+        // payload تالف: كان JSON.parse بيرمي بعد المطالبة فالصف يفضل «claimed» للأبد ويوقف تفريغ الشركة كلها.
+        outcome = "payload غير صالح — لم يُعالج (مراجعة يدوية)";
+        skipped++;
+      } else {
+        await processEasyOrderBody(channel, body, logWebhook, res);
+        // 5xx مابقاش «اتعالج» بصمت — بيتعلّم للمراجعة اليدوية (إعادة المحاولة التلقائية ممكن تلف للأبد على خطأ دائم).
+        outcome = res.code >= 500
+          ? `⚠️ فشل المعالجة بعد إعادة التفعيل (HTTP ${res.code}) — يحتاج مراجعة يدوية`
+          : `عولج بعد إعادة التفعيل (HTTP ${res.code}${res.body?.action ? ` · ${res.body.action}` : ""})`;
+        if (res.code >= 500) skipped++; else processed++;
+      }
     } else skipped++;
     await drizzle.update(webhookLogs).set({ eventType: DEFERRED_DONE, message: `${row.message ?? ""} → ${outcome}`.slice(0, 2000) }).where(eq(webhookLogs.id, row.id));
   }

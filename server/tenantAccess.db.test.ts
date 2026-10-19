@@ -194,4 +194,19 @@ describe.runIf(CAN)("🔒 إنفاذ حالة الشركة", () => {
     const live = await request(app).post("/api/webhooks/easyorder").set("x-webhook-secret", channelSecretA).send(body);
     expect(live.status).not.toBe(202);
   });
+
+  it("Easy Orders المؤجل: الحد بالبايت (عربي) — payload بيعدّي حد الحروف لكن أكبر من العمود = 503 مش 202 ضايع", async () => {
+    const app = express(); app.use(express.json({ limit: "5mb" })); registerWebhookRoutes(app);
+    const logs = async () => ((await tmp.raw.query("SELECT eventType FROM webhook_logs WHERE businessId = ? AND eventType = 'deferred'", [A.businessId])) as any)[0].length;
+    await setTenant(A.tenantId, "expired");
+    try {
+      const before = await logs();
+      // ~40k حرف عربي = ~80k بايت: أقل من 60k حرف (الحد القديم) وأكبر من TEXT (65,535 بايت)
+      const body = { event_type: "order-status-update", order_id: `ext-big-${tmp.name}`, new_status: "confirmed", note: "ع".repeat(40_000) };
+      const r = await request(app).post("/api/webhooks/easyorder").set("x-webhook-secret", channelSecretA).send(body);
+      expect(r.status).toBe(503);
+      expect(r.headers["retry-after"]).toBeTruthy();
+      expect(await logs()).toBe(before);
+    } finally { await setTenant(A.tenantId, "active"); }
+  });
 });

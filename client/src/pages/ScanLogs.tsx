@@ -43,7 +43,7 @@ const RESULT: Record<ScanLog["result"], { label: string; tone: "success" | "warn
 };
 
 /**
- * سجل المسحات — مسحات QR للموظف الحالي (employeePortal.scanLogs) بفلاتر النتيجة/التاريخ/بحث محلي وتصدير CSV.
+ * سجل المسحات — مسحات QR في نطاق الجلسة (orders.scanLogsReport) بفلاتر النتيجة/التاريخ/بحث محلي وتصدير CSV.
  * المرحلة 7D (عرض فقط): بطاقات ملخص من إحصاءات الاستعلام نفسه، جدول Desktop/بطاقات Mobile، StatusBadge للنتيجة.
  */
 export default function ScanLogs() {
@@ -53,7 +53,9 @@ export default function ScanLogs() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  const { data: scanLogsData, isLoading, isError, error, refetch } = (trpc.employeePortal as any).scanLogs.useQuery(
+  // الصفحة جوه لوحة الإدارة (جلسة المالك/المدير) — orders.scanLogsReport مقيّد بنطاق الجلسة. كان النداء على
+  // employeePortal.scanLogs (مش موجود) مستخبي ورا `as any` فالصفحة كانت بتفضل تحمّل على 404.
+  const { data: scanLogsData, isLoading, isError, error, refetch } = trpc.orders.scanLogsReport.useQuery(
     {
       limit: 500,
       dateFrom: dateFrom ? new Date(dateFrom) : undefined,
@@ -128,7 +130,7 @@ export default function ScanLogs() {
     <div className="mx-auto max-w-6xl space-y-5" dir="rtl" data-testid="scan-logs-page">
       <PageHeader
         title="سجل المسحات"
-        description="عرض كل مسحات QR الخاصة بك"
+        description="عرض مسحات QR في نشاطك"
         icon={<QrCode className="h-5 w-5" aria-hidden="true" />}
         actions={
           <>

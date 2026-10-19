@@ -324,7 +324,10 @@ export async function connectCarrierAccount(input: {
   const db = await getDb();
   if (!db) return { ok: false, error: "قاعدة البيانات غير متاحة" };
   const sealed = encryptSecret(apiKey);
-  const salt = randomSalt();
+  // إعادة الربط (تغيير المفتاح / فصل ثم ربط) تحتفظ بنفس الـsalt = نفس سر الـwebhook: الشحنات اللي اتعملت قبلها
+  // بتبعت السر القديم في الهيدر، وتدويره كان بيرفضها 401 فتضيع تحديثات التسليم/المرتجع بتاعتها. أول ربط بس = salt جديد.
+  const existing = await getCarrierAccountRow(input.businessId);
+  const salt = existing?.webhookSalt || randomSalt();
   const secretHash = hashSecret(deriveWebhookSecret(PROVIDER_BOSTA, input.businessId, salt));
   const last4 = apiKey.slice(-4);
   const values = {

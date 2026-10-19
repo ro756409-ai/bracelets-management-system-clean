@@ -28,7 +28,9 @@ describe.runIf(CAN)("📝 تعديل أوردر فيسبوك: نوع الحفر 
   const snap = async (orderId: number) => JSON.stringify({ o: await q("SELECT * FROM orders WHERE id = ?", [orderId]), i: await q("SELECT * FROM order_items WHERE orderId = ? ORDER BY id", [orderId]) });
   const CUST = { customerName: "عميل نقشة", customerPhone: "01000009001", governorate: "القاهرة", customerAddress: "شارع النقشة 4 - الدور 2 - شقة 7" };
   async function addOrder(products: any[]) {
-    const r = await (await portal(fb)).facebookEntry.addOrder({ ...CUST, selectedProducts: products, totalAmount: 300 } as any);
+    // الإجمالي متسق مع البنود (السيرفر بيرفض إجمالي أكبر من البنود + الشحن من غير خصم).
+    const totalAmount = products.reduce((s: number, p: any) => s + (p.unitPrice ?? 0) * (p.quantity ?? 1), 0);
+    const r = await (await portal(fb)).facebookEntry.addOrder({ ...CUST, selectedProducts: products, totalAmount } as any);
     return (await q("SELECT id FROM orders WHERE orderNumber = ?", [r.orderNumber]))[0].id as number;
   }
 

@@ -7,6 +7,7 @@ import { RefreshCw, Activity, Filter } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PageHeader, SectionCard, StatusBadge, ResponsiveDataTable, Pagination, OfflineState, type Column } from "@/components/shared";
+import { roleLabel } from "@shared/permissionLabels";
 
 const ACTION_LABELS: Record<string, string> = {
   confirm_order: "تأكيد أوردر",
@@ -20,6 +21,27 @@ const ACTION_LABELS: Record<string, string> = {
   print_orders: "طباعة أوردرات",
   add_product: "إضافة منتج",
   reclaim_orders: "استرداد أوردرات",
+  resolve_order_review: "تعيين منتج (مراجعة)",
+  edit_order_items: "تعديل بنود أوردر",
+  duplicate_order: "تكرار أوردر",
+  convert_no_answer: "تحويل «لم يرد» لجديد",
+  convert_postponed: "تحويل «مؤجل» لجديد",
+  unassign_employee_orders: "سحب أوردرات موظف",
+  fb_order_create: "إدخال أوردر فيسبوك",
+  fb_order_update: "تعديل أوردر فيسبوك",
+  fb_order_delete: "حذف أوردر فيسبوك",
+  employee_create: "إضافة موظف",
+  employee_update: "تعديل موظف",
+  employee_delete: "حذف موظف",
+  employee_credentials_set: "تعيين بيانات دخول",
+  employee_password_change: "تغيير كلمة سر",
+  sales_channel_create: "إضافة قناة بيع",
+  sales_channel_update: "تعديل قناة بيع",
+  sales_channel_secret_clear: "مسح سر قناة بيع",
+  sales_channel_delete: "حذف قناة بيع",
+  sales_channel_reactivate: "إعادة تفعيل قناة بيع",
+  carrier_account_connect: "ربط حساب بوسطة",
+  carrier_account_disconnect: "فصل حساب بوسطة",
 };
 
 const ENTITY_LABELS: Record<string, string> = {
@@ -27,6 +49,8 @@ const ENTITY_LABELS: Record<string, string> = {
   product: "منتج",
   employee: "موظف",
   inventory: "مخزون",
+  sales_channel: "قناة بيع",
+  carrier_account: "حساب شحن",
 };
 
 const ACTION_TONE = (a: string): "success" | "danger" | "warning" | "info" | "neutral" =>
@@ -70,9 +94,13 @@ export default function ActivityLogPage() {
   const total = data?.total ?? 0;
   const hasFilters = (actionFilter && actionFilter !== "all") || (entityFilter && entityFilter !== "all");
 
-  const roleBadge = (role: string) => role === "admin"
-    ? <StatusBadge status="admin" label="مدير" tone="danger" size="sm" icon={null} />
-    : <StatusBadge status="employee" label="موظف" tone="info" size="sm" icon={null} />;
+  // السطور الجديدة بتسجّل الدور الفعلي (المالك/مدير/وكيل…)؛ القديمة كانت «admin» لأي جلسة إدارة و«employee» لأي موظف.
+  const roleBadge = (role: string) => {
+    const legacy: Record<string, string> = { admin: "مدير", employee: "موظف", system: "النظام" };
+    const label = legacy[role] ?? roleLabel(role);
+    const adminTier = role === "admin" || role === "super_admin" || role === "manager";
+    return <StatusBadge status={role} label={label} tone={adminTier ? "danger" : "info"} size="sm" icon={null} />;
+  };
   const actionBadge = (a: string) => <StatusBadge status={a} label={ACTION_LABELS[a] || a} tone={ACTION_TONE(a)} size="sm" icon={null} />;
 
   const columns: Column<any>[] = [

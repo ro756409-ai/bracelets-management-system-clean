@@ -4,7 +4,7 @@ import request from "supertest";
 import { randomBytes } from "crypto";
 import { and, eq, inArray, isNull, like, or, sql } from "drizzle-orm";
 import { appRouter } from "./routers";
-import { getDb, insertOrderWithItems, createProductWithVariants, setDefaultPackageImageUrl } from "./db";
+import { getDb, insertOrderWithItems, createProductWithVariants, setDefaultPackageImageUrl, getDashboardStats } from "./db";
 import {
   businessCarrierAccounts, businessConfigurationValues, carrierWebhookEvents, carrierWebhookInbox, inventoryMovements,
   orders, orderItems, products, productVariants,
@@ -562,6 +562,138 @@ export function registerBostaWebhookInboxDbSuite(CAN: boolean) {
       const next = await mkShipped(A, prodA, varA);
       expect((await call(secretA, official(next.sid, 45, T0 + 100))).json?.status).toBe("processed");
       expect(await inboxRows(next.sid)).toHaveLength(1);
+    });
+
+    it("🔑 deliveredAt/shippedAt: بيتسجّلوا مرة واحدة بوقت الحدث نفسه، والمكرر/المتأخر مايغيّرهمش (إيراد اللوحة بتاريخ التسليم)", async () => {
+      const { id, sid } = await mkShipped(A, prodA, varA);
+      const T1 = T0 + 500_000, T2 = T1 + 60_000, T3 = T2 + 3_600_000;
+      await call(secretA, official(sid, 21, T1));
+      expect(new Date((await orderRow(id)).shippedAt as any).getTime()).toBe(T1);
+      await call(secretA, official(sid, 41, T2));
+      expect(new Date((await orderRow(id)).shippedAt as any).getTime()).toBe(T1); // خرجت للتسليم مابتغيّرش وقت الشحن
+      expect((await orderRow(id)).deliveredAt).toBeNull();
+      const revenue = async () => (await getDashboardStats(new Date(T3), new Date(T3), undefined, [A.businessId]))!.totalRevenue;
+      const revBefore = await revenue();
+      await call(secretA, official(sid, 45, T3, { isConfirmedDelivery: true }));
+      expect(await revenue()).toBe(revBefore + 750); // كان صفر: تسليم بوسطة مابيكتبش deliveredAt فمايدخلش إيراد اليوم
+      const o = await orderRow(id);
+      expect(o.status).toBe("delivered");
+      expect(new Date(o.deliveredAt as any).getTime()).toBe(T3);
+      await call(secretA, official(sid, 45, T3 + 1000, { isConfirmedDelivery: true })); // تكرار بوقت أحدث
+      expect(new Date((await orderRow(id)).deliveredAt as any).getTime()).toBe(T3);
+      // شحنة سلّمت مباشرة (بدون حدث شحن قبلها): التسليم بيكتب deliveredAt، ووقت الشحن مايتخترعش
+      const direct = await mkShipped(A, prodA, varA);
+      await call(secretA, official(direct.sid, 45, T3));
+      expect(new Date((await orderRow(direct.id)).deliveredAt as any).getTime()).toBe(T3);
+    });
+
+    it("🔒 إعادة ربط حساب بوسطة (مفتاح جديد) بتحتفظ بسر الـwebhook — الشحنات اللي في الطريق مابترجعش 401", async () => {
+      const d = await db();
+      const [beforeRow] = await d.select().from(businessCarrierAccounts).where(eq(businessCarrierAccounts.businessId, A.businessId));
+      const KEY_A2 = `whk-A2-${tag}`;
+      const r = await connectCarrierAccount({ tenantId: A.tenantId, businessId: A.businessId, apiKey: KEY_A2, pickupLocationId: "LOC1", pickupLocationName: "المخزن", allowOpenPackageDefault: true, actorId: 1, fetchImpl: fakeFetch(KEY_A2, []) });
+      expect(r.ok).toBe(true);
+      const [afterRow] = await d.select().from(businessCarrierAccounts).where(eq(businessCarrierAccounts.businessId, A.businessId));
+      expect(afterRow.webhookSalt).toBe(beforeRow.webhookSalt);
+      expect(afterRow.webhookSecretHash).toBe(beforeRow.webhookSecretHash);
+      expect(afterRow.apiKeyLast4).toBe(KEY_A2.slice(-4));
+      const { id, sid } = await mkShipped(A, prodA, varA, undefined, "shipped");
+      const res = await call(secretA, official(sid, 45, T0 + 100));
+      expect(res.status).toBe(200);
+      expect((await orderRow(id)).status).toBe("delivered");
+    });
+
+    it("🔒 فترة الانتقال: شحنة اتعملت بالسر العام **قبل** ربط حساب النشاط بتكمّل؛ اللي بعده (أو وقتها مجهول) 401", async () => {
+      process.env.BOSTA_WEBHOOK_SECRET = ENV_SECRET;
+      try {
+        const d = await db();
+        const [acct] = await d.select().from(businessCarrierAccounts).where(eq(businessCarrierAccounts.businessId, B.businessId));
+        const createdAt = new Date(acct.createdAt as any).getTime();
+        const old = await mkShipped(B, prodB, varB, undefined, "shipped");
+        await d.update(orders).set({ bostaSentAt: new Date(createdAt - 86_400_000) }).where(eq(orders.id, old.id));
+        const r1 = await call(ENV_SECRET, official(old.sid, 45, T0 + 100));
+        expect(r1.json).toMatchObject({ ok: true, status: "processed" });
+        expect((await orderRow(old.id)).status).toBe("delivered");
+        const fresh = await mkShipped(B, prodB, varB, undefined, "shipped");
+        await d.update(orders).set({ bostaSentAt: new Date(createdAt + 86_400_000) }).where(eq(orders.id, fresh.id));
+        const before = await orderRow(fresh.id);
+        expect((await call(ENV_SECRET, official(fresh.sid, 45, T0 + 100))).status).toBe(401);
+        expect(await orderRow(fresh.id)).toEqual(before);
+      } finally { delete process.env.BOSTA_WEBHOOK_SECRET; }
+    });
+
+    it("🔒 التحصيل مايتلمسش من الـwebhook: collectedAmount/collectedAt/collectionStatus والإجمالي ثابتين عبر الشحن والتسليم والاستثناء والمرتجع", async () => {
+      const { id, sid } = await mkShipped(A, prodA, varA);
+      const collectedAt = new Date("2026-09-01T10:00:00Z");
+      await (await db()).update(orders).set({ collectedAmount: "123.45", collectedAt, collectionStatus: "partial" }).where(eq(orders.id, id));
+      const money = async () => { const o = await orderRow(id); return [o.collectedAmount, new Date(o.collectedAt as any).getTime(), o.collectionStatus, o.totalAmount]; };
+      const before = await money();
+      expect(before).toEqual(["123.45", collectedAt.getTime(), "partial", "750.00"]);
+      let seqTs = T0 + 900_000;
+      for (const [state, extra] of [[21, {}], [41, {}], [47, { exceptionReason: "العميل لا يرد" }], [45, { cod: 999, isConfirmedDelivery: true }], [46, { type: "RTO" }]] as const) {
+        const r = await call(secretA, official(sid, state, (seqTs += 1000), extra as any)); // أوقات متزايدة بترتيب الأحداث
+        expect(r.status, `state ${state}`).toBe(200);
+        expect(await money(), `state ${state}`).toEqual(before);
+      }
+      expect((await orderRow(id)).status).toBe("returned");
+      // أوردر جديد بقيم التحصيل الافتراضية: التسليم مابيعلّمهوش «اتحصّل» ولا بيكتب مبلغ
+      const fresh = await mkShipped(A, prodA, varA, undefined, "shipped");
+      await call(secretA, official(fresh.sid, 45, T0 + 950_000, { cod: 750 }));
+      expect(await orderRow(fresh.id)).toMatchObject({ status: "delivered", collectedAmount: null, collectedAt: null, collectionStatus: "pending" });
+    });
+
+    it("🔑 حدث بلا timeStamp: يتعالج (الوقت = وقت الاستقبال)، تكراره بنفس الحالة مايأثرش، ومايرجّعش أوردر مسلَّم لورا", async () => {
+      const { id, sid } = await mkShipped(A, prodA, varA);
+      const noTs = (state: number, over: Record<string, unknown> = {}) => { const p: any = official(sid, state, 0, over); delete p.timeStamp; return p; };
+      const t0 = Date.now();
+      const r1 = await call(secretA, noTs(21));
+      expect(r1.json).toMatchObject({ ok: true, status: "processed" });
+      const o1 = await orderRow(id);
+      expect(o1.status).toBe("shipped");
+      const shippedAt = new Date(o1.shippedAt as any).getTime();
+      expect(shippedAt).toBeGreaterThanOrEqual(t0 - 2000); expect(shippedAt).toBeLessThanOrEqual(Date.now() + 2000);
+      // نفس الحالة بلا وقت = نفس المفتاح → مكرر بلا أثر تاني
+      expect((await call(secretA, noTs(21))).json).toMatchObject({ ok: true, duplicate: true });
+      expect(new Date((await orderRow(id)).shippedAt as any).getTime()).toBe(shippedAt);
+      // تسليم بوقت، وبعده حدث أقدم مرتبة بلا وقت (فحص الترتيب الزمني مابيشتغلش بلا وقت) → ترتيب الحالات بيمنع الرجوع
+      await call(secretA, official(sid, 45, T0 + 990_000, { isConfirmedDelivery: true }));
+      const r3 = await call(secretA, noTs(41));
+      expect(r3.status).toBe(200);
+      const o3 = await orderRow(id);
+      expect(o3.status).toBe("delivered");
+      expect(new Date(o3.deliveredAt as any).getTime()).toBe(T0 + 990_000);
+      // قيد معروف (موثّق في التقرير): استثناءين بلا وقت لنفس الحالة بيتدمجوا في مفتاح واحد — التاني بيتعدّ مكرر وسببه مابيتسجّلش
+      const ex = await mkShipped(A, prodA, varA, undefined, "shipped");
+      const exNoTs = (reason: string) => { const p: any = official(ex.sid, 47, 0, { exceptionReason: reason }); delete p.timeStamp; return p; };
+      expect((await call(secretA, exNoTs("المحاولة الأولى"))).json).toMatchObject({ status: "processed" });
+      expect((await call(secretA, exNoTs("المحاولة التانية"))).json).toMatchObject({ duplicate: true });
+      const exRow = await orderRow(ex.id);
+      expect(exRow.status).toBe("shipped");
+      expect(exRow.bostaLastError).toContain("المحاولة الأولى");
+      expect(exRow.bostaLastError).not.toContain("المحاولة التانية");
+    });
+
+    it("🔒 تسليم نفس الحدث 5 مرات بالتزامن: صف واحد في الصندوق، تطبيق واحد، deliveredAt بوقت الحدث، وبلا 5xx ولا حركة مخزون", async () => {
+      const { id, sid } = await mkShipped(A, prodA, varA, undefined, "shipped");
+      const before = await stockSnapshot();
+      const payload = official(sid, 45, T0 + 1_100_000, { isConfirmedDelivery: true });
+      const one = async () => {
+        let status = 0, json: any = null;
+        const res: any = { status: (s: number) => { status = s; return res; }, json: (j: any) => { json = j; return res; }, set: () => res };
+        await handleBostaWebhook({ headers: { "x-bosta-secret": secretA }, body: payload } as any, res);
+        return { status, json };
+      };
+      const rs = await Promise.all(Array.from({ length: 5 }, one));
+      expect(rs.map(r => r.status)).toEqual([200, 200, 200, 200, 200]);
+      expect(rs.filter(r => r.json?.status === "processed" && !r.json?.duplicate).length).toBeGreaterThanOrEqual(1);
+      const rows = await inboxRows(sid);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ processingStatus: "processed" });
+      expect(rows[0].duplicateCount + 1).toBeLessThanOrEqual(5);
+      const o = await orderRow(id);
+      expect(o.status).toBe("delivered");
+      expect(new Date(o.deliveredAt as any).getTime()).toBe(T0 + 1_100_000);
+      expect(await stockSnapshot()).toEqual(before);
     });
 
     it("🔒 ولا حركة مخزون ولا تغيير رصيد من كل أحداث الـsuite", async () => {

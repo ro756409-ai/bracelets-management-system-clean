@@ -271,7 +271,9 @@ export default function OrderDetails() {
     if (editData.customerPhone !== order.customerPhone) updates.customerPhone = editData.customerPhone;
     if (editData.customerAddress !== order.customerAddress) updates.customerAddress = editData.customerAddress;
     if (editData.governorate !== order.governorate) updates.governorate = editData.governorate;
-    if (Number(editData.totalAmount) !== Number(order.totalAmount)) updates.totalAmount = Number(editData.totalAmount);
+    // الإجمالي بيتكتب مباشرة بس لأوردر قديم بلا بنود — غير كده بيتحسب من البنود + الشحن على السيرفر.
+    const hasItems = Array.isArray((order as any).items) && (order as any).items.length > 0;
+    if (!hasItems && Number(editData.totalAmount) !== Number(order.totalAmount)) updates.totalAmount = Number(editData.totalAmount);
     if (editData.notes !== (order.notes || "")) updates.notes = editData.notes;
 
     if (Object.keys(updates).length <= 1) {
@@ -479,8 +481,12 @@ export default function OrderDetails() {
         <SectionCard title="الأسعار والتحصيل" icon={<Receipt className="h-4 w-4" aria-hidden="true" />} testId="od-section-prices">
           <div className="grid grid-cols-2 gap-4">
             <Field label="المبلغ الإجمالي">
-              {isEditing ? (
+              {isEditing && items.length === 0 ? (
                 <Input type="number" min={0} value={editData.totalAmount} onChange={e => setEditData({ ...editData, totalAmount: parseFloat(e.target.value) || 0 })} aria-label="المبلغ الإجمالي" className="min-h-11 md:min-h-9" />
+              ) : isEditing ? (
+                <span className="tabular-nums" data-testid="od-total-derived">
+                  {money(order.totalAmount)} <span className="text-xs text-muted-foreground">— بيتحسب من البنود + الشحن (عدّل من محرر البنود)</span>
+                </span>
               ) : (
                 <span className="tabular-nums text-[var(--success)]">{money(order.totalAmount)}</span>
               )}

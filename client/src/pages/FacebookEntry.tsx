@@ -439,6 +439,8 @@ export default function FacebookEntry() {
       selectedProducts: buildSelectedProducts(items),
       totalAmount: total,
       shippingCost: Number(cust.shipping) || 0,
+      // الخصم دايمًا (مش في أوردر اللصق بس) — السيرفر بيتحقق إن الإجمالي = البنود − الخصم + الشحن.
+      discount: Number(cust.discount) || 0,
       adName: cust.adName.trim() || undefined,
       notes: cust.notes.trim() || undefined,
       variantId: first.variantId,
@@ -447,6 +449,15 @@ export default function FacebookEntry() {
       ...pastePayload,
       operationId: persistentOperationIdFor(OP_SCOPE),
     } as any, { onSettled: done }));
+  }
+
+  /** خصم الأوردر المحفوظ ضمنيًا: إجمالي البنود قبل الخصم − (الإجمالي − الشحن)؛ مايبقاش سالب. */
+  function orderDiscountOf(order: any): number {
+    const items: any[] = order.items ?? [];
+    if (!items.length) return 0;
+    const gross = items.reduce((s, it) => s + Number(it.unitPrice ?? 0) * Number(it.quantity ?? 0), 0);
+    const net = Number(order.totalAmount ?? 0) - Number(order.shippingFees ?? 0);
+    return Math.max(0, Math.round((gross - net) * 100) / 100);
   }
 
   function openEdit(order: any) {
@@ -461,7 +472,7 @@ export default function FacebookEntry() {
       notes: order.notes ?? "",
       adName: order.adName ?? "",
       shipping: String(order.shippingFees ?? "0"),
-      discount: "0",
+      discount: String(orderDiscountOf(order)),
     });
     // بنود التعديل: من عناصر الأوردر لو متاحة، وإلا صنف واحد من رأس الأوردر.
     const src = (order.items?.length ? order.items : [{ productId: order.productId, productName: order.productName, quantity: order.quantity, variantId: order.variantId }]);
@@ -476,9 +487,10 @@ export default function FacebookEntry() {
         return {
           productId: it.productId, productName: it.productName ?? p?.name ?? "",
           variantId: it.variantId ?? undefined, sku: v?.sku ?? p?.sku ?? null,
-          color: v?.color ?? order.color ?? null, size: v?.size ?? order.size ?? null,
+          // لون/مقاس/سعر البند المحفوظ أولًا — الكتالوج بديل بس (التعديل مايغيّرش سعر اتباع بيه).
+          color: it.color ?? v?.color ?? order.color ?? null, size: it.size ?? v?.size ?? order.size ?? null,
           optionLabel: variantLabel(v, dims) || null,
-          quantity: it.quantity ?? 1, unitPrice: Number(v?.price ?? p?.price ?? 0),
+          quantity: it.quantity ?? 1, unitPrice: Number(it.unitPrice ?? v?.price ?? p?.price ?? 0),
           availableStock: avail,
         } as PickedItem;
       })
@@ -489,7 +501,10 @@ export default function FacebookEntry() {
     if (!editingOrder) return;
     if (editItems.length === 0) return toast.error("أضف صنفًا واحدًا على الأقل");
     const first = editItems[0];
-    const editTotal = editItems.reduce((s, it) => s + it.unitPrice * it.quantity, 0) + (Number(editCust.shipping) || 0);
+    const editShipping = Number(editCust.shipping) || 0;
+    const editDiscount = Number(editCust.discount) || 0;
+    // نفس معادلة الإضافة والسيرفر: مجموع البنود − الخصم + الشحن (الخصم مايضيعش مع التعديل).
+    const editTotal = Math.round((editItems.reduce((s, it) => s + it.unitPrice * it.quantity, 0) - editDiscount + editShipping) * 100) / 100;
     updateOrderMutation.mutate({
       orderId: editingOrder.id,
       customerName: editCust.customerName.trim(),
@@ -505,6 +520,8 @@ export default function FacebookEntry() {
         unitPrice: it.unitPrice,
       })),
       totalAmount: editTotal,
+      shippingCost: editShipping,
+      discount: editDiscount,
       adName: editCust.adName.trim() || undefined,
       notes: editCust.notes.trim() || undefined,
       variantId: first.variantId,

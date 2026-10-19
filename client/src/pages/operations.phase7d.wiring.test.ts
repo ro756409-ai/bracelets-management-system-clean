@@ -32,8 +32,10 @@ describe("🔌 Queries/Mutations قبل = بعد (12 صفحة)", () => {
       expect(hooks(read(file))).toEqual(before);
     });
   }
-  it("ScanLogs: employeePortal.scanLogs كما كان (بـcast)", () => {
-    expect(read("pages/ScanLogs.tsx")).toContain("(trpc.employeePortal as any).scanLogs.useQuery(");
+  it("ScanLogs: orders.scanLogsReport مكتوب النوع (من غير cast يخبّي مسار غلط → 404)", () => {
+    const page = read("pages/ScanLogs.tsx");
+    expect(page).toContain("trpc.orders.scanLogsReport.useQuery(");
+    expect(page).not.toContain("employeePortal as any");
   });
 });
 

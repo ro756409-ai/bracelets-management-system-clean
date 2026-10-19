@@ -809,6 +809,11 @@ async function assertRecordInScope(
  * `null` (مش `[]`) لسه معناها «الداتابيز مش متاحة فمقدرش أتحقق» — دي حالة تانية
  * بالكامل ومتوثّقة في `getBusinessIdsForTenant`.
  */
+/** مبلغ نصي من الواجهة (إجمالي/سعر): رقم غير سالب بحد أقصى خانتين عشريتين — غير كده 400 واضحة بدل 500 من القاعدة. */
+const orderMoneyString = z.string().trim().regex(/^\d{1,9}(\.\d{1,2})?$/, "المبلغ لازم يكون رقم موجب بحد أقصى خانتين عشريتين");
+/** مبلغ رقمي من الواجهة (إجمالي/شحن): غير سالب ومحدود. */
+const moneyNumber = z.number().finite().min(0, "المبلغ لا يمكن أن يكون سالبًا").max(10_000_000);
+
 const NO_BUSINESS = -1;
 
 /** النطاق المتحقّق — والفاضي منه بيمنع كل حاجة بدل ما يسمح بكل حاجة. */
@@ -1029,6 +1034,7 @@ import {
   OrderConfirmBlockedError,
   OrderStockInconsistencyError,
   OrderStatusGuardError,
+  ORDER_LOCKED_AFTER_SHIPPING,
   postponeOrder,
   cancelOrder,
   editOrderWithInventory,
@@ -1107,6 +1113,7 @@ import {
   getPayrollSummary,
   scanOrderBySerial,
   getScanLogs,
+  getScanLogsReport,
   getBusinessIdsForTenant,
 } from "./db";
 import {
@@ -1440,6 +1447,104 @@ function resolveOrderEditor(ctx: any): { id: number; name: string; role: string 
     role: ctx.user?.role ?? "admin",
   };
 }
+
+/**
+ * هوية منفّذ سطر النشاط: الموظف الحقيقي (معرّف موجب + دوره الفعلي). كان `ctx.user` (مستخدم صناعي بمعرّف سالب ودور
+ * admin ثابت) — نفس الشخص بقى له معرّفين بإشارتين، والمدير/المالك بيظهروا «admin»، وموظف البوابة «employee» دايمًا.
+ */
+function logActor(ctx: any): { performedBy: number; performedByName: string; performedByRole: string } {
+  const e = resolveOrderEditor(ctx);
+  return { performedBy: e.id, performedByName: e.name || "غير معروف", performedByRole: e.role || "unknown" };
+}
+
+/** أوردرات مجمّعة بنشاطها — عشان العمليات الجماعية تكتب سطر نشاط لكل نشاط (السطر بلا نشاط مابيظهرش لحد). */
+async function groupOrdersByBusiness(ids: number[]): Promise<Map<number, { id: number; orderNumber: string }[]>> {
+  const out = new Map<number, { id: number; orderNumber: string }[]>();
+  if (ids.length === 0) return out;
+  for (const o of await getOrdersByIds(Array.from(new Set(ids)))) {
+    if (o.businessId == null) continue;
+    const list = out.get(o.businessId) ?? [];
+    list.push({ id: o.id, orderNumber: o.orderNumber });
+    out.set(o.businessId, list);
+  }
+  return out;
+}
+
+/**
+ * تدقيق إدارة الموظفين والحسابات. **مفيش أسرار أبدًا**: كلمة السر وhash بتاعها مابيتكتبوش — بس حقيقة التغيير (واسم
+ * المستخدم عند تعيينه). الهاتف/الإيميل بيتسجّل إنهم اتغيّروا من غير القيم.
+ */
+async function logEmployeeAudit(
+  ctx: any,
+  action: string,
+  target: { id: number; name?: string | null; role?: string | null; businessId?: number | null },
+  description: string,
+  metadata?: Record<string, unknown>
+) {
+  await addActivityLog({
+    action,
+    entityType: "employee",
+    entityId: target.id,
+    description,
+    metadata: { employeeName: target.name ?? null, employeeRole: target.role ?? null, ...(metadata ?? {}) },
+    ...logActor(ctx),
+    businessId: target.businessId ?? undefined,
+  });
+}
+
+/** الفرق الفعلي في تعديل موظف (للسجل) — الحقول اللي اتبعتت واختلفت بس. */
+function employeeChanges(target: Record<string, any>, data: Record<string, any>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of ["name", "role", "isActive", "businessId"])
+    if (data[k] !== undefined && data[k] !== target[k]) out[k] = { from: target[k] ?? null, to: data[k] };
+  for (const k of ["phone", "email"])
+    if (data[k] !== undefined && (data[k] || null) !== (target[k] || null)) out[k] = "changed";
+  return out;
+}
+
+/** تدقيق الربط الخارجي (قنوات البيع/شركات الشحن) — الأسرار (توكن/سر webhook/مفتاح API) مابتتسجّلش أبدًا: «اتغيّر» وآخر 4 بس. */
+async function logIntegrationAudit(ctx: any, action: string, entityType: string, entityId: number | undefined, businessId: number | null | undefined, description: string, metadata?: Record<string, unknown>) {
+  await addActivityLog({ action, entityType, entityId, description, metadata, ...logActor(ctx), businessId: businessId ?? undefined });
+}
+
+/**
+ * اتساق إجمالي أوردر فيسبوك (إضافة): لما كل البنود فيها سعر، الإجمالي = Σ(سعر × كمية) − الخصم + الشحن (±0.01). عميل قديم
+ * مابيبعتش الخصم: الإجمالي مايزيدش عن البنود + الشحن (الخصم مايبقاش سالب). البنود من غير سعر = الإجمالي ≥ الشحن.
+ */
+function assertFacebookTotalConsistent(input: { selectedProducts: { quantity?: number; unitPrice?: number }[]; totalAmount: number; shippingCost?: number; discount?: number }) {
+  const ship = input.shippingCost ?? 0;
+  const priced = input.selectedProducts.every(p => p.unitPrice != null);
+  if (!priced) {
+    if (input.totalAmount + 0.0001 < ship)
+      throw new TRPCError({ code: "BAD_REQUEST", message: "الإجمالي أقل من رسوم الشحن" });
+    return;
+  }
+  const gross = input.selectedProducts.reduce((s, p) => s + Number(p.unitPrice) * (p.quantity ?? 1), 0);
+  if (input.discount != null) {
+    if (input.discount > gross + 0.0001)
+      throw new TRPCError({ code: "BAD_REQUEST", message: "الخصم أكبر من إجمالي البنود" });
+    const expected = Math.round((gross - input.discount + ship) * 100) / 100;
+    if (Math.abs(expected - input.totalAmount) > 0.01)
+      throw new TRPCError({ code: "BAD_REQUEST", message: `الإجمالي ${input.totalAmount} لا يطابق البنود − الخصم + الشحن (${expected})` });
+  } else if (input.totalAmount > gross + ship + 0.01) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `الإجمالي ${input.totalAmount} أكبر من البنود + الشحن (${Math.round((gross + ship) * 100) / 100})` });
+  }
+}
+
+/** بصمة أوردر (الهيدر + البنود) — لمعرفة إن التعديل غيّر حاجة فعلًا قبل كتابة سطر نشاط. */
+async function fbOrderSignature(orderId: number): Promise<string> {
+  const db = await getDb();
+  if (!db) return "";
+  const { orders, orderItems } = await import("../drizzle/schema");
+  const [o] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+  const items = await db.select({ p: orderItems.productId, v: orderItems.variantId, q: orderItems.quantity, u: orderItems.unitPrice, c: orderItems.color, z: orderItems.size, n: orderItems.productName })
+    .from(orderItems).where(eq(orderItems.orderId, orderId)).orderBy(orderItems.id);
+  if (!o) return "";
+  const { updatedAt: _u, lastUpdatedAt: _l, ...header } = o as any;
+  return JSON.stringify({ header, items });
+}
+
+const insertedId = (r: any): number => Number((Array.isArray(r) ? r[0] : r)?.insertId ?? 0);
 
 async function assertLegacyInventoryMutationAllowed(businessId: number) {
   const db = await getDb();
@@ -3210,7 +3315,9 @@ export const appRouter = router({
           ctx,
           input.businessId
         );
-        await createEmployee({ ...input, businessId, tenantId: ctx.tenantId });
+        const created = await createEmployee({ ...input, businessId, tenantId: ctx.tenantId });
+        await logEmployeeAudit(ctx, "employee_create", { id: insertedId(created), name: input.name, role: input.role, businessId },
+          `إضافة موظف «${input.name}» بدور ${input.role}`);
         return { success: true };
       }),
     update: adminProcedure
@@ -3272,8 +3379,11 @@ export const appRouter = router({
           }
         }
 
+        const changes = employeeChanges(target, data);
         if (isOwnerRole(target.role)) await writeOwnerAccountChange(ctx, id, { kind: "update", data });
         else await writeCheckedEmployee(target, { kind: "update", data });
+        if (Object.keys(changes).length > 0)
+          await logEmployeeAudit(ctx, "employee_update", target, `تعديل بيانات الموظف «${target.name}» (${Object.keys(changes).join("، ")})`, { changes });
         return { success: true };
       }),
     delete: adminProcedure
@@ -3309,6 +3419,7 @@ export const appRouter = router({
 
         if (isOwnerRole(target.role)) await writeOwnerAccountChange(ctx, input.id, { kind: "delete" });
         else await writeCheckedEmployee(target, { kind: "delete" });
+        await logEmployeeAudit(ctx, "employee_delete", target, `حذف الموظف «${target.name}»`);
         return { success: true };
       }),
     setCredentials: adminProcedure
@@ -3341,6 +3452,8 @@ export const appRouter = router({
         }
         const passwordHash = await bcrypt.hash(input.password, 10);
         await writeCheckedEmployee(target, { kind: "update", data: { username: input.username, passwordHash } });
+        // بلا كلمة السر ولا الـhash — اسم المستخدم وحقيقة التعيين بس.
+        await logEmployeeAudit(ctx, "employee_credentials_set", target, `تعيين بيانات دخول للموظف «${target.name}»`, { username: input.username });
         return { success: true };
       }),
     changePassword: adminProcedure
@@ -3362,6 +3475,7 @@ export const appRouter = router({
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
         await writeCheckedEmployee(target, { kind: "update", data: { passwordHash } });
+        await logEmployeeAudit(ctx, "employee_password_change", target, `تغيير كلمة سر الموظف «${target.name}»`);
         return { success: true };
       }),
 
@@ -3403,17 +3517,21 @@ export const appRouter = router({
       .input(
         z.object({
           employeeId: z.number(),
-          statuses: z.array(z.string()).optional(),
+          // حالات الاسترداد مقفولة على أوردرات لسه شغّالة — مش أي نص (كان بيقبل shipped/delivered).
+          statuses: z.array(z.enum(["new", "no_answer", "postponed", "confirmed"])).optional(),
           operationId: operationIdInput,
         })
       )
       .mutation(async ({ ctx, input }) => {
         await requireSessionPermission(ctx, "employees.manage"); // M3: خريطة صلاحيات الشركة تُحترم على الويب كمان
         await requireOwned(ctx, "employee", input.employeeId);
+        // العزل في الـWHERE نفسه: أوردر قديم من tenant تاني مسند لنفس الموظف مايتلمسش (زي unassignEmployeeOrders).
+        const scope = (await scopeBusinessIds(ctx, {})) ?? [NO_BUSINESS];
         const result = await reclaimEmployeeOrders(
           input.employeeId,
           input.statuses,
-          await webEventCtx(ctx, "bulk", input.operationId)
+          await webEventCtx(ctx, "bulk", input.operationId),
+          scope
         );
         return result;
       }),
@@ -3452,7 +3570,7 @@ export const appRouter = router({
           // sku/price are optional: a parent product with variants (e.g. "أسورة نحاس") carries
           // neither — those live on its variants. Standalone products without variants still set both.
           sku: z.string().min(2).optional(),
-          price: z.string().optional(),
+          price: z.union([orderMoneyString, z.literal("")]).optional(), // فاضي = بلا سعر (زي قبل كده)
           currentStock: z.number().default(0),
           minStockLevel: z.number().default(15),
           businessId: z.number().optional(),
@@ -3463,6 +3581,9 @@ export const appRouter = router({
         const scopedBusinessIds = await scopeBusinessIds(ctx, {
           businessId: input.businessId,
         });
+        // نشاط خارج الجلسة بيتحوّل لـ[-1] — كان بيعدّي فحص length ويتسجّل منتج يتيم بـbusinessId = -1.
+        if (scopedBusinessIds?.[0] === NO_BUSINESS)
+          throw new TRPCError({ code: "FORBIDDEN", message: "النشاط ده مش تابع لحسابك" });
         if (scopedBusinessIds?.length !== 1)
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -3513,6 +3634,9 @@ export const appRouter = router({
         const scopedBusinessIds = await scopeBusinessIds(ctx, {
           businessId: input.businessId,
         });
+        // نشاط خارج الجلسة بيتحوّل لـ[-1] — كان بيعدّي فحص length ويتسجّل منتج يتيم بـbusinessId = -1.
+        if (scopedBusinessIds?.[0] === NO_BUSINESS)
+          throw new TRPCError({ code: "FORBIDDEN", message: "النشاط ده مش تابع لحسابك" });
         if (scopedBusinessIds?.length !== 1)
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -3613,7 +3737,7 @@ export const appRouter = router({
           name: z.string().optional(),
           description: z.string().optional(),
           sku: z.string().min(2).optional(),
-          price: z.string().optional(),
+          price: z.union([orderMoneyString, z.literal("")]).optional(), // فاضي = بلا سعر (زي قبل كده)
           currentStock: z.number().optional(),
           minStockLevel: z.number().optional(),
           isActive: z.boolean().optional(),
@@ -3879,7 +4003,7 @@ export const appRouter = router({
           productName: z.string(),
           variantId: z.number().optional(),
           quantity: z.number().min(1).default(1),
-          totalAmount: z.string(),
+          totalAmount: orderMoneyString,
           source: z.string().min(1),
           notes: z.string().optional(),
           businessId: z.number(),
@@ -4037,21 +4161,23 @@ export const appRouter = router({
         await requireAllOwned(ctx, "order", input.orderIds);
         await requireOwned(ctx, "employee", input.employeeId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
-        await bulkAssignOrders(
+        const { changedIds } = await bulkAssignOrders(
           input.orderIds,
           input.employeeId,
           actingEmpId ?? 0,
           await webEventCtx(ctx, "bulk", input.operationId)
         );
-        await addActivityLog({
-          action: "assign_orders",
-          entityType: "order",
-          description: `توزيع ${input.orderIds.length} أوردر على موظف #${input.employeeId}`,
-          metadata: { orderIds: input.orderIds, employeeId: input.employeeId },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
-        });
+        // سطر لكل نشاط، بالأوردرات اللي اتغيّر مُسنَدها فعلًا بس (المسند أصلًا لنفس الموظف/إعادة الإرسال = لا سطر).
+        for (const [businessId, list] of await groupOrdersByBusiness(changedIds)) {
+          await addActivityLog({
+            action: "assign_orders",
+            entityType: "order",
+            description: `توزيع ${list.length} أوردر على موظف #${input.employeeId}`,
+            metadata: { orderIds: list.map(o => o.id), employeeId: input.employeeId },
+            ...logActor(ctx),
+            businessId,
+          });
+        }
         return { success: true };
       }),
 
@@ -4066,15 +4192,13 @@ export const appRouter = router({
         await requireOwned(ctx, "order", input.orderId);
         const { id: actingEmpId, name: actingEmpName } =
           await resolveActingEmployeeIdAndName(ctx);
-        await confirmOrderOrReject(input.orderId, actingEmpId ?? 0, actingEmpName, await webEventCtx(ctx, "admin_ui", input.operationId));
-        await addActivityLog({
+        const confirmed = await confirmOrderOrReject(input.orderId, actingEmpId ?? 0, actingEmpName, await webEventCtx(ctx, "admin_ui", input.operationId));
+        if (confirmed.changed) await addActivityLog({
           action: "confirm_order",
           entityType: "order",
           entityId: input.orderId,
           description: `تأكيد أوردر #${input.orderId}`,
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
+          ...logActor(ctx),
         });
         // ❌ الإرسال التلقائي لـ Bosta معطل - الإرسال يدوي فقط من صفحة الأوردرات
         return { success: true };
@@ -4118,14 +4242,14 @@ export const appRouter = router({
           variantId: input.variantId ?? null,
           productName: input.productName,
         }));
-        await addActivityLog({
+        const reviewNoop = !order.needsReview && order.productId === input.productId && (order.variantId ?? null) === (input.variantId ?? null);
+        if (!reviewNoop) await addActivityLog({
           action: "resolve_order_review",
           entityType: "order",
           entityId: input.orderId,
+          businessId: order.businessId ?? undefined,
           description: `تعيين منتج يدويًا لأوردر #${order.orderNumber}`,
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
+          ...logActor(ctx),
         });
         return { success: true };
       }),
@@ -4246,22 +4370,20 @@ export const appRouter = router({
         await requireOwned(ctx, "order", input.orderId);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const cancelEventCtx = await webEventCtx(ctx, "admin_ui", input.operationId);
-        await withStatusGuard(() => cancelOrder(
+        const cancelled = await withStatusGuard(() => cancelOrder(
           input.orderId,
           input.cancelReason,
           input.notes,
           actingEmpId ?? 0,
           cancelEventCtx
         ));
-        await addActivityLog({
+        if (cancelled.changed) await addActivityLog({
           action: "cancel_order",
           entityType: "order",
           entityId: input.orderId,
           description: `إلغاء أوردر #${input.orderId} - السبب: ${input.cancelReason}`,
           metadata: { cancelReason: input.cancelReason, notes: input.notes },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
+          ...logActor(ctx),
         });
         return { success: true };
       }),
@@ -4301,8 +4423,8 @@ export const appRouter = router({
           productId: z.number().optional(),
           productName: z.string().optional(),
           quantity: z.number().min(1).optional(),
-          totalAmount: z.number().optional(),
-          shippingFees: z.number().optional(),
+          totalAmount: moneyNumber.optional(),
+          shippingFees: moneyNumber.optional(),
           paymentMethod: z.string().optional(),
           notes: z.string().optional(),
           employeeNotes: z.string().optional(),
@@ -4316,10 +4438,12 @@ export const appRouter = router({
         await requireOrderLinesOwned(ctx, [{ productId: (input as any).productId, variantId: (input as any).variantId }]);
         const actingEmpId = await resolveActingEmployeeId(ctx);
         const { orderId, ...updates } = input;
+        // المنفّذ الحقيقي (معرّف الموظف + دوره) — كان الدور «admin» ثابت والمعرّف 0 لو ماتحلّش.
+        const editor = resolveOrderEditor(ctx);
         const result = await withOrderStockErrors(() => editOrderFull(orderId, updates, {
-          id: actingEmpId ?? 0,
-          name: ctx.user.name || "Admin",
-          role: "admin",
+          id: actingEmpId ?? editor.id,
+          name: editor.name || ctx.user.name || "Admin",
+          role: editor.role,
         }));
         return { success: true, order: result };
       }),
@@ -4420,6 +4544,11 @@ export const appRouter = router({
         const order = await getOrderById(input.orderId);
         if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
         await requireScopedBusinessId(ctx, order.businessId);
+        // جلسة موظف (مش جلسة الإدارة): نفس قاعدة البوابة — موظف غير إداري يعدّل بنود أوردر مسند له بس.
+        // قبل كده أي agent معاه orders.edit_items كان يقدر يعدّل بنود/أسعار أي أوردر في نشاطه بنداء مباشر.
+        const sessionEmp = (ctx as any).employee as { id: number; role: string } | undefined;
+        if (!ctx.user && sessionEmp && !isAdminTierRole(sessionEmp.role) && order.assignedEmployeeId !== sessionEmp.id)
+          throw new TRPCError({ code: "FORBIDDEN", message: "مش مسموح تعدّل بنود أوردر مش مسند ليك" });
         await requireOrderLinesOwned(ctx, input.items);
         const editor = resolveOrderEditor(ctx);
         const result = await withOrderStockErrors(() => replaceOrderItemsFromEditor(
@@ -4437,8 +4566,9 @@ export const appRouter = router({
           input.shippingFees,
           editor
         ));
-        await addActivityLog({
+        if (result.changed) await addActivityLog({
           action: "edit_order_items",
+          businessId: order.businessId ?? undefined,
           entityType: "order",
           entityId: input.orderId,
           description: `تعديل بنود أوردر #${input.orderId} — ${result.itemCount} بند، إجمالي ${result.totalAmount}`,
@@ -4447,9 +4577,7 @@ export const appRouter = router({
             itemCount: result.itemCount,
             totalAmount: result.totalAmount,
           },
-          performedBy: editor.id,
-          performedByName: editor.name,
-          performedByRole: editor.role,
+...logActor(ctx),
         });
         return { success: true, ...result };
       }),
@@ -4474,15 +4602,16 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "order", input.orderId);
+        // النشاط/الرقم قبل الحذف — بعده الأوردر مش موجود يتنسب له السطر (كان بيتسجّل بلا نشاط فمايظهرش لحد).
+        const doomed = await getOrderById(input.orderId);
         await withStatusGuard(() => deleteOrder(input.orderId));
         await addActivityLog({
           action: "delete_order",
           entityType: "order",
           entityId: input.orderId,
-          description: `حذف أوردر #${input.orderId}`,
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
+          businessId: doomed?.businessId ?? undefined,
+          description: `حذف أوردر #${doomed?.orderNumber ?? input.orderId}`,
+          ...logActor(ctx),
         });
         return { success: true };
       }),
@@ -4496,16 +4625,18 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         // حذف جماعي — الرفض قبل أي مسح لو أي أوردر برّه النطاق.
         await requireAllOwned(ctx, "order", input.orderIds);
+        const doomedByBusiness = await groupOrdersByBusiness(input.orderIds);
         await withStatusGuard(async () => deleteOrders(input.orderIds, (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS]));
-        await addActivityLog({
-          action: "bulk_delete_orders",
-          entityType: "order",
-          description: `حذف ${input.orderIds.length} أوردر`,
-          metadata: { orderIds: input.orderIds },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
-        });
+        for (const [businessId, list] of doomedByBusiness) {
+          await addActivityLog({
+            action: "bulk_delete_orders",
+            entityType: "order",
+            description: `حذف ${list.length} أوردر`,
+            metadata: { orderIds: list.map(o => o.id), orderNumbers: list.map(o => o.orderNumber) },
+            ...logActor(ctx),
+            businessId,
+          });
+        }
         return { success: true };
       }),
 
@@ -4606,15 +4737,14 @@ export const appRouter = router({
             action: "duplicate_order",
             entityType: "order",
             entityId: input.orderId,
+            businessId,
             description: `تكرار أوردر #${originalOrder.orderNumber} → أوردر جديد #${newOrderNumber}`,
             metadata: {
               originalOrderId: input.orderId,
               originalOrderNumber: originalOrder.orderNumber,
               newOrderNumber,
             },
-            performedBy: ctx.user.id,
-            performedByName: ctx.user.name ?? "مدير",
-            performedByRole: ctx.user.role ?? "admin",
+            ...logActor(ctx),
           });
           return { success: true as const, newOrderNumber };
         };
@@ -4644,26 +4774,31 @@ export const appRouter = router({
       // العزل: التحويل بالجملة لازم يتقيّد بأنشطة الـtenant بتاعه. من غير الفلتر ده كان
       // أدمن شركة بيقلب حالة أوردرات كل الشركات. `scopeBusinessIds` بترجع أنشطة الـtenant
       // (أو [-1] لو فاضي = يمنع الكل)، و`undefined` للمالك على مستوى المنصة (مفيش فلتر).
-      const scoped = await scopeBusinessIds(ctx);
-      const conds = [eq(ordersTable.status, "no_answer" as any)];
-      if (scoped) conds.push(inArray(ordersTable.businessId, scoped));
+      // النطاق إلزامي (مفيش «undefined = بلا فلتر») — وسطر نشاط لكل نشاط بعدد أوردراته.
+      const scoped = (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS];
+      const conds = [eq(ordersTable.status, "no_answer" as any), inArray(ordersTable.businessId, scoped)];
+      const targets = await db.select({ id: ordersTable.id, businessId: ordersTable.businessId }).from(ordersTable).where(and(...conds));
+      if (targets.length === 0) return { success: true, count: 0 };
       const result: any = await db
         .update(ordersTable)
         .set({ status: "new" as any })
-        .where(and(...conds));
+        .where(and(...conds, inArray(ordersTable.id, targets.map(t => t.id))));
       const count =
         Number(result?.[0]?.affectedRows ?? result?.affectedRows ?? 0) || 0;
       if (count > 0) {
-        await addActivityLog({
-          action: "convert_no_answer",
-          entityType: "order",
-          entityId: 0,
-          description: `تحويل ${count} أوردر من "لم يرد" إلى "جديد"`,
-          metadata: { count },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
-        });
+        const perBusiness = new Map<number, number>();
+        for (const t of targets) if (t.businessId != null) perBusiness.set(t.businessId, (perBusiness.get(t.businessId) ?? 0) + 1);
+        for (const [businessId, n] of perBusiness) {
+          await addActivityLog({
+            action: "convert_no_answer",
+            entityType: "order",
+            entityId: 0,
+            description: `تحويل ${n} أوردر من "لم يرد" إلى "جديد"`,
+            metadata: { count: n },
+            ...logActor(ctx),
+            businessId,
+          });
+        }
       }
       return { success: true, count };
     }),
@@ -4676,26 +4811,31 @@ export const appRouter = router({
           message: "DB error",
         });
       // نفس العزل زي convertNoAnswerToNew — التحويل بالجملة على أنشطة الـtenant بس.
-      const scoped = await scopeBusinessIds(ctx);
-      const conds = [eq(ordersTable.status, "postponed" as any)];
-      if (scoped) conds.push(inArray(ordersTable.businessId, scoped));
+      // النطاق إلزامي (مفيش «undefined = بلا فلتر») — وسطر نشاط لكل نشاط بعدد أوردراته.
+      const scoped = (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS];
+      const conds = [eq(ordersTable.status, "postponed" as any), inArray(ordersTable.businessId, scoped)];
+      const targets = await db.select({ id: ordersTable.id, businessId: ordersTable.businessId }).from(ordersTable).where(and(...conds));
+      if (targets.length === 0) return { success: true, count: 0 };
       const result: any = await db
         .update(ordersTable)
         .set({ status: "new" as any, postponedTo: null })
-        .where(and(...conds));
+        .where(and(...conds, inArray(ordersTable.id, targets.map(t => t.id))));
       const count =
         Number(result?.[0]?.affectedRows ?? result?.affectedRows ?? 0) || 0;
       if (count > 0) {
-        await addActivityLog({
-          action: "convert_postponed",
-          entityType: "order",
-          entityId: 0,
-          description: `تحويل ${count} أوردر من "مؤجل" إلى "جديد"`,
-          metadata: { count },
-          performedBy: ctx.user.id,
-          performedByName: ctx.user.name ?? "مدير",
-          performedByRole: ctx.user.role ?? "admin",
-        });
+        const perBusiness = new Map<number, number>();
+        for (const t of targets) if (t.businessId != null) perBusiness.set(t.businessId, (perBusiness.get(t.businessId) ?? 0) + 1);
+        for (const [businessId, n] of perBusiness) {
+          await addActivityLog({
+            action: "convert_postponed",
+            entityType: "order",
+            entityId: 0,
+            description: `تحويل ${n} أوردر من "مؤجل" إلى "جديد"`,
+            metadata: { count: n },
+            ...logActor(ctx),
+            businessId,
+          });
+        }
       }
       return { success: true, count };
     }),
@@ -4721,17 +4861,15 @@ export const appRouter = router({
         );
         const count = (result as any).affectedRows || 0;
         if (count > 0) {
-          const emps = await getAllEmployees();
-          const emp = emps.find(e => e.id === input.employeeId);
+          const emp = await getEmployeeById(input.employeeId); // اتحقق من ملكيته فوق
           await addActivityLog({
             action: "unassign_employee_orders",
-            entityType: "order",
+            entityType: "employee",
             entityId: input.employeeId,
+            businessId: emp?.businessId ?? undefined,
             description: `سحب ${count} أوردر من الموظف ${emp?.name || input.employeeId}`,
             metadata: { employeeId: input.employeeId, count },
-            performedBy: ctx.user.id,
-            performedByName: ctx.user.name ?? "مدير",
-            performedByRole: ctx.user.role ?? "admin",
+            ...logActor(ctx),
           });
         }
         return { success: true, count };
@@ -4803,6 +4941,19 @@ export const appRouter = router({
           await requireOwned(ctx, "order", input.orderId);
         return getScanLogs(input, (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS]);
       }),
+
+    // شاشة الإدارة /scan-logs (جلسة المالك/المدير) — نفس شكل «مسحاتي» في البوابة (سجلات + إحصاءات)، مقيّد بنطاق الجلسة.
+    scanLogsReport: adminProcedure
+      .input(
+        z.object({
+          dateFrom: z.date().optional(),
+          dateTo: z.date().optional(),
+          result: z.enum(["success", "failed", "duplicate", "cancelled"]).optional(),
+          limit: z.number().int().min(1).max(MAX_LIST_LIMIT).default(500),
+        })
+      )
+      .query(async ({ ctx, input }) =>
+        getScanLogsReport(input, (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS], (ctx as any).realEmployeeId ?? (ctx as any).employee?.id ?? null)),
 
     todayConfirmed: protectedProcedure
       .input(
@@ -5126,14 +5277,12 @@ export const appRouter = router({
         // Ownership check: agents can only confirm their own assigned orders
         await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
         const res = await confirmOrderOrReject(input.orderId, emp.id, emp.name, portalEventCtx(ctx, "employee_portal", input.operationId));
-        await addActivityLog({
+        if (res.changed) await addActivityLog({
           action: "confirm_order",
           entityType: "order",
           entityId: input.orderId,
           description: `تأكيد أوردر #${input.orderId} بواسطة موظف`,
-          performedBy: emp.id,
-          performedByName: emp.name,
-          performedByRole: "employee",
+          ...logActor(ctx),
         });
         // التأكيد نجح دائمًا؛ لو فيه عجز مخزون نبلّغ الموظف برسالة نجاح توضّح الحاجة للمراجعة.
         return {
@@ -5158,22 +5307,20 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         // Ownership check: agents can only postpone their own assigned orders
         await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
-        await withStatusGuard(() => postponeOrder(
+        const postponed = await withStatusGuard(() => postponeOrder(
           input.orderId,
           input.postponedTo,
           input.notes,
           emp.id,
           portalEventCtx(ctx, "employee_portal", input.operationId)
         ));
-        await addActivityLog({
+        if (postponed.changed) await addActivityLog({
           action: "postpone_order",
           entityType: "order",
           entityId: input.orderId,
           description: `تأجيل أوردر #${input.orderId}`,
           metadata: { notes: input.notes },
-          performedBy: emp.id,
-          performedByName: emp.name,
-          performedByRole: "employee",
+          ...logActor(ctx),
         });
         return { success: true };
       }),
@@ -5191,22 +5338,20 @@ export const appRouter = router({
         const emp = (ctx as any).employee;
         // Ownership check: agents can only cancel their own assigned orders
         await assertEmployeeOwnsOrder(emp, input.orderId, "هذا الأوردر غير مخصص لك");
-        await withStatusGuard(() => cancelOrder(
+        const cancelled = await withStatusGuard(() => cancelOrder(
           input.orderId,
           input.cancelReason,
           input.notes,
           emp.id,
           portalEventCtx(ctx, "employee_portal", input.operationId)
         ));
-        await addActivityLog({
+        if (cancelled.changed) await addActivityLog({
           action: "cancel_order",
           entityType: "order",
           entityId: input.orderId,
           description: `إلغاء أوردر #${input.orderId} - السبب: ${input.cancelReason}`,
           metadata: { cancelReason: input.cancelReason, notes: input.notes },
-          performedBy: emp.id,
-          performedByName: emp.name,
-          performedByRole: "employee",
+          ...logActor(ctx),
         });
         return { success: true };
       }),
@@ -5461,8 +5606,8 @@ export const appRouter = router({
           productId: z.number().optional(),
           productName: z.string().optional(),
           quantity: z.number().min(1).optional(),
-          totalAmount: z.number().optional(),
-          shippingFees: z.number().optional(),
+          totalAmount: moneyNumber.optional(),
+          shippingFees: moneyNumber.optional(),
           paymentMethod: z.string().optional(),
           notes: z.string().optional(),
           employeeNotes: z.string().optional(),
@@ -5609,7 +5754,7 @@ export const appRouter = router({
           input.shippingFees,
           { id: emp.id, name: emp.name, role: emp.role }
         ));
-        await addActivityLog({
+        if (result.changed) await addActivityLog({
           action: "edit_order_items",
           entityType: "order",
           entityId: input.orderId,
@@ -5619,9 +5764,7 @@ export const appRouter = router({
             itemCount: result.itemCount,
             totalAmount: result.totalAmount,
           },
-          performedBy: emp.id,
-          performedByName: emp.name,
-          performedByRole: emp.role,
+          ...logActor(ctx),
         });
         return { success: true, ...result };
       }),
@@ -5782,7 +5925,7 @@ export const appRouter = router({
           productId: z.number(),
           productName: z.string(),
           quantity: z.number().min(1).default(1),
-          totalAmount: z.string(),
+          totalAmount: orderMoneyString,
           source: z.string().min(1).max(60),
           notes: z.string().optional(),
           websiteId: z.number().optional(),
@@ -6067,11 +6210,13 @@ export const appRouter = router({
           empScope(ctx),
           emp.businessId ?? undefined
         );
-        await createEmployee({
+        const created = await createEmployee({
           ...input,
           businessId,
           tenantId,
         });
+        await logEmployeeAudit(ctx, "employee_create", { id: insertedId(created), name: input.name, role: input.role, businessId },
+          `إضافة موظف «${input.name}» بدور ${input.role}`);
         return { success: true };
       }),
 
@@ -6099,7 +6244,10 @@ export const appRouter = router({
         await requireOwned(empScope(ctx), "employee", input.id);
         const { id, ...data } = input;
         const target = await loadPortalManagedEmployee(ctx, id, data.role);
+        const changes = employeeChanges(target, data);
         await writeCheckedEmployee(target, { kind: "update", data });
+        if (Object.keys(changes).length > 0)
+          await logEmployeeAudit(ctx, "employee_update", target, `تعديل بيانات الموظف «${target.name}» (${Object.keys(changes).join("، ")})`, { changes });
         return { success: true };
       }),
 
@@ -6110,6 +6258,7 @@ export const appRouter = router({
         await requireOwned(empScope(ctx), "employee", input.id);
         const target = await loadPortalManagedEmployee(ctx, input.id);
         await writeCheckedEmployee(target, { kind: "delete" });
+        await logEmployeeAudit(ctx, "employee_delete", target, `حذف الموظف «${target.name}»`);
         return { success: true };
       }),
 
@@ -6140,6 +6289,8 @@ export const appRouter = router({
         }
         const passwordHash = await bcrypt.hash(input.password, 10);
         await writeCheckedEmployee(target, { kind: "update", data: { username: input.username, passwordHash } });
+        // بلا كلمة السر ولا الـhash — اسم المستخدم وحقيقة التعيين بس.
+        await logEmployeeAudit(ctx, "employee_credentials_set", target, `تعيين بيانات دخول للموظف «${target.name}»`, { username: input.username });
         return { success: true };
       }),
 
@@ -6156,6 +6307,7 @@ export const appRouter = router({
         const target = await loadPortalManagedEmployee(ctx, input.id);
         const passwordHash = await bcrypt.hash(input.newPassword, 10);
         await writeCheckedEmployee(target, { kind: "update", data: { passwordHash } });
+        await logEmployeeAudit(ctx, "employee_password_change", target, `تغيير كلمة سر الموظف «${target.name}»`);
         return { success: true };
       }),
 
@@ -6277,11 +6429,8 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        await requireOwned(
-          empScope(ctx),
-          "order",
-          input.orderId
-        );
+        // نطاق جلسة الإدارة كاملة (زي duplicates.list/delete) — empScope كان بيقصر المالك على نشاطه الأساسي بس.
+        await requireOwned(ctx, "order", input.orderId);
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
         const { orders } = await import("../drizzle/schema");
@@ -6376,6 +6525,8 @@ export const appRouter = router({
         // العزل: النشاط **إجباريًا من جلسة الموظف**، مش من input العميل ولا القيمة الافتراضية
         // (businessId=1). موظف بلا نشاط صالح → fail-closed (مفيش أوردر يتكتب).
         const businessId = await resolveEmployeeBusinessId(empScope(ctx));
+        // أوردر اللصق ليه فحصه السيرفري الأشد (pasteSaveBlockers: الإجمالي النهائي = أصناف + شحن − خصم + عدد القطع)؛ اليدوي هنا.
+        if (input.rawText == null && input.parseToken == null && input.parseResult == null) assertFacebookTotalConsistent(input);
 
         // ── منع التكرار (0052): نطاق الشركة + نشاط الجلسة + نوع العملية + معرّف الواجهة، والبيانات بلا المعرّف ──
         const { operationId, ...requestPayload } = input;
@@ -6601,6 +6752,13 @@ export const appRouter = router({
               }),
             });
           }
+          // جوه execute: إعادة الإرسال بنفس operationId بترجع من replay من غير سطر نشاط تاني.
+          await addActivityLog({
+            action: "fb_order_create", entityType: "order", entityId: newOrderId, businessId,
+            description: `إدخال أوردر فيسبوك #${orderNumber}`,
+            metadata: { totalAmount: input.totalAmount, itemCount: itemsWithQty.length, needsReview },
+            ...logActor(ctx),
+          });
           return { success: true as const, orderNumber, needsReview };
         };
         return runIdempotent({
@@ -6700,6 +6858,10 @@ export const appRouter = router({
           });
         // نفس helper الحذف — بيمسح الأصناف مع الأوردر (منع الـorphans).
         await withStatusGuard(() => deleteOrder(input.orderId));
+        await addActivityLog({
+          action: "fb_order_delete", entityType: "order", entityId: input.orderId, businessId: order.businessId ?? undefined,
+          description: `حذف أوردر فيسبوك #${order.orderNumber}`, ...logActor(ctx),
+        });
         return { success: true };
       }),
 
@@ -6737,6 +6899,10 @@ export const appRouter = router({
             .min(1),
           quantity: z.number().int().min(1).optional(),
           totalAmount: z.number().min(0),
+          /** شحن العميل الجديد (زي addOrder). غيابه = الشحن المحفوظ زي ما هو. */
+          shippingCost: z.number().min(0).optional(),
+          /** خصم الأوردر (زي addOrder) — الإجمالي لازم = مجموع البنود − الخصم + الشحن. */
+          discount: z.number().min(0).optional(),
           adName: z.string().optional(),
           pageName: z.string().optional(),
           notes: z.string().optional(),
@@ -6773,6 +6939,11 @@ export const appRouter = router({
             code: "NOT_FOUND",
             message: "الأوردر غير موجود أو ليس من إدخالك",
           });
+        // سياسة المبالغ بعد الشحن (نفس محرر البنود وeditOrder)، وبعد إنشاء شحنة بوسطة المبلغ اتبعت كتحصيل.
+        if (ORDER_LOCKED_AFTER_SHIPPING.includes(String(order.status)))
+          throw new TRPCError({ code: "BAD_REQUEST", message: "لا يمكن تعديل أوردر بعد شحنه" });
+        if (order.bostaShipmentId && Math.abs(Number(order.totalAmount) - input.totalAmount) > 0.005)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "المبلغ اتبعت لبوسطة كتحصيل — تعديل الإجمالي ممنوع بعد إنشاء الشحنة" });
         // نفس حارس الإنشاء: كل منتج لازم يكون في نطاق الموظف، والاسم من الكتالوج مش
         // من نص العميل — المرآة والبنود يفضلوا متطابقين مهما بعت المتصل.
         await requireAllOwned(
@@ -6796,6 +6967,20 @@ export const appRouter = router({
           itemsWithQty.reduce((sum, p) => sum + p.quantity, 0) ||
           input.quantity ||
           1;
+        // الإجمالي متسق مع البنود: لو كل بند معاه سعر، الإجمالي لازم = Σ(سعر×كمية) − الخصم + الشحن (بفرق قرش) —
+        // قبل كده الإجمالي كان بيتاخد من العميل زي ما هو، والشحن ماكانش بيتحدّث، فالهيدر كان ممكن يختلف عن البنود.
+        const shippingFee = input.shippingCost ?? Number(order.shippingFees ?? 0);
+        if (itemsWithQty.every(p => p.unitPrice != null)) {
+          const gross = itemsWithQty.reduce((s, p) => s + (p.unitPrice as number) * p.quantity, 0);
+          const discount = input.discount ?? 0;
+          if (discount > gross + 0.005)
+            throw new TRPCError({ code: "BAD_REQUEST", message: "الخصم أكبر من قيمة الأصناف" });
+          const expected = Math.round((gross - discount + shippingFee) * 100) / 100;
+          if (Math.abs(expected - input.totalAmount) > 0.01)
+            throw new TRPCError({ code: "BAD_REQUEST", message: `الإجمالي (${input.totalAmount}) لا يطابق الأصناف − الخصم + الشحن (${expected})` });
+        } else if (input.totalAmount < shippingFee) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "الإجمالي أقل من الشحن" });
+        }
         const productNames = buildOrderHeaderName(itemsWithQty);
         const firstProductId = itemsWithQty[0].productId;
         // الهيدر والبنود في transaction واحدة، وصف الأوردر مقفول بالـPK أولًا
@@ -6803,6 +6988,7 @@ export const appRouter = router({
         // واحد كامل. الأرقام بتتكتب زي ما هي (مفيش تطبيع هنا من زمان).
         // أوردر خارج من المخزون: تغيير الأصناف/الكميات/نوع الحفر من هنا مرفوض بوضوح (المسار ده مابيطابقش المخزون —
         // DATA-4 / D3)؛ نفس الأصناف + بيانات العميل تتحدّث عادي.
+        const fbBefore = await fbOrderSignature(input.orderId);
         await withStatusGuard(() => updateOrderWithItems(
           input.orderId,
           {
@@ -6816,6 +7002,7 @@ export const appRouter = router({
             productName: productNames,
             quantity: totalQty,
             totalAmount: input.totalAmount.toString(),
+            ...(input.shippingCost != null ? { shippingFees: input.shippingCost.toString() } : {}),
             adName: input.adName ?? null,
             pageName: input.pageName ?? null,
             notes: input.notes ?? null,
@@ -6841,6 +7028,13 @@ export const appRouter = router({
           })),
           { normalizePhones: false, onStockLockedItems: "reject" }
         ));
+        // نفس البيانات بالظبط (الهيدر + البنود) = لا سطر نشاط مكرر.
+        if ((await fbOrderSignature(input.orderId)) !== fbBefore) await addActivityLog({
+          action: "fb_order_update", entityType: "order", entityId: input.orderId, businessId: order.businessId ?? undefined,
+          description: `تعديل أوردر فيسبوك #${order.orderNumber}`,
+          metadata: { totalAmount: { from: order.totalAmount, to: input.totalAmount }, itemCount: input.selectedProducts.length },
+          ...logActor(ctx),
+        });
         return { success: true };
       }),
 
@@ -7765,6 +7959,8 @@ export const appRouter = router({
           actorId: ctx.user.id,
         });
         if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: r.error });
+        await logIntegrationAudit(ctx, "carrier_account_connect", "carrier_account", undefined, businessId, `ربط حساب بوسطة (…${r.apiKeyLast4})`,
+          { apiKeyLast4: r.apiKeyLast4 }); // المفتاح نفسه مابيتسجّلش
         return { ok: true, apiKeyLast4: r.apiKeyLast4 };
       }),
     disconnect: adminProcedure
@@ -7772,6 +7968,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const businessId = await scopeBusinessId(ctx, input.businessId);
         await disconnectCarrierAccount(businessId!, ctx.user.id);
+        await logIntegrationAudit(ctx, "carrier_account_disconnect", "carrier_account", undefined, businessId, "فصل حساب بوسطة");
         return { ok: true };
       }),
   }),
@@ -8112,6 +8309,8 @@ export const appRouter = router({
           domain: input.domain || undefined,
           webhookUrl: input.webhookUrl || undefined,
         });
+        await logIntegrationAudit(ctx, "sales_channel_create", "sales_channel", result.id, input.businessId, `إضافة قناة بيع «${input.name}»`,
+          { platform: (input as any).platform ?? null, hasApiToken: Boolean((input as any).apiToken), hasWebhookSecret: Boolean((input as any).webhookSecret) });
         return { success: true, id: result.id };
       }),
     update: adminProcedure
@@ -8184,6 +8383,10 @@ export const appRouter = router({
           }
         }
         await updateSalesChannel(id, data);
+        const changed = Object.keys(data).filter(k => (data as any)[k] !== undefined && (data as any)[k] !== "" && (k === "apiToken" || k === "webhookSecret" || (data as any)[k] !== (current as any)[k]));
+        if (changed.length > 0)
+          await logIntegrationAudit(ctx, "sales_channel_update", "sales_channel", id, current.businessId, `تعديل قناة البيع «${current.name}» (${changed.join("، ")})`,
+            { changedFields: changed }); // أسماء الحقول بس — قيمة التوكن/السر مابتتسجّلش
         return { success: true };
       }),
     /** Removes a stored credential (update() alone can never clear one, by design). */
@@ -8196,21 +8399,27 @@ export const appRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "salesChannel", input.id);
+        const ch = await getSalesChannelById(input.id);
         await clearSalesChannelSecret(input.id, input.field);
+        await logIntegrationAudit(ctx, "sales_channel_secret_clear", "sales_channel", input.id, ch?.businessId, `مسح ${input.field} من قناة البيع «${ch?.name ?? input.id}»`);
         return { success: true };
       }),
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "salesChannel", input.id);
+        const ch = await getSalesChannelById(input.id);
         await deleteSalesChannel(input.id);
+        await logIntegrationAudit(ctx, "sales_channel_delete", "sales_channel", input.id, ch?.businessId, `حذف قناة البيع «${ch?.name ?? input.id}»`);
         return { success: true };
       }),
     reactivate: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "salesChannel", input.id);
+        const ch = await getSalesChannelById(input.id);
         await reactivateSalesChannel(input.id);
+        await logIntegrationAudit(ctx, "sales_channel_reactivate", "sales_channel", input.id, ch?.businessId, `إعادة تفعيل قناة البيع «${ch?.name ?? input.id}»`);
         return { success: true };
       }),
     /** Verifies the channel's stored API credentials without importing anything. */
@@ -9434,9 +9643,7 @@ export const appRouter = router({
           action: "payroll_settings_update",
           entityType: "payroll_settings",
           description: "تعديل إعدادات الرواتب",
-          performedBy: actor.id ?? ctx.user!.id,
-          performedByName: actor.name ?? "غير معروف",
-          performedByRole: "admin",
+          ...logActor(ctx),
           businessId,
         });
         return { success: true };
@@ -9515,9 +9722,7 @@ export const appRouter = router({
             salaryType: input.salaryType,
             effectiveFrom: input.effectiveFrom,
           },
-          performedBy: actor.id ?? ctx.user!.id,
-          performedByName: actor.name ?? "غير معروف",
-          performedByRole: "admin",
+          ...logActor(ctx),
           businessId,
         });
         return result;
@@ -9562,9 +9767,7 @@ export const appRouter = router({
           entityId: result.employeeId,
           description: `إنشاء موظف رواتب: ${input.name.trim()}`,
           metadata: { baseSalary: input.baseSalary, jobTitle: input.jobTitle ?? null },
-          performedBy: actor.id,
-          performedByName: actor.name,
-          performedByRole: "accountant",
+          ...logActor(ctx),
           businessId,
         });
         return result;
@@ -9646,9 +9849,7 @@ export const appRouter = router({
           entityType: "employee_advance",
           entityId: result.id,
           description: `صرف سُلفة ${input.amount} لـ${employee.name}`,
-          performedBy: actor.id ?? ctx.user!.id,
-          performedByName: actor.name ?? "غير معروف",
-          performedByRole: "admin",
+          ...logActor(ctx),
           businessId,
         });
         return result;
@@ -9683,9 +9884,8 @@ export const appRouter = router({
           entityType: "employee_advance",
           entityId: input.id,
           description: `إلغاء سُلفة #${input.id}`,
-          performedBy: actor.id ?? ctx.user!.id,
-          performedByName: actor.name ?? "غير معروف",
-          performedByRole: "admin",
+          ...logActor(ctx),
+          businessId,
         });
         return { success: true };
       }),
@@ -9734,9 +9934,7 @@ export const appRouter = router({
           entityType: "employee_bonus",
           entityId: result.id,
           description: `تسجيل بونص للموظف #${input.employeeId}`,
-          performedBy: actor.id ?? ctx.user!.id,
-          performedByName: actor.name ?? "غير معروف",
-          performedByRole: "admin",
+          ...logActor(ctx),
           businessId,
         });
         return result;
@@ -9813,9 +10011,7 @@ export const appRouter = router({
           entityType: "payroll_period",
           entityId: result.id,
           description: `إنشاء دورة رواتب ${input.month}/${input.year}`,
-          performedBy: who.id,
-          performedByName: who.name,
-          performedByRole: "admin",
+          ...logActor(ctx),
           businessId,
         });
         return result;
@@ -9893,11 +10089,10 @@ export const appRouter = router({
           action: "payroll_period_approve",
           entityType: "payroll_period",
           entityId: input.id,
+          businessId: (await getPayrollPeriod(input.id))?.businessId ?? undefined,
           description: `اعتماد دورة رواتب #${input.id} بصافي ${result.totalNet}`,
           metadata: { totalNet: result.totalNet },
-          performedBy: who.id,
-          performedByName: who.name,
-          performedByRole: "admin",
+          ...logActor(ctx),
         });
         return result;
       }),
@@ -9930,14 +10125,13 @@ export const appRouter = router({
           action: "payroll_period_pay",
           entityType: "payroll_period",
           entityId: input.id,
+          businessId: (await getPayrollPeriod(input.id))?.businessId ?? undefined,
           description: `دفع دورة رواتب #${input.id} بمبلغ ${result.amount}`,
           metadata: {
             transactionId: result.transactionId,
             amount: result.amount,
           },
-          performedBy: who.id,
-          performedByName: who.name,
-          performedByRole: "admin",
+          ...logActor(ctx),
         });
         return result;
       }),
@@ -9961,10 +10155,9 @@ export const appRouter = router({
           action: "payroll_period_cancel",
           entityType: "payroll_period",
           entityId: input.id,
+          businessId: (await getPayrollPeriod(input.id))?.businessId ?? undefined,
           description: `إلغاء دورة رواتب #${input.id} — ${input.reason}`,
-          performedBy: who.id,
-          performedByName: who.name,
-          performedByRole: "admin",
+          ...logActor(ctx),
         });
         return { success: true };
       }),
@@ -9973,16 +10166,15 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ ctx, input }) => {
         await requireOwned(ctx, "payrollPeriod", input.id);
-        const actor = await resolveActingEmployeeIdAndName(ctx);
+        const periodBusinessId = (await getPayrollPeriod(input.id))?.businessId ?? undefined;
         await deletePayrollPeriod(input.id);
         await addActivityLog({
           action: "payroll_period_delete",
           entityType: "payroll_period",
           entityId: input.id,
+          businessId: periodBusinessId,
           description: `حذف دورة رواتب مسودة #${input.id}`,
-          performedBy: actor.id ?? ctx.user!.id,
-          performedByName: actor.name ?? "غير معروف",
-          performedByRole: "admin",
+          ...logActor(ctx),
         });
         return { success: true };
       }),

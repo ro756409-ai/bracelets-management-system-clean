@@ -267,8 +267,11 @@ describe("الواجهة والسجل", () => {
     const start = routers.indexOf('editOrderItems: permissionProcedure("orders.edit_items")');
     const body = routers.slice(start, routers.indexOf("getEditHistory", start));
     expect(body).toContain("resolveOrderEditor(ctx)");
-    expect(body).toContain("performedByName: editor.name");
-    expect(body).toContain("performedByRole: editor.role");
+    // السجل بقى من helper واحد (logActor) مبني على resolveOrderEditor — الاسم والدور الحقيقيين لكل مسارات السجل.
+    expect(body).toContain("...logActor(ctx)");
+    const helper = routers.slice(routers.indexOf("function logActor("), routers.indexOf("function logActor(") + 400);
+    expect(helper).toContain("resolveOrderEditor(ctx)");
+    expect(helper).toContain("performedByRole: e.role");
     expect(body).not.toContain('role: "admin" }');
   });
 

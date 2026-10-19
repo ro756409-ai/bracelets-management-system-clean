@@ -139,7 +139,7 @@ describe("🔑 P1-2/P1-3 · الحركة الذرّية والقفل — على 
   it("🔑 editOrderFull مابقاش يحرّك المخزون مرتين", () => {
     const fn = db.slice(
       db.indexOf("export async function editOrderFull("),
-      db.indexOf("export async function editOrderFull(") + 6000
+      db.indexOf("export async function editOrderFull(") + 16000 // الدالة كبرت بقسم سياسة المبالغ (اتساق الإجمالي/الشحن)
     );
     const qtyBlock = fn.slice(fn.indexOf('"quantity" in orderUpdates'));
     const region = qtyBlock.slice(0, qtyBlock.indexOf("addActivityLog"));

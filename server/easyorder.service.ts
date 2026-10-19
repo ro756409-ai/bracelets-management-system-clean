@@ -1,3 +1,4 @@
+import { ClientSafeError } from "./logSafety";
 /**
  * EasyOrder integration service — API client, order normalization, and the shared
  * idempotent upsert pipeline used by BOTH the webhook and the manual "Sync Now" button.
@@ -276,6 +277,10 @@ export interface NormalizedOrder {
   items: NormalizedItem[];
   itemsTotal: number;
   shippingFee: number;
+  /** الشحن ماجاش من Easy Order كرقم موجب، فاتطبّق الافتراضي (50) — السياسة زي ما هي، بس لازم تبان للمراجعة. */
+  shippingDefaulted: boolean;
+  /** قيمة الشحن زي ما وصلت (للسجل): رقم/فاضي/غير موجود. */
+  shippingAsSent: string;
   totalAmount: number;
   externalUpdatedAt: Date | null;
   createdAt: Date | null;
@@ -299,7 +304,9 @@ export function normalizeEasyOrderPayload(payload: EasyOrderPayload): Normalized
 
   const itemsTotal = items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
   const rawShipping = Number(payload.shipping_cost);
-  const shippingFee = Number.isFinite(rawShipping) && rawShipping > 0 ? rawShipping : DEFAULT_SHIPPING_FEE;
+  const shippingDefaulted = !(Number.isFinite(rawShipping) && rawShipping > 0);
+  const shippingFee = shippingDefaulted ? DEFAULT_SHIPPING_FEE : rawShipping;
+  const shippingAsSent = payload.shipping_cost === undefined ? "غير موجود" : payload.shipping_cost === null ? "فاضي" : String(payload.shipping_cost);
 
   const parseDate = (v?: string) => {
     if (!v) return null;
@@ -317,6 +324,8 @@ export function normalizeEasyOrderPayload(payload: EasyOrderPayload): Normalized
     items,
     itemsTotal,
     shippingFee,
+    shippingDefaulted,
+    shippingAsSent,
     totalAmount: itemsTotal + shippingFee,
     externalUpdatedAt: parseDate(payload.updated_at),
     createdAt: parseDate(payload.created_at),
@@ -334,6 +343,8 @@ export interface UpsertResult {
   needsReview: boolean;
   reviewReason?: string;
   error?: string;
+  /** فشل مش هيتصلح بإعادة نفس الطلب (بيانات أطول من العمود / رفض بسياسة) — الويبهوك يرد 4xx بدل 500 عشان المرسل مايعيدش للأبد. */
+  permanent?: boolean;
 }
 
 /**
@@ -354,7 +365,7 @@ export async function upsertEasyOrder(
   const normalized = normalizeEasyOrderPayload(payload);
 
   if (!normalized.externalOrderId || !normalized.customerName || normalized.items.length === 0) {
-    return { outcome: "failed", needsReview: false, error: "بيانات الأوردر غير مكتملة" };
+    return { outcome: "failed", needsReview: false, error: "بيانات الأوردر غير مكتملة", permanent: true };
   }
 
   const catalog = opts.catalog ?? (await getMatchCatalog(opts.businessId));
@@ -369,10 +380,16 @@ export async function upsertEasyOrder(
   }));
 
   const unmatched = resolved.filter((r) => !r.match.matched);
-  const needsReview = unmatched.length > 0;
-  const reviewReason = needsReview
-    ? `أصناف غير مطابقة: ${unmatched.map((u) => (u.match.matched ? "" : u.match.reason)).join(" | ")}`
+  // الشحن الافتراضي (50) مابيتغيّرش هنا (قرار تجاري)، بس مايبقاش حساب صامت: الأوردر يتعلّم للمراجعة بسبب واضح
+  // فيه القيمة اللي Easy Order بعتها فعلًا — عشان أوردر شحنه مجاني (0) مايتحصّلش منه 50 من غير ما حد يشوف.
+  const shippingReason = normalized.shippingDefaulted
+    ? `رسوم شحن افتراضية ${DEFAULT_SHIPPING_FEE} — Easy Order أرسل الشحن: ${normalized.shippingAsSent}؛ راجعها قبل التأكيد`
     : undefined;
+  const needsReview = unmatched.length > 0 || !!shippingReason;
+  const reviewReason = [
+    unmatched.length > 0 ? `أصناف غير مطابقة: ${unmatched.map((u) => (u.match.matched ? "" : u.match.reason)).join(" | ")}` : undefined,
+    shippingReason,
+  ].filter(Boolean).join(" | ") || undefined;
 
   const firstMatched = resolved.find((r) => r.match.matched);
   const primaryProductId = firstMatched?.match.matched ? firstMatched.match.productId : null;
@@ -516,7 +533,9 @@ export async function upsertEasyOrder(
     return { outcome: "created", orderId: created.orderId, orderNumber, needsReview, reviewReason };
   } catch (err: any) {
     // نص آمن: رسالة الـORM فيها params الاستعلام (بيانات العميل) — كانت بتتكتب في سجل الويبهوك كما هي (INT-2).
-    return { outcome: "failed", needsReview, error: safeErrorText(err) };
+    const code = String(err?.code ?? err?.cause?.code ?? "");
+    const permanent = err instanceof ClientSafeError || ["ER_DATA_TOO_LONG", "ER_TRUNCATED_WRONG_VALUE", "ER_TRUNCATED_WRONG_VALUE_FOR_FIELD", "WARN_DATA_TRUNCATED"].includes(code);
+    return { outcome: "failed", needsReview, error: safeErrorText(err), permanent };
   }
 }
 

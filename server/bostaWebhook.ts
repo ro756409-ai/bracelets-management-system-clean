@@ -108,6 +108,11 @@ export async function applyBostaEvent(businessId: number, event: NormalizedBosta
   return { status: "processed", orderId: order.id, orderStatus: decision.advance ? (event.orderStatus as string) : order.status };
 }
 
+/** وقت حدث بوسطة الفعلي (timeStamp بالمللي ثانية) — أو الآن لو الحدث مالوش وقت. */
+function eventTime(event: { timeStamp?: number | null }): Date {
+  return event.timeStamp != null && Number.isFinite(event.timeStamp) ? new Date(event.timeStamp) : new Date();
+}
+
 /** قرار تطبيق حدث بوسطة على صف أوردر — نفس المنطق السابق حرفيًا (استُخرج فقط ليُستخدم على صف مقفول أيضًا). */
 async function decideBostaUpdate(order: typeof orders.$inferSelect, businessId: number, event: NormalizedBostaEvent, inboxId?: number):
   Promise<{ result: ApplyResult } | { set: Record<string, unknown>; advance: boolean }> {
@@ -142,6 +147,10 @@ async function decideBostaUpdate(order: typeof orders.$inferSelect, businessId: 
       bostaStatus: event.label,
       ...(event.trackingNumber ? { bostaTrackingNumber: event.trackingNumber } : {}),
       ...(advance ? { status: event.orderStatus as any } : {}),
+      // وقت الحدث نفسه (مش وقت الوصول) ومرة واحدة: إيرادات الداشبورد بتتحسب بـdeliveredAt، والشحن اليومي بـshippedAt —
+      // قبل كده الويبهوك كان بيغيّر الحالة بس، فأوردرات بوسطة المسلَّمة ماكانتش بتظهر في الإيراد خالص.
+      ...(advance && event.orderStatus === "delivered" && order.deliveredAt == null ? { deliveredAt: eventTime(event) } : {}),
+      ...(advance && event.orderStatus === "shipped" && order.shippedAt == null ? { shippedAt: eventTime(event) } : {}),
       ...(exceptionNote ? { bostaLastError: exceptionNote } : {}),
       ...(event.flagsReview ? { needsReview: true, reviewReason: appendReview(order.reviewReason, `بوسطة: ${event.label}`) } : {}),
     },
@@ -206,9 +215,14 @@ export async function handleBostaWebhook(req: Request, res: Response) {
     // فترة الانتقال: السر العام بيوصل للأوردر بشرط إن نشاطه **مالوش** حساب شحن.
     if (legacy) {
       const byShipment = event.shipmentId ? eq(orders.bostaShipmentId, event.shipmentId) : eq(orders.bostaTrackingNumber, event.trackingNumber as string);
-      const [candidate] = await drizzle.select({ businessId: orders.businessId }).from(orders).where(byShipment).limit(1);
+      const [candidate] = await drizzle.select({ businessId: orders.businessId, bostaSentAt: orders.bostaSentAt }).from(orders).where(byShipment).limit(1);
       if (candidate) {
-        if (await getCarrierAccountRow(candidate.businessId)) {
+        const account = await getCarrierAccountRow(candidate.businessId);
+        // شحنة اتعملت **قبل** ربط حساب النشاط اتبعتت بالسر العام — تحديثاتها لسه بتيجي بيه. رفضها كان بيوقف تسليم/مرتجع
+        // الشحنات اللي في الطريق لحظة الربط. اللي اتعملت بعد الربط (أو وقتها مجهول) مرفوضة زي قبل كده.
+        const sentBeforeAccount = account != null && candidate.bostaSentAt != null && account.createdAt != null
+          && new Date(candidate.bostaSentAt).getTime() < new Date(account.createdAt).getTime();
+        if (account && !sentBeforeAccount) {
           console.warn("[Bosta Webhook] legacy secret used for a business that has its own account — rejected");
           return res.status(401).json({ error: "Unauthorized" });
         }
