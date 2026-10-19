@@ -1,12 +1,14 @@
+import { activeBrand } from "@/lib/brandFlag";
 import type { ReactNode } from "react";
 import { CheckCircle, Clock, Copy, Edit2, Eye, MoreVertical, PhoneCall, PhoneOff, RotateCcw, Trash2, XCircle } from "lucide-react";
-import { PartnerLogo } from "@/components/brand/PartnerLogo";
+import { TrackingChip } from "@/components/orders/TrackingChip";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   AttemptsCell, CustomerCell, ReceiptPrediction, ResponsiveDataTable, StatusBadge, TwoLineCell, WhatsAppButton,
   type Column, type Density, type ResponsiveDataTableProps, UNAVAILABLE_LABEL,
 } from "@/components/shared";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * جدول الأوردرات (المرحلة 4) — **عرض فقط**. الصفحة تملك الاستعلامات والـmutations والنوافذ وتمرّر
@@ -57,9 +59,9 @@ export const COLLECTION_STATUS: Record<string, { label: string; tone: "neutral" 
   failed: { label: "فشل التحصيل", tone: "danger" },
 };
 
-export const money = (v: unknown) => `${Number(v ?? 0).toLocaleString("ar-EG")} ج.م`;
-const day = (v: unknown) => new Date(v as string).toLocaleDateString("ar-EG", { day: "numeric", month: "short" });
-const time = (v: unknown) => new Date(v as string).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
+export const money = (v: unknown) => `${Number(v ?? 0).toLocaleString(AR_LOCALE)} ج.م`;
+const day = (v: unknown) => new Date(v as string).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" });
+const time = (v: unknown) => new Date(v as string).toLocaleTimeString(AR_LOCALE, { hour: "2-digit", minute: "2-digit" });
 export const paymentLabel = (order: OrderRow): string | null => {
   const p = order.projectedPaymentType || order.paymentMethod;
   if (!p) return null;
@@ -151,11 +153,7 @@ export function buildOrdersColumns(ctx: OrdersColumnsContext): Column<OrderRow>[
           )}
           <div className="mt-1 flex flex-wrap items-center gap-1">
             {order.source && <StatusBadge status={order.source} kind="source" size="sm" label={ctx.sourceLabel(order.source)} />}
-            {order.bostaShipmentId && (
-              <span className="inline-flex items-center gap-0.5 rounded-[var(--radius-brand-pill)] bg-[var(--info)]/10 px-1.5 py-0.5 text-[10px] font-bold text-[var(--info)]" title={`شحنة Bosta: ${order.bostaTrackingNumber || order.bostaShipmentId}`}>
-                <PartnerLogo partner="bosta" size="xs" decorative className="!h-2.5" /> بوسطة
-              </span>
-            )}
+            <TrackingChip shipmentId={order.bostaShipmentId} trackingNumber={order.bostaTrackingNumber} />
             {order.bostaLastError && !order.bostaShipmentId && (
               <span className="inline-flex items-center rounded-[var(--radius-brand-pill)] border border-destructive/20 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-bold text-destructive">فشل بوسطة</span>
             )}
@@ -181,7 +179,7 @@ export function buildOrdersColumns(ctx: OrdersColumnsContext): Column<OrderRow>[
     {
       // 5. المنطقة — المحافظة بارزة والمدينة/العنوان تحتها
       id: "area", header: "المنطقة", alwaysVisible: true,
-      cell: order => <TwoLineCell primary={order.governorate || "—"} secondary={order.city || order.customerAddress || undefined} className="max-w-[150px]" />,
+      cell: order => <TwoLineCell primary={order.governorate || "—"} secondary={order.city || order.customerAddress || undefined} className="max-w-[150px] brand-v2:max-w-[128px]" />,
     },
     {
       // 6. المنتجات/الأنواع — الاسم × الكمية، وسطر التخصيص (لون/مقاس) إن وُجد
@@ -196,7 +194,8 @@ export function buildOrdersColumns(ctx: OrdersColumnsContext): Column<OrderRow>[
     },
     {
       // 7. مبلغ التحصيل
-      id: "codAmount", header: "مبلغ التحصيل", numeric: true, alwaysVisible: true,
+      // v2: «مثبّت» — بيفضل ظاهر كامل في كل مواضع التمرير الأفقي (لازق جنب رقم الأوردر أو الإجراءات). v1 زي ما هو.
+      id: "codAmount", header: "مبلغ التحصيل", numeric: true, alwaysVisible: true, sticky: activeBrand() === "v2" ? "pinned" : undefined,
       cell: order => <span className="font-en text-sm font-bold tabular-nums brand-v2:whitespace-nowrap">{money(order.totalAmount)}</span>,
     },
     {
@@ -354,7 +353,9 @@ export function OrdersTable(props: OrdersTableProps) {
       toolbar={props.toolbar}
       onRowClick={props.onRowClick}
       mobileRow={props.mobileRow}
-      cardsBelow="md"
+      // v2: كروت تحت 1024 (التابلت) — عند 768 الجدول بيتحشر في ~480px والعمودين الثابتين واخدين ~380px، فمبلغ التحصيل مايلحقش
+      // يتعرض كامل. الكروت فيها المبلغ ورقم التتبع كاملين. v1 زي ما هي (md).
+      cardsBelow={activeBrand() === "v2" ? "lg" : "md"}
       empty={props.empty ?? { title: "لا توجد أوردرات", description: "جرّب تعديل الفلاتر أو أضف أوردرًا جديدًا" }}
     />
   );

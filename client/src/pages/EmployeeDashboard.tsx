@@ -38,6 +38,7 @@ import {
   OrderEditDialog, isValidEgyptianMobile,
   type OrderEditSavePayload,
 } from "@/components/orders/OrderEditDialog";
+import { AR_LOCALE } from "@/lib/format";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   new:       { label: "جديد",         color: "text-primary",            bg: "bg-accent border-primary/30" },
@@ -901,7 +902,7 @@ export default function EmployeeDashboard() {
                   مكانه جنب الاسم عشان يتشاف من غير ما الموظف ينزل بصره. */}
               <p className="text-xs text-primary-foreground/75">
                 {remainingCount > 0
-                  ? <>متبقّي <span className="font-bold tabular-nums text-primary-foreground">{remainingCount.toLocaleString('ar-EG')}</span> طلب</>
+                  ? <>متبقّي <span className="font-bold tabular-nums text-primary-foreground">{remainingCount.toLocaleString(AR_LOCALE)}</span> طلب</>
                   : 'خلصت كل الطلبات'}
               </p>
             </div>
@@ -1018,7 +1019,7 @@ export default function EmployeeDashboard() {
                               }`}>
                                 {p.currentStock} <span className="text-xs font-normal text-muted-foreground">قطعة</span>
                               </p>
-                              <p className="mt-0.5 text-xs text-muted-foreground">سعر: {Number(p.price).toLocaleString('ar-EG')} ج.م</p>
+                              <p className="mt-0.5 text-xs text-muted-foreground">سعر: {Number(p.price).toLocaleString(AR_LOCALE)} ج.م</p>
                               {isLow && (
                                 <StatusBadge className="mt-1" status="low" kind="stock" tone="danger" label="مخزون منخفض" size="sm" />
                               )}
@@ -1228,7 +1229,7 @@ export default function EmployeeDashboard() {
                       <p><span className="font-semibold">الكمية:</span> {scanResult.order.quantity}</p>
                       <p><span className="font-semibold">المحافظة:</span> {scanResult.order.governorate}</p>
                       {scanResult.preparedByName && (
-                        <p className="text-[var(--warning)]"><span className="font-semibold">جهزه:</span> {scanResult.preparedByName} • {scanResult.preparedAt ? new Date(scanResult.preparedAt).toLocaleString('ar-EG') : ''}</p>
+                        <p className="text-[var(--warning)]"><span className="font-semibold">جهزه:</span> {scanResult.preparedByName} • {scanResult.preparedAt ? new Date(scanResult.preparedAt).toLocaleString(AR_LOCALE) : ''}</p>
                       )}
                     </div>
                   )}
@@ -1269,7 +1270,7 @@ export default function EmployeeDashboard() {
                 <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
                   <span className="font-medium text-[var(--warning)]">{broadcastData.sentByName}</span>
                   <span aria-hidden="true">•</span>
-                  <span>{new Date(broadcastData.createdAt).toLocaleString('ar-EG')}</span>
+                  <span>{new Date(broadcastData.createdAt).toLocaleString(AR_LOCALE)}</span>
                 </div>
               </div>
             </div>
@@ -1546,7 +1547,7 @@ export default function EmployeeDashboard() {
                             </span>
                           </span>
                           <span className="shrink-0 font-semibold tabular-nums">
-                            {Number(order.totalAmount).toLocaleString('ar-EG')} ج.م
+                            {Number(order.totalAmount).toLocaleString(AR_LOCALE)} ج.م
                           </span>
                         </div>
                         {/* الملاحظة كانت مدفونة جوه التوسيع: الموظف كان لازم يفتح كل كارت
@@ -1564,7 +1565,7 @@ export default function EmployeeDashboard() {
                           // بدون السنة: كل أوردرات الموظف من نفس السنة، والسنة كانت بتوسّع
                           // العمود ده وتاكل من عرض بيانات العميل على الموبايل.
                           <span className="whitespace-nowrap text-xs text-muted-foreground">
-                            {new Date(order.createdAt).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
+                            {new Date(order.createdAt).toLocaleDateString(AR_LOCALE, { day: 'numeric', month: 'short' })}
                           </span>
                         )}
                         {isExpanded ? (
@@ -1756,7 +1757,7 @@ export default function EmployeeDashboard() {
                       {order.status === "postponed" && order.postponedTo && (
                         <div className="flex items-center gap-2 rounded-[var(--radius-brand-md)] border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-sm text-[var(--warning)]">
                           <Clock className="h-4 w-4" />
-                          مؤجل لـ: {new Date(order.postponedTo).toLocaleDateString("ar-EG")}
+                          مؤجل لـ: {new Date(order.postponedTo).toLocaleDateString(AR_LOCALE)}
                         </div>
                       )}
 
@@ -2060,7 +2061,7 @@ function EditHistoryPanel({ orderId }: { orderId: number }) {
           <div key={i} className="text-xs border-b border-border pb-1 last:border-0">
             <div className="flex items-center justify-between">
               <span className="font-medium text-foreground">{log.editedByName}</span>
-              <span className="text-muted-foreground">{new Date(log.editedAt).toLocaleString('ar-EG')}</span>
+              <span className="text-muted-foreground">{new Date(log.editedAt).toLocaleString(AR_LOCALE)}</span>
             </div>
             <div className="mt-0.5 text-muted-foreground">
               <span className="font-medium">{log.fieldName}:</span>{' '}
@@ -2128,7 +2129,7 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
                       <p className="text-xs text-muted-foreground leading-relaxed mb-1">{task.description}</p>
                     )}
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{new Date(task.createdAt).toLocaleDateString('ar-EG')}</span>
+                      <span>{new Date(task.createdAt).toLocaleDateString(AR_LOCALE)}</span>
                       <span aria-hidden="true">•</span>
                       <span>{task.createdByName}</span>
                     </div>
@@ -2177,7 +2178,7 @@ function EmployeeTasksPanel({ employeeId }: { employeeId?: number }) {
 // ==================== STOCK VARIANTS (view only) ====================
 // Same cells the old hand-rolled table rendered; ResponsiveDataTable swaps them for cards below md.
 const variantIsLow = (v: any) => v.currentStock <= v.minStockLevel;
-const variantPrice = (v: any) => (v.price ? `${Number(v.price).toLocaleString('ar-EG')} ج.م` : '-');
+const variantPrice = (v: any) => (v.price ? `${Number(v.price).toLocaleString(AR_LOCALE)} ج.م` : '-');
 const VariantStockBadge = ({ v }: { v: any }) => (
   variantIsLow(v)
     ? <StatusBadge kind="stock" status="low" label="ينفد" tone="danger" size="sm" />

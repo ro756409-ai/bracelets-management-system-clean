@@ -1,4 +1,5 @@
 import { formatMoney } from "./money";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * كشف راتب للطباعة / الحفظ PDF.
@@ -133,14 +134,14 @@ export function printPayslip(data: PayslipData): boolean {
   </table>
 
   ${data.notes ? `<p class="notes"><strong>ملاحظات:</strong> ${escapeHtml(data.notes)}</p>` : ""}
-  ${data.paidAt ? `<p class="notes"><strong>تاريخ الصرف:</strong> ${new Date(data.paidAt).toLocaleDateString("ar-EG")}</p>` : ""}
+  ${data.paidAt ? `<p class="notes"><strong>تاريخ الصرف:</strong> ${new Date(data.paidAt).toLocaleDateString(AR_LOCALE)}</p>` : ""}
 
   <div class="sign">
     <div><div class="line">توقيع الموظف</div></div>
     <div><div class="line">${escapeHtml(data.paidByName || data.approvedByName || "المسؤول المالي")}</div></div>
   </div>
 
-  <footer>طُبع من نظام متجرك — ${new Date().toLocaleString("ar-EG")}</footer>
+  <footer>طُبع من نظام متجرك — ${new Date().toLocaleString(AR_LOCALE)}</footer>
 </body></html>`);
   win.document.close();
   win.focus();

@@ -25,6 +25,7 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { canSeeNav } from "@/config/navigation";
 import { gateForPath } from "@/components/shell/CreateMenu";
 import { activeBrand } from "@/lib/brandFlag";
+import { AR_LOCALE } from "@/lib/format";
 
 /** محاور الرسوم: 12px تحت v2 (Master Audit §6 — كانت 10px)، وv1 كما هو. */
 const axisFontSize = () => (activeBrand() === "v2" ? 12 : 10);
@@ -57,7 +58,7 @@ function todayRange(): PickerRange {
   return { from, to };
 }
 
-const fmt = (n: number) => n.toLocaleString("ar-EG");
+const fmt = (n: number) => n.toLocaleString(AR_LOCALE);
 
 /** الإجراءات السريعة — وجهات موجودة فعلًا، تُفلتر بنفس بوابات التنقل (config/navigation) */
 const QUICK_ACTIONS = [
@@ -126,7 +127,7 @@ export default function Dashboard() {
   async function exportTodayConfirmedToExcel() {
     // PERF-2: xlsx (~400KB) بيتحمّل وقت التصدير بس — مش جزء من الحزمة الأولى لكل صفحة.
     const XLSX = await import("xlsx");
-    const today = new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
+    const today = new Date().toLocaleDateString(AR_LOCALE, { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
     const rows = todayConfirmedOrders.map((o, idx) => ({
       '#': idx + 1,
       'رقم Easy Order': o.easyOrderShortId ?? '',
@@ -137,7 +138,7 @@ export default function Dashboard() {
       'المنتج': o.productName,
       'الكمية': o.quantity ?? 1,
       'المبلغ الإجمالي': Number(o.totalAmount),
-      'وقت التأكيد': o.confirmedAt ? new Date(o.confirmedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '',
+      'وقت التأكيد': o.confirmedAt ? new Date(o.confirmedAt).toLocaleTimeString(AR_LOCALE, { hour: '2-digit', minute: '2-digit' }) : '',
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     // عرض الأعمدة
@@ -198,7 +199,7 @@ export default function Dashboard() {
   const quickActions = QUICK_ACTIONS.filter(a => canSeeNav(gateForPath(a.path), isAdmin, permissions));
   const canOpen = (path: string) => canSeeNav(gateForPath(path), isAdmin, permissions);
   const refreshAll = () => { void refetch(); void refetchChart(); void refetchLowStock(); void refetchToday(); };
-  const dateLabel = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const dateLabel = new Date().toLocaleDateString(AR_LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
   return (
     <div className="space-y-6 brand-v2:space-y-8 brand-v2:pb-4" data-testid="dashboard-page">
@@ -303,7 +304,7 @@ export default function Dashboard() {
                     {order.customerAddress && <p className="mt-0.5 truncate text-xs text-muted-foreground">{order.customerAddress}</p>}
                     <div className="mt-1 flex items-center justify-between">
                       <span className="text-xs text-muted-foreground">{order.productName}</span>
-                      <span className="font-en text-xs tabular-nums text-muted-foreground">{order.confirmedAt ? new Date(order.confirmedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                      <span className="font-en text-xs tabular-nums text-muted-foreground">{order.confirmedAt ? new Date(order.confirmedAt).toLocaleTimeString(AR_LOCALE, { hour: '2-digit', minute: '2-digit' }) : ''}</span>
                     </div>
                   </div>
                 </li>
@@ -481,7 +482,7 @@ export default function Dashboard() {
                   <div className="flex-1">
                     <p className="mb-1 text-xs font-medium text-[var(--warning)]">الرسالة الحالية:</p>
                     <p className="text-sm text-foreground">{activeBroadcast.message}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">بواسطة: {activeBroadcast.sentByName} • {new Date(activeBroadcast.createdAt).toLocaleString('ar-EG')}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">بواسطة: {activeBroadcast.sentByName} • {new Date(activeBroadcast.createdAt).toLocaleString(AR_LOCALE)}</p>
                   </div>
                   <Button
                     type="button" size="sm" variant="outline"

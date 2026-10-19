@@ -5,6 +5,7 @@ import { trpc } from "@/lib/trpc";
 import {
   AccCard, AccSectionTitle, AccField, AccInput, AccSelect, AccButton, AccTable, accMoney,
 } from "./ui";
+import { AR_LOCALE } from "@/lib/format";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -128,7 +129,7 @@ export default function AccWorkshop({ businessId }: { businessId: number }) {
           {rows.map(r => (
             <tr key={r.id} className="border-b border-slate-100 last:border-0">
               <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-slate-600">
-                {new Date(r.occurredAt).toLocaleDateString("ar-EG")}
+                {new Date(r.occurredAt).toLocaleDateString(AR_LOCALE)}
               </td>
               <td className="px-3 py-2.5">{r.label ?? r.description}</td>
               <td className="px-3 py-2.5 tabular-nums font-medium"

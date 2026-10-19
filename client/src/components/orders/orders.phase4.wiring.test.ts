@@ -90,7 +90,8 @@ describe("🧩 أجزاء العرض بلا منطق أعمال ولا بيان�
     for (const [n, s] of [["OrdersTabs", tabs], ["OrdersTable", table], ["OrdersMobileList", mobile]] as const) expect(s, n).not.toMatch(/@\/lib\/trpc|useQuery|useMutation|BusinessContext|localStorage|fetch\(/);
   });
   it("الجدول: cardsBelow=md؛ توقع الاستلام null؛ محاولات التوصيل null؛ رسوم الشحن من projectedShippingCostSnapshot؛ لا نسب/تواريخ مخترعة", () => {
-    expect(table).toContain('cardsBelow="md"');
+    // v1: md زي ما هو؛ v2 (قرار 2026-10-19): كروت تحت 1024 عشان مبلغ التحصيل يفضل ظاهر كامل على التابلت.
+    expect(table).toContain('cardsBelow={activeBrand() === "v2" ? "lg" : "md"}');
     expect(table).toContain("<ReceiptPrediction probability={null}"); expect(mobile).toContain("<ReceiptPrediction probability={null}");
     expect(table).toContain("deliveryAttempts={null}"); expect(mobile).toContain("deliveryAttempts={null}");
     expect(table).toContain("order.projectedShippingCostSnapshot"); expect(mobile).toContain("order.projectedShippingCostSnapshot");

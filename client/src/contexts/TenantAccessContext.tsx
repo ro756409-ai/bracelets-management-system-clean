@@ -9,16 +9,18 @@ import type { TenantAccessLevel, TenantAccessReason } from "@shared/tenantAccess
  * يتغيّر إطلاقًا. read_only ⇒ حارس التفاعل (ReadOnlyGuard) + رابط tRPC يرفض الكتابة؛ blocked ⇒ شاشة كاملة.
  * الإخفاء/التعطيل هنا تجربة استخدام فقط — حارس السيرفر هو الحماية.
  */
-export type TenantAccessView = { enforced: boolean; level: TenantAccessLevel; reason: TenantAccessReason | null; message: string | null; until: Date | string | null; readOnly: boolean; blocked: boolean };
-const FULL: TenantAccessView = { enforced: false, level: "full", reason: null, message: null, until: null, readOnly: false, blocked: false };
+export type TenantAccessView = { enforced: boolean; level: TenantAccessLevel; reason: TenantAccessReason | null; message: string | null; until: Date | string | null; readOnly: boolean; blocked: boolean; billing: boolean };
+const FULL: TenantAccessView = { enforced: false, level: "full", reason: null, message: null, until: null, readOnly: false, blocked: false, billing: false };
 const Ctx = createContext<TenantAccessView>(FULL);
 export const useTenantAccess = () => useContext(Ctx);
 
 export function TenantAccessProvider({ children }: { children: ReactNode }) {
   const { data } = trpc.tenantAccess.status.useQuery(undefined, { retry: false, staleTime: 60_000, refetchOnWindowFocus: true });
   const value = useMemo<TenantAccessView>(() => {
-    if (!data || !data.enforced) return FULL;
-    return { enforced: true, level: data.level, reason: data.reason, message: data.message, until: data.until ?? null, readOnly: data.level === "read_only", blocked: data.level === "blocked" };
+    if (!data) return FULL;
+    const billing = Boolean((data as { billing?: boolean }).billing);
+    if (!data.enforced) return billing ? { ...FULL, billing } : FULL;
+    return { enforced: true, level: data.level, reason: data.reason, message: data.message, until: data.until ?? null, readOnly: data.level === "read_only", blocked: data.level === "blocked", billing };
   }, [data]);
   useEffect(() => { setTenantAccessLevel(value.level); }, [value.level]);
   return (

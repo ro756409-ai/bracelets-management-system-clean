@@ -23,6 +23,7 @@ import { requireAdminOrManager, type RequestWithAuth } from "./authMiddleware";
 import {
   resolveBostaConnection,
   resolveBostaEndpoint,
+  guardBostaRequest,
   authHeader,
   NOT_CONNECTED_MESSAGE,
   type BostaConnection,
@@ -45,8 +46,11 @@ import { eq, and, isNotNull, isNull, ne, inArray, notInArray, or } from "drizzle
  *   uncertain  ← النداء وقع بعد ما بوسطة **ممكن** تكون أنشأت الشحنة — retry أعمى ممنوع
  *   sent       ← اتأكد الإنشاء ومعاه shipmentId
  *   failed     ← بوسطة رفضت الطلب (مفيش شحنة اتعملت) — retry آمن
+ *   reset_requested ← طلب إعادة إرسال لشحنة غير مؤكدة تحت مراجعة المالك — الإرسال مقفول لحد الاعتماد
+ *                     (bostaResolution.service.ts). مفيش أي مسار بيفتح الإرسال من غير اعتماد مُسجَّل.
  */
-const BOSTA_CREATING = "creating";
+export const BOSTA_CREATING = "creating";
+export const BOSTA_RESET_REQUESTED = "reset_requested";
 /** حالات الأوردر المسموح شحنها لبوسطة — على السيرفر لكل مسار (فردي/جماعي/إعادة محاولة). */
 export const BOSTA_SENDABLE_STATUSES = ["confirmed", "preparing", "printed"] as const;
 const STATUS_LABEL_AR: Record<string, string> = {
@@ -55,7 +59,8 @@ const STATUS_LABEL_AR: Record<string, string> = {
 };
 const notSendableMessage = (status: string | null | undefined) =>
   `لا يمكن إرسال أوردر حالته «${STATUS_LABEL_AR[String(status)] ?? status}» لبوسطة — المسموح: مؤكد، قيد التحضير، مطبوع`;
-const BOSTA_UNCERTAIN = "uncertain";
+export const BOSTA_UNCERTAIN = "uncertain";
+const RESET_REQUESTED_MESSAGE = "طلب إعادة إرسال الشحنة تحت مراجعة المالك — الإرسال مقفول لحد الاعتماد";
 const UNCERTAIN_MESSAGE =
   "حالة إنشاء الشحنة غير مؤكدة — راجع بوسطة قبل إعادة المحاولة عشان ما تتعملش شحنة تانية";
 
@@ -339,6 +344,9 @@ export async function createBostaShipment(
   try { bostaWebhookUrl(); } catch (err) { return { success: false, error: (err as Error).message }; }
   const conn = await resolveBostaConnection(order.businessId);
   if (!conn) return { success: false, error: NOT_CONNECTED_MESSAGE };
+  // B1: نفس حاجز النداء الخارجي **قبل** أي كتابة أو حجز (`creating`) — في staging/preview عنوان Live أو غير معتمد = رفض هنا.
+  const deliveriesGuard = guardBostaRequest(`${conn.baseUrl}/deliveries`, {});
+  if (!deliveriesGuard.ok) return { success: false, error: deliveriesGuard.error };
 
   // ❌ منع إرسال أوردرات مجموعة "مفروشات وأدوات منزلية" لـ Bosta نهائياً
   // الاعتماد على مجموعة العمل (business group slug = furniture) وهو الأدق
@@ -378,6 +386,9 @@ export async function createBostaShipment(
   // بشرية بدل ما نبعت تاني على الأعمى.
   if (order.bostaStatus === BOSTA_UNCERTAIN || order.bostaStatus === BOSTA_CREATING) {
     return { success: false, error: UNCERTAIN_MESSAGE };
+  }
+  if (order.bostaStatus === BOSTA_RESET_REQUESTED) {
+    return { success: false, error: RESET_REQUESTED_MESSAGE };
   }
 
   // حالة الأوردر على السيرفر (الواجهة كانت البوابة الوحيدة، والإرسال الجماعي بلا فلتر): الشحن فقط لمؤكد/قيد
@@ -543,7 +554,7 @@ export async function createBostaShipment(
       inArray(orders.status, [...BOSTA_SENDABLE_STATUSES]),
       or(
         isNull(orders.bostaStatus),
-        notInArray(orders.bostaStatus, [BOSTA_CREATING, BOSTA_UNCERTAIN])
+        notInArray(orders.bostaStatus, [BOSTA_CREATING, BOSTA_UNCERTAIN, BOSTA_RESET_REQUESTED])
       )
     ));
   const claimed = Number((claim as any)?.[0]?.affectedRows ?? (claim as any)?.affectedRows ?? 0);
@@ -590,6 +601,8 @@ export async function createBostaShipment(
       body: JSON.stringify(payload),
       // INT-4: نداء معلّق مايقفلش الطلب للأبد — المهلة بتدخل مسار «uncertain» تحت (بلا retry تلقائي)
       signal: AbortSignal.timeout(BOSTA_CREATE_TIMEOUT_MS),
+      // B1: في staging/preview ممنوع متابعة أي redirect (الحاجز اتشيّك قبل الحجز)
+      ...(deliveriesGuard.init.redirect ? { redirect: deliveriesGuard.init.redirect } : {}),
     });
 
     const responseBody = await response.json() as Record<string, unknown>;
@@ -598,6 +611,18 @@ export async function createBostaShipment(
       orderId, status: response.status, shipmentId: responseBody._id ?? null, trackingNumber: responseBody.trackingNumber ?? null,
       ...(response.ok ? {} : { message: String((responseBody as any).message ?? "").slice(0, 200) }),
     })));
+
+    // نجاح HTTP من غير رقم شحنة واضح في الشكل المتوقع (`_id` على المستوى الأعلى): **مش** فشل مؤكد — الشحنة ممكن
+    // تكون اتعملت بشكل رد مختلف. «failed» كان بيفتح إعادة إرسال ممكن تعمل شحنة مكررة؛ دلوقتي uncertain لحد الحسم
+    // اليدوي (ربط برقم الشحنة من لوحة بوسطة، أو طلب إعادة إرسال باعتماد المالك). مانفترضش أي شكل رد تاني غير موثّق.
+    if (response.ok && !responseBody._id) {
+      const detail = `HTTP ${response.status} بدون رقم شحنة واضح في الرد`;
+      await db!.update(orders).set({
+        bostaLastError: `${UNCERTAIN_MESSAGE} — ${detail}`,
+        bostaStatus: BOSTA_UNCERTAIN,
+      }).where(eq(orders.id, orderId));
+      return { success: false, error: `${UNCERTAIN_MESSAGE} — ${detail}` };
+    }
 
     if (response.ok && responseBody._id) {
       const shipmentId = String(responseBody._id);
@@ -706,13 +731,16 @@ export async function fetchBostaAwb(
 
   const query = encodeURIComponent(shipmentIds.join(","));
   const url = `${conn.baseUrl}/deliveries/business/awb?deliveries=${query}`;
+  // B1: حاجز النداء الخارجي (أصل معتمد + بلا redirects في staging/preview)
+  const g = guardBostaRequest(url, {
+    method: "GET",
+    headers: authHeader(conn.authScheme, conn.apiKey),
+    signal: AbortSignal.timeout(BOSTA_AWB_TIMEOUT_MS), // INT-4
+  });
+  if (!g.ok) return { ok: false, error: g.error };
 
   try {
-    const response = await fetchImpl(url, {
-      method: "GET",
-      headers: authHeader(conn.authScheme, conn.apiKey),
-      signal: AbortSignal.timeout(BOSTA_AWB_TIMEOUT_MS), // INT-4
-    });
+    const response = await fetchImpl(url, g.init);
 
     const contentType = response.headers.get("content-type") || "";
 

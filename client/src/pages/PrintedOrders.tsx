@@ -12,6 +12,7 @@ import {
   PageHeader, StatCard, SearchInput, StatusBadge, ResponsiveDataTable, StickyActionBar, OfflineState, type Column,
 } from "@/components/shared";
 import { PartnerLogo } from "@/components/brand";
+import { AR_LOCALE } from "@/lib/format";
 
 const TOUCH = "min-h-11 md:min-h-9";
 
@@ -97,8 +98,8 @@ export default function PrintedOrders() {
         'المنتج': o.productName,
         'الكمية': o.quantity,
         'المبلغ': Number(o.totalAmount),
-        'تاريخ الطباعة': o.printedAt ? new Date(o.printedAt).toLocaleString('ar-EG') : '',
-        'تاريخ التأكيد': o.confirmedAt ? new Date(o.confirmedAt).toLocaleString('ar-EG') : '',
+        'تاريخ الطباعة': o.printedAt ? new Date(o.printedAt).toLocaleString(AR_LOCALE) : '',
+        'تاريخ التأكيد': o.confirmedAt ? new Date(o.confirmedAt).toLocaleString(AR_LOCALE) : '',
         'بوسطة': o.bostaLastError?.includes('successfully') ? 'نعم' : 'لا',
       }));
       const ws = XLSX.utils.json_to_sheet(rows);
@@ -110,10 +111,10 @@ export default function PrintedOrders() {
   };
 
   const dateLabel = dateFilter === 'today'
-    ? new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+    ? new Date().toLocaleDateString(AR_LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
     : dateFilter === 'yesterday'
-    ? new Date(Date.now() - 86400000).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-    : customDate ? new Date(customDate + 'T00:00:00').toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : 'اختر تاريخًا';
+    ? new Date(Date.now() - 86400000).toLocaleDateString(AR_LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+    : customDate ? new Date(customDate + 'T00:00:00').toLocaleDateString(AR_LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : 'اختر تاريخًا';
 
   const carrierCell = (o: any) => {
     const isBosta = o.bostaLastError?.includes('successfully');
@@ -130,8 +131,8 @@ export default function PrintedOrders() {
     { id: "governorate", header: "المحافظة", cell: o => <span className="text-xs">{o.governorate || "—"}</span> },
     { id: "product", header: "المنتج", cell: o => <span className="block max-w-[180px] truncate text-xs" title={o.productName}>{o.productName}</span> },
     { id: "qty", header: "الكمية", numeric: true, cell: o => <span className="text-xs font-medium tabular-nums">{o.quantity}</span> },
-    { id: "total", header: "المبلغ", numeric: true, cell: o => <span className="text-xs font-medium tabular-nums text-[var(--success)]">{Number(o.totalAmount).toLocaleString('ar-EG')} ج.م</span> },
-    { id: "printedAt", header: "تاريخ الطباعة", cell: o => <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{o.printedAt ? new Date(o.printedAt).toLocaleString('ar-EG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span> },
+    { id: "total", header: "المبلغ", numeric: true, cell: o => <span className="text-xs font-medium tabular-nums text-[var(--success)]">{Number(o.totalAmount).toLocaleString(AR_LOCALE)} ج.م</span> },
+    { id: "printedAt", header: "تاريخ الطباعة", cell: o => <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{o.printedAt ? new Date(o.printedAt).toLocaleString(AR_LOCALE, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span> },
     { id: "carrier", header: "شحن", alwaysVisible: true, cell: carrierCell },
   ];
 
@@ -147,8 +148,8 @@ export default function PrintedOrders() {
               {carrierCell(o)}
             </span>
             <span className="mt-1 block text-xs text-muted-foreground" dir="ltr">{o.customerPhone}</span>
-            <span className="mt-1 flex items-center justify-between text-xs"><span className="truncate">{o.productName} × {o.quantity}</span><span className="shrink-0 font-semibold tabular-nums text-[var(--success)]">{Number(o.totalAmount).toLocaleString('ar-EG')} ج.م</span></span>
-            <span className="mt-1 block text-xs tabular-nums text-muted-foreground">{o.governorate || "—"} · طُبع {o.printedAt ? new Date(o.printedAt).toLocaleString('ar-EG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+            <span className="mt-1 flex items-center justify-between text-xs"><span className="truncate">{o.productName} × {o.quantity}</span><span className="shrink-0 font-semibold tabular-nums text-[var(--success)]">{Number(o.totalAmount).toLocaleString(AR_LOCALE)} ج.م</span></span>
+            <span className="mt-1 block text-xs tabular-nums text-muted-foreground">{o.governorate || "—"} · طُبع {o.printedAt ? new Date(o.printedAt).toLocaleString(AR_LOCALE, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
           </span>
         </label>
       </article>
@@ -194,10 +195,10 @@ export default function PrintedOrders() {
         }
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="ملخص المطبوعات" data-testid="printed-summary">
-          <StatCard label="أوردرات مطبوعة" value={orders.length.toLocaleString('ar-EG')} hint="في التاريخ المختار" loading={isLoading} />
-          <StatCard label="القطع" value={totalQty.toLocaleString('ar-EG')} hint="مجموع الكميات" loading={isLoading} />
-          <StatCard label="المبالغ" value={`${totalAmount.toLocaleString('ar-EG')} ج.م`} hint="قيمة الأوردرات، ليست نقدًا محصّلًا" loading={isLoading} />
-          <StatCard label="بوسطة / أخرى" value={`${bostaCount.toLocaleString('ar-EG')} / ${nonBostaCount.toLocaleString('ar-EG')}`} hint="سجّلتها بوسطة فعلًا / شركة أخرى" loading={isLoading} />
+          <StatCard label="أوردرات مطبوعة" value={orders.length.toLocaleString(AR_LOCALE)} hint="في التاريخ المختار" loading={isLoading} />
+          <StatCard label="القطع" value={totalQty.toLocaleString(AR_LOCALE)} hint="مجموع الكميات" loading={isLoading} />
+          <StatCard label="المبالغ" value={`${totalAmount.toLocaleString(AR_LOCALE)} ج.م`} hint="قيمة الأوردرات، ليست نقدًا محصّلًا" loading={isLoading} />
+          <StatCard label="بوسطة / أخرى" value={`${bostaCount.toLocaleString(AR_LOCALE)} / ${nonBostaCount.toLocaleString(AR_LOCALE)}`} hint="سجّلتها بوسطة فعلًا / شركة أخرى" loading={isLoading} />
         </section>
       </PageHeader>
 

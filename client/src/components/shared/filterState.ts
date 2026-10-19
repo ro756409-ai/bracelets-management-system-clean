@@ -1,3 +1,4 @@
+import { AR_LOCALE } from "@/lib/format";
 /**
  * Filter-bar logic, kept separate from the markup so it can be unit-tested without a DOM.
  *
@@ -71,7 +72,7 @@ export function buildFilterChips<T extends Record<string, any>>(
 function formatDefault(value: unknown): string {
   if (Array.isArray(value)) return value.join("، ");
   if (typeof value === "boolean") return "نعم";
-  if (value instanceof Date) return value.toLocaleDateString("ar-EG");
+  if (value instanceof Date) return value.toLocaleDateString(AR_LOCALE);
   return String(value);
 }
 

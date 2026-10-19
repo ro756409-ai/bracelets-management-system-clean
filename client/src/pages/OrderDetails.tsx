@@ -20,6 +20,7 @@ import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { SHIPMENT_STALE_WARNING } from "@shared/orderContent";
 import { BostaShipmentImagePreview } from "@/components/BostaPackageImageField";
+import { BostaResolutionPanel } from "@/components/orders/BostaResolutionPanel";
 import { toast } from "sonner";
 import {
   PageHeader, SectionCard, StatusBadge, ReceiptPrediction, AttemptsCell, UNAVAILABLE_LABEL,
@@ -30,6 +31,7 @@ import { OrderActionBar } from "@/components/orders/OrderActionBar";
 import { CancelOrderDialog, PostponeOrderDialog, NoAnswerDialog } from "@/components/orders/OrderActionDialogs";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { NEEDS_COMPLETION_LABEL, shippingIssuesText, shippingReadiness } from "@shared/shippingReadiness";
+import { AR_LOCALE } from "@/lib/format";
 
 const STATUS_LABELS: Record<string, string> = {
   new: "جديد",
@@ -524,6 +526,9 @@ export default function OrderDetails() {
               </Field>
             )}
           </div>
+          {isAdmin && !isEditing && !order.bostaShipmentId && ["uncertain", "creating", "reset_requested"].includes(String(o.bostaStatus)) && (
+            <BostaResolutionPanel orderId={order.id} orderNumber={order.orderNumber} bostaStatus={o.bostaStatus ?? null} onDone={() => refetch()} />
+          )}
           {isAdmin && !isEditing && bostaEligible && (
             <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-3" data-testid="bosta-controls">
               {order.bostaShipmentId ? (
@@ -732,7 +737,7 @@ export default function OrderDetails() {
 
 function fmtDate(date: any) {
   if (!date) return "-";
-  return new Date(date).toLocaleString("ar-EG", {
+  return new Date(date).toLocaleString(AR_LOCALE, {
     year: "numeric",
     month: "short",
     day: "numeric",

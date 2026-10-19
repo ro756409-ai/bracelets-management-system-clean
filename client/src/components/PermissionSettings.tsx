@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { SectionCard, StatusBadge, LoadingSkeleton, ErrorState, PermissionDeniedState } from "@/components/shared";
 import { toast } from "sonner";
 import { permissionLabel, roleLabel } from "@shared/permissionLabels";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * صلاحيات الأدوار (tenant_role_permissions) — للمالك. تعرض كل الصلاحيات بأسماء عربية، ومنها دفتر
@@ -69,7 +70,7 @@ export function PermissionSettings() {
             </select>
           </div>
           <div className="flex items-center gap-2 pb-1">
-            {ownerRole ? <StatusBadge status="owner" label="المالك — كل الصلاحيات" tone="primary" size="sm" icon={<ShieldCheck className="h-3 w-3" aria-hidden="true" />} /> : <StatusBadge status="overrides" label={overridesCount > 0 ? `${overridesCount.toLocaleString("ar-EG")} تخصيص لهذا الدور` : "الافتراضي"} tone={overridesCount > 0 ? "info" : "neutral"} size="sm" icon={null} />}
+            {ownerRole ? <StatusBadge status="owner" label="المالك — كل الصلاحيات" tone="primary" size="sm" icon={<ShieldCheck className="h-3 w-3" aria-hidden="true" />} /> : <StatusBadge status="overrides" label={overridesCount > 0 ? `${overridesCount.toLocaleString(AR_LOCALE)} تخصيص لهذا الدور` : "الافتراضي"} tone={overridesCount > 0 ? "info" : "neutral"} size="sm" icon={null} />}
           </div>
         </div>
       </SectionCard>

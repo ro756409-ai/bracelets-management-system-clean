@@ -15,6 +15,7 @@ import {
   FilterBar, SearchInput, MobileOrderCard, StatusBadge, toast,
 } from "@/components/shared";
 import { formatMoney } from "@/lib/money";
+import { AR_LOCALE } from "@/lib/format";
 
 const COLLECTION_STATUS: Record<string, { label: string; className: string }> = {
   pending:   { label: "معلّق",       className: "border-[var(--warning)]/40 text-[var(--warning)]" },
@@ -106,7 +107,7 @@ export function CollectionsSection() {
       cell: (o) => {
         if (o.collectedAmount == null) return <span className="type-caption">—</span>;
         const diff = Number(o.collectedAmount) - Number(o.totalAmount);
-        if (diff === 0) return <span className="text-sm tabular-nums text-[var(--success)]">٠</span>;
+        if (diff === 0) return <span className="text-sm tabular-nums text-[var(--success)]">{(0).toLocaleString(AR_LOCALE)}</span>;
         return (
           <span className={`text-sm font-semibold tabular-nums ${diff < 0 ? "text-destructive" : "text-[var(--success)]"}`}>
             {diff > 0 ? "+" : "−"}{formatMoney(Math.abs(diff))}
@@ -132,7 +133,7 @@ export function CollectionsSection() {
       id: "collectedAt", header: "تاريخ التحصيل", alwaysVisible: true,
       cell: (o) => o.collectedAt ? (
         <span className="whitespace-nowrap text-sm tabular-nums">
-          {new Date(o.collectedAt).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}
+          {new Date(o.collectedAt).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" })}
         </span>
       ) : <span className="type-caption">—</span>,
     },
@@ -232,7 +233,7 @@ export function CollectionsSection() {
               statusBadge={<Badge variant="outline" className={`text-xs ${conf.className}`}>{conf.label}</Badge>}
               total={formatMoney(o.collectedAmount ?? o.totalAmount)}
               dateLabel={o.shippedAt
-                ? new Date(o.shippedAt).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })
+                ? new Date(o.shippedAt).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" })
                 : "—"}
               expanded={expandedMobileId === o.id}
               onToggle={() => setExpandedMobileId(id => id === o.id ? null : o.id)}
@@ -450,9 +451,9 @@ function CollectionHistoryDialog({
                       {t.notes && <p className="type-caption truncate" title={t.notes}>{t.notes}</p>}
                     </div>
                     <p className="type-caption shrink-0 tabular-nums">
-                      {new Date(t.transactionDate).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}
+                      {new Date(t.transactionDate).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" })}
                       {" · "}
-                      {new Date(t.transactionDate).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                      {new Date(t.transactionDate).toLocaleTimeString(AR_LOCALE, { hour: "2-digit", minute: "2-digit" })}
                     </p>
                   </div>
                 </li>

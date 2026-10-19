@@ -7,6 +7,7 @@ import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItem
 import {
   AccCard, AccSectionTitle, AccField, AccInput, AccSelect, AccButton, AccTable, accMoney, AccStatus,
 } from "./ui";
+import { AR_LOCALE } from "@/lib/format";
 
 const STATUS: Record<string, { label: string; tone: "green" | "amber" | "rose" | "slate" }> = {
   draft: { label: "مسودة", tone: "slate" },
@@ -89,7 +90,7 @@ function StocktakeList({
             return (
               <tr key={r.id} className="border-b border-slate-100 last:border-0">
                 <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-slate-600">
-                  {new Date(r.createdAt).toLocaleDateString("ar-EG")}
+                  {new Date(r.createdAt).toLocaleDateString(AR_LOCALE)}
                 </td>
                 <td className="px-3 py-2.5">{whName(r.warehouseId)}</td>
                 <td className="px-3 py-2.5"><AccStatus tone={st.tone}>{st.label}</AccStatus></td>
@@ -187,7 +188,7 @@ function StocktakeSession({
             <div>
               <p className="font-bold text-slate-800">جردة #{data.id}</p>
               <p className="text-xs text-slate-500">
-                {new Date(data.createdAt).toLocaleDateString("ar-EG")} · {data.createdByName}
+                {new Date(data.createdAt).toLocaleDateString(AR_LOCALE)} · {data.createdByName}
               </p>
             </div>
             <AccStatus tone={st.tone}>{st.label}</AccStatus>

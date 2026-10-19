@@ -20,6 +20,7 @@ import {
   buildFilterChips, countActiveFilters, type FilterDescriptor,
 } from "@/components/shared";
 import { formatAmount, formatMoney } from "@/lib/money";
+import { AR_LOCALE } from "@/lib/format";
 
 
 /**
@@ -58,8 +59,8 @@ const FILTER_DESCRIPTORS: FilterDescriptor<{
   {
     key: "dateRange", label: "التاريخ",
     format: (v: DateRange) => {
-      const from = v.from ? v.from.toLocaleDateString("ar-EG") : "";
-      const to = v.to ? v.to.toLocaleDateString("ar-EG") : "";
+      const from = v.from ? v.from.toLocaleDateString(AR_LOCALE) : "";
+      const to = v.to ? v.to.toLocaleDateString(AR_LOCALE) : "";
       return from && to ? `${from} – ${to}` : from || to;
     },
   },
@@ -138,10 +139,10 @@ export function TreasurySection() {
       cell: (t) => (
         <div className="whitespace-nowrap leading-tight">
           <p className="text-sm tabular-nums">
-            {new Date(t.transactionDate).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}
+            {new Date(t.transactionDate).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" })}
           </p>
           <p className="type-caption tabular-nums">
-            {new Date(t.transactionDate).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+            {new Date(t.transactionDate).toLocaleTimeString(AR_LOCALE, { hour: "2-digit", minute: "2-digit" })}
           </p>
         </div>
       ),
@@ -347,7 +348,7 @@ export function TreasurySection() {
             {formatMoney(data?.totalOut ?? 0)}
           </p>
           <p className="type-caption mt-1">
-            {(data?.total ?? 0).toLocaleString("ar-EG")} حركة مطابقة
+            {(data?.total ?? 0).toLocaleString(AR_LOCALE)} حركة مطابقة
           </p>
         </div>
       </div>
@@ -380,7 +381,7 @@ export function TreasurySection() {
               </Badge>
             }
             total={formatMoney(t.balanceAfter)}
-            dateLabel={new Date(t.transactionDate).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}
+            dateLabel={new Date(t.transactionDate).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" })}
             expanded={expandedMobileId === t.id}
             onToggle={() => setExpandedMobileId(id => id === t.id ? null : t.id)}
             details={
@@ -543,7 +544,7 @@ function RecentMovements({
   return (
     <Card className="shadow-[var(--shadow-card)]">
       <CardHeader className="pb-2 pt-3">
-        <CardTitle className="type-subheading">آخر ١٠ حركات</CardTitle>
+        <CardTitle className="type-subheading">آخر {(10).toLocaleString(AR_LOCALE)} حركات</CardTitle>
       </CardHeader>
       <CardContent className="p-0">
         <ul className="divide-y divide-border">
@@ -572,9 +573,9 @@ function RecentMovements({
                     {isIn ? "+" : "−"}{formatMoney(t.amount)}
                   </p>
                   <p className="type-caption tabular-nums">
-                    {new Date(t.transactionDate).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}
+                    {new Date(t.transactionDate).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" })}
                     {" · "}
-                    {new Date(t.transactionDate).toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                    {new Date(t.transactionDate).toLocaleTimeString(AR_LOCALE, { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 </div>
               </li>

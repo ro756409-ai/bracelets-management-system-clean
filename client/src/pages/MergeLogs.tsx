@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { GitMerge, RefreshCw, Phone, Package, Hash, Calendar, TrendingUp } from "lucide-react";
 import { PageHeader, StatCard, SectionCard, StatusBadge, SearchInput, ResponsiveDataTable, OfflineState, type Column } from "@/components/shared";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { AR_LOCALE } from "@/lib/format";
 
 const TOUCH = "min-h-11 md:min-h-9";
 
@@ -52,7 +53,7 @@ export default function MergeLogs() {
 
   const formatDate = (d: any) => {
     if (!d) return "-";
-    return new Date(d).toLocaleString("ar-EG", {
+    return new Date(d).toLocaleString(AR_LOCALE, {
       year: "numeric", month: "short", day: "numeric",
       hour: "2-digit", minute: "2-digit",
     });
@@ -78,10 +79,10 @@ export default function MergeLogs() {
         actions={<Button data-readonly-safe variant="outline" size="sm" onClick={() => refetch()} className={`${TOUCH} gap-2`} data-testid="merge-refresh"><RefreshCw className="h-4 w-4" aria-hidden="true" /> تحديث</Button>}
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="إحصاءات الدمج" data-testid="merge-stats">
-          <StatCard label="إجمالي عمليات الدمج" value={totalMerges.toLocaleString("ar-EG")} tone="warning" hint="آخر 200 عملية دمج" loading={isLoading} />
-          <StatCard label="إجمالي الكميات المدمجة" value={totalQtyMerged.toLocaleString("ar-EG")} tone="info" loading={isLoading} />
-          <StatCard label="عملاء فريدون" value={uniqueCustomers.toLocaleString("ar-EG")} tone="success" loading={isLoading} />
-          <StatCard label="دمج اليوم" value={todayMerges.toLocaleString("ar-EG")} tone="primary" loading={isLoading} />
+          <StatCard label="إجمالي عمليات الدمج" value={totalMerges.toLocaleString(AR_LOCALE)} tone="warning" hint="آخر 200 عملية دمج" loading={isLoading} />
+          <StatCard label="إجمالي الكميات المدمجة" value={totalQtyMerged.toLocaleString(AR_LOCALE)} tone="info" loading={isLoading} />
+          <StatCard label="عملاء فريدون" value={uniqueCustomers.toLocaleString(AR_LOCALE)} tone="success" loading={isLoading} />
+          <StatCard label="دمج اليوم" value={todayMerges.toLocaleString(AR_LOCALE)} tone="primary" loading={isLoading} />
         </section>
       </PageHeader>
 
@@ -108,7 +109,7 @@ export default function MergeLogs() {
       </SectionCard>
 
       {/* Table */}
-      <SectionCard title={<span className="inline-flex items-center gap-2"><GitMerge className="h-4 w-4 text-primary" aria-hidden="true" /> سجل عمليات الدمج <StatusBadge status="count" label={`${filtered.length.toLocaleString("ar-EG")} عملية`} tone="neutral" size="sm" icon={null} /></span>} flush testId="merge-list">
+      <SectionCard title={<span className="inline-flex items-center gap-2"><GitMerge className="h-4 w-4 text-primary" aria-hidden="true" /> سجل عمليات الدمج <StatusBadge status="count" label={`${filtered.length.toLocaleString(AR_LOCALE)} عملية`} tone="neutral" size="sm" icon={null} /></span>} flush testId="merge-list">
         <ResponsiveDataTable<any>
           rows={filtered}
           columns={columns}

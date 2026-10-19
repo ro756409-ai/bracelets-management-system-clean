@@ -82,8 +82,12 @@ describe("🌐 لا أصول خارجية وقت التشغيل", () => {
   });
   it("WhatsAppButton لم يعد يحمل مسار SVG مضمّنًا؛ OrdersTable يعرض شعار بوسطة داخل شارة الشحنة فقط", () => {
     expect(readFileSync(path.join(src, "components/shared/WhatsAppButton.tsx"), "utf8")).not.toContain("M17.472 14.382");
+    // الشعار انتقل لشارة التتبع (TrackingChip) — نفس الشرط: مفيش شعار من غير رقم شحنة بوسطة فعلي.
     const t = readFileSync(path.join(src, "components/orders/OrdersTable.tsx"), "utf8");
-    const i = t.indexOf('<PartnerLogo partner="bosta"'); const guard = t.lastIndexOf("order.bostaShipmentId && (", i);
-    expect(i).toBeGreaterThan(0); expect(guard).toBeGreaterThan(0); expect(i - guard).toBeLessThan(400);
+    expect(t).toContain("<TrackingChip shipmentId={order.bostaShipmentId}");
+    expect(t).not.toContain('<PartnerLogo partner="bosta"');
+    const chip = readFileSync(path.join(src, "components/orders/TrackingChip.tsx"), "utf8");
+    const guard = chip.indexOf("if (!shipmentId) return null"); const i = chip.indexOf('<PartnerLogo partner="bosta"');
+    expect(guard).toBeGreaterThan(0); expect(i).toBeGreaterThan(guard);
   });
 });

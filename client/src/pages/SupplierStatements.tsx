@@ -41,6 +41,7 @@ import {
 } from "@/components/accounting/Surface";
 import { SupplierPaymentDrawer } from "@/components/accounting/SupplierPaymentDrawer";
 import GoodsReceipt from "./GoodsReceipt";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * كشف حساب الموردين.
@@ -213,7 +214,7 @@ function SupplierList({
                         </td>
                         <td className="p-2 whitespace-nowrap text-muted-foreground">
                           {row.lastMovementAt
-                            ? new Date(row.lastMovementAt).toLocaleDateString("ar-EG")
+                            ? new Date(row.lastMovementAt).toLocaleDateString(AR_LOCALE)
                             : "—"}
                         </td>
                         <td className="p-2 text-left">
@@ -690,7 +691,7 @@ function MovementRow({
   return (
     <tr className="border-b last:border-0">
       <td className="whitespace-nowrap text-xs">
-        {new Date(row.occurredAt).toLocaleString("ar-EG", {
+        {new Date(row.occurredAt).toLocaleString(AR_LOCALE, {
           dateStyle: "short",
           timeStyle: "short",
         })}
@@ -822,7 +823,7 @@ function SupplierReceipts({
                   <Fragment key={row.id}>
                     <tr className="border-b last:border-0">
                       <td className="whitespace-nowrap text-xs">
-                        {new Date(row.receiptDate).toLocaleDateString("ar-EG")}
+                        {new Date(row.receiptDate).toLocaleDateString(AR_LOCALE)}
                       </td>
                       <td>
                         <div className="flex items-center gap-2">

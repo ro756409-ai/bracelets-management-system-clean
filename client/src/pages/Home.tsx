@@ -5,6 +5,8 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { useLocation } from "wouter";
 import { useEffect } from "react";
 import { Package, Users, Warehouse, BarChart3 } from "lucide-react";
+import { activeBrand } from "@/lib/brandFlag";
+import Landing from "./Landing";
 
 const FEATURES = [
   { icon: Package, label: "إدارة الأوردرات" },
@@ -28,6 +30,8 @@ export default function Home() {
   }, [user, loading, setLocation]);
 
   if (loading) return null;
+  // الهوية v2: الصفحة الرئيسية التسويقية الكاملة (عربي/إنجليزي). v1 تفضل زي ما هي بالظبط.
+  if (activeBrand() === "v2") return <Landing />;
 
   return (
     <main dir="rtl" className="flex min-h-screen items-center justify-center bg-background p-4" data-testid="home-page">

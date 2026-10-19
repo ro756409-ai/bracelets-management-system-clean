@@ -12,6 +12,8 @@ import { registerBostaWebhookRoutes } from "../bostaWebhook";
 import { registerBostaAwbRoutes } from "../bosta.service";
 import { registerPlatformAuthRoutes } from "../platformAuth";
 import { registerPlatformAdminRoutes } from "../platformAdmin";
+import { registerPlatformBillingRoutes } from "../platformBilling";
+import { registerPaymentWebhookRoutes } from "../payments/webhook";
 import { registerSignupRoutes } from "../signup";
 import employeeAuthRouter from "../employeeAuth";
 import cookieParser from "cookie-parser";
@@ -54,6 +56,8 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  // ويبهوك الدفع: body خام (التوقيع على البايتات نفسها) — قبل JSON العام فيتخطاه.
+  app.use("/api/webhooks/payments", express.raw({ type: "*/*", limit: "64kb" }));
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -89,6 +93,10 @@ async function startServer() {
   registerPlatformAuthRoutes(app);
   // Platform Admin — إدارة طلبات التسجيل (/api/platform/signup-requests/*) محمي بجلسة المنصة
   registerPlatformAdminRoutes(app);
+  // Platform Admin — فوترة الاشتراك (/api/platform/billing/*) خلف SUBSCRIPTION_BILLING_ENABLED + أدمن فوترة مخوَّل
+  registerPlatformBillingRoutes(app);
+  // ويبهوك مزوّد دفع الاشتراك (/api/webhooks/payments/:provider) — خلف SUBSCRIPTION_BILLING_ENABLED + المزوّد المفعّل
+  registerPaymentWebhookRoutes(app);
   // Public tenant signup (POST /api/signup) — طلب pending فقط، بلا إنشاء tenant قبل الموافقة
   registerSignupRoutes(app);
   // Employee auth routes

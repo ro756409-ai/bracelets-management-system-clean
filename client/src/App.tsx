@@ -45,6 +45,8 @@ import MyPerformance from "./pages/MyPerformance";
 import Attendance from "./pages/Attendance";
 import { TenantAccessNotice } from "./components/TenantAccessNotice";
 import { TenantAccessProvider } from "./contexts/TenantAccessContext";
+import { I18nProvider } from "./i18n";
+import Subscription from "./pages/Subscription";
 import MyAttendance from "./pages/MyAttendance";
 import Messages from "./pages/Messages";
 import MyMessages from "./pages/MyMessages";
@@ -350,6 +352,10 @@ function Router() {
           <OrderCreateGuard><FacebookEntry /></OrderCreateGuard>
         </BlockFinancialUser>
       </Route>
+      {/* الاشتراك (0055) — المالك بس؛ الصفحة نفسها بتعرض «غير مفعّل» والعلم مقفول */}
+      <Route path={"/subscription"}>
+        <ProtectedLayout><Subscription /></ProtectedLayout>
+      </Route>
       <Route path={"/scan-orders"}>
         <ProtectedLayout><ScanOrders /></ProtectedLayout>
       </Route>
@@ -364,6 +370,8 @@ function App() {
     <ErrorBoundary>
       {/* تخصيص العرض لكل مستخدم (المرحلة 5) — مصدر الوضع/الخط/اللون/الكثافة/الحركة؛ ThemeProvider يقرأ منه */}
       <DisplayPrefsProvider>
+      {/* لغة الصفحات العامة وصفحة الاشتراك (v2 بس؛ v1 عربي دائمًا) */}
+      <I18nProvider>
       <ThemeProvider defaultTheme="light">
         <BusinessProvider>
           <TooltipProvider>
@@ -385,6 +393,7 @@ function App() {
           </TooltipProvider>
         </BusinessProvider>
       </ThemeProvider>
+      </I18nProvider>
       </DisplayPrefsProvider>
     </ErrorBoundary>
   );

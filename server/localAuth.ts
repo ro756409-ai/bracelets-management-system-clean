@@ -88,11 +88,14 @@ export function registerLocalAuthRoutes(app: Express) {
   router.post("/login", async (req, res) => {
     try {
       const { username, password } = req.body ?? {};
+      // «افتكرني»: false صريحة بس ⇒ كوكي جلسة (تنتهي بقفل المتصفح). غيابها = نفس السلوك الحالي (كوكي ثابتة). صلاحية التوكن نفسها
+      // على السيرفر مابتتغيرش في الحالتين.
+      const rememberMe = req.body?.rememberMe !== false;
       const result = await verifyOwnerLogin(String(username ?? ""), String(password ?? ""));
 
       if (result.status === 200) {
         const cookieOptions = getSessionCookieOptions(req);
-        res.cookie(COOKIE_NAME, result.token, { ...cookieOptions, maxAge: SESSION_MAX_AGE_MS });
+        res.cookie(COOKIE_NAME, result.token, rememberMe ? { ...cookieOptions, maxAge: SESSION_MAX_AGE_MS } : cookieOptions);
       }
 
       return res.status(result.status).json(result.body);

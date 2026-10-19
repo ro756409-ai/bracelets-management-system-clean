@@ -10,6 +10,7 @@ import {
   Package, Phone, MapPin, Calendar, ChevronDown, Info, Check, ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
+import { AR_LOCALE } from "@/lib/format";
 
 const WEBHOOK_URL = `${window.location.origin}/api/webhooks/easyorder`;
 const TOUCH = "min-h-11 md:min-h-9";
@@ -30,7 +31,7 @@ function EventStatusBadge({ status }: { status: string }) {
 function formatTime(val: string | Date | null | undefined): string {
   if (!val) return "—";
   try {
-    return new Date(val as string).toLocaleString("ar-EG", {
+    return new Date(val as string).toLocaleString(AR_LOCALE, {
       day: "2-digit",
       month: "2-digit",
       year: "numeric",
@@ -101,7 +102,7 @@ function LogRow({ entry }: { entry: any }) {
             {entry.totalAmount && (
               <div className="text-muted-foreground">
                 <span className="font-medium">الإجمالي: </span>
-                <span className="tabular-nums">{Number(entry.totalAmount).toLocaleString("ar-EG")} ج.م</span>
+                <span className="tabular-nums">{Number(entry.totalAmount).toLocaleString(AR_LOCALE)} ج.م</span>
               </div>
             )}
             {entry.itemsCount != null && (
@@ -213,10 +214,10 @@ export default function WebhookSettings() {
         }
       >
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="إحصاءات الأحداث" data-testid="webhook-stats">
-          <StatCard label="إجمالي الأحداث" value={stats.total.toLocaleString("ar-EG")} hint="من سجل الاستقبال" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} loading={isLoading} />
-          <StatCard label="أوردر استُقبل" value={stats.success.toLocaleString("ar-EG")} tone="success" active={statusFilter === "success"} onClick={() => toggleFilter("success")} loading={isLoading} />
-          <StatCard label="مكرر (تم تخطيه)" value={stats.duplicate.toLocaleString("ar-EG")} tone="warning" active={statusFilter === "duplicate"} onClick={() => toggleFilter("duplicate")} loading={isLoading} />
-          <StatCard label="خطأ" value={stats.error.toLocaleString("ar-EG")} tone="danger" active={statusFilter === "error"} onClick={() => toggleFilter("error")} loading={isLoading} />
+          <StatCard label="إجمالي الأحداث" value={stats.total.toLocaleString(AR_LOCALE)} hint="من سجل الاستقبال" active={statusFilter === "all"} onClick={() => setStatusFilter("all")} loading={isLoading} />
+          <StatCard label="أوردر استُقبل" value={stats.success.toLocaleString(AR_LOCALE)} tone="success" active={statusFilter === "success"} onClick={() => toggleFilter("success")} loading={isLoading} />
+          <StatCard label="مكرر (تم تخطيه)" value={stats.duplicate.toLocaleString(AR_LOCALE)} tone="warning" active={statusFilter === "duplicate"} onClick={() => toggleFilter("duplicate")} loading={isLoading} />
+          <StatCard label="خطأ" value={stats.error.toLocaleString(AR_LOCALE)} tone="danger" active={statusFilter === "error"} onClick={() => toggleFilter("error")} loading={isLoading} />
         </section>
       </PageHeader>
 
@@ -265,7 +266,7 @@ export default function WebhookSettings() {
 
       {/* Log Section */}
       <SectionCard
-        title={<span className="inline-flex items-center gap-2"><Calendar className="h-4 w-4" aria-hidden="true" /> سجل الأحداث {filtered.length !== log.length && <StatusBadge status="count" label={`${filtered.length.toLocaleString("ar-EG")} من ${log.length.toLocaleString("ar-EG")}`} tone="neutral" size="sm" icon={null} />}</span>}
+        title={<span className="inline-flex items-center gap-2"><Calendar className="h-4 w-4" aria-hidden="true" /> سجل الأحداث {filtered.length !== log.length && <StatusBadge status="count" label={`${filtered.length.toLocaleString(AR_LOCALE)} من ${log.length.toLocaleString(AR_LOCALE)}`} tone="neutral" size="sm" icon={null} />}</span>}
         testId="webhook-log"
       >
         {/* Filters */}

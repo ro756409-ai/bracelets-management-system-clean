@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Package, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * المخزون حسب المنتج — **Mobile-first**، بلا أي تغيير في قاعدة البيانات.
@@ -124,7 +125,7 @@ export function ProductVariantGroups({
             <Package className="h-5 w-5 shrink-0 text-primary" />
             <span className="min-w-0 flex-1 truncate font-bold">{g.productName}</span>
             <Badge variant="outline" className="shrink-0 text-xs">{g.rows.length} نوع</Badge>
-            <Badge variant="secondary" className="shrink-0 text-xs tabular-nums">{g.total.toLocaleString("ar-EG")} قطعة</Badge>
+            <Badge variant="secondary" className="shrink-0 text-xs tabular-nums">{g.total.toLocaleString(AR_LOCALE)} قطعة</Badge>
             {g.attention > 0 && <Badge variant="destructive" className="shrink-0 text-xs">{g.attention} يحتاج انتباه</Badge>}
             {isOpen(g.productId, gi) ? <ChevronUp className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
           </button>

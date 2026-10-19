@@ -3,6 +3,8 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { ShieldCheck, LogOut, RefreshCw, CheckCircle2, XCircle, ChevronDown } from "lucide-react";
 import { StatusBadge, EmptyState, LoadingSkeleton } from "@/components/shared";
+import { PlatformBillingPanel } from "./PlatformBillingPanel";
+import { AR_LOCALE } from "@/lib/format";
 
 type Status = "pending" | "approved" | "rejected";
 interface SignupRequest {
@@ -29,6 +31,8 @@ export default function PlatformAdmin() {
   const [selected, setSelected] = useState<SignupRequest | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  // قسم الفوترة (0055) — السيرفر بيرجّع 503 لو SUBSCRIPTION_BILLING_ENABLED مقفول، والرسالة بتظهر جوه اللوحة.
+  const [section, setSection] = useState<"requests" | "billing">("requests");
 
   // حارس: لازم جلسة Platform Admin؛ وإلا للدخول.
   useEffect(() => {
@@ -91,6 +95,13 @@ export default function PlatformAdmin() {
       </header>
 
       <main className="mx-auto max-w-5xl space-y-4 p-4 sm:p-6">
+        <div className="flex gap-2 border-b border-border" role="group" aria-label="أقسام لوحة المنصة">
+          {([["requests", "طلبات التسجيل"], ["billing", "الفوترة"]] as const).map(([k, label]) => (
+            <button key={k} type="button" onClick={() => setSection(k)} aria-pressed={section === k} data-testid={`platform-section-${k}`}
+              className={`-mb-px min-h-11 border-b-2 px-3 text-sm font-semibold ${section === k ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}>{label}</button>
+          ))}
+        </div>
+        {section === "billing" ? <PlatformBillingPanel onUnauthorized={() => setLocation("/platform-admin/login")} /> : <>
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="حالة الطلبات">
           {(["pending", "approved", "rejected"] as Status[]).map(s => (
             <button key={s} type="button" onClick={() => setTab(s)} aria-pressed={tab === s} data-testid={`platform-tab-${s}`}
@@ -134,8 +145,8 @@ export default function PlatformAdmin() {
                   {openRow && (
                     <dl id={`platform-request-details-${r.id}`} className="grid grid-cols-1 gap-2 border-t border-border px-4 py-3 text-sm text-muted-foreground sm:grid-cols-2">
                       <div><dt className="inline">اسم المستخدم: </dt><dd className="inline text-foreground" dir="ltr">{r.username}</dd></div>
-                      <div><dt className="inline">تاريخ الطلب: </dt><dd className="inline">{new Date(r.createdAt).toLocaleString("ar-EG")}</dd></div>
-                      {r.reviewedAt && <div><dt className="inline">تاريخ المراجعة: </dt><dd className="inline">{new Date(r.reviewedAt).toLocaleString("ar-EG")}</dd></div>}
+                      <div><dt className="inline">تاريخ الطلب: </dt><dd className="inline">{new Date(r.createdAt).toLocaleString(AR_LOCALE)}</dd></div>
+                      {r.reviewedAt && <div><dt className="inline">تاريخ المراجعة: </dt><dd className="inline">{new Date(r.reviewedAt).toLocaleString(AR_LOCALE)}</dd></div>}
                       {r.createdTenantId && <div><dt className="inline">Tenant: </dt><dd className="inline" dir="ltr">#{r.createdTenantId}</dd></div>}
                       {r.rejectionReason && <div className="sm:col-span-2"><dt className="inline">سبب الرفض: </dt><dd className="inline">{r.rejectionReason}</dd></div>}
                     </dl>
@@ -145,6 +156,7 @@ export default function PlatformAdmin() {
             })}
           </ul>
         )}
+        </>}
       </main>
     </div>
   );

@@ -13,6 +13,7 @@ import {
   ChevronDown, ChevronUp, X, Store
 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { AR_LOCALE } from "@/lib/format";
 
 type RowStatus = "new" | "review" | "existing" | "rejected";
 type PreviewRow = {
@@ -431,7 +432,7 @@ export default function ImportExcelDialog({ open, onClose, onSuccess }: Props) {
                           </td>
                           <td className="p-2 text-center text-foreground">{row.totalQuantity}</td>
                           <td className="p-2 font-semibold text-foreground">
-                            {Number(row.totalAmount).toLocaleString('ar-EG')} ج.م
+                            {Number(row.totalAmount).toLocaleString(AR_LOCALE)} ج.م
                           </td>
                         </tr>
                       );

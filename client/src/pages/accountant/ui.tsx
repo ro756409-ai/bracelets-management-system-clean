@@ -1,4 +1,5 @@
 import React from "react";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * عناصر واجهة خاصة بمساحة المحاسب فقط — Theme أبيض/رمادي فاتح، مساحات واسعة، أزرار
@@ -6,7 +7,7 @@ import React from "react";
  */
 
 export function accMoney(n: number | string | null | undefined): string {
-  return Number(n ?? 0).toLocaleString("ar-EG", {
+  return Number(n ?? 0).toLocaleString(AR_LOCALE, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });

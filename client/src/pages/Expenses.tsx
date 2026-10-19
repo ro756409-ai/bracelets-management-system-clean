@@ -58,6 +58,7 @@ import {
 import { NewExpenseButton } from "@/components/accounting/ExpenseDrawer";
 import { formatMoney } from "@/lib/money";
 import { printExpenses } from "@/lib/printExpenses";
+import { AR_LOCALE } from "@/lib/format";
 
 const FILTER_DESCRIPTORS: FilterDescriptor<{
   category: string;
@@ -68,8 +69,8 @@ const FILTER_DESCRIPTORS: FilterDescriptor<{
     key: "dateRange",
     label: "التاريخ",
     format: (v: DateRange) => {
-      const from = v.from ? v.from.toLocaleDateString("ar-EG") : "";
-      const to = v.to ? v.to.toLocaleDateString("ar-EG") : "";
+      const from = v.from ? v.from.toLocaleDateString(AR_LOCALE) : "";
+      const to = v.to ? v.to.toLocaleDateString(AR_LOCALE) : "";
       return from && to ? `${from} – ${to}` : from || to;
     },
   },
@@ -203,7 +204,7 @@ export function ExpensesSection() {
       alwaysVisible: true,
       cell: e => (
         <span className="whitespace-nowrap text-sm tabular-nums">
-          {new Date(e.expenseDate).toLocaleDateString("ar-EG", {
+          {new Date(e.expenseDate).toLocaleDateString(AR_LOCALE, {
             day: "numeric",
             month: "short",
             year: "numeric",
@@ -422,12 +423,12 @@ export function ExpensesSection() {
           <StatCard
             label="عدد المصروفات"
             loading={isLoading}
-            value={(data?.total ?? 0).toLocaleString("ar-EG")}
+            value={(data?.total ?? 0).toLocaleString(AR_LOCALE)}
             icon={<Receipt className="h-5 w-5" />}
           />
           <StatCard
             label="التصنيفات"
-            value={(categories?.length ?? 0).toLocaleString("ar-EG")}
+            value={(categories?.length ?? 0).toLocaleString(AR_LOCALE)}
             icon={<Tag className="h-5 w-5" />}
           />
         </div>
@@ -507,7 +508,7 @@ export function ExpensesSection() {
             customerPhone={e.createdByName}
             governorate={e.categoryName ?? "بدون تصنيف"}
             productSummary={new Date(e.expenseDate).toLocaleDateString(
-              "ar-EG",
+              AR_LOCALE,
               { day: "numeric", month: "long", year: "numeric" }
             )}
             statusBadge={
@@ -519,7 +520,7 @@ export function ExpensesSection() {
               </Badge>
             }
             total={formatMoney(e.amount)}
-            dateLabel={new Date(e.expenseDate).toLocaleDateString("ar-EG", {
+            dateLabel={new Date(e.expenseDate).toLocaleDateString(AR_LOCALE, {
               day: "numeric",
               month: "short",
             })}

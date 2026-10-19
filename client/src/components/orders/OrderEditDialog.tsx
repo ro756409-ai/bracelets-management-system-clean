@@ -20,6 +20,7 @@ import {
   OrderItemsEditor, newLineKey, linesTotal,
   type EditorLine, type CatalogProduct, type CatalogVariant,
 } from "./OrderItemsEditor";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * Editing an order, for whoever is allowed to edit it.
@@ -203,7 +204,7 @@ export function OrderEditDialog({
     const out: string[] = [];
     if (!header.customerName.trim()) out.push("اسم العميل مطلوب");
     if (!isValidEgyptianMobile(header.customerPhone))
-      out.push("رقم الهاتف غير صحيح (١١ رقم يبدأ بـ010/011/012/015)");
+      out.push(`رقم الهاتف غير صحيح (${(11).toLocaleString(AR_LOCALE)} رقم يبدأ بـ010/011/012/015)`);
     if (header.customerPhone2.trim() && !isValidEgyptianMobile(header.customerPhone2))
       out.push("التليفون البديل غير صحيح");
     // العنوان/المحافظة الناقصان **لا يمنعان الحفظ** — تنبيه «محتاج استكمال بيانات» مستقل تحت (shippingReadiness):
@@ -314,7 +315,7 @@ export function OrderEditDialog({
                       className={`mt-1 h-10 ${!isValidEgyptianMobile(header.customerPhone) ? "border-destructive/30 bg-destructive/10" : ""}`}
                     />
                     {!isValidEgyptianMobile(header.customerPhone) && (
-                      <p className="mt-1 text-xs text-destructive">١١ رقم يبدأ بـ 010 / 011 / 012 / 015</p>
+                      <p className="mt-1 text-xs text-destructive">{(11).toLocaleString(AR_LOCALE)} رقم يبدأ بـ 010 / 011 / 012 / 015</p>
                     )}
                   </div>
                   <div>
@@ -482,7 +483,7 @@ export function OrderEditDialog({
             <div className="flex w-full items-center justify-between text-sm sm:w-auto sm:me-auto">
               <span className="text-muted-foreground">الإجمالي</span>
               <span className="ms-3 text-base font-black tabular-nums">
-                {linesTotal(lines, shippingFees).toLocaleString("ar-EG", {
+                {linesTotal(lines, shippingFees).toLocaleString(AR_LOCALE, {
                   minimumFractionDigits: 2, maximumFractionDigits: 2,
                 })}
                 <span className="ms-1 text-xs font-normal">ج.م</span>

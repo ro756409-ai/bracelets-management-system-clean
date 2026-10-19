@@ -17,6 +17,7 @@ import { discardOperation, persistentOperationIdFor, sessionFingerprint } from "
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useRef } from "react";
+import { AR_LOCALE } from "@/lib/format";
 
 const TOUCH = "min-h-11 md:min-h-9";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
@@ -38,7 +39,7 @@ import { toast } from "sonner";
  */
 
 const money = (n: number) =>
-  Number(n || 0).toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  Number(n || 0).toLocaleString(AR_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 type Line = { key: string; productId: string; variantId: string; quantity: string };
 
@@ -193,13 +194,13 @@ export default function WorkshopReturns() {
     ? <StatusBadge status="received" label="تم الاستلام" tone="success" size="sm" />
     : <StatusBadge status="at_workshop" label="عند الورشة" tone="warning" size="sm" />;
   const batchColumns: Column<any>[] = [
-    { id: "sentAt", header: "تاريخ الإرسال", alwaysVisible: true, cell: b => <span className="whitespace-nowrap tabular-nums">{new Date(b.sentAt).toLocaleDateString("ar-EG")}</span> },
+    { id: "sentAt", header: "تاريخ الإرسال", alwaysVisible: true, cell: b => <span className="whitespace-nowrap tabular-nums">{new Date(b.sentAt).toLocaleDateString(AR_LOCALE)}</span> },
     { id: "ref", header: "رقم الإذن", alwaysVisible: true, cell: b => <span className="whitespace-nowrap font-mono text-xs" dir="ltr">{b.reference}</span> },
     { id: "lines", header: "الصنف / النوع", cell: b => <div>{b.lines.map((l: any, i: number) => <span key={i} className="block text-xs">{productName(l.productId)}{variantName(l.variantId) && ` — ${variantName(l.variantId)}`}<span className="text-muted-foreground"> ×{l.quantity}</span></span>)}</div> },
     { id: "qty", header: "العدد", numeric: true, cell: b => <span className="tabular-nums">{b.quantity}</span> },
     { id: "unit", header: "تكلفة الإصلاح للقطعة", numeric: true, cell: b => <span className="tabular-nums">{money(b.repairCostPerPiece)}</span> },
     { id: "total", header: "الإجمالي", numeric: true, cell: b => <span className="font-semibold tabular-nums">{money(b.repairCostTotal)}</span> },
-    { id: "status", header: "الحالة", alwaysVisible: true, cell: b => <div>{batchStatus(b)}{b.receivedAt && <span className="block text-xs tabular-nums text-muted-foreground">{new Date(b.receivedAt).toLocaleDateString("ar-EG")}</span>}</div> },
+    { id: "status", header: "الحالة", alwaysVisible: true, cell: b => <div>{batchStatus(b)}{b.receivedAt && <span className="block text-xs tabular-nums text-muted-foreground">{new Date(b.receivedAt).toLocaleDateString(AR_LOCALE)}</span>}</div> },
     { id: "action", header: "إجراء", sticky: "end", alwaysVisible: true, cell: b => b.status === "at_workshop" ? (
       <Button type="button" size="sm" className="min-h-11 md:min-h-9 min-h-9 gap-1 text-xs" disabled={receive.isPending} onClick={() => receiveBack(b)} data-testid={`workshop-receive-${b.reference}`}>
         <PackageCheck className="h-3.5 w-3.5" aria-hidden="true" /> استلام من الورشة
@@ -444,7 +445,7 @@ export default function WorkshopReturns() {
                 mobileRow={b => (
                   <article className="space-y-1.5 rounded-[var(--radius-brand-md)] border border-border bg-card p-3" data-testid={`workshop-batch-${b.reference}`}>
                     <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0"><p className="font-mono text-xs" dir="ltr">{b.reference}</p><p className="text-xs tabular-nums text-muted-foreground">{new Date(b.sentAt).toLocaleDateString("ar-EG")}</p></div>
+                      <div className="min-w-0"><p className="font-mono text-xs" dir="ltr">{b.reference}</p><p className="text-xs tabular-nums text-muted-foreground">{new Date(b.sentAt).toLocaleDateString(AR_LOCALE)}</p></div>
                       {batchStatus(b)}
                     </div>
                     <div className="text-xs">{b.lines.map((l: any, i: number) => <span key={i} className="block">{productName(l.productId)}{variantName(l.variantId) && ` — ${variantName(l.variantId)}`}<span className="text-muted-foreground"> ×{l.quantity}</span></span>)}</div>

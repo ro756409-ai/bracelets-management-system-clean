@@ -13,6 +13,9 @@ import {
 import { cn } from "@/lib/utils";
 import { EmptyState, ErrorState, LoadingSkeleton } from "./States";
 import { useMediaQuery } from "./useMediaQuery";
+import { activeBrand } from "@/lib/brandFlag";
+import { useStickyOcclusionGuard } from "./stickyOcclusion";
+import { AR_LOCALE } from "@/lib/format";
 
 export type Density = "comfortable" | "compact";
 
@@ -31,8 +34,10 @@ export type Column<T> = {
    * left/right, so the same column definition is correct in both directions.
    * `true` = `"end"`: every existing consumer sets it on the trailing «actions» column, and the
    * legacy `left-0` it replaced was exactly the end edge in RTL.
+   * `"pinned"` (v2): الخلية بتمشي مع التمرير ولما توصل لحافة عمود ثابت (بداية أو نهاية) بتقف جنبه — فبتفضل ظاهرة **كاملة**
+   * في كل مواضع التمرير (مبلغ التحصيل). الإزاحات = عرض الأعمدة الثابتة، متقاسة في stickyOcclusion.
    */
-  sticky?: boolean | "start" | "end";
+  sticky?: boolean | "start" | "end" | "pinned";
   /** Never offered in the column-visibility menu (e.g. the actions column). */
   alwaysVisible?: boolean;
   /** Hidden until the user opts in via the column menu. */
@@ -143,6 +148,9 @@ export function ResponsiveDataTable<T>({
   // 50-row table means 50 stops before reaching the pagination.
   const [focusedRow, setFocusedRow] = useState(0);
   const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+  // v2: حماية المبالغ من التغطية الجزئية تحت الأعمدة الثابتة (docs/backlog/responsive-data-table-sticky-occlusion.md).
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const occlusionGuard = activeBrand() === "v2";
 
   const moveFocus = (to: number) => {
     const clamped = Math.max(0, Math.min(rows.length - 1, to));
@@ -154,6 +162,7 @@ export function ResponsiveDataTable<T>({
     () => columns.filter((c) => c.alwaysVisible || !hiddenColumns?.has(c.id)),
     [columns, hiddenColumns]
   );
+  useStickyOcclusionGuard(scrollRef, occlusionGuard && !showCards, [rows, visibleColumns]);
 
   const allSelected =
     selectable && rows.length > 0 && rows.every((r) => selectedKeys!.has(rowKey(r)));
@@ -274,7 +283,7 @@ export function ResponsiveDataTable<T>({
       {selectable && bulkActions && selectedKeys!.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-brand-md)] border border-primary/30 bg-accent px-3 py-2">
           <span className="text-sm font-semibold text-accent-foreground tabular-nums">
-            {selectedKeys!.size.toLocaleString("ar-EG")} محدد
+            {selectedKeys!.size.toLocaleString(AR_LOCALE)} محدد
           </span>
           <Button
             variant="ghost"
@@ -301,6 +310,7 @@ export function ResponsiveDataTable<T>({
       {/* Desktop table — scrolls inside itself, never widening the page; وحده في DOM على الشاشة الواسعة */}
       {!showCards && (
       <div
+        ref={scrollRef}
         className="overflow-x-auto rounded-[var(--radius-brand-md)] border border-border"
         data-testid="responsive-table-table"
       >
@@ -323,9 +333,12 @@ export function ResponsiveDataTable<T>({
                   className={cn(
                     "px-3 py-2.5 text-start text-xs font-semibold text-muted-foreground",
                     col.numeric && "text-end tabular-nums",
-                    stickyClass(col.sticky, "z-10 bg-muted/60"),
+                    // v2: خلفية الرأس الثابت مصمتة (بنفس اللون) — الشفافة كانت بتبيّن عناوين الأعمدة اللي بتعدّي تحتها.
+                    stickyClass(col.sticky, "z-10 bg-muted/60 brand-v2:bg-[color-mix(in_oklab,var(--muted)_60%,var(--card))]"),
                     col.headerClassName
                   )}
+                  data-rdt-sticky={stickyAttr(col.sticky)}
+                  style={col.sticky === "pinned" ? PINNED_STYLE : undefined}
                 >
                   {col.sortable && onSortChange ? (
                     <button
@@ -400,8 +413,11 @@ export function ResponsiveDataTable<T>({
                         stickyClass(col.sticky, "z-[1] bg-card"),
                         col.className
                       )}
+                      data-rdt-sticky={stickyAttr(col.sticky)}
+                      style={col.sticky === "pinned" ? PINNED_STYLE : undefined}
+                      data-rdt-numeric={occlusionGuard && col.numeric ? "" : undefined}
                     >
-                      {col.cell(row)}
+                      {occlusionGuard && col.numeric ? <span data-rdt-value className="inline-block">{col.cell(row)}</span> : col.cell(row)}
                     </td>
                   ))}
                 </tr>
@@ -419,5 +435,10 @@ export function ResponsiveDataTable<T>({
  *  `true` = end (عمود الإجراءات الأخير في كل المستهلكين الحاليين؛ كان `left-0` = الحافة الختامية في RTL). */
 export function stickyClass(sticky: Column<unknown>["sticky"], extra: string): string | false {
   if (!sticky) return false;
+  if (sticky === "pinned") return cn("sticky", extra);
   return cn("sticky", sticky === "start" ? "start-0" : "end-0", extra);
 }
+
+const stickyAttr = (sticky: Column<unknown>["sticky"]) => (!sticky ? undefined : sticky === "start" ? "start" : sticky === "pinned" ? "pinned" : "end");
+/** إزاحتا العمود المثبّت = عرض الأعمدة الثابتة على كل حافة (متغيرات على حاوية التمرير، بيحسبها useStickyOcclusionGuard). */
+const PINNED_STYLE = { insetInlineStart: "var(--rdt-start-w, 0px)", insetInlineEnd: "var(--rdt-end-w, 0px)" } as const;

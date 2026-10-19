@@ -3,6 +3,8 @@ import type { NextFunction, Request, Response } from "express";
 import { tenants, subscriptions, businesses } from "../drizzle/schema";
 import { getDb } from "./db";
 import { computeTenantAccess, httpRequestAllowed, TENANT_ACCESS_MESSAGES, type TenantAccess } from "@shared/tenantAccess";
+import type { BillingStatus } from "@shared/billing";
+import { loadBillingStatus, subscriptionBillingEnabled } from "./subscriptionBilling.service";
 
 /**
  * `resolveTenantAccess` — المصدر **الوحيد** لقرار وصول الشركة في كل الطبقات: tRPC (query/mutation، الويب
@@ -26,7 +28,13 @@ export async function resolveTenantAccess(tenantId: number, now = new Date()): P
       .where(and(eq(subscriptions.tenantId, tenantId), eq(subscriptions.status, "past_due"))).orderBy(desc(subscriptions.currentPeriodEnd)).limit(1);
     pastDueSince = s?.end ?? null;
   }
-  return computeTenantAccess(t ?? null, pastDueSince, now);
+  // نموذج الاشتراك (0055) خلف علمه المستقل: الشركة المسجّلة بس (صف tenant_billing_accounts) — الباقي بسلوكه القديم.
+  let billing: BillingStatus | null = null;
+  if (t && subscriptionBillingEnabled()) {
+    try { billing = await loadBillingStatus(tenantId, now, db); }
+    catch (e) { console.error(`[tenantAccess] تعذّر قراءة حالة الاشتراك — السلوك القديم للشركة ${tenantId}:`, (e as Error)?.message); }
+  }
+  return computeTenantAccess(t ?? null, pastDueSince, now, billing);
 }
 
 export async function resolveTenantAccessForBusiness(businessId: number, now = new Date()): Promise<TenantAccess & { tenantId: number | null }> {

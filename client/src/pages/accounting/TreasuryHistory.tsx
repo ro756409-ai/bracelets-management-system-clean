@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SectionCard } from "@/components/shared";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * سجل الخزنة — صفحة المراجعة.
@@ -18,7 +19,7 @@ import { SectionCard } from "@/components/shared";
  */
 
 const egp = (n: number | null | undefined) =>
-  Number(n ?? 0).toLocaleString("ar-EG", {
+  Number(n ?? 0).toLocaleString(AR_LOCALE, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -166,9 +167,9 @@ export default function TreasuryHistory() {
                   return (
                     <tr key={r.id} className="border-b last:border-0 align-top">
                       <td className="p-2 whitespace-nowrap tabular-nums">
-                        {when.toLocaleDateString("ar-EG")}
+                        {when.toLocaleDateString(AR_LOCALE)}
                         <span className="block text-xs text-muted-foreground">
-                          {when.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" })}
+                          {when.toLocaleTimeString(AR_LOCALE, { hour: "2-digit", minute: "2-digit" })}
                         </span>
                       </td>
                       <td className="p-2 whitespace-nowrap">{TYPE_LABEL[r.type] ?? r.type}</td>

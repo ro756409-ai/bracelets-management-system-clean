@@ -31,6 +31,7 @@ import { PageHeader, SectionCard, StatusBadge, ResponsiveDataTable, EmptyState, 
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { toast } from "sonner";
+import { AR_LOCALE } from "@/lib/format";
 
 const TOUCH = "min-h-11 md:min-h-9";
 const ICON_BTN = "min-h-11 min-w-11 p-0 md:min-h-9 md:min-w-9 md:h-9 md:w-9";
@@ -163,7 +164,7 @@ export default function Businesses() {
     { id: "name", header: "اسم النشاط", alwaysVisible: true, cell: b => <span className="flex items-center gap-2 font-medium"><BusinessAvatar name={b.name} logoUrl={b.logoUrl ?? null} className="h-7 w-7" textClassName="text-xs" />{b.name}</span> },
     { id: "slug", header: "Slug", cell: b => <span className="font-mono text-sm text-muted-foreground" dir="ltr">{b.slug}</span> },
     { id: "status", header: "الحالة", alwaysVisible: true, cell: statusBadge },
-    { id: "created", header: "تاريخ الإنشاء", cell: b => <span className="text-sm text-muted-foreground">{b.createdAt ? new Date(b.createdAt).toLocaleDateString("ar-EG") : "-"}</span> },
+    { id: "created", header: "تاريخ الإنشاء", cell: b => <span className="text-sm text-muted-foreground">{b.createdAt ? new Date(b.createdAt).toLocaleDateString(AR_LOCALE) : "-"}</span> },
     { id: "entryMode", header: "قالب إدخال الأوردر", alwaysVisible: true, cell: b => <span onClick={e => e.stopPropagation()}><OrderEntryModeSelect businessId={b.id} /></span> },
     { id: "actions", header: <span className="sr-only">إجراءات</span>, alwaysVisible: true, sticky: "end", cell: actions },
   ];
@@ -226,7 +227,7 @@ export default function Businesses() {
 
       {!online && <OfflineState onRetry={() => refetch()} className="py-6" />}
 
-      <SectionCard title={<span className="inline-flex items-center gap-2"><Building2 className="h-5 w-5" aria-hidden="true" /> الأنشطة التجارية <span className="text-sm font-normal text-muted-foreground tabular-nums">({(businesses?.length || 0).toLocaleString("ar-EG")})</span></span>} flush testId="biz-list">
+      <SectionCard title={<span className="inline-flex items-center gap-2"><Building2 className="h-5 w-5" aria-hidden="true" /> الأنشطة التجارية <span className="text-sm font-normal text-muted-foreground tabular-nums">({(businesses?.length || 0).toLocaleString(AR_LOCALE)})</span></span>} flush testId="biz-list">
         {isLoading ? (
           <LoadingSkeleton variant="table" rows={3} className="p-4" />
         ) : isError ? (
@@ -255,7 +256,7 @@ export default function Businesses() {
                   <OrderEntryModeSelect businessId={b.id} />
                 </div>
                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>أُنشئ {b.createdAt ? new Date(b.createdAt).toLocaleDateString("ar-EG") : "-"}</span>
+                  <span>أُنشئ {b.createdAt ? new Date(b.createdAt).toLocaleDateString(AR_LOCALE) : "-"}</span>
                   {actions(b)}
                 </div>
               </article>

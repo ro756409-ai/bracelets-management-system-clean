@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { BrandLogo } from "@/components/BrandLogo";
+import { activeBrand } from "@/lib/brandFlag";
 import { Eye, EyeOff, Lock, User, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -87,12 +88,13 @@ export default function EmployeeLogin() {
   return (
     <main
       dir="rtl"
-      className="flex min-h-screen items-center justify-center p-4"
-      style={{ background: "linear-gradient(135deg, var(--brand-surface) 0%, var(--brand-surface-strong) 100%)" }}
+      // v2: خلفية الصفحة الثابتة (#FAF9F7) زي باقي الواجهة؛ v1: نفس التدرّج الحالي.
+      className={activeBrand() === "v2" ? "flex min-h-screen items-center justify-center bg-background p-4" : "flex min-h-screen items-center justify-center p-4"}
+      style={activeBrand() === "v2" ? undefined : { background: "linear-gradient(135deg, var(--brand-surface) 0%, var(--brand-surface-strong) 100%)" }}
       data-testid="employee-login-page"
     >
       <div className="relative w-full max-w-sm">
-        <div className="rounded-[var(--radius-brand-lg,var(--radius-brand-md))] border-0 bg-card/95 shadow-[var(--shadow-card)] backdrop-blur outline outline-[var(--auth-card-border)] -outline-offset-1">
+        <div className={activeBrand() === "v2" ? "rounded-[var(--radius-brand-xl,1.5rem)] border border-border bg-card shadow-[var(--shadow-card)]" : "rounded-[var(--radius-brand-lg,var(--radius-brand-md))] border-0 bg-card/95 shadow-[var(--shadow-card)] backdrop-blur outline outline-[var(--auth-card-border)] -outline-offset-1"}>
           <div className="px-6 pb-4 pt-8 text-center">
             {/* Logo */}
             <div className="mb-4 flex justify-center">

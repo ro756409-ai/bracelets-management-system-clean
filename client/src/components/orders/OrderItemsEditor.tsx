@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AR_LOCALE } from "@/lib/format";
 
 /** Sentinel for "the base product, no variant". Radix SelectItem rejects an empty value. */
 const NO_VARIANT = "__base__";
@@ -72,7 +73,7 @@ export function emptyLine(): EditorLine {
 }
 
 const money = (n: number) =>
-  n.toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  n.toLocaleString(AR_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export function lineNet(line: EditorLine): number {
   return Math.max(0, line.quantity * line.unitPrice - line.discount);

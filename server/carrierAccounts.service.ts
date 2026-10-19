@@ -58,17 +58,59 @@ export const BOSTA_ENDPOINT_MISSING_MESSAGE =
   "عنوان بوسطة غير مضبوط لهذه البيئة (BOSTA_BASE_URL) — لا يُستخدم عنوان Live تلقائيًا خارج production";
 
 export type BostaEndpoint =
-  | { ok: true; baseUrl: string; source: "env" | "live_default" | "mock" }
+  | { ok: true; baseUrl: string; source: "env" | "live_default" | "mock"; /** staging/preview: عنوان Sandbox معتمد صراحةً، والنداءات بلا redirects */ guarded?: boolean }
   | { ok: false; error: string };
+
+// ── B1: حماية Staging/Preview من Bosta Live (2026-10-20) ──
+//
+// في البيئات المنشورة غير الإنتاج (staging/preview) `BOSTA_BASE_URL` **مايتقبلش بفحص اسم الدومين**، بل بقائمة سماح صريحة:
+//   • أصل العنوان (scheme+host+port) لازم يكون موجود حرفيًا في `BOSTA_SANDBOX_ORIGINS` (أصول https مفصولة بفواصل) —
+//     المالك بيضيفه بعد ما يتحقق من عنوان Sandbox الرسمي من بوسطة. الكود مابيعرفش أي عنوان Sandbox ومابيخمّنش.
+//   • أصل Live (نفس host الـBOSTA_LIVE_BASE_URL) مرفوض **حتى لو اتكتب في القائمة بالغلط**، وكمان أي عنوان مش https أو فيه user:pass.
+//   • كل نداء خارجي بيعدّي على `guardBostaRequest`: الرابط لازم يكون على نفس الأصل المعتمد **وقت النداء**، والـredirects
+//     ممنوعة (`redirect: "error"`) — فـSandbox بيعمل redirect لـLive أو لأي مكان تاني = فشل، مش متابعة.
+// حدود الحماية (موثّقة): لو المالك أدرج في القائمة hostname بيشاور فعليًا (DNS/CNAME/proxy) على بنية Live، الكود مايقدرش
+// يكتشف ده — الثقة في القائمة نفسها. production وdevelopment/test سلوكهم زي ما هو بالظبط.
+export const BOSTA_SANDBOX_ORIGINS_ENV = "BOSTA_SANDBOX_ORIGINS";
+export const BOSTA_LIVE_BLOCKED_MESSAGE = "عنوان بوسطة في هذه البيئة يشير إلى Live — مرفوض (Staging/Preview لا تتصل بـBosta Live أبدًا)";
+export const BOSTA_SANDBOX_NOT_ALLOWED_MESSAGE = "عنوان بوسطة لهذه البيئة غير معتمد — أضف أصل Sandbox الرسمي بعد التحقق منه إلى BOSTA_SANDBOX_ORIGINS";
+const GUARDED_DEPLOY_ENVS = new Set(["staging", "preview"]);
+const LIVE_HOST = new URL(BOSTA_LIVE_BASE_URL).hostname;
+
+/** أصل https نظيف (بلا user:pass) بحروف صغيرة، أو null. */
+export function normalizeBostaOrigin(raw: string | null | undefined): string | null {
+  try {
+    const u = new URL(String(raw ?? "").trim());
+    if (u.protocol !== "https:" || u.username || u.password) return null;
+    return u.origin.toLowerCase();
+  } catch { return null; }
+}
+const isLiveOrigin = (origin: string) => new URL(origin).hostname.replace(/\.$/, "") === LIVE_HOST;
+
+export function bostaSandboxOrigins(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const out = new Set<string>();
+  for (const part of String(env[BOSTA_SANDBOX_ORIGINS_ENV] ?? "").split(",")) {
+    const o = normalizeBostaOrigin(part);
+    if (o && !isLiveOrigin(o)) out.add(o);
+  }
+  return out;
+}
 
 let warnedLiveDefault = false;
 export function resolveBostaEndpoint(env: NodeJS.ProcessEnv = process.env): BostaEndpoint {
   const fromEnv = (env.BOSTA_BASE_URL ?? "").replace(/^BOSTA_BASE_URL=/i, "").trim().replace(/\/+$/, "");
+  const deploy = resolveDeployEnv(env);
   if (fromEnv) {
     if (!/^https:\/\/[^/]+/i.test(fromEnv)) return { ok: false, error: "BOSTA_BASE_URL يجب أن يكون رابط https صالحًا" };
+    if (GUARDED_DEPLOY_ENVS.has(deploy)) {
+      const origin = normalizeBostaOrigin(fromEnv);
+      if (!origin) return { ok: false, error: BOSTA_SANDBOX_NOT_ALLOWED_MESSAGE };
+      if (isLiveOrigin(origin)) return { ok: false, error: BOSTA_LIVE_BLOCKED_MESSAGE };
+      if (!bostaSandboxOrigins(env).has(origin)) return { ok: false, error: BOSTA_SANDBOX_NOT_ALLOWED_MESSAGE };
+      return { ok: true, baseUrl: fromEnv, source: "env", guarded: true };
+    }
     return { ok: true, baseUrl: fromEnv, source: "env" };
   }
-  const deploy = resolveDeployEnv(env);
   if (deploy === "production") {
     if (!warnedLiveDefault) {
       warnedLiveDefault = true;
@@ -78,6 +120,20 @@ export function resolveBostaEndpoint(env: NodeJS.ProcessEnv = process.env): Bost
   }
   if (deploy === "development" || deploy === "test") return { ok: true, baseUrl: BOSTA_MOCK_BASE_URL, source: "mock" };
   return { ok: false, error: BOSTA_ENDPOINT_MISSING_MESSAGE };
+}
+
+/**
+ * B1 — آخر حاجز قبل **أي** نداء خارجي لبوسطة. في staging/preview: الرابط لازم يكون على نفس أصل العنوان المعتمد للبيئة
+ * دلوقتي (مش عنوان مخزّن ولا محسوب في مكان تاني)، والـredirects ممنوعة. production/test: الـinit زي ما هو بالظبط.
+ */
+export function guardBostaRequest(url: string, init: RequestInit, env: NodeJS.ProcessEnv = process.env): { ok: true; init: RequestInit } | { ok: false; error: string } {
+  const ep = resolveBostaEndpoint(env);
+  if (!ep.ok) return ep;
+  if (!ep.guarded) return { ok: true, init };
+  const target = normalizeBostaOrigin(url);
+  if (!target || isLiveOrigin(target)) return { ok: false, error: BOSTA_LIVE_BLOCKED_MESSAGE };
+  if (target !== normalizeBostaOrigin(ep.baseUrl)) return { ok: false, error: BOSTA_SANDBOX_NOT_ALLOWED_MESSAGE };
+  return { ok: true, init: { ...init, redirect: "error" } };
 }
 
 /** للاختبارات — يعيد تفعيل تحذير Live الافتراضي. */
@@ -147,11 +203,13 @@ export async function probeBostaKey(
   for (const baseUrl of bases) {
     for (const authScheme of schemes) {
       try {
-        const res = await fetchImpl(`${baseUrl}/pickup-locations`, {
+        const g = guardBostaRequest(`${baseUrl}/pickup-locations`, {
           method: "GET",
           headers: { "Content-Type": "application/json", ...authHeader(authScheme, apiKey) },
           signal: AbortSignal.timeout(15_000), // INT-4: اختبار الاتصال مايعلّقش
         });
+        if (!g.ok) return { ok: false, error: g.error }; // B1: قبل أي نداء
+        const res = await fetchImpl(`${baseUrl}/pickup-locations`, g.init);
         if (res.ok) {
           const body = await res.json().catch(() => null);
           return { ok: true, baseUrl, authScheme, pickupLocations: parsePickupLocations(body) };

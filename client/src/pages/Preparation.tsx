@@ -17,6 +17,7 @@ import { ResponsiveDataTable, StickyActionBar, type Column, type FilterChip } fr
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { OfflineState } from "@/components/shared";
 import { NEEDS_COMPLETION_LABEL, shippingReadiness } from "@shared/shippingReadiness";
+import { AR_LOCALE } from "@/lib/format";
 
 const ITEMS_PER_PAGE = 50;
 const TOUCH = "min-h-11 md:min-h-9";
@@ -203,8 +204,8 @@ export default function Preparation() {
   const onSelectionChange = (keys: Set<string | number>) => setSelectedIds([...keys].map(Number));
   const busy = printing || savePrintLogMutation.isPending;
 
-  const fmtDate = (d: Date) => d.toLocaleDateString("ar-EG");
-  const fmtTime = (d: Date) => d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
+  const fmtDate = (d: Date) => d.toLocaleDateString(AR_LOCALE);
+  const fmtTime = (d: Date) => d.toLocaleTimeString(AR_LOCALE, { hour: "2-digit", minute: "2-digit" });
 
   const columns: Column<any>[] = [
     { id: "number", header: "#", alwaysVisible: true, cell: o => <span className="font-mono text-xs text-muted-foreground" dir="ltr">{o.orderNumber || o.id}</span> },
@@ -213,7 +214,7 @@ export default function Preparation() {
     { id: "governorate", header: "المحافظة", cell: o => <span className="inline-flex items-center gap-1 text-xs"><MapPin className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />{o.governorate || "—"}</span> },
     { id: "address", header: "العنوان", cell: o => <span className="block max-w-[180px] truncate text-xs text-muted-foreground" title={o.customerAddress}>{o.customerAddress || "—"}</span> },
     { id: "product", header: "المنتج", cell: o => <span className="block max-w-[140px] truncate text-xs" title={o.productName}>{o.productName || "—"}</span> },
-    { id: "total", header: "الإجمالي", numeric: true, cell: o => <span className="text-sm font-medium tabular-nums">{o.totalAmount ? `${Number(o.totalAmount).toLocaleString("ar-EG")} ج.م` : "—"}</span> },
+    { id: "total", header: "الإجمالي", numeric: true, cell: o => <span className="text-sm font-medium tabular-nums">{o.totalAmount ? `${Number(o.totalAmount).toLocaleString(AR_LOCALE)} ج.م` : "—"}</span> },
     { id: "status", header: "الحالة", alwaysVisible: true, cell: o => <StatusBadge status={o.status} size="sm" /> },
     { id: "confirmedAt", header: "وقت التأكيد", cell: o => o.confirmedAt ? <span className="block text-xs tabular-nums text-muted-foreground">{fmtDate(new Date(o.confirmedAt))}<span className="block opacity-70">{fmtTime(new Date(o.confirmedAt))}</span></span> : <span className="text-xs text-muted-foreground">—</span> },
   ];
@@ -231,7 +232,7 @@ export default function Preparation() {
             </span>
             <span className="mt-1 block text-xs text-muted-foreground" dir="ltr">{o.customerPhone}</span>
             <span className="mt-1 block text-xs">{o.governorate || "—"} · <span className="text-muted-foreground">{o.customerAddress || "—"}</span></span>
-            <span className="mt-1 flex items-center justify-between text-xs"><span className="truncate">{o.productName || "—"}</span><span className="shrink-0 font-semibold tabular-nums">{o.totalAmount ? `${Number(o.totalAmount).toLocaleString("ar-EG")} ج.م` : "—"}</span></span>
+            <span className="mt-1 flex items-center justify-between text-xs"><span className="truncate">{o.productName || "—"}</span><span className="shrink-0 font-semibold tabular-nums">{o.totalAmount ? `${Number(o.totalAmount).toLocaleString(AR_LOCALE)} ج.م` : "—"}</span></span>
             {o.confirmedAt && <span className="mt-1 block text-xs tabular-nums text-muted-foreground">تأكيد: {fmtDate(new Date(o.confirmedAt))} {fmtTime(new Date(o.confirmedAt))}</span>}
           </span>
         </label>

@@ -10,6 +10,7 @@ import {
   ChevronDown, ChevronUp, X, MessageCircle
 } from "lucide-react";
 import { useBusinessContext } from "@/contexts/BusinessContext";
+import { AR_LOCALE } from "@/lib/format";
 
 type PreviewRow = {
   rowIndex: number;
@@ -266,7 +267,7 @@ export default function ImportWhatsAppDialog({ open, onClose, onSuccess }: Props
                         </td>
                         <td className="p-2 text-center text-foreground">{row.quantity}</td>
                         <td className="p-2 font-semibold text-foreground">
-                          {Number(row.totalAmount).toLocaleString('ar-EG')} ج.م
+                          {Number(row.totalAmount).toLocaleString(AR_LOCALE)} ج.م
                         </td>
                         <td className="p-2 text-xs text-muted-foreground">
                           {row.notes?.replace("بيدج: ", "") || "-"}

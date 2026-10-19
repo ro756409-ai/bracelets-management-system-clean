@@ -31,6 +31,7 @@ import { PageHeader, SectionCard, StatusBadge, EmptyState, LoadingSkeleton, Offl
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
 import { toast } from "sonner";
+import { AR_LOCALE } from "@/lib/format";
 
 const PLATFORM_LABELS: Record<string, string> = {
   easyorder: "EasyOrder",
@@ -72,7 +73,7 @@ const emptyForm: ChannelForm = {
 };
 
 const fmtDateTime = (d: Date) =>
-  d.toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  d.toLocaleString(AR_LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 /**
  * Credential/connection health, from the read-only connection test.
@@ -509,7 +510,7 @@ export default function SalesChannels() {
                             />
                             <div className="min-w-0 flex-1">
                               <span className="text-muted-foreground">
-                                {log.trigger} · {new Date(log.startedAt).toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                                {log.trigger} · {new Date(log.startedAt).toLocaleString(AR_LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                               </span>
                               <div className="text-foreground">
                                 جلب {log.fetchedCount} · جديد {log.createdCount} · محدَّث {log.updatedCount}

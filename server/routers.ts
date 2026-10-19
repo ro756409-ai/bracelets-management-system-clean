@@ -23,6 +23,7 @@ import {
   PARSE_TOKEN_MESSAGES,
 } from "./orderParse.service";
 import { activeSegmentResolver, rateLimitedResolver } from "./ai/segmentResolver";
+import { BostaResolutionError, approveBostaReset, linkUncertainShipment, requestBostaReset } from "./bostaResolution.service";
 import { listInboxEvents } from "./carrierWebhookInbox.service";
 import { BOSTA_STATES } from "./bostaEvents";
 import { reprocessBostaInboxEvent } from "./bostaWebhook";
@@ -64,6 +65,10 @@ import {
   assertTrpcTenantAccess,
 } from "./_core/trpc";
 import { resolveTenantAccess, tenantAccessEnforcementEnabled } from "./tenantAccess";
+import { attachProviderRef, BillingError, createPendingPayment, getBillingOverview, subscriptionBillingEnabled } from "./subscriptionBilling.service";
+import { getPaymentProvider, onlineCheckoutAvailable } from "./payments/registry";
+import { ProviderBlockedError } from "./payments/provider";
+import { BEST_VALUE_PLAN, SUBSCRIPTION_PLANS, SUBSCRIPTION_PLAN_CODES } from "@shared/billing";
 import { TENANT_ACCESS_MESSAGES } from "@shared/tenantAccess";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -423,6 +428,15 @@ async function confirmOrderOrReject(orderId: number, updatedBy: number, confirme
       throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
     if (err instanceof OrderStockInconsistencyError)
       throw new TRPCError({ code: "CONFLICT", message: err.message });
+    throw err;
+  }
+}
+
+/** أخطاء حسم شحنات بوسطة (رسائل آمنة للعرض) → BAD_REQUEST بدل 500. */
+async function withBostaResolutionErrors<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); }
+  catch (err) {
+    if (err instanceof BostaResolutionError) throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
     throw err;
   }
 }
@@ -1607,10 +1621,46 @@ export const appRouter = router({
   // حالة وصول الشركة للواجهة (شاشة/شريط) — العلم معطل ⇒ enforced:false فلا تظهر أي شاشة قبل جاهزية الحارس.
   tenantAccess: router({
     status: publicProcedure.query(async ({ ctx }) => {
-      if (!tenantAccessEnforcementEnabled() || ctx.tenantId == null) return { enforced: false as const };
+      // billing: هل نظام الاشتراك (0055) مفعّل — للتنقّل بس (رابط «الاشتراك»)، مش قرار وصول.
+      const billing = subscriptionBillingEnabled();
+      // العقد القديم محفوظ حرفيًا والعلمين مقفولين: { enforced: false } بس.
+      if (!tenantAccessEnforcementEnabled() || ctx.tenantId == null) return billing ? { enforced: false as const, billing } : { enforced: false as const };
       const a = await resolveTenantAccess(ctx.tenantId);
-      return { enforced: true as const, level: a.level, reason: a.reason, message: TENANT_ACCESS_MESSAGES[a.reason], until: a.until };
+      return { enforced: true as const, billing, level: a.level, reason: a.reason, message: TENANT_ACCESS_MESSAGES[a.reason], until: a.until };
     }),
+  }),
+  // اشتراك متجرك (0055) — عرض للمالك فقط؛ الكتابة (دفع/استرداد) من أدمن المنصة بس. العلم معطل ⇒ enabled:false بلا قراءة.
+  subscription: router({
+    status: ownerProcedure.query(async ({ ctx }) => {
+      const plans = SUBSCRIPTION_PLAN_CODES.map(code => ({ ...SUBSCRIPTION_PLANS[code], bestValue: code === BEST_VALUE_PLAN }));
+      if (!subscriptionBillingEnabled() || ctx.tenantId == null) return { enabled: false as const, plans };
+      try {
+        const o = await getBillingOverview(ctx.tenantId);
+        return { enabled: true as const, plans, enrolled: o.enrolled, status: o.status, periods: o.periods, payments: o.payments, online: onlineCheckoutAvailable() };
+      } catch (e) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: e instanceof BillingError ? e.message : "تعذّر قراءة حالة الاشتراك" });
+      }
+    }),
+    // بدء دفع أونلاين: المبلغ من الخطة على السيرفر، ومفتاح idempotency من الواجهة (إعادة الضغط = نفس الدفع). بلا مزوّد مفعّل ⇒
+    // رفض واضح (الدفع اليدوي عن طريق الدعم). Paymob/Fawry BLOCKED لحد الوثائق والـSandbox.
+    createCheckout: ownerProcedure
+      .input(z.object({ planCode: z.enum(["month_1", "month_5", "month_12"]), idempotencyKey: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/) }))
+      .mutation(async ({ ctx, input }) => {
+        if (!subscriptionBillingEnabled() || ctx.tenantId == null) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "نظام الاشتراك غير مفعّل" });
+        let provider;
+        try { provider = getPaymentProvider(); } catch (e) { if (!(e instanceof ProviderBlockedError)) throw e; provider = null; }
+        if (!provider) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "الدفع الأونلاين غير متاح حاليًا — تواصل مع الدعم للدفع بالتحويل وهيتفعّل اشتراكك بعد التأكد" });
+        try {
+          const { payment, replay } = await createPendingPayment({ tenantId: ctx.tenantId, planCode: input.planCode, provider: provider.id, idempotencyKey: `t${ctx.tenantId}:${input.idempotencyKey}` });
+          if (payment.status !== "pending") return { paymentId: payment.id, status: payment.status, replay, checkout: null };
+          const checkout = await provider.createCheckout(payment, { returnUrl: "/subscription" });
+          if (checkout.providerRef) await attachProviderRef(payment.id, checkout.providerRef);
+          return { paymentId: payment.id, status: payment.status, replay, checkout: checkout.mode === "redirect" ? { redirectUrl: checkout.redirectUrl } : { mock: true } };
+        } catch (e) {
+          if (e instanceof BillingError) throw new TRPCError({ code: e.code === "conflict" ? "CONFLICT" : "PRECONDITION_FAILED", message: e.message });
+          throw e;
+        }
+      }),
   }),
   accountingV2: router({
     dashboard: permissionProcedure("accounting.view")
@@ -4287,6 +4337,39 @@ export const appRouter = router({
         const result = await createBostaShipment(input.orderId, { allowToOpenPackage: input.allowToOpenPackage, depositAmount: input.depositAmount });
         return result;
       }),
+
+    /*
+      حسم شحنة بوسطة غير مؤكدة (bostaResolution.service): ربط برقم الشحنة من لوحة بوسطة، أو طلب إعادة إرسال → اعتماد
+      المالك. كله بدليل إلزامي وسجل نشاط، ومن غير أي نداء لبوسطة. النطاق = أنشطة الجلسة.
+    */
+    bostaLinkShipment: adminProcedure
+      .input(z.object({
+        orderId: z.number(),
+        shipmentId: z.string().trim().min(4).max(100),
+        trackingNumber: z.string().trim().max(100).optional(),
+        evidence: z.string().trim().min(10).max(1000),
+      }))
+      .mutation(async ({ ctx, input }) => withBostaResolutionErrors(async () =>
+        linkUncertainShipment({ ...input, allowedBusinessIds: (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS], actor: resolveOrderEditor(ctx) }))),
+    bostaRequestReset: adminProcedure
+      .input(z.object({ orderId: z.number(), evidence: z.string().trim().min(10).max(1000) }))
+      .mutation(async ({ ctx, input }) => withBostaResolutionErrors(async () =>
+        requestBostaReset({ ...input, allowedBusinessIds: (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS], actor: resolveOrderEditor(ctx) }))),
+    // B2: مالك غير مقدّم الطلب + توثيق تحقق منظّم من لوحة بوسطة (الخدمة بتفرض القواعد؛ هنا الشكل بس)
+    bostaApproveReset: adminProcedure
+      .input(z.object({
+        orderId: z.number(),
+        verification: z.object({
+          method: z.literal("bosta_dashboard_search"),
+          searchedAt: z.string().min(10).max(40),
+          searchQuery: z.string().trim().min(1).max(200),
+          resultCount: z.number().int().min(0).max(1000),
+          screenshotUrl: z.string().trim().max(500),
+          notes: z.string().trim().max(1000).optional(),
+        }),
+      }))
+      .mutation(async ({ ctx, input }) => withBostaResolutionErrors(async () =>
+        approveBostaReset({ ...input, allowedBusinessIds: (await scopeBusinessIds(ctx)) ?? [NO_BUSINESS], actor: resolveOrderEditor(ctx) }))),
 
     bulkSendToBosta: adminProcedure
       .input(

@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { PageHeader, SectionCard } from "@/components/shared";
 import { toast } from "sonner";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * مركز التسجيل اليومي.
@@ -52,7 +53,7 @@ function cairoToday(): string {
 }
 
 const money = (n: number) =>
-  Number(n || 0).toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  Number(n || 0).toLocaleString(AR_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const MOVEMENT_LABELS: Record<string, string> = {
   collection: "تحصيل", refund: "مرتجع", expense: "مصروف",
@@ -435,7 +436,7 @@ export default function DailyLedger() {
                 {s.movements.map(m => (
                   <tr key={m.id} className="border-b last:border-0">
                     <td className="p-2 text-xs tabular-nums text-muted-foreground">
-                      {new Date(m.transactionDate as any).toLocaleTimeString("ar-EG", {
+                      {new Date(m.transactionDate as any).toLocaleTimeString(AR_LOCALE, {
                         hour: "2-digit", minute: "2-digit", timeZone: "Africa/Cairo",
                       })}
                     </td>

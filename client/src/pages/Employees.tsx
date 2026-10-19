@@ -21,6 +21,7 @@ import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
+import { AR_LOCALE } from "@/lib/format";
 
 // يجب أن تطابق EMPLOYEE_ROLE_VALUES في server/permissions.ts
 const EMPLOYEE_ROLES = [
@@ -89,10 +90,10 @@ function formatLastLogin(value: unknown): string {
   if (!value) return "لم يسجل الدخول بعد";
   const date = new Date(value as string);
   if (Number.isNaN(date.getTime())) return "لم يسجل الدخول بعد";
-  return date.toLocaleString("ar-EG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleString(AR_LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-const fmtDay = (v: unknown) => v ? new Date(v as string).toLocaleDateString("ar-EG", { day: "numeric", month: "short" }) : "—";
+const fmtDay = (v: unknown) => v ? new Date(v as string).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" }) : "—";
 const n = (v: unknown) => Number(v ?? 0);
 
 function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }) {
@@ -393,9 +394,9 @@ export default function Employees() {
         }
       >
         <section className="grid grid-cols-3 gap-3" aria-label="ملخص الفريق" data-testid="emp-summary">
-          <StatCard label="موظف نشط" value={activeCount.toLocaleString("ar-EG")} loading={isLoading} hint="من قائمة الموظفين الحالية" />
-          <StatCard label="موظف تأكيدات" value={agentCount.toLocaleString("ar-EG")} tone="primary" loading={isLoading} />
-          <StatCard label="موظف مخزن" value={warehouseCount.toLocaleString("ar-EG")} tone="info" loading={isLoading} />
+          <StatCard label="موظف نشط" value={activeCount.toLocaleString(AR_LOCALE)} loading={isLoading} hint="من قائمة الموظفين الحالية" />
+          <StatCard label="موظف تأكيدات" value={agentCount.toLocaleString(AR_LOCALE)} tone="primary" loading={isLoading} />
+          <StatCard label="موظف مخزن" value={warehouseCount.toLocaleString(AR_LOCALE)} tone="info" loading={isLoading} />
         </section>
       </PageHeader>
 

@@ -2,7 +2,7 @@ import {
   LayoutDashboard, ShoppingCart, PackageCheck, Boxes, Users, LineChart, Settings,
   Briefcase, Truck, RotateCcw, AlertTriangle, Printer, QrCode, Clock, Activity,
   Package, PackagePlus, ClipboardCheck, Building2, Globe, Zap,
-  BarChart3, GitMerge, Wallet, Wrench, BookOpen, ShieldCheck, UsersRound, Factory,
+  BarChart3, GitMerge, Wallet, Wrench, BookOpen, ShieldCheck, UsersRound, Factory, CreditCard,
 } from "lucide-react";
 
 /**
@@ -30,7 +30,7 @@ export type NavGate = {
 };
 
 /** مزايا خلف flag على السيرفر — الشل يمرّر المفعّل منها (من status endpoint الخاص بكل ميزة). */
-export type NavFlag = "teams" | "teamLeader";
+export type NavFlag = "teams" | "teamLeader" | "subscription";
 
 export type NavLink = NavGate & {
   label: string;
@@ -154,6 +154,8 @@ export const PRIMARY_DESTINATIONS: NavDestination[] = [
       { label: "صلاحيات الأدوار", path: "/permissions", icon: ShieldCheck, adminOnly: true },
       { label: "قنوات البيع", path: "/sales-channels", icon: Globe, adminOnly: true },
       { label: "Easy Order ربط", path: "/webhook-settings", icon: Zap, adminOnly: true },
+      // الاشتراك (0055) — يظهر بس لما SUBSCRIPTION_BILLING_ENABLED (tenantAccess.status.billing)
+      { label: "الاشتراك", path: "/subscription", icon: CreditCard, adminOnly: true, flag: "subscription" },
     ],
   },
 ];

@@ -2,6 +2,7 @@ import { Lock, LogOut } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { useTenantAccess } from "@/contexts/TenantAccessContext";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * حالة وصول الشركة (TENANT_ACCESS_ENFORCEMENT_ENABLED) — العرض فقط؛ الحارس الحقيقي على السيرفر.
@@ -13,7 +14,9 @@ export function TenantAccessNotice() {
   // المصدر الموحّد (TenantAccessProvider) — لا استعلام ثانٍ هنا.
   const data = useTenantAccess();
   const ownerLogout = trpc.auth.logout.useMutation();
-  if (!data.enforced || data.level === "full") return null;
+  if (!data.enforced) return null;
+  // سماح الـ72 ساعة: التشغيل كامل، بس لازم تنبيه واضح بالتجديد.
+  if (data.level === "full" && data.reason !== "subscription_grace") return null;
 
   // الخروج مسموح في كل المستويات (auth.logout في قائمة المسموح، و/api/employee مستثنى من الحارس).
   const logout = async () => {
@@ -37,10 +40,19 @@ export function TenantAccessNotice() {
       </div>
     );
 
+  if (data.level === "full" || data.level === "restricted")
+    return (
+      <div className="sticky top-0 z-[60] border-b border-[var(--warning)]/40 bg-[var(--warning)]/15 px-4 py-2 text-center text-sm text-foreground" dir="rtl" role="status" data-readonly-safe data-testid={`tenant-access-${data.level === "full" ? "grace" : "restricted"}`}>
+        {data.message}
+        {data.until ? <span className="text-muted-foreground"> ({new Date(data.until).toLocaleString(AR_LOCALE, { dateStyle: "medium", timeStyle: "short" })})</span> : null}
+        {" · "}<a href="/subscription" className="font-semibold underline underline-offset-2">الاشتراك والتجديد</a>
+      </div>
+    );
+
   return (
     <div className="sticky top-0 z-[60] border-b border-[var(--warning)]/40 bg-[var(--warning)]/15 px-4 py-2 text-center text-sm text-foreground" dir="rtl" role="status" data-readonly-safe data-testid="tenant-access-readonly">
       <span className="font-semibold">وضع القراءة فقط — </span>{data.message}
-      {data.until ? <span className="text-muted-foreground"> ({new Date(data.until).toLocaleDateString("ar-EG")})</span> : null}
+      {data.until ? <span className="text-muted-foreground"> ({new Date(data.until).toLocaleDateString(AR_LOCALE)})</span> : null}
       <span className="text-muted-foreground"> · الدخول والقراءة والتصدير متاحة، والتعديل متوقف.</span>
     </div>
   );

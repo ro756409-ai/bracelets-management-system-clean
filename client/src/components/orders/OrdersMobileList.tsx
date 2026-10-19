@@ -2,6 +2,8 @@ import { CheckCircle, Eye, MoreVertical, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AttemptsCell, MobileOrderCard, ReceiptPrediction, StatusBadge, TwoLineCell, UNAVAILABLE_LABEL, WhatsAppButton } from "@/components/shared";
 import { COLLECTION_STATUS, OrderMoreMenu, isActionable, money, paymentLabel, type OrderRow, type OrdersColumnsContext } from "./OrdersTable";
+import { TrackingChip } from "./TrackingChip";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * بطاقة الأوردر على الموبايل (المرحلة 4) — **عرض فقط**، تُمرَّر لـ`OrdersTable` كـ`mobileRow`.
@@ -34,12 +36,16 @@ export function OrdersMobileCard({ order, ctx, expanded, onToggle }: OrdersMobil
         [order.color, order.size].filter(Boolean).join(" / "),
       ].filter(Boolean).join(" · ")}
       total={money(order.totalAmount)}
-      dateLabel={new Date(order.createdAt).toLocaleDateString("ar-EG", { day: "numeric", month: "short" })}
+      dateLabel={new Date(order.createdAt).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short" })}
       expanded={expanded}
       onToggle={onToggle}
       onClick={() => actions.onDetails(order)}
-      warnings={order.needsReview ? (
-        <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-[var(--purple)] bg-[var(--purple)]/10 border border-[var(--purple)]/30">يحتاج مراجعة</span>
+      // رقم تتبع بوسطة الحقيقي + نسخ — ظاهر في الكارت المقفول زي عمود الجدول (مش بس على الديسكتوب).
+      warnings={order.needsReview || order.bostaShipmentId ? (
+        <>
+          {order.needsReview && <span className="rounded px-1.5 py-0.5 text-[10px] font-bold text-[var(--purple)] bg-[var(--purple)]/10 border border-[var(--purple)]/30">يحتاج مراجعة</span>}
+          <TrackingChip shipmentId={order.bostaShipmentId} trackingNumber={order.bostaTrackingNumber} />
+        </>
       ) : undefined}
       details={
         <div className="space-y-3" data-testid={`order-card-details-${order.id}`}>

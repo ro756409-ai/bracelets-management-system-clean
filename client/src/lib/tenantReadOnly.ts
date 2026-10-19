@@ -12,6 +12,8 @@ import { trpcCallAllowed, type TenantAccess, type TenantAccessLevel } from "@sha
  *     تصدير/عرض/خروج) أو فاتح قائمة/اختيار/طيّ. الحرمان الافتراضي = أي زر نُسي يبقى معطلًا (fail-closed).
  */
 export const READ_ONLY_MESSAGE = "الحساب في وضع القراءة فقط";
+/** restricted (اشتراك غير مدفوع/منتهي): العرض والتصحيح متاحين — الرسالة بتوجّه للتجديد. */
+export const RESTRICTED_MESSAGE = "العمليات الجديدة متوقفة لحد تفعيل/تجديد الاشتراك — العرض والتصحيح متاحين";
 
 let level: TenantAccessLevel = "full";
 const listeners = new Set<() => void>();
@@ -32,7 +34,7 @@ export function clientMutationAllowed(path: string): boolean {
 export const readOnlyLink: TRPCLink<AppRouter> = () => ({ op, next }) =>
   observable(observer => {
     if (op.type === "mutation" && !clientMutationAllowed(op.path)) {
-      observer.error(TRPCClientError.from(new Error(READ_ONLY_MESSAGE)));
+      observer.error(TRPCClientError.from(new Error(level === "restricted" ? RESTRICTED_MESSAGE : READ_ONLY_MESSAGE)));
       return;
     }
     return next(op).subscribe(observer);

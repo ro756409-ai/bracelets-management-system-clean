@@ -6,6 +6,7 @@ import {
   AccCard, AccSectionTitle, AccField, AccInput, AccTextarea, AccSelect,
   AccButton, AccTable, accMoney, AccStatus,
 } from "./ui";
+import { AR_LOCALE } from "@/lib/format";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -164,7 +165,7 @@ export default function AccCollections({ businessId }: { businessId: number }) {
             return (
               <tr key={r.id} className="border-b border-slate-100 last:border-0">
                 <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-slate-600">
-                  {new Date(r.statementDate).toLocaleDateString("ar-EG")}
+                  {new Date(r.statementDate).toLocaleDateString(AR_LOCALE)}
                 </td>
                 <td className="px-3 py-2.5">{r.carrierName ?? "—"}</td>
                 <td className="px-3 py-2.5 tabular-nums">{r.ordersCount ?? "—"}</td>

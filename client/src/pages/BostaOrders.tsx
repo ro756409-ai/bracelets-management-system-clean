@@ -22,6 +22,7 @@ import {
 } from "@/components/shared";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { PartnerLogo } from "@/components/brand";
+import { AR_LOCALE } from "@/lib/format";
 
 const TOUCH = "min-h-11 md:min-h-9";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
@@ -177,7 +178,7 @@ export default function BostaOrders() {
       alwaysVisible: true,
       cell: order => (
         <span className="font-bold text-sm">
-          {Number(order.totalAmount).toLocaleString("ar-EG")}
+          {Number(order.totalAmount).toLocaleString(AR_LOCALE)}
         </span>
       ),
     },
@@ -193,7 +194,7 @@ export default function BostaOrders() {
       cell: order => (
         <div className="text-xs text-muted-foreground whitespace-nowrap">
           {order.bostaSentAt
-            ? new Date(order.bostaSentAt).toLocaleDateString("ar-EG", {
+            ? new Date(order.bostaSentAt).toLocaleDateString(AR_LOCALE, {
                 year: "numeric",
                 month: "numeric",
                 day: "numeric",
@@ -208,7 +209,7 @@ export default function BostaOrders() {
       cell: order => (
         <div className="text-xs text-muted-foreground whitespace-nowrap">
           {order.updatedAt
-            ? new Date(order.updatedAt).toLocaleDateString("ar-EG", {
+            ? new Date(order.updatedAt).toLocaleDateString(AR_LOCALE, {
                 year: "numeric",
                 month: "numeric",
                 day: "numeric",
@@ -267,13 +268,13 @@ export default function BostaOrders() {
     <div className="space-y-6">
       <PageHeader
         title="طلبات بوسطة"
-        description={`إجمالي: ${total.toLocaleString("ar-EG")} طلب — الأوردرات التي أُرسلت فعلًا إلى بوسطة`}
+        description={`إجمالي: ${total.toLocaleString(AR_LOCALE)} طلب — الأوردرات التي أُرسلت فعلًا إلى بوسطة`}
         icon={<PartnerLogo partner="bosta" size="sm" decorative />}
       >
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <StatCard
             label="أُرسلت اليوم"
-            value={(summary?.sentToday ?? 0).toLocaleString("ar-EG")}
+            value={(summary?.sentToday ?? 0).toLocaleString(AR_LOCALE)}
             tone="primary"
             active={category === "sent_today"}
             onClick={() =>
@@ -282,7 +283,7 @@ export default function BostaOrders() {
           />
           <StatCard
             label="في الطريق"
-            value={(summary?.inTransit ?? 0).toLocaleString("ar-EG")}
+            value={(summary?.inTransit ?? 0).toLocaleString(AR_LOCALE)}
             tone="info"
             active={category === "in_transit"}
             onClick={() =>
@@ -291,7 +292,7 @@ export default function BostaOrders() {
           />
           <StatCard
             label="تم التسليم"
-            value={(summary?.delivered ?? 0).toLocaleString("ar-EG")}
+            value={(summary?.delivered ?? 0).toLocaleString(AR_LOCALE)}
             tone="success"
             active={category === "delivered"}
             onClick={() =>
@@ -300,7 +301,7 @@ export default function BostaOrders() {
           />
           <StatCard
             label="مرتجع"
-            value={(summary?.returned ?? 0).toLocaleString("ar-EG")}
+            value={(summary?.returned ?? 0).toLocaleString(AR_LOCALE)}
             tone="danger"
             active={category === "returned"}
             onClick={() =>
@@ -309,7 +310,7 @@ export default function BostaOrders() {
           />
           <StatCard
             label="فشل الإرسال"
-            value={(summary?.sendFailed ?? 0).toLocaleString("ar-EG")}
+            value={(summary?.sendFailed ?? 0).toLocaleString(AR_LOCALE)}
             tone="danger"
             active={category === "send_failed"}
             onClick={() =>
@@ -320,7 +321,7 @@ export default function BostaOrders() {
           />
           <StatCard
             label="بانتظار التحديث"
-            value={(summary?.awaitingUpdate ?? 0).toLocaleString("ar-EG")}
+            value={(summary?.awaitingUpdate ?? 0).toLocaleString(AR_LOCALE)}
             tone="warning"
             active={category === "awaiting_update"}
             onClick={() =>
@@ -390,10 +391,10 @@ export default function BostaOrders() {
             governorate={order.governorate}
             statusBadge={<CategoryBadge order={order} />}
             productSummary={order.productName}
-            total={`${Number(order.totalAmount).toLocaleString("ar-EG")} ج.م`}
+            total={`${Number(order.totalAmount).toLocaleString(AR_LOCALE)} ج.م`}
             dateLabel={
               order.bostaSentAt
-                ? new Date(order.bostaSentAt).toLocaleDateString("ar-EG", {
+                ? new Date(order.bostaSentAt).toLocaleDateString(AR_LOCALE, {
                     day: "numeric",
                     month: "short",
                   })

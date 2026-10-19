@@ -14,6 +14,7 @@ import {
 } from "@/components/shared";
 import { ArrowRight, CheckCircle2, ClipboardCheck, Plus, Send, Save } from "lucide-react";
 import { toast } from "sonner";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * لوحة الجرد للمالك/المدير/موظف المخزن (المرحلة 7C) — **نفس الـendpoints ونفس التدفق** الذي يستخدمه
@@ -31,7 +32,7 @@ const STATUS: Record<string, { label: string; tone: "neutral" | "warning" | "suc
   cancelled: { label: "ملغي", tone: "danger" },
 };
 const TOUCH = "min-h-11 md:min-h-9";
-const money = (n: unknown) => Number(n ?? 0).toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = (n: unknown) => Number(n ?? 0).toLocaleString(AR_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export type LineState = "matched" | "surplus" | "shortage";
 /** حالة السطر من الفرق المحسوب على السيرفر (differenceQuantity) — لا حساب جديد. */
@@ -84,7 +85,7 @@ function StocktakeList({ businessId, onOpen, onCreated }: { businessId: number; 
   };
 
   const columns: Column<any>[] = [
-    { id: "date", header: "التاريخ", cell: r => <span className="whitespace-nowrap tabular-nums">{new Date(r.createdAt).toLocaleDateString("ar-EG")}</span>, alwaysVisible: true },
+    { id: "date", header: "التاريخ", cell: r => <span className="whitespace-nowrap tabular-nums">{new Date(r.createdAt).toLocaleDateString(AR_LOCALE)}</span>, alwaysVisible: true },
     { id: "warehouse", header: "المخزن", cell: r => whName(r.warehouseId) },
     { id: "status", header: "الحالة", cell: r => <StatusBadge status={r.status} label={STATUS[r.status]?.label ?? r.status} tone={STATUS[r.status]?.tone ?? "neutral"} size="sm" /> },
     { id: "by", header: "بواسطة", cell: r => <span className="text-muted-foreground">{r.createdByName}</span> },
@@ -130,7 +131,7 @@ function StocktakeList({ businessId, onOpen, onCreated }: { businessId: number; 
             <article className="flex items-center justify-between gap-3 rounded-[var(--radius-brand-md)] border border-border bg-card p-3" data-testid={`stocktake-card-${r.id}`}>
               <div className="min-w-0">
                 <p className="font-semibold">{whName(r.warehouseId)}</p>
-                <p className="text-xs tabular-nums text-muted-foreground">{new Date(r.createdAt).toLocaleDateString("ar-EG")} · {r.createdByName}</p>
+                <p className="text-xs tabular-nums text-muted-foreground">{new Date(r.createdAt).toLocaleDateString(AR_LOCALE)} · {r.createdByName}</p>
                 <div className="mt-1"><StatusBadge status={r.status} label={STATUS[r.status]?.label ?? r.status} tone={STATUS[r.status]?.tone ?? "neutral"} size="sm" /></div>
               </div>
               <Button type="button" variant="outline" className="min-h-11 shrink-0 gap-1" onClick={() => onOpen(r.id)} data-testid={`stocktake-open-m-${r.id}`}>فتح <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" /></Button>
@@ -285,17 +286,17 @@ function StocktakeSession({ businessId, stocktakeId, onBack }: { businessId: num
       {!online && <OfflineState onRetry={() => session.refetch()} className="py-6" />}
       <SectionCard
         title={<span className="flex flex-wrap items-center gap-2">جردة #{data.id} <StatusBadge status={data.status} label={st.label} tone={st.tone} size="sm" /></span>}
-        description={`${new Date(data.createdAt).toLocaleDateString("ar-EG")} · ${data.createdByName} · لقطة الأرصدة وقت بدء الجرد`}
+        description={`${new Date(data.createdAt).toLocaleDateString(AR_LOCALE)} · ${data.createdByName} · لقطة الأرصدة وقت بدء الجرد`}
         icon={<ClipboardCheck className="h-4 w-4" aria-hidden="true" />}
         action={<Button type="button" variant="ghost" className={`${TOUCH} gap-1`} onClick={onBack} data-testid="stocktake-back"><ArrowRight className="h-4 w-4" aria-hidden="true" /> رجوع</Button>}
         testId="stocktake-header"
       >
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-5" data-testid="stocktake-summary">
-          <StatCard label="الأسطر" value={lines.length.toLocaleString("ar-EG")} hint="من لقطة الجلسة" />
-          <StatCard label="مطابق" value={totals.matched.toLocaleString("ar-EG")} tone="success" hint="الفرق = 0" />
-          <StatCard label="زيادة" value={totals.surplusCount.toLocaleString("ar-EG")} tone="info" hint={`${money(totals.surplus)} ج.م`} />
-          <StatCard label="عجز" value={totals.shortageCount.toLocaleString("ar-EG")} tone={totals.shortageCount > 0 ? "danger" : "default"} hint={`${money(totals.shortage)} ج.م`} />
-          <StatCard label="غير محفوظ" value={unsavedCount.toLocaleString("ar-EG")} tone={unsavedCount > 0 ? "warning" : "default"} hint={unsavedCount > 0 ? "احفظ العدّ (Enter أو زر الحفظ)" : "كل العدّ محفوظ"} />
+          <StatCard label="الأسطر" value={lines.length.toLocaleString(AR_LOCALE)} hint="من لقطة الجلسة" />
+          <StatCard label="مطابق" value={totals.matched.toLocaleString(AR_LOCALE)} tone="success" hint="الفرق = 0" />
+          <StatCard label="زيادة" value={totals.surplusCount.toLocaleString(AR_LOCALE)} tone="info" hint={`${money(totals.surplus)} ج.م`} />
+          <StatCard label="عجز" value={totals.shortageCount.toLocaleString(AR_LOCALE)} tone={totals.shortageCount > 0 ? "danger" : "default"} hint={`${money(totals.shortage)} ج.م`} />
+          <StatCard label="غير محفوظ" value={unsavedCount.toLocaleString(AR_LOCALE)} tone={unsavedCount > 0 ? "warning" : "default"} hint={unsavedCount > 0 ? "احفظ العدّ (Enter أو زر الحفظ)" : "كل العدّ محفوظ"} />
         </div>
       </SectionCard>
 

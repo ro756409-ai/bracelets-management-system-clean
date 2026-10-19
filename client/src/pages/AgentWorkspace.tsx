@@ -25,6 +25,7 @@ import { PageHeader, StatCard, SectionCard, StatusBadge, EmptyState, LoadingSkel
 import { toast } from "sonner";
 import { CheckCircle, XCircle, Clock, Phone, MapPin, Package, Calendar, Edit2, ChevronRight, ChevronLeft, Briefcase } from "lucide-react";
 import { cairoDateKey } from "@/lib/cairoDate";
+import { AR_LOCALE } from "@/lib/format";
 
 const TOUCH = "min-h-11 md:min-h-9";
 
@@ -176,7 +177,7 @@ export default function AgentWorkspace() {
     setStatusFilter('all');
   }
   const isToday = assignedDate === todayCairo;
-  const displayDate = new Date(assignedDate + 'T12:00:00').toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const displayDate = new Date(assignedDate + 'T12:00:00').toLocaleDateString(AR_LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const toggle = (s: string) => setStatusFilter(statusFilter === s ? 'all' : s);
 
   return (
@@ -200,10 +201,10 @@ export default function AgentWorkspace() {
         }
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="إحصاءات اليوم" data-testid="agent-stats">
-          <StatCard label="جديدة" value={newCount.toLocaleString("ar-EG")} tone="info" active={statusFilter === 'new'} onClick={() => toggle('new')} loading={isLoading} />
-          <StatCard label="مؤكدة" value={confirmedCount.toLocaleString("ar-EG")} tone="success" active={statusFilter === 'confirmed'} onClick={() => toggle('confirmed')} loading={isLoading} />
-          <StatCard label="مؤجلة" value={postponedCount.toLocaleString("ar-EG")} tone="warning" active={statusFilter === 'postponed'} onClick={() => toggle('postponed')} loading={isLoading} />
-          <StatCard label="ملغية" value={cancelledCount.toLocaleString("ar-EG")} tone="danger" active={statusFilter === 'cancelled'} onClick={() => toggle('cancelled')} loading={isLoading} />
+          <StatCard label="جديدة" value={newCount.toLocaleString(AR_LOCALE)} tone="info" active={statusFilter === 'new'} onClick={() => toggle('new')} loading={isLoading} />
+          <StatCard label="مؤكدة" value={confirmedCount.toLocaleString(AR_LOCALE)} tone="success" active={statusFilter === 'confirmed'} onClick={() => toggle('confirmed')} loading={isLoading} />
+          <StatCard label="مؤجلة" value={postponedCount.toLocaleString(AR_LOCALE)} tone="warning" active={statusFilter === 'postponed'} onClick={() => toggle('postponed')} loading={isLoading} />
+          <StatCard label="ملغية" value={cancelledCount.toLocaleString(AR_LOCALE)} tone="danger" active={statusFilter === 'cancelled'} onClick={() => toggle('cancelled')} loading={isLoading} />
         </section>
       </PageHeader>
 
@@ -282,16 +283,16 @@ export default function AgentWorkspace() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-bold tabular-nums text-foreground">
-                    {Number(order.totalAmount).toLocaleString('ar-EG')} ج.م
+                    {Number(order.totalAmount).toLocaleString(AR_LOCALE)} ج.م
                   </span>
                   <span className="text-xs tabular-nums text-muted-foreground">
-                    {new Date(order.createdAt).toLocaleDateString('ar-EG')}
+                    {new Date(order.createdAt).toLocaleDateString(AR_LOCALE)}
                   </span>
                 </div>
                 {order.postponedTo && (
                   <div className="flex items-center gap-2 text-sm text-[var(--warning)]">
                     <Calendar className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                    <span>متابعة: {new Date(order.postponedTo).toLocaleDateString('ar-EG')}</span>
+                    <span>متابعة: {new Date(order.postponedTo).toLocaleDateString(AR_LOCALE)}</span>
                   </div>
                 )}
                 {order.notes && (

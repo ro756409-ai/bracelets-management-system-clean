@@ -43,6 +43,7 @@ import {
 } from "./db";
 import { webhookLogs, businesses } from "../drizzle/schema";
 import { resolveTenantAccessForBusiness } from "./tenantAccess";
+import { acceptsNewOrders } from "@shared/tenantAccess";
 import { orderEventsEnabled } from "./orderEvents.service";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { upsertEasyOrder, fetchEasyOrderById, type EasyOrderPayload } from "./easyorder.service";
@@ -260,7 +261,10 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
     // ⇒ الطلب يُخزَّن كاملًا في سجل الويبهوك كـ«مؤجل» بلا أي معالجة، ويُعالج مرة واحدة بعد إعادة التفعيل
     // (drainDeferredEasyOrders). payload أكبر من العمود ⇒ 503 ليعيد المرسل لاحقًا (لا فقد ولا قص).
     const access = await resolveTenantAccessForBusiness(channel.businessId);
-    if (!access.processWebhooks) {
+    // اشتراك منتهي/غير مدفوع (restricted): تحديث حالة أوردر **قائم** بيتعالج عادي، وأي حدث تاني (= أوردر جديد) بيتأجل بنفس
+    // المسار ويتعالج مرة واحدة بعد التجديد. أوردر جديد مابيتعملش والاشتراك مش ساري.
+    const isStatusUpdate = req.body?.event_type === "order-status-update";
+    if (!access.processWebhooks || (!isStatusUpdate && !acceptsNewOrders(access))) {
       const raw = JSON.stringify(req.body ?? null);
       // الحد بالبايت مش بعدد الحروف: العمود TEXT = 65,535 بايت، والحرف العربي 2 بايت — payload عربي 22k–60k حرف كان
       // بيفشل في الحفظ ويترجع 202 فيضيع للأبد.

@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { PageHeader, SectionCard, StatusBadge, EmptyState, LoadingSkeleton } from "@/components/shared";
 import { PeriodDialog } from "./LedgerTransactions";
 import { accountKindLabel, cairoToday, money } from "./ledgerUi";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * «مراجعة الشهر وإقفاله» — الحركات تُرحّل فورًا عند إدخالها؛ الاعتماد = مراجعة حركة الشهر ثم إقفاله بملاحظة مراجعة
@@ -23,7 +24,7 @@ type Review = {
   reversals: { transactionId: number; reversalOfTransactionId: number | null; description: string; effectiveDate: string; actorName: string | null }[];
 };
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-const fmtDateTime = (d: string | Date) => new Date(d).toLocaleString("ar-EG", { timeZone: "Africa/Cairo", dateStyle: "medium", timeStyle: "short" });
+const fmtDateTime = (d: string | Date) => new Date(d).toLocaleString(AR_LOCALE, { timeZone: "Africa/Cairo", dateStyle: "medium", timeStyle: "short" });
 
 export default function LedgerPeriods() {
   const { has } = usePermissions();

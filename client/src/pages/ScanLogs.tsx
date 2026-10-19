@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AR_LOCALE } from "@/lib/format";
 
 type ScanLog = {
   id: number;
@@ -96,7 +97,7 @@ export default function ScanLogs() {
 
     const headers = ["التاريخ", "الرقم التسلسلي", "رقم الأوردر", "العميل", "الهاتف", "المحافظة", "النتيجة", "المسح بواسطة"];
     const rows = filteredLogs.map((log) => [
-      new Date(log.createdAt).toLocaleString("ar-EG"),
+      new Date(log.createdAt).toLocaleString(AR_LOCALE),
       log.serialNumber,
       log.order?.orderNumber || "-",
       log.order?.customerName || "-",
@@ -118,7 +119,7 @@ export default function ScanLogs() {
   const resultBadge = (r: ScanLog["result"]) => <StatusBadge status={r} label={RESULT[r]?.label ?? r} tone={RESULT[r]?.tone ?? "neutral"} size="sm" />;
 
   const columns: Column<ScanLog>[] = [
-    { id: "at", header: "التاريخ والوقت", alwaysVisible: true, cell: l => <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs tabular-nums"><Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />{new Date(l.createdAt).toLocaleString("ar-EG")}</span> },
+    { id: "at", header: "التاريخ والوقت", alwaysVisible: true, cell: l => <span className="inline-flex items-center gap-2 whitespace-nowrap text-xs tabular-nums"><Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />{new Date(l.createdAt).toLocaleString(AR_LOCALE)}</span> },
     { id: "serial", header: "الرقم التسلسلي", cell: l => <span className="font-mono text-xs" dir="ltr">{l.serialNumber}</span> },
     { id: "order", header: "رقم الأوردر", cell: l => l.order ? <span className="font-mono text-xs" dir="ltr">#{l.order.orderNumber}</span> : <span className="text-muted-foreground">-</span> },
     { id: "customer", header: "العميل", cell: l => <div className="min-w-0"><p className="text-sm">{l.order?.customerName || "-"}</p><p className="text-xs text-muted-foreground" dir="ltr">{l.order?.customerPhone || "-"}</p></div> },
@@ -146,11 +147,11 @@ export default function ScanLogs() {
         }
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-5" aria-label="ملخص المسحات" data-testid="scan-summary">
-          <StatCard label="إجمالي المسحات" value={Number(stats.total).toLocaleString("ar-EG")} hint="من stats الاستعلام" loading={isLoading} />
-          <StatCard label="نجح" value={Number(stats.success).toLocaleString("ar-EG")} tone="success" loading={isLoading} />
-          <StatCard label="مكرر" value={Number(stats.duplicate).toLocaleString("ar-EG")} tone="warning" loading={isLoading} />
-          <StatCard label="فشل" value={Number(stats.failed).toLocaleString("ar-EG")} tone="danger" loading={isLoading} />
-          <StatCard label="ملغي" value={Number(stats.cancelled).toLocaleString("ar-EG")} tone="danger" loading={isLoading} />
+          <StatCard label="إجمالي المسحات" value={Number(stats.total).toLocaleString(AR_LOCALE)} hint="من stats الاستعلام" loading={isLoading} />
+          <StatCard label="نجح" value={Number(stats.success).toLocaleString(AR_LOCALE)} tone="success" loading={isLoading} />
+          <StatCard label="مكرر" value={Number(stats.duplicate).toLocaleString(AR_LOCALE)} tone="warning" loading={isLoading} />
+          <StatCard label="فشل" value={Number(stats.failed).toLocaleString(AR_LOCALE)} tone="danger" loading={isLoading} />
+          <StatCard label="ملغي" value={Number(stats.cancelled).toLocaleString(AR_LOCALE)} tone="danger" loading={isLoading} />
         </section>
       </PageHeader>
 
@@ -185,7 +186,7 @@ export default function ScanLogs() {
       </SectionCard>
 
       {/* Logs */}
-      <SectionCard title={`${filteredLogs.length.toLocaleString("ar-EG")} مسح`} flush testId="scan-logs-list">
+      <SectionCard title={`${filteredLogs.length.toLocaleString(AR_LOCALE)} مسح`} flush testId="scan-logs-list">
         <ResponsiveDataTable<ScanLog>
           rows={filteredLogs}
           columns={columns}
@@ -204,7 +205,7 @@ export default function ScanLogs() {
                 </div>
                 {resultBadge(l.result)}
               </div>
-              <p className="text-xs tabular-nums text-muted-foreground">{new Date(l.createdAt).toLocaleString("ar-EG")} · {l.scannedByName}</p>
+              <p className="text-xs tabular-nums text-muted-foreground">{new Date(l.createdAt).toLocaleString(AR_LOCALE)} · {l.scannedByName}</p>
               {l.order?.customerPhone && <p className="text-xs text-muted-foreground" dir="ltr">{l.order.customerPhone}</p>}
             </article>
           )}

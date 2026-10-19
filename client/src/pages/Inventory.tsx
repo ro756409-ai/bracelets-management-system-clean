@@ -68,6 +68,7 @@ import {
   enabledVariants,
   type VariantMatrixValue,
 } from "@/components/inventory/VariantMatrixBuilder";
+import { AR_LOCALE } from "@/lib/format";
 
 /** هدف لمس ≥44px على الهاتف للمكوّنات المشتركة داخل هذه الصفحة فقط (شرائح الفلتر/البحث)؛ 36px على md+. */
 const TOUCH_SCOPE = "[&_button]:min-h-[max(2.75rem,44px)] [&_input]:min-h-[max(2.75rem,44px)] md:[&_button]:min-h-9 md:[&_input]:min-h-9";
@@ -906,7 +907,7 @@ export default function Inventory() {
       { date: string; inQty: number; outQty: number; items: any[] }
     > = {};
     for (const m of movements) {
-      const d = new Date(m.createdAt).toLocaleDateString("ar-EG", {
+      const d = new Date(m.createdAt).toLocaleDateString(AR_LOCALE, {
         year: "numeric",
         month: "long",
         day: "numeric",
@@ -920,7 +921,7 @@ export default function Inventory() {
   }, [movements]);
 
   // Today's movements
-  const todayStr = new Date().toLocaleDateString("ar-EG", {
+  const todayStr = new Date().toLocaleDateString(AR_LOCALE, {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -994,8 +995,8 @@ export default function Inventory() {
     return list.reduce((a, b) => (new Date(b.createdAt).getTime() > new Date(a.createdAt).getTime() ? b : a));
   }, [stocktakes.data]);
   const STOCKTAKE_STATUS: Record<string, string> = { draft: "مسودة", pending_approval: "بانتظار الاعتماد", approved: "معتمد", cancelled: "ملغي" };
-  const fmtN = (n: number) => n.toLocaleString("ar-EG");
-  const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString("ar-EG", { day: "numeric", month: "short", year: "numeric" }) : UNAVAILABLE_LABEL);
+  const fmtN = (n: number) => n.toLocaleString(AR_LOCALE);
+  const fmtDate = (d: string | null) => (d ? new Date(d).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short", year: "numeric" }) : UNAVAILABLE_LABEL);
 
   const refreshAll = () => {
     utils.products.list.invalidate(); utils.products.lowStock.invalidate(); utils.variants.all.invalidate(); utils.products.movements.invalidate();
@@ -1367,7 +1368,7 @@ export default function Inventory() {
                               )}
                               <p className="text-xs text-muted-foreground mt-0.5">
                                 {new Date(m.createdAt).toLocaleTimeString(
-                                  "ar-EG",
+                                  AR_LOCALE,
                                   { hour: "2-digit", minute: "2-digit" }
                                 )}
                               </p>
@@ -1746,7 +1747,7 @@ export default function Inventory() {
                         </p>
                       )}
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {new Date(m.createdAt).toLocaleString("ar-EG")}
+                        {new Date(m.createdAt).toLocaleString(AR_LOCALE)}
                       </p>
                     </div>
                     <Badge

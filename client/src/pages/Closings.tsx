@@ -24,6 +24,7 @@ import {
   exportClosingWorkbook,
   printClosingReport,
 } from "@/lib/closingExports";
+import { AR_LOCALE } from "@/lib/format";
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "مسودة",
@@ -198,8 +199,8 @@ export function ClosingsSection() {
                     </span>
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {new Date(row.periodFrom).toLocaleDateString("ar-EG")} -{" "}
-                    {new Date(row.periodTo).toLocaleDateString("ar-EG")}
+                    {new Date(row.periodFrom).toLocaleDateString(AR_LOCALE)} -{" "}
+                    {new Date(row.periodTo).toLocaleDateString(AR_LOCALE)}
                   </div>
                 </button>
               ))
@@ -341,7 +342,7 @@ function ClosingDetail({
                   {row.action} - {row.performedByName}
                 </span>
                 <time className="text-xs text-muted-foreground">
-                  {new Date(row.createdAt).toLocaleString("ar-EG")}
+                  {new Date(row.createdAt).toLocaleString(AR_LOCALE)}
                 </time>
               </div>
             ))

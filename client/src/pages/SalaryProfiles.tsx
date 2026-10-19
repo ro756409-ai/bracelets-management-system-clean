@@ -26,6 +26,7 @@ import {
   type Tone,
 } from "@/components/accounting/Surface";
 import { Users, Pencil, Trash2, Wallet } from "lucide-react";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * مرتبات الموظفين — مين بياخد كام.
@@ -331,7 +332,7 @@ function ProfilesSection({ businessId }: { businessId: number }) {
       draft.commissionType === "percentage" &&
       commission > 100
     )
-      return toast.error("النسبة ماتزيدش عن ١٠٠٪");
+      return toast.error(`النسبة ماتزيدش عن ${(100).toLocaleString(AR_LOCALE)}٪`);
 
     create.mutate({
       businessId,
@@ -410,7 +411,7 @@ function ProfilesSection({ businessId }: { businessId: number }) {
                         <SalaryValue row={row} />
                       </td>
                       <td className="py-2 text-muted-foreground">
-                        {new Date(row.effectiveFrom).toLocaleDateString("ar-EG")}
+                        {new Date(row.effectiveFrom).toLocaleDateString(AR_LOCALE)}
                       </td>
                       <td className="py-2 text-left">
                         <Button
@@ -781,7 +782,7 @@ function AdvancesSection({ businessId }: { businessId: number }) {
                     <td className="p-2 font-medium">{row.employeeName}</td>
                     <td className="p-2">{formatMoney(Number(row.amount))}</td>
                     <td className="p-2 text-muted-foreground">
-                      {new Date(row.advanceDate).toLocaleDateString("ar-EG")}
+                      {new Date(row.advanceDate).toLocaleDateString(AR_LOCALE)}
                     </td>
                     <td className="p-2 text-muted-foreground">{row.reason ?? "—"}</td>
                   </tr>
@@ -966,7 +967,7 @@ function BonusesSection({ businessId }: { businessId: number }) {
                     <td className="p-2 font-medium">{row.employeeName}</td>
                     <td className="p-2 tabular-nums">{formatMoney(Number(row.amount))}</td>
                     <td className="p-2 text-muted-foreground">
-                      {new Date(row.bonusDate).toLocaleDateString("ar-EG")}
+                      {new Date(row.bonusDate).toLocaleDateString(AR_LOCALE)}
                     </td>
                     <td className="p-2 text-muted-foreground">{row.reason ?? "—"}</td>
                     <td className="p-2 text-left">
@@ -1296,7 +1297,7 @@ function PeriodWorkspace({ businessId }: { businessId: number }) {
             */}
             <Kpi
               label="البونص والخصومات"
-              value={`${totals.bonuses.toLocaleString("ar-EG")} / ${totals.deductions.toLocaleString("ar-EG")}`}
+              value={`${totals.bonuses.toLocaleString(AR_LOCALE)} / ${totals.deductions.toLocaleString(AR_LOCALE)}`}
               tone="neutral"
               hint="بونص / خصم (ج.م)"
             />

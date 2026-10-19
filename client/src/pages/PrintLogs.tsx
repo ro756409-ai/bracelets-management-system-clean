@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PageHeader, EmptyState, ErrorState, LoadingSkeleton, OfflineState } from "@/components/shared";
+import { AR_LOCALE } from "@/lib/format";
 
 const TOUCH = "min-h-11 md:min-h-9";
 
@@ -49,7 +50,7 @@ export default function PrintLogs() {
 
   const formatDate = (date: string | Date) => {
     const d = new Date(date);
-    return d.toLocaleDateString("ar-EG", {
+    return d.toLocaleDateString(AR_LOCALE, {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -58,7 +59,7 @@ export default function PrintLogs() {
 
   const formatTime = (date: string | Date) => {
     const d = new Date(date);
-    return d.toLocaleTimeString("ar-EG", {
+    return d.toLocaleTimeString(AR_LOCALE, {
       hour: "2-digit",
       minute: "2-digit",
     });

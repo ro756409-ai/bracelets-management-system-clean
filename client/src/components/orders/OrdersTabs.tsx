@@ -1,6 +1,7 @@
 import { UserX } from "lucide-react";
 import { ORDER_STATUS, ReviewAttentionBanner, ScopeBar, UnderlineTabs, type UnderlineTab } from "@/components/shared";
 import { cn } from "@/lib/utils";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * رأس صفحة الأوردرات (المرحلة 4) — **عرض فقط**: نطاق النشاط + تبويبات الحالة + شريط «بانتظار قرار».
@@ -54,7 +55,7 @@ export function OrdersTabs({ businesses, scopeValue, onScopeChange, statusCounts
       <UserX className="h-4 w-4" aria-hidden="true" />
       الأوردرات غير الموزعة
       {unassigned.active && unassigned.count != null && (
-        <span className="rounded-[var(--radius-brand-pill)] bg-[var(--warning)]/20 px-1.5 text-xs font-bold tabular-nums">{Number(unassigned.count).toLocaleString("ar-EG")}</span>
+        <span className="rounded-[var(--radius-brand-pill)] bg-[var(--warning)]/20 px-1.5 text-xs font-bold tabular-nums">{Number(unassigned.count).toLocaleString(AR_LOCALE)}</span>
       )}
     </button>
   );

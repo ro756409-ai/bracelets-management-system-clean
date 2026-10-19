@@ -498,6 +498,8 @@ export function makeSlug(base: string, fallback: string, maxLen: number): string
 }
 
 const TRIAL_DAYS = 14;
+/** نموذج الاشتراك (0055) — نفس العلم في subscriptionBilling.service (بلا import دائري). */
+const billingSignupEnabled = () => process.env.SUBSCRIPTION_BILLING_ENABLED === "true";
 
 export type ApproveResult =
   | { ok: true; tenantId: number; businessId: number; employeeId: number }
@@ -506,6 +508,8 @@ export type ApproveResult =
 /**
  * قبول طلب تسجيل — **transaction ذرية واحدة**: tenant + business فارغ + owner employee (من
  * بيانات الطلب وكلمة السر المشفّرة) + membership(owner) + تجربة 14 يوم + تحويل الطلب approved.
+ * SUBSCRIPTION_BILLING_ENABLED=true: **بلا تجربة مجانية** — الشركة active ومسجّلة في نموذج الاشتراك (tenant_billing_accounts)
+ * بلا أي فترة ⇒ pending_payment (عرض وإعداد بس) لحد أول دفع مؤكد. نفس المعاملة ⇒ نجاح كامل أو لا شيء.
  * يقفل صف الطلب (FOR UPDATE) ويمنع القبول المتكرر. أي فشل (يوزر مكرر…) = rollback كامل.
  */
 export async function approveSignupRequest(requestId: number, platformAdminId: number): Promise<ApproveResult> {
@@ -521,17 +525,20 @@ export async function approveSignupRequest(requestId: number, platformAdminId: n
         return { ok: false, code: "not_pending", message: "الطلب تمت معالجته بالفعل" } as ApproveResult;
 
       const now = new Date();
+      const subscriptionModel = billingSignupEnabled();
       const trialEndsAt = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
       const tenantId = insertedId(await tx.insert(tenants).values({
         name: reqRow.businessName,
         slug: makeSlug(reqRow.businessName, "tenant", 60),
-        status: "trialing",
-        trialStartsAt: now,
-        trialEndsAt,
+        ...(subscriptionModel
+          ? { status: "active" as const, trialStartsAt: null, trialEndsAt: null }
+          : { status: "trialing" as const, trialStartsAt: now, trialEndsAt }),
         ownerName: reqRow.ownerName,
         ownerEmail: reqRow.email,
       }));
+      if (subscriptionModel)
+        await tx.execute(sql`INSERT INTO tenant_billing_accounts (tenantId, model, enrolledBy) VALUES (${tenantId}, 'subscription_v1', 'signup')`);
       const businessId = insertedId(await tx.insert(businesses).values({
         tenantId,
         name: reqRow.businessName,

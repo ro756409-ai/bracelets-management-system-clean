@@ -1,3 +1,4 @@
+import { AR_LOCALE } from "@/lib/format";
 
 /** PERF-2: xlsx بيتحمّل وقت التصدير بس. */
 export async function exportClosingWorkbook(detail: any) {
@@ -8,8 +9,8 @@ export async function exportClosingWorkbook(detail: any) {
     { field: "Business", value: detail.businessId },
     { field: "Sequence", value: detail.sequenceNumber },
     { field: "Status", value: detail.status },
-    { field: "Period From", value: new Date(detail.periodFrom).toLocaleString("ar-EG") },
-    { field: "Period To", value: new Date(detail.periodTo).toLocaleString("ar-EG") },
+    { field: "Period From", value: new Date(detail.periodFrom).toLocaleString(AR_LOCALE) },
+    { field: "Period To", value: new Date(detail.periodTo).toLocaleString(AR_LOCALE) },
     ...Object.entries(totals).filter(([, value]) => typeof value !== "object").map(([field, value]) => ({ field, value })),
   ]), "Summary");
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(detail.lines ?? []), "Subledger Lines");
@@ -30,7 +31,7 @@ export function printClosingReport(detail: any) {
     <style>@page{size:A4;margin:14mm}body{font-family:Tahoma,sans-serif;color:#172033}h1{margin:0 0 8px}small{color:#657084}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{border:1px solid #d9dee8;padding:8px;text-align:right}th{background:#edf4f1}.meta{display:flex;gap:18px;flex-wrap:wrap}.stamp{display:inline-block;padding:5px 10px;border:1px solid #286a58;border-radius:20px;color:#286a58;font-weight:bold}@media print{button{display:none}}</style>
     </head><body><button onclick="window.print()">حفظ PDF / طباعة</button><h1>Matjarak ERP - Accounting Closing</h1>
     <div class="meta"><span>Business #${detail.businessId}</span><span>تقفيلة #${detail.sequenceNumber}</span><span class="stamp">${escapeHtml(detail.status)}</span></div>
-    <p><small>${new Date(detail.periodFrom).toLocaleString("ar-EG")} - ${new Date(detail.periodTo).toLocaleString("ar-EG")}</small></p>
+    <p><small>${new Date(detail.periodFrom).toLocaleString(AR_LOCALE)} - ${new Date(detail.periodTo).toLocaleString(AR_LOCALE)}</small></p>
     <table><thead><tr><th>المؤشر</th><th>القيمة</th></tr></thead><tbody>${rows}</tbody></table>
     ${adjustments ? `<h2>التسويات</h2><table><thead><tr><th>النوع</th><th>القيمة</th><th>السبب</th></tr></thead><tbody>${adjustments}</tbody></table>` : ""}
     <script>window.onload=()=>window.print()</script></body></html>`);

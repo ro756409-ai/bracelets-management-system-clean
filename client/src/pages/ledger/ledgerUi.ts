@@ -1,5 +1,6 @@
 import { SYSTEM_POSTED_CODES } from "@shared/ledgerDailyAccounts";
 import { fromMinorUnits, toMinorUnits } from "@shared/accountingMoney";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * منطق واجهة دفتر V3 — نقي (بلا React/tRPC) ليُختبر وحده:
@@ -132,7 +133,7 @@ function fromMinor(v: bigint): string {
   return `${whole}.${frac}`;
 }
 
-export const money = (v: string | number) => Number(v || 0).toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export const money = (v: string | number) => Number(v || 0).toLocaleString(AR_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** اليوم بتوقيت القاهرة YYYY-MM-DD. */
 export function cairoToday(): string {

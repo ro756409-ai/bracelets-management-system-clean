@@ -19,6 +19,7 @@ import {
   costPerOrder, costPerMessage, conversionRate, roas,
   rankCampaigns, summariseCampaigns, type CampaignKind, type CampaignRow,
 } from "@shared/adMetrics";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * الإعلانات.
@@ -35,10 +36,10 @@ import {
  */
 
 const money = (n: number | null | undefined) =>
-  n == null ? "—" : Number(n).toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  n == null ? "—" : Number(n).toLocaleString(AR_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const dec = (n: number | null | undefined, digits = 2) =>
-  n == null ? "—" : Number(n).toLocaleString("ar-EG", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  n == null ? "—" : Number(n).toLocaleString(AR_LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
 function cairoToday(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -451,7 +452,7 @@ export default function Advertising() {
                   return (
                     <tr key={r.id} className="border-b last:border-0">
                       <td className="p-2 whitespace-nowrap tabular-nums">
-                        {new Date(r.spendDate).toLocaleDateString("ar-EG")}
+                        {new Date(r.spendDate).toLocaleDateString(AR_LOCALE)}
                       </td>
                       <td className="p-2">{r.accountName}</td>
                       <td className="p-2">{r.campaignName}</td>

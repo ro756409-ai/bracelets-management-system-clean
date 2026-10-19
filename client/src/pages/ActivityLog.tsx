@@ -8,6 +8,7 @@ import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { PageHeader, SectionCard, StatusBadge, ResponsiveDataTable, Pagination, OfflineState, type Column } from "@/components/shared";
 import { roleLabel } from "@shared/permissionLabels";
+import { AR_LOCALE } from "@/lib/format";
 
 const ACTION_LABELS: Record<string, string> = {
   confirm_order: "تأكيد أوردر",
@@ -81,7 +82,7 @@ export default function ActivityLogPage() {
 
   const formatDate = (date: any) => {
     if (!date) return "-";
-    return new Date(date).toLocaleString("ar-EG", {
+    return new Date(date).toLocaleString(AR_LOCALE, {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -159,7 +160,7 @@ export default function ActivityLogPage() {
       </SectionCard>
 
       {/* Log Table */}
-      <SectionCard title={<span>{total ? `${total.toLocaleString("ar-EG")} عملية مسجلة` : "لا توجد عمليات مسجلة"}</span>} flush testId="activity-list">
+      <SectionCard title={<span>{total ? `${total.toLocaleString(AR_LOCALE)} عملية مسجلة` : "لا توجد عمليات مسجلة"}</span>} flush testId="activity-list">
         <ResponsiveDataTable<any>
           rows={items}
           columns={columns}

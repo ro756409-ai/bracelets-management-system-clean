@@ -70,7 +70,8 @@ describe("🔑 P1-1 · حجز الشحنة يمنع الازدواج", () => {
     expect(catchBlock).not.toContain('bostaStatus: "failed"');
     // الحجز الذرّي موجود قبل الـfetch.
     expect(code).toContain("bostaStatus: BOSTA_CREATING");
-    expect(code).toContain("notInArray(orders.bostaStatus, [BOSTA_CREATING, BOSTA_UNCERTAIN])");
+    // + reset_requested (مسار المراجعة في المرحلة C): طلب إعادة الإرسال تحت المراجعة مايتحجزش للإرسال.
+    expect(code).toContain("notInArray(orders.bostaStatus, [BOSTA_CREATING, BOSTA_UNCERTAIN, BOSTA_RESET_REQUESTED])");
     // والحالة غير المؤكدة بتترفض قبل أي إنشاء جديد.
     expect(code).toContain("order.bostaStatus === BOSTA_UNCERTAIN");
   });

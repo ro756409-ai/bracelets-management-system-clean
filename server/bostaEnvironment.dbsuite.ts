@@ -32,14 +32,15 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
     const ids = { orderIds: [] as number[], productIds: [] as number[], empIds: [] as number[] };
     let prodA = 0, varA = 0, adminA = 0, seq = 0;
     const KEY_A = `env-A-${tag}`;
-    const STG = "https://stg-app.bosta.co/api/v2";
+    // B1 (2026-10-20): في staging/preview العنوان لازم يكون في BOSTA_SANDBOX_ORIGINS — STG هنا عنوان اختبار وهمي، مش Sandbox رسمي.
+const STG = "https://stg-app.bosta.co/api/v2";
     const LIVE_HOST = new URL(BOSTA_LIVE_BASE_URL).hostname;
     const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mj-pkg-env-"));
-    const ENV_KEYS = ["PACKAGE_IMAGE_LOCAL_DIR", "CARRIER_SECRETS_KEY", "BOSTA_API_KEY", "BOSTA_WEBHOOK_SECRET", "BOSTA_WEBHOOK_URL", "BOSTA_BASE_URL", "DEPLOY_ENV",
+    const ENV_KEYS = ["PACKAGE_IMAGE_LOCAL_DIR", "CARRIER_SECRETS_KEY", "BOSTA_API_KEY", "BOSTA_WEBHOOK_SECRET", "BOSTA_WEBHOOK_URL", "BOSTA_BASE_URL", "BOSTA_SANDBOX_ORIGINS", "DEPLOY_ENV",
       "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_ENDPOINT", "S3_REGION", "S3_FORCE_PATH_STYLE"] as const;
     let savedEnv: Record<string, string | undefined> = {};
     const setEnv = (o: Record<string, string | undefined>) => { for (const [k, v] of Object.entries(o)) { if (v == null) delete process.env[k]; else process.env[k] = v; } __resetObjectStorageClientForTests(); __resetBostaEndpointWarningForTests(); };
-    const resetCase = () => setEnv({ BOSTA_BASE_URL: undefined, BOSTA_WEBHOOK_URL: undefined, DEPLOY_ENV: undefined, S3_BUCKET: undefined, S3_ACCESS_KEY_ID: undefined, S3_SECRET_ACCESS_KEY: undefined, S3_ENDPOINT: undefined });
+    const resetCase = () => setEnv({ BOSTA_BASE_URL: undefined, BOSTA_SANDBOX_ORIGINS: undefined, BOSTA_WEBHOOK_URL: undefined, DEPLOY_ENV: undefined, S3_BUCKET: undefined, S3_ACCESS_KEY_ID: undefined, S3_SECRET_ACCESS_KEY: undefined, S3_ENDPOINT: undefined });
 
     // خادم S3 وهمي داخل العملية (PUT/GET/HEAD path-style) — يسجّل المفاتيح ويمكن إفشاله.
     const bucket = new Map<string, { body: Buffer; type: string }>();
@@ -206,7 +207,7 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
 
     // ═══ 2) نداءات بوسطة — عنوان البيئة فقط ═══
     it("🔒 Staging + BOSTA_BASE_URL: الإنشاء وAWB واختبار المفتاح على Staging فقط — حتى لو الصف المخزّن يشير إلى Live", async () => {
-      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_WEBHOOK_URL: "https://staging.example.test/api/webhooks/bosta" });
+      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin, BOSTA_WEBHOOK_URL: "https://staging.example.test/api/webhooks/bosta" });
       await setStoredBase(BOSTA_LIVE_BASE_URL); // صف منسوخ من Production
       const { calls, f } = recorder(okReply);
       const oid = await mkOrder();
@@ -223,7 +224,7 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
     });
 
     it("🔒 Staging + BOSTA_BASE_URL يفشل (401/timeout): لا نداء Live، uncertain بعد timeout بلا محاولة ثانية", async () => {
-      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_WEBHOOK_URL: "https://staging.example.test/api/webhooks/bosta" });
+      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin, BOSTA_WEBHOOK_URL: "https://staging.example.test/api/webhooks/bosta" });
       const oid = await mkOrder();
       const r401 = recorder(url => url.endsWith("/deliveries") ? new Response(JSON.stringify({ message: "Unauthorized" }), { status: 401 }) : okReply(url));
       const r1 = await createBostaShipment(oid, { allowToOpenPackage: true }, r401.f);
@@ -241,7 +242,7 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
     });
 
     it("🔒 INT-1 · Staging + BOSTA_BASE_URL بلا BOSTA_WEBHOOK_URL → فشل مغلق قبل الشبكة (لا تسجيل Webhook الإنتاج)، والأوردر لا يُمس", async () => {
-      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_WEBHOOK_URL: undefined });
+      setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin, BOSTA_WEBHOOK_URL: undefined });
       const { calls, f } = recorder(okReply);
       const oid = await mkOrder();
       const r = await createBostaShipment(oid, { allowToOpenPackage: true }, f);
@@ -285,7 +286,7 @@ export function registerBostaEnvironmentDbSuite(CAN: boolean) {
     });
 
     it("🔒 Production + BOSTA_BASE_URL مضبوط → هذا العنوان فقط (لا Live الافتراضي)", async () => {
-      setEnv({ DEPLOY_ENV: "production", BOSTA_BASE_URL: STG });
+      setEnv({ DEPLOY_ENV: "production", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin });
       await setStoredBase(BOSTA_LIVE_BASE_URL);
       const { calls, f } = recorder(okReply);
       expect((await createBostaShipment(await mkOrder(), { allowToOpenPackage: true }, f)).success).toBe(true);

@@ -1,4 +1,5 @@
 import { formatMoney } from "./money";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * طباعة كشف المصروفات المعروض.
@@ -28,7 +29,7 @@ export function printExpenses(
 
   const rowsHtml = rows.map(r => `
     <tr>
-      <td>${new Date(r.expenseDate).toLocaleDateString("ar-EG", { day: "numeric", month: "short", year: "numeric" })}</td>
+      <td>${new Date(r.expenseDate).toLocaleDateString(AR_LOCALE, { day: "numeric", month: "short", year: "numeric" })}</td>
       <td>${escapeHtml(r.categoryName ?? "بدون تصنيف")}</td>
       <td>${escapeHtml(r.description)}</td>
       <td class="num">${formatMoney(r.amount)}</td>
@@ -53,8 +54,8 @@ export function printExpenses(
 </style></head><body>
   <h1>كشف المصروفات</h1>
   <p class="meta">
-    متجرك — تاريخ الطباعة: ${new Date().toLocaleString("ar-EG")}
-    · عدد البنود: ${rows.length.toLocaleString("ar-EG")}
+    متجرك — تاريخ الطباعة: ${new Date().toLocaleString(AR_LOCALE)}
+    · عدد البنود: ${rows.length.toLocaleString(AR_LOCALE)}
   </p>
   <table>
     <thead><tr>

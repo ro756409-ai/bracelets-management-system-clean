@@ -279,7 +279,9 @@ describe("اللوحة", () => {
   });
 
   it("العملة بالجنيه المصري", () => {
-    expect(dash).toContain('toLocaleString("ar-EG"');
+    // التنسيق من المصدر الموحّد AR_LOCALE (lib/format: "ar-EG" في v1، و"ar-EG-u-nu-latn" — نفس الـlocale المصري بأرقام غربية — في v2).
+    expect(dash).toContain("toLocaleString(AR_LOCALE");
+    expect(dash).toContain('import { AR_LOCALE } from "@/lib/format"');
     expect(dash).toContain("ج.م");
   });
 

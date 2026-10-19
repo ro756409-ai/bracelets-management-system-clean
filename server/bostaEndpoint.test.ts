@@ -9,10 +9,11 @@ import {
 /**
  * عنوان بوسطة لكل بيئة — فشل مغلق بلا أي fallback بين البيئات (بلا قاعدة بيانات، بلا شبكة).
  */
+// B1 (2026-10-20): في staging/preview العنوان لازم يكون في BOSTA_SANDBOX_ORIGINS — STG هنا عنوان اختبار وهمي، مش Sandbox رسمي.
 const STG = "https://stg-app.bosta.co/api/v2";
 const LIVE_HOST = "app.bosta.co";
 
-const ENV_KEYS = ["DEPLOY_ENV", "NODE_ENV", "VITEST", "BOSTA_BASE_URL"] as const;
+const ENV_KEYS = ["DEPLOY_ENV", "NODE_ENV", "VITEST", "BOSTA_BASE_URL", "BOSTA_SANDBOX_ORIGINS"] as const;
 let saved: Record<string, string | undefined> = {};
 beforeEach(() => { saved = Object.fromEntries(ENV_KEYS.map(k => [k, process.env[k]])); __resetBostaEndpointWarningForTests(); });
 afterEach(() => { for (const k of ENV_KEYS) { if (saved[k] == null) delete process.env[k]; else process.env[k] = saved[k]; } });
@@ -41,8 +42,9 @@ describe("🌍 resolveDeployEnv — بلا تخمين", () => {
 describe("🔒 resolveBostaEndpoint — عنوان واحد لكل بيئة", () => {
   it("BOSTA_BASE_URL مضبوط → هو فقط، في أي بيئة (حتى production)", () => {
     for (const d of ["production", "staging", "preview", "development", "test"]) {
-      const ep = resolveBostaEndpoint({ DEPLOY_ENV: d, BOSTA_BASE_URL: STG } as any);
-      expect(ep).toEqual({ ok: true, baseUrl: STG, source: "env" });
+      const ep = resolveBostaEndpoint({ DEPLOY_ENV: d, BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin } as any);
+      // B1: في staging/preview العنوان المعتمد بيتعلّم guarded (نداءات بلا redirects) — نفس العنوان، ومفيش غيره.
+      expect(ep).toEqual({ ok: true, baseUrl: STG, source: "env", ...(d === "staging" || d === "preview" ? { guarded: true } : {}) });
     }
     // شرطة مائلة أخيرة وبادئة "BOSTA_BASE_URL=" الملصوقة بالخطأ تُنظَّفان
     expect(resolveBostaEndpoint({ BOSTA_BASE_URL: `BOSTA_BASE_URL=${STG}/` } as any)).toMatchObject({ ok: true, baseUrl: STG });
@@ -86,7 +88,7 @@ describe("🔒 effectiveBostaBaseUrl — العنوان المخزّن لا يت
     expect(effectiveBostaBaseUrl("garbage", env)).toMatchObject({ ok: true, baseUrl: BOSTA_LIVE_BASE_URL });
   });
   it("Staging بعنوان مضبوط: صف قاعدة بيانات منسوخ من Production (apiBaseUrl = Live) → Staging لا Live", () => {
-    const env = { DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG } as any;
+    const env = { DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin } as any;
     expect(effectiveBostaBaseUrl("https://app.bosta.co/api/v2", env)).toMatchObject({ ok: true, baseUrl: STG });
   });
   it("Staging بلا عنوان: فشل مغلق حتى لو الصف يحمل عنوانًا", () => {
@@ -101,7 +103,7 @@ describe("🔒 probeBostaKey (اختبار الاتصال) — لا نداء Liv
     return { calls, f };
   };
   it("Staging URL يفشل (401) → لا يوجد أي نداء إلى Live، وخطأ واضح لنفس البيئة", async () => {
-    setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG });
+    setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin });
     const { calls, f } = recorder(() => new Response("{}", { status: 401 }));
     const r = await probeBostaKey("staging-key-xxxxxxxx", f);
     expect(r.ok).toBe(false);
@@ -110,21 +112,21 @@ describe("🔒 probeBostaKey (اختبار الاتصال) — لا نداء Liv
     expect(calls.some(u => new URL(u).hostname === LIVE_HOST)).toBe(false); // (stg-app.bosta.co ≠ app.bosta.co)
   });
   it("Staging URL ينجح → نداء واحد فقط إلى Staging", async () => {
-    setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG });
+    setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin });
     const { calls, f } = recorder(() => new Response(JSON.stringify({ data: [{ _id: "L1", locationName: "x" }] }), { status: 200 }));
     const r = await probeBostaKey("staging-key-xxxxxxxx", f);
     expect(r.ok).toBe(true); expect(r.baseUrl).toBe(STG);
     expect(calls).toEqual([`${STG}/pickup-locations`]);
   });
   it("timeout على Staging → لا محاولة ثانية على بيئة أخرى", async () => {
-    setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG });
+    setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin });
     const { calls, f } = recorder(() => Object.assign(new Error("fetch failed"), { cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }));
     const r = await probeBostaKey("staging-key-xxxxxxxx", f);
     expect(r.ok).toBe(false);
     expect(calls).toHaveLength(1); expect(calls[0].startsWith(STG)).toBe(true);
   });
   it("404 على Staging (مسار خاطئ) → يبقى على نفس العنوان ولا يسقط على Live", async () => {
-    setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG });
+    setEnv({ DEPLOY_ENV: "staging", BOSTA_BASE_URL: STG, BOSTA_SANDBOX_ORIGINS: new URL(STG).origin });
     const { calls, f } = recorder(() => new Response("{}", { status: 404 }));
     const r = await probeBostaKey("staging-key-xxxxxxxx", f);
     expect(r.ok).toBe(false);

@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { AR_LOCALE } from "@/lib/format";
 
 export default function Duplicates() {
   const utils = trpc.useUtils();
@@ -133,7 +134,7 @@ export default function Duplicates() {
 
                   {order.duplicateMarkedAt && (
                     <p className="text-xs text-muted-foreground mt-2">
-                      علّمه موظف في: {new Date(order.duplicateMarkedAt).toLocaleString("ar-EG")}
+                      علّمه موظف في: {new Date(order.duplicateMarkedAt).toLocaleString(AR_LOCALE)}
                     </p>
                   )}
                 </div>

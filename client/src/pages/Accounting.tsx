@@ -43,6 +43,7 @@ import SupplierStatements from "./SupplierStatements";
 import Advertising from "./Advertising";
 import SalaryProfiles from "./SalaryProfiles";
 import { Factory, Megaphone } from "lucide-react";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * مركز الحسابات.
@@ -321,7 +322,7 @@ function OverviewSection() {
           label="هامش الربح المحقق"
           tone={(data?.realized?.profitMargin ?? 0) < 0 ? "danger" : "success"}
           loading={isLoading}
-          value={`${(data?.realized?.profitMargin ?? 0).toLocaleString("ar-EG", { maximumFractionDigits: 2 })}%`}
+          value={`${(data?.realized?.profitMargin ?? 0).toLocaleString(AR_LOCALE, { maximumFractionDigits: 2 })}%`}
           hint="الربح المحقق ÷ الإيراد المحقق"
           icon={<Percent className="h-5 w-5" />}
         />
@@ -475,7 +476,7 @@ function OverviewSection() {
                         <span className="tabular-nums">
                           {formatMoney(row.value)}
                           <span className="type-caption mr-1.5">
-                            {pct.toLocaleString("ar-EG", {
+                            {pct.toLocaleString(AR_LOCALE, {
                               maximumFractionDigits: 0,
                             })}
                             %
@@ -583,7 +584,7 @@ function FinancialMovementChart({
                       className="type-caption whitespace-nowrap tabular-nums"
                       dir="rtl"
                     >
-                      {new Date(d.day).toLocaleDateString("ar-EG", {
+                      {new Date(d.day).toLocaleDateString(AR_LOCALE, {
                         day: "numeric",
                         month: "short",
                       })}

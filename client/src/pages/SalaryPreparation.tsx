@@ -15,6 +15,7 @@ import {
 import { PageHeader, SectionCard } from "@/components/shared";
 import { netFromComponents, toNumber } from "@shared/payrollCalc";
 import { toast } from "sonner";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * تجهيز المرتبات.
@@ -36,7 +37,7 @@ const MONTHS = [
 ];
 
 const money = (n: number) =>
-  Number(n || 0).toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  Number(n || 0).toLocaleString(AR_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const STATUS_LABEL: Record<string, { text: string; tone: string }> = {
   draft: { text: "مسودة", tone: "var(--muted-foreground)" },

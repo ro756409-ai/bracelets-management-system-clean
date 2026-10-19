@@ -6,6 +6,7 @@ import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItem
 import {
   AccCard, AccSectionTitle, AccField, AccInput, AccSelect, AccButton, AccTable, accMoney, AccStatus,
 } from "./ui";
+import { AR_LOCALE } from "@/lib/format";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -256,7 +257,7 @@ export default function AccGoodsReceipt({ businessId }: { businessId: number }) 
             return (
               <tr key={r.id} className="border-b border-slate-100 last:border-0">
                 <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-slate-600">
-                  {r.receiptDate ? new Date(r.receiptDate).toLocaleDateString("ar-EG") : "—"}
+                  {r.receiptDate ? new Date(r.receiptDate).toLocaleDateString(AR_LOCALE) : "—"}
                 </td>
                 <td className="px-3 py-2.5">{r.supplierName}</td>
                 <td className="px-3 py-2.5 font-semibold tabular-nums">{accMoney(r.totalAmount)}</td>

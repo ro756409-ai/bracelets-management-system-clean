@@ -64,6 +64,7 @@ import { useBrandOptions } from "@/hooks/useBrandOptions";
 import { useOrderSourceOptions } from "@/hooks/useOrderSourceOptions";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
 import { QuickShippingProviderDialog, QuickConfigValueDialog, QuickProductDialog } from "@/components/orders/QuickCreateDialogs";
+import { AR_LOCALE } from "@/lib/format";
 
 // QR Code renderer component
 function QRRenderer({ serialNumber, canvasId }: { serialNumber: string; canvasId: string }) {
@@ -100,8 +101,8 @@ const FILTER_DESCRIPTORS: FilterDescriptor<{
   {
     key: "dateRange", label: "التاريخ",
     format: (v: DateRange) => {
-      const from = v.from ? v.from.toLocaleDateString("ar-EG") : "";
-      const to = v.to ? v.to.toLocaleDateString("ar-EG") : "";
+      const from = v.from ? v.from.toLocaleDateString(AR_LOCALE) : "";
+      const to = v.to ? v.to.toLocaleDateString(AR_LOCALE) : "";
       return from && to ? `${from} – ${to}` : from || to;
     },
   },
@@ -877,13 +878,13 @@ export default function Orders() {
                 {confirmedDateFilter === 'today' ? 'مؤكدات اليوم' : confirmedDateFilter === 'yesterday' ? 'مؤكدات أمس' : `مؤكدات ${confirmedCustomDate}`}
                 {' - '}
                 {confirmedDateFilter === 'today'
-                  ? new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+                  ? new Date().toLocaleDateString(AR_LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
                   : confirmedDateFilter === 'yesterday'
-                  ? new Date(Date.now() - 86400000).toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-                  : confirmedCustomDate ? new Date(confirmedCustomDate + 'T00:00:00').toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : ''}
+                  ? new Date(Date.now() - 86400000).toLocaleDateString(AR_LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+                  : confirmedCustomDate ? new Date(confirmedCustomDate + 'T00:00:00').toLocaleDateString(AR_LOCALE, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : ''}
               </p>
               <p className="mt-0.5 type-caption tabular-nums">
-                إجمالي: {todayConfirmedData?.total ?? 0} أوردر مؤكد (لم يُطبع بعد) · إجمالي المبالغ: {(todayConfirmedData?.orders ?? []).reduce((s: number, o: any) => s + Number(o.totalAmount), 0).toLocaleString('ar-EG')} ج.م
+                إجمالي: {todayConfirmedData?.total ?? 0} أوردر مؤكد (لم يُطبع بعد) · إجمالي المبالغ: {(todayConfirmedData?.orders ?? []).reduce((s: number, o: any) => s + Number(o.totalAmount), 0).toLocaleString(AR_LOCALE)} ج.م
               </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -926,7 +927,7 @@ export default function Orders() {
                   'المنتج': o.productName,
                   'الكمية': o.quantity,
                   'المبلغ': Number(o.totalAmount),
-                  'وقت التأكيد': o.confirmedAt ? new Date(o.confirmedAt).toLocaleString('ar-EG') : '',
+                  'وقت التأكيد': o.confirmedAt ? new Date(o.confirmedAt).toLocaleString(AR_LOCALE) : '',
                 }));
                 const ws = XLSX.utils.json_to_sheet(rows);
                 const wb = XLSX.utils.book_new();
@@ -1589,7 +1590,7 @@ export default function Orders() {
           detailIndex >= 0 ? (
             <>
               <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
-                {(detailIndex + 1).toLocaleString('ar-EG')} / {orders.length.toLocaleString('ar-EG')}
+                {(detailIndex + 1).toLocaleString(AR_LOCALE)} / {orders.length.toLocaleString(AR_LOCALE)}
               </span>
               <Button variant="ghost" size="icon" className="min-h-11 md:h-8 min-w-11 md:min-w-8 md:w-8" title="الأوردر السابق (→)"
                 disabled={detailIndex <= 0} onClick={() => goToOrderAt(detailIndex - 1)}>
@@ -1717,7 +1718,7 @@ export default function Orders() {
                   <div className="col-span-2"><span className="text-muted-foreground">العنوان:</span> <span className="font-semibold">{order.customerAddress || '—'}</span></div>
                   <div>
                     <span className="text-muted-foreground">مصاريف الشحن:</span>{' '}
-                    <span className="font-semibold tabular-nums">{Number(order.shippingFees ?? 0).toLocaleString('ar-EG')} ج.م</span>
+                    <span className="font-semibold tabular-nums">{Number(order.shippingFees ?? 0).toLocaleString(AR_LOCALE)} ج.م</span>
                   </div>
                   <div><span className="text-muted-foreground">طريقة الدفع:</span> <span className="font-semibold">{order.paymentMethod === 'cod' ? 'دفع عند الاستلام' : (order.paymentMethod || '—')}</span></div>
                   {order.bostaShipmentId && (
@@ -1756,7 +1757,7 @@ export default function Orders() {
                   <div><span className="text-muted-foreground">الكمية:</span> <span className="font-semibold">{order.quantity}</span></div>
                   {order.color && <div><span className="text-muted-foreground">اللون:</span> <span className="font-semibold">{order.color}</span></div>}
                   {order.size && <div><span className="text-muted-foreground">المقاس:</span> <span className="font-semibold">{order.size}</span></div>}
-                  <div><span className="text-muted-foreground">المبلغ:</span> <span className="font-bold text-primary">{Number(order.totalAmount).toLocaleString('ar-EG')} ج.م</span></div>
+                  <div><span className="text-muted-foreground">المبلغ:</span> <span className="font-bold text-primary">{Number(order.totalAmount).toLocaleString(AR_LOCALE)} ج.م</span></div>
                   <div><span className="text-muted-foreground">المصدر:</span> <span className="font-semibold">{sourceOptions.find(option => option.value === order.source)?.label ?? order.source}</span></div>
                   {Array.isArray(order.items) && order.items.length > 0 && (
                     <div className="col-span-2 space-y-1.5 pt-1 border-t border-border">
@@ -1831,9 +1832,9 @@ export default function Orders() {
                                 {ev.detail && <p className="type-caption truncate" title={ev.detail}>{ev.detail}</p>}
                               </div>
                               <p className="type-caption shrink-0 tabular-nums">
-                                {ev.at.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' })}
+                                {ev.at.toLocaleDateString(AR_LOCALE, { day: 'numeric', month: 'short' })}
                                 {' · '}
-                                {ev.at.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                                {ev.at.toLocaleTimeString(AR_LOCALE, { hour: '2-digit', minute: '2-digit' })}
                               </p>
                             </div>
                           </li>
@@ -1842,7 +1843,7 @@ export default function Orders() {
                       {order.postponedTo && (
                         <p className="mt-3 rounded-md border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-2.5 py-1.5 text-sm">
                           <span className="text-muted-foreground">مؤجَّل حتى:</span>{' '}
-                          <span className="font-semibold text-[var(--warning)]">{new Date(order.postponedTo).toLocaleDateString('ar-EG')}</span>
+                          <span className="font-semibold text-[var(--warning)]">{new Date(order.postponedTo).toLocaleDateString(AR_LOCALE)}</span>
                         </p>
                       )}
                     </CardContent>
@@ -1887,7 +1888,7 @@ export default function Orders() {
                           <p className={`font-bold text-sm mt-0.5 ${order.isPrepared ? 'text-[var(--success)]' : 'text-[var(--warning)]'}`}>
                             {order.isPrepared ? `تم التجهيز بواسطة ${order.preparedByName || 'موظف'}` : 'لم يتم التجهيز بعد'}
                           </p>
-                          {order.preparedAt && <p className="type-caption">{new Date(order.preparedAt).toLocaleString('ar-EG')}</p>}
+                          {order.preparedAt && <p className="type-caption">{new Date(order.preparedAt).toLocaleString(AR_LOCALE)}</p>}
                         </div>
                       </div>
                     </div>
@@ -2139,7 +2140,7 @@ function CreateOrderDialog({
             <Label className="flex items-center gap-2">المنتج <span className="text-destructive">*</span> <AddInlineButton label="إضافة منتج" disabled={noBusiness} onClick={() => setQuick("product")} /></Label>
             <Select value={form.productId} onValueChange={handleProductChange}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="اختر المنتج" /></SelectTrigger>
-              <SelectContent>{products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}{p.price != null && p.price !== "" ? ` - ${Number(p.price).toLocaleString('ar-EG')} ج.م` : ""}</SelectItem>)}</SelectContent>
+              <SelectContent>{products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}{p.price != null && p.price !== "" ? ` - ${Number(p.price).toLocaleString(AR_LOCALE)} ج.م` : ""}</SelectItem>)}</SelectContent>
             </Select>
             <EmptyConfigHint show={!noBusiness && products.length === 0} label="منتجات" onGo={() => setQuick("product")} />
           </div>

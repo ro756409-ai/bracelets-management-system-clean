@@ -1,6 +1,7 @@
 # ResponsiveDataTable — sticky column occlusion and financial value visibility (backlog)
 
-> **الحالة: existing defect — غير محلول.** تخطيط وتوثيق فقط؛ لا تنفيذ ولا اختيار حل في هذا الملف.
+> **الحالة (2026-10-19): محلول تحت v2 بس** — الخياران 4 + 3 في `client/src/components/shared/stickyOcclusion.ts` + `ResponsiveDataTable` + `index.css`: أي قيمة رقمية متغطّية جزئيًا بتتخفي بالكامل بمؤشر «⋯» لحد التمرير، وفيه ظل على حافة العمود الثابت. اتقاس في المتصفح عند 1280: صفر مبلغ جزئي ظاهر في 24 موضع تمرير. **v1 زي ما هي** (المعيار 4).
+> الأصل: existing defect — تخطيط وتوثيق فقط.
 > اتسجّل أثناء مراجعة Matjarak 2.0 — المرحلة 1C-2 (الخطوط)، واتفصل عنها عمدًا عشان مايتخلطش مع شغلها.
 
 ## الملخّص

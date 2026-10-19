@@ -17,6 +17,7 @@ import {
 import { DEFAULT_TREASURY_LABEL } from "@/components/accounting/PaymentSource";
 import { formatMoney } from "@/lib/money";
 import { Banknote, Receipt, Wallet } from "lucide-react";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * تحصيل اليوم ومصروف اليوم — الشاشة اللي التاجر بيفتحها آخر النهار.
@@ -695,7 +696,7 @@ function RecentSettlements({ businessId }: { businessId: number }) {
                 {rows.map(row => (
                   <tr key={row.id} className="border-b last:border-0">
                     <td className="p-2 whitespace-nowrap">
-                      {new Date(row.statementDate).toLocaleDateString("ar-EG")}
+                      {new Date(row.statementDate).toLocaleDateString(AR_LOCALE)}
                     </td>
                     <td className="p-2">{row.carrierName ?? "—"}</td>
                     <td className="p-2">{row.ordersCount ?? "—"}</td>

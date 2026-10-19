@@ -32,6 +32,7 @@ import {
   Phone, MapPin, ChevronDown, ChevronUp, AlertTriangle,
   UserPlus, Key, Menu, X, Eye, EyeOff,
   FileText, Calendar, User, Megaphone, ArrowLeftRight } from "lucide-react";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * بوابة المدير (/manager-dashboard) — طبقة العرض فقط على نظام التصميم المشترك (Copper Signature × Clean Spatial).
@@ -383,7 +384,7 @@ function ManagerDashboardTab() {
                   <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-muted-foreground">
                     <span className="font-medium text-[var(--warning)]">{activeBroadcast.sentByName}</span>
                     <span aria-hidden="true">•</span>
-                    <span>{new Date(activeBroadcast.createdAt).toLocaleString('ar-EG')}</span>
+                    <span>{new Date(activeBroadcast.createdAt).toLocaleString(AR_LOCALE)}</span>
                   </div>
                 </div>
                 {canManageTeam && (
@@ -1485,7 +1486,7 @@ function ManagerTasksTab() {
                       </span>
                       <span className="flex items-center gap-1">
                         <Calendar className="h-3 w-3" aria-hidden="true" />
-                        {new Date(task.createdAt).toLocaleDateString('ar-EG')}
+                        {new Date(task.createdAt).toLocaleDateString(AR_LOCALE)}
                       </span>
                       <span>بواسطة: {task.createdByName}</span>
                     </div>

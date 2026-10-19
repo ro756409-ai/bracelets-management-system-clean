@@ -15,6 +15,7 @@ import {
   PageHeader, StatCard, SectionCard, StatusBadge, ResponsiveDataTable, EmptyState, LoadingSkeleton, OfflineState, PermissionDeniedState, type Column,
 } from "@/components/shared";
 import { activeBrand } from "@/lib/brandFlag";
+import { AR_LOCALE } from "@/lib/format";
 
 /** محاور الرسوم: 12px تحت v2 (Master Audit §6 — كانت 10px)، وv1 كما هو. */
 const axisFontSize = () => (activeBrand() === "v2" ? 12 : 10);
@@ -147,9 +148,9 @@ export default function Reports() {
         icon={<BarChart3 className="h-5 w-5" aria-hidden="true" />}
       >
         <section className="grid grid-cols-3 gap-3" aria-label="ملخص الفترة" data-testid="reports-summary">
-          <StatCard label={`أوردرات ${dateRangeLabels[dateRange]}`} value={sums.total.toLocaleString("ar-EG")} hint="مجموع أيام الفترة" loading={chartLoading} />
-          <StatCard label="مؤكد" value={sums.confirmed.toLocaleString("ar-EG")} tone="success" hint="حسب تاريخ الإنشاء" loading={chartLoading} />
-          <StatCard label="ملغي" value={sums.cancelled.toLocaleString("ar-EG")} tone="danger" hint="حسب تاريخ الإنشاء" loading={chartLoading} />
+          <StatCard label={`أوردرات ${dateRangeLabels[dateRange]}`} value={sums.total.toLocaleString(AR_LOCALE)} hint="مجموع أيام الفترة" loading={chartLoading} />
+          <StatCard label="مؤكد" value={sums.confirmed.toLocaleString(AR_LOCALE)} tone="success" hint="حسب تاريخ الإنشاء" loading={chartLoading} />
+          <StatCard label="ملغي" value={sums.cancelled.toLocaleString(AR_LOCALE)} tone="danger" hint="حسب تاريخ الإنشاء" loading={chartLoading} />
         </section>
       </PageHeader>
 
@@ -208,7 +209,7 @@ export default function Reports() {
         </SectionCard>
 
         {/* Cancellation Reasons Pie */}
-        <SectionCard title={<span className="inline-flex items-center gap-2"><XCircle className="h-4 w-4 text-destructive" aria-hidden="true" /> أسباب الإلغاء <span className="text-sm font-normal text-muted-foreground tabular-nums">({totalCancelled.toLocaleString("ar-EG")} إلغاء)</span></span>} description="حسب السبب المسجّل عند الإلغاء" testId="reports-cancel-chart">
+        <SectionCard title={<span className="inline-flex items-center gap-2"><XCircle className="h-4 w-4 text-destructive" aria-hidden="true" /> أسباب الإلغاء <span className="text-sm font-normal text-muted-foreground tabular-nums">({totalCancelled.toLocaleString(AR_LOCALE)} إلغاء)</span></span>} description="حسب السبب المسجّل عند الإلغاء" testId="reports-cancel-chart">
           {cancelLoading ? <LoadingSkeleton variant="cards" rows={1} className="h-[220px]" /> : cancelPieData.length > 0 ? (
             <>
               <div aria-hidden="true">

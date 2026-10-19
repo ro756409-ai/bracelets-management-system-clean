@@ -27,6 +27,7 @@ import {
   workshopLineTotal, workshopReceiptTotal, workshopReceiptPieces,
   type WorkshopLineInput,
 } from "@shared/purchaseTotals";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * استلام بضاعة من الورشة.
@@ -47,7 +48,7 @@ import {
  */
 
 const money = (n: number) =>
-  n.toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  n.toLocaleString(AR_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 type Line = WorkshopLineInput & {
   key: string;
@@ -304,7 +305,7 @@ export default function GoodsReceipt({
 
   type ReceiptRow = any;
   const receiptColumns: Column<ReceiptRow>[] = [
-    { id: "date", header: "التاريخ", cell: r => <span className="whitespace-nowrap tabular-nums">{new Date(r.receiptDate).toLocaleDateString("ar-EG")}</span>, alwaysVisible: true },
+    { id: "date", header: "التاريخ", cell: r => <span className="whitespace-nowrap tabular-nums">{new Date(r.receiptDate).toLocaleDateString(AR_LOCALE)}</span>, alwaysVisible: true },
     { id: "workshop", header: "الورشة", cell: r => r.supplierName },
     { id: "total", header: "الإجمالي", numeric: true, cell: r => <span className="tabular-nums">{money(Number(r.totalAmount))} ج.م</span> },
     { id: "status", header: "الحالة", cell: r => <StatusBadge status={r.status} label={STATUS[r.status]?.label ?? r.status} tone={STATUS[r.status]?.tone ?? "neutral"} size="sm" /> },
@@ -337,7 +338,7 @@ export default function GoodsReceipt({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold">{r.supplierName}</p>
-          <p className="text-xs tabular-nums text-muted-foreground">{new Date(r.receiptDate).toLocaleDateString("ar-EG")}</p>
+          <p className="text-xs tabular-nums text-muted-foreground">{new Date(r.receiptDate).toLocaleDateString(AR_LOCALE)}</p>
         </div>
         <StatusBadge status={r.status} label={STATUS[r.status]?.label ?? r.status} tone={STATUS[r.status]?.tone ?? "neutral"} size="sm" />
       </div>

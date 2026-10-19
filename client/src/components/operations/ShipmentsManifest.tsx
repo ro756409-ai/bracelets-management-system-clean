@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Truck, Package, MapPin, ChevronDown, ChevronUp } from "lucide-react";
 import type { AgentGroup, ShipmentOrder } from "@/lib/shippingOperations";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * كشف شحنات اليوم — كارت لكل شركة شحن (محافظاتها + جدول أوردراتها + إجمالي) + الإجمالي الكلي.
@@ -71,7 +72,7 @@ export function ShipmentsManifest({ agents, totalOrders }: { agents: AgentGroup[
               </div>
               <div className="flex shrink-0 items-center gap-3">
                 <span className="text-sm font-medium tabular-nums text-muted-foreground">
-                  إجمالي: {agent.totalAmount.toLocaleString("ar-EG")} ج.م
+                  إجمالي: {agent.totalAmount.toLocaleString(AR_LOCALE)} ج.م
                 </span>
                 {isExpanded ? (
                   <ChevronUp className="h-5 w-5 print:hidden" aria-hidden="true" />
@@ -144,7 +145,7 @@ export function ShipmentsManifest({ agents, totalOrders }: { agents: AgentGroup[
                           </td>
                           <td className="px-3 py-2 text-center tabular-nums">{order.quantity}</td>
                           <td className="px-3 py-2 font-semibold tabular-nums">
-                            {Number(order.totalAmount).toLocaleString("ar-EG")} ج.م
+                            {Number(order.totalAmount).toLocaleString(AR_LOCALE)} ج.م
                           </td>
                           <td className="max-w-[150px] truncate px-3 py-2 text-xs text-muted-foreground print:hidden">
                             {order.notes || "—"}
@@ -162,7 +163,7 @@ export function ShipmentsManifest({ agents, totalOrders }: { agents: AgentGroup[
                           {agent.orders.reduce((sum: number, o: ShipmentOrder) => sum + o.quantity, 0)}
                         </td>
                         <td className="px-3 py-2 tabular-nums">
-                          {agent.totalAmount.toLocaleString("ar-EG")} ج.م
+                          {agent.totalAmount.toLocaleString(AR_LOCALE)} ج.م
                         </td>
                         <td className="print:hidden"></td>
                       </tr>
@@ -184,12 +185,12 @@ export function ShipmentsManifest({ agents, totalOrders }: { agents: AgentGroup[
         <div className="flex flex-wrap items-center gap-6 text-sm">
           <div>
             <span className="ml-1 text-muted-foreground">عدد الأوردرات:</span>
-            <span className="text-lg font-bold tabular-nums">{totalOrders.toLocaleString("ar-EG")}</span>
+            <span className="text-lg font-bold tabular-nums">{totalOrders.toLocaleString(AR_LOCALE)}</span>
           </div>
           <div>
             <span className="ml-1 text-muted-foreground">المبلغ:</span>
             <span className="text-lg font-bold tabular-nums text-primary-text">
-              {agents.reduce((sum: number, a: AgentGroup) => sum + a.totalAmount, 0).toLocaleString("ar-EG")} ج.م
+              {agents.reduce((sum: number, a: AgentGroup) => sum + a.totalAmount, 0).toLocaleString(AR_LOCALE)} ج.م
             </span>
           </div>
         </div>

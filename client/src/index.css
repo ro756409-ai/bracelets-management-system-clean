@@ -873,3 +873,27 @@
   opacity: 0.45 !important;
   cursor: not-allowed !important;
 }
+
+/* Matjarak 2.0 (v2 فقط) — الأعمدة الثابتة في ResponsiveDataTable (docs/backlog/responsive-data-table-sticky-occlusion.md):
+   1) مبلغ متغطّي جزئيًا تحت عمود ثابت بيختفي بالكامل (يفضل في DOM لقارئ الشاشة) ويظهر مكانه «⋯» لحد التمرير — مايتقريش رقم ناقص.
+   2) ظل خفيف على الحافة الداخلية للعمود الثابت طول ما الجدول بيتمرّر أفقيًا — إشارة صريحة إن فيه محتوى تحته. */
+html[data-brand="v2"] td[data-occluded="partial"] { position: relative; }
+html[data-brand="v2"] td[data-occluded="partial"] [data-rdt-value] { opacity: 0; }
+html[data-brand="v2"] td[data-occluded="partial"]::after {
+  content: "⋯"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted-foreground); font-weight: 700; pointer-events: none;
+}
+html[data-brand="v2"][dir="rtl"] [data-rdt-overflow="true"] [data-rdt-sticky="start"],
+html[data-brand="v2"][dir="ltr"] [data-rdt-overflow="true"] [data-rdt-sticky="end"] { box-shadow: -10px 0 12px -12px rgb(37 35 41 / 0.45); }
+html[data-brand="v2"][dir="rtl"] [data-rdt-overflow="true"] [data-rdt-sticky="end"],
+html[data-brand="v2"][dir="ltr"] [data-rdt-overflow="true"] [data-rdt-sticky="start"] { box-shadow: 10px 0 12px -12px rgb(37 35 41 / 0.45); }
+
+/* v2 — خلفية واحدة ثابتة للتطبيق كله: القائمة الجانبية بنفس لون الصفحة (#FAF9F7) بدل الأبيض، والفصل بخط الحد بس.
+   (SIDEBAR_TOKEN_CSS في DashboardLayout بيحط --sidebar = --card للاتنين؛ ده تخصيص v2 بأولوية أعلى.) */
+html[data-brand="v2"] [data-slot="sidebar-container"],
+html[data-brand="v2"] [data-slot="sidebar"][data-mobile="true"] { --sidebar: var(--background); }
+
+/* v2 — العمود «المثبّت» (مبلغ التحصيل): ظل على الجهة اللي بيعدّي منها المحتوى تحته وهو لازق. «left/right» هنا فيزيائية حسب الاتجاه. */
+html[data-brand="v2"] [data-rdt-overflow="true"] [data-rdt-sticky="pinned"] { z-index: 2; }
+html[data-brand="v2"] [data-rdt-pinned-stuck="start-side"] [data-rdt-sticky="pinned"] { box-shadow: 10px 0 12px -12px rgb(37 35 41 / 0.45); }
+html[data-brand="v2"] [data-rdt-pinned-stuck="end-side"] [data-rdt-sticky="pinned"] { box-shadow: -10px 0 12px -12px rgb(37 35 41 / 0.45); }

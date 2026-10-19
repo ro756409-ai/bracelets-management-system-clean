@@ -18,6 +18,7 @@ import {
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
 import { LayoutDashboard, PanelRight, ChevronDown } from "lucide-react";
+import { useTenantAccess } from "@/contexts/TenantAccessContext";
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   MORE_ICON, activeDestinationKey, activeLinkPath, visibleChildren, visibleDestinations, visibleToolsLinks, type NavFlag,
@@ -84,6 +85,9 @@ export const SIDEBAR_TOKEN_CSS = `
   --sidebar-accent-foreground: var(--primary-text);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+  /* لون النص لازم يتعاد تعريفه هنا: الغلاف الأب (text-sidebar-foreground) بيحسب اللون من متغيرات :root الداكنة (#F3F1F2)،
+     فالبنود اللي مالهاش لون صريح كانت بتورث نص شبه أبيض فوق خلفية بيضاء (تباين ~1.1:1). */
+  color: var(--sidebar-foreground);
 }
 `;
 
@@ -180,9 +184,10 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
   const canAskLeadership = Boolean(teamsStatus.data?.enabled) && isEmployeeSession && permissions.includes("teams.view_own");
   const myLedTeams = trpc.employeePortal.team.myTeams.useQuery(undefined, { enabled: canAskLeadership, retry: false, staleTime: 60 * 1000 });
   const leadsNow = canAskLeadership && myLedTeams.data?.enabled === true && myLedTeams.data.teams.length > 0;
+  const { billing: billingEnabled } = useTenantAccess();
   const navFlags = useMemo<NavFlag[]>(
-    () => [...(teamsStatus.data?.enabled ? (["teams"] as NavFlag[]) : []), ...(leadsNow ? (["teamLeader"] as NavFlag[]) : [])],
-    [teamsStatus.data?.enabled, leadsNow]
+    () => [...(teamsStatus.data?.enabled ? (["teams"] as NavFlag[]) : []), ...(leadsNow ? (["teamLeader"] as NavFlag[]) : []), ...(billingEnabled ? (["subscription"] as NavFlag[]) : [])],
+    [teamsStatus.data?.enabled, leadsNow, billingEnabled]
   );
   const navDestinations = useMemo(
     () => visibleDestinations(isAdmin, permissions, navFlags),
@@ -290,13 +295,14 @@ function DashboardLayoutContent({ children, setSidebarWidth }: DashboardLayoutCo
                 !openGroups.has(group.label);
               return (
               <SidebarGroup key={group.label} className="px-2 py-0.5">
-                {/* عنوان المجموعة بيتخفي لما تكون بند واحد: "المخزون" فوق "المخزون"،
+                {/* v2: عنوان المجموعة القابلة للطي بنفس حجم ولون البنود المباشرة (كان أصغر وأفتح فبيبان أقل أهمية من «الموظفين»/«التقارير»).
+                    عنوان المجموعة بيتخفي لما تكون بند واحد: "المخزون" فوق "المخزون"،
                     و"الموظفون" فوق "الموظفين" — كانت بتقرا كإنها صفحتين مختلفتين. */}
                 {group.items.length > 1 &&
                   (group.collapsible ? (
                     <button
                       type="button"
-                      className="flex w-full min-h-11 items-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring md:min-h-9"
+                      className="flex w-full min-h-11 items-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring md:min-h-9 brand-v2:gap-2 brand-v2:text-sm brand-v2:text-sidebar-foreground brand-v2:[&>svg:first-child]:h-4 brand-v2:[&>svg:first-child]:w-4"
                       aria-expanded={!collapsed}
                       onClick={() =>
                         setOpenGroups(current => {

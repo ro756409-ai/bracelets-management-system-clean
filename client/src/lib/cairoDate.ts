@@ -1,4 +1,5 @@
 import { businessDateKey, businessDayRange, zonedDateTimeToUtc } from "@shared/businessTime";
+import { AR_LOCALE } from "@/lib/format";
 
 const CAIRO_TIMEZONE = "Africa/Cairo";
 
@@ -24,5 +25,5 @@ export function cairoMiddayInstant(dateKey: string): Date {
 }
 
 export function cairoArabicWeekday(date = new Date()): string {
-  return new Intl.DateTimeFormat("ar-EG", { timeZone: CAIRO_TIMEZONE, weekday: "long" }).format(date).replace("الأحد", "الاحد").replace("الأربعاء", "الاربعاء");
+  return new Intl.DateTimeFormat(AR_LOCALE, { timeZone: CAIRO_TIMEZONE, weekday: "long" }).format(date).replace("الأحد", "الاحد").replace("الأربعاء", "الاربعاء");
 }

@@ -34,6 +34,7 @@ import {
   History,
   Box,
 } from "lucide-react";
+import { AR_LOCALE } from "@/lib/format";
 
 export default function WarehouseDashboard() {
   const [, setLocation] = useLocation();
@@ -452,7 +453,7 @@ export default function WarehouseDashboard() {
                       {m.quantity}
                     </Badge>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {new Date(m.createdAt).toLocaleDateString("ar-EG", {
+                      {new Date(m.createdAt).toLocaleDateString(AR_LOCALE, {
                         day: "numeric",
                         month: "short",
                         hour: "2-digit",

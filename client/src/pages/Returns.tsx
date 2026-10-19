@@ -10,6 +10,7 @@ import {
 } from "@/components/shared";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { AR_LOCALE } from "@/lib/format";
 
 const RETURN_REASON_LABELS: Record<string, string> = {
   customer_refused: "رفض العميل",
@@ -75,10 +76,10 @@ export default function Returns() {
     { id: "governorate", header: "المحافظة", cell: r => <span className="text-muted-foreground">{r.governorate || "—"}</span> },
     { id: "product", header: "المنتج", cell: r => <span className="block max-w-[180px] truncate" title={r.productName}>{r.productName}</span> },
     { id: "qty", header: "الكمية", numeric: true, cell: r => <span className="tabular-nums">{r.quantity}</span> },
-    { id: "total", header: "المبلغ", numeric: true, cell: r => <span className="font-semibold tabular-nums">{Number(r.totalAmount).toLocaleString("ar-EG")} ج.م</span> },
+    { id: "total", header: "المبلغ", numeric: true, cell: r => <span className="font-semibold tabular-nums">{Number(r.totalAmount).toLocaleString(AR_LOCALE)} ج.م</span> },
     { id: "reason", header: "سبب الإرجاع", alwaysVisible: true, cell: r => reasonBadge(r.returnReason) },
     { id: "stock", header: "المخزون", cell: r => stockBadge(!!r.stockRestored) },
-    { id: "date", header: "التاريخ", cell: r => <span className="text-xs tabular-nums text-muted-foreground">{new Date(r.createdAt).toLocaleDateString("ar-EG")}</span> },
+    { id: "date", header: "التاريخ", cell: r => <span className="text-xs tabular-nums text-muted-foreground">{new Date(r.createdAt).toLocaleDateString(AR_LOCALE)}</span> },
   ];
 
   return (
@@ -89,16 +90,16 @@ export default function Returns() {
         icon={<RotateCcw className="h-5 w-5" aria-hidden="true" />}
       >
         <section className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-label="ملخص المرتجعات" data-testid="returns-summary">
-          <StatCard label="إجمالي المرتجعات" value={Number(stats?.total ?? 0).toLocaleString("ar-EG")} hint="حسب الفترة المختارة" loading={statsLoading} />
+          <StatCard label="إجمالي المرتجعات" value={Number(stats?.total ?? 0).toLocaleString(AR_LOCALE)} hint="حسب الفترة المختارة" loading={statsLoading} />
           <StatCard
             label="إجمالي قيمة المرتجعات"
-            value={`${stats?.totalAmount ? Number(stats.totalAmount).toLocaleString("ar-EG") : "٠"} ج.م`}
+            value={`${stats?.totalAmount ? Number(stats.totalAmount).toLocaleString(AR_LOCALE) : (0).toLocaleString(AR_LOCALE)} ج.م`}
             tone="danger"
             hint="قيمة الأوردرات المرتجعة"
             loading={statsLoading}
           />
           {stats?.byReason?.slice(0, 2).map((r: any) => (
-            <StatCard key={r.reason} label={RETURN_REASON_LABELS[r.reason] ?? r.reason} value={Number(r.count).toLocaleString("ar-EG")} hint="أكثر الأسباب" />
+            <StatCard key={r.reason} label={RETURN_REASON_LABELS[r.reason] ?? r.reason} value={Number(r.count).toLocaleString(AR_LOCALE)} hint="أكثر الأسباب" />
           ))}
         </section>
       </PageHeader>
@@ -112,7 +113,7 @@ export default function Returns() {
             {stats.byReason.map((r: any) => (
               <li key={r.reason} className="flex items-center gap-2">
                 {reasonBadge(r.reason)}
-                <span className="text-sm font-semibold tabular-nums">{Number(r.count).toLocaleString("ar-EG")}</span>
+                <span className="text-sm font-semibold tabular-nums">{Number(r.count).toLocaleString(AR_LOCALE)}</span>
               </li>
             ))}
           </ul>
@@ -146,7 +147,7 @@ export default function Returns() {
       </div>
 
       {/* List */}
-      <SectionCard title={<span>قائمة المرتجعات <span className="text-sm font-normal text-muted-foreground tabular-nums">({total.toLocaleString("ar-EG")} مرتجع)</span></span>} flush testId="returns-list">
+      <SectionCard title={<span>قائمة المرتجعات <span className="text-sm font-normal text-muted-foreground tabular-nums">({total.toLocaleString(AR_LOCALE)} مرتجع)</span></span>} flush testId="returns-list">
         <ResponsiveDataTable<any>
           rows={items}
           columns={columns}
@@ -166,8 +167,8 @@ export default function Returns() {
                 {reasonBadge(r.returnReason)}
               </div>
               <p className="text-xs text-muted-foreground" dir="ltr">{r.customerPhone}</p>
-              <p className="flex items-center justify-between text-sm"><span className="truncate">{r.productName} × {r.quantity}</span><span className="shrink-0 font-semibold tabular-nums">{Number(r.totalAmount).toLocaleString("ar-EG")} ج.م</span></p>
-              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>{r.governorate || "—"} · {new Date(r.createdAt).toLocaleDateString("ar-EG")}</span>{stockBadge(!!r.stockRestored)}</div>
+              <p className="flex items-center justify-between text-sm"><span className="truncate">{r.productName} × {r.quantity}</span><span className="shrink-0 font-semibold tabular-nums">{Number(r.totalAmount).toLocaleString(AR_LOCALE)} ج.م</span></p>
+              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>{r.governorate || "—"} · {new Date(r.createdAt).toLocaleDateString(AR_LOCALE)}</span>{stockBadge(!!r.stockRestored)}</div>
             </article>
           )}
         />

@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SectionCard } from "@/components/shared";
 import { moneyTone, toneColor, type Tone } from "@/components/accounting/Surface";
+import { AR_LOCALE } from "@/lib/format";
 
 /**
  * لوحة مركز الحسابات.
@@ -27,7 +28,7 @@ import { moneyTone, toneColor, type Tone } from "@/components/accounting/Surface
 
 /** الجنيه المصري بالعربي. الصفر بيتعرض صفر — مش شرطة ولا خانة فاضية. */
 const egp = (n: number | null | undefined) =>
-  Number(n ?? 0).toLocaleString("ar-EG", {
+  Number(n ?? 0).toLocaleString(AR_LOCALE, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
@@ -304,7 +305,7 @@ function RecentMovements() {
               <span className="min-w-0">
                 <span className="block truncate text-sm">{row.description}</span>
                 <span className="block text-[11px] text-muted-foreground">
-                  {new Date(row.transactionDate).toLocaleString("ar-EG", {
+                  {new Date(row.transactionDate).toLocaleString(AR_LOCALE, {
                     day: "numeric",
                     month: "short",
                     hour: "numeric",

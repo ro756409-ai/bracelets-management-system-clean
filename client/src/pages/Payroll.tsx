@@ -55,6 +55,7 @@ import {
 } from "@/components/shared";
 import { formatAmount, formatMoney } from "@/lib/money";
 import { printPayslip } from "@/lib/printPayslip";
+import { AR_LOCALE } from "@/lib/format";
 
 const MONTHS = [
   "يناير",
@@ -408,7 +409,7 @@ export function PayrollSection() {
       alwaysVisible: true,
       cell: a => (
         <span className="whitespace-nowrap text-sm tabular-nums">
-          {new Date(a.advanceDate).toLocaleDateString("ar-EG", {
+          {new Date(a.advanceDate).toLocaleDateString(AR_LOCALE, {
             day: "numeric",
             month: "short",
             year: "numeric",
@@ -502,14 +503,14 @@ export function PayrollSection() {
             loading={summaryLoading}
             value={(
               (summary?.draftPeriods ?? 0) + (summary?.approvedPeriods ?? 0)
-            ).toLocaleString("ar-EG")}
+            ).toLocaleString(AR_LOCALE)}
             hint={`${summary?.draftPeriods ?? 0} مسودة · ${summary?.approvedPeriods ?? 0} معتمدة`}
             icon={<FileText className="h-5 w-5" />}
           />
           <StatCard
             label="موظفون بملف راتب"
             loading={summaryLoading}
-            value={(summary?.employeesWithProfile ?? 0).toLocaleString("ar-EG")}
+            value={(summary?.employeesWithProfile ?? 0).toLocaleString(AR_LOCALE)}
             icon={<Users className="h-5 w-5" />}
           />
         </div>
@@ -1453,7 +1454,7 @@ function SettingsDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="working_days">أيام العمل</SelectItem>
-                <SelectItem value="calendar_days">أيام التقويم (٣٠)</SelectItem>
+                <SelectItem value="calendar_days">أيام التقويم ({(30).toLocaleString(AR_LOCALE)})</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -1516,8 +1517,8 @@ function SettingsDialog({
               <SelectContent>
                 <SelectItem value="none">بدون تقريب</SelectItem>
                 <SelectItem value="nearest_1">أقرب جنيه</SelectItem>
-                <SelectItem value="nearest_5">أقرب ٥</SelectItem>
-                <SelectItem value="nearest_10">أقرب ١٠</SelectItem>
+                <SelectItem value="nearest_5">أقرب {(5).toLocaleString(AR_LOCALE)}</SelectItem>
+                <SelectItem value="nearest_10">أقرب {(10).toLocaleString(AR_LOCALE)}</SelectItem>
               </SelectContent>
             </Select>
           </div>
