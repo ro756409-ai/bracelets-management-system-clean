@@ -4,6 +4,7 @@ import { usePermission } from "@/hooks/usePermission";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { variantLabel, type CatalogVariant } from "@/components/orders/OrderItemsEditor";
 import { createInFlightGuard } from "@/components/orders/confirmGuard";
+import { stocktakeApproveFeedback } from "./stocktakeApproveFeedback";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -190,8 +191,12 @@ function StocktakeSession({ businessId, stocktakeId, onBack }: { businessId: num
     onError: (e: any) => toast.error(e.message),
   });
   const approve = trpc.accountingV2.stocktakeApprove.useMutation({
-    onSuccess: async () => {
-      toast.success("تم الاعتماد — العجز اتسجّل خسارة مخزون والزيادة ربح مخزون، والمخزون اتحرّك.");
+    onSuccess: async (r: unknown) => {
+      // BUG-55: الرسالة حسب حالة قيد الدفتر الفعلية — فشل القيد = تحذير ثابت لحد ما يتقفل، مش نجاح كامل.
+      const fb = stocktakeApproveFeedback(r);
+      if (fb.kind === "warning")
+        toast.warning(fb.title, { description: fb.description, duration: Infinity, closeButton: true });
+      else toast.success(fb.title, fb.description ? { description: fb.description } : undefined);
       setConfirm(null);
       await Promise.all([
         utils.accountingV2.stocktakeGet.invalidate({ businessId, stocktakeId }),

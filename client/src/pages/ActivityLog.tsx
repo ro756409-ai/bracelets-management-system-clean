@@ -12,6 +12,7 @@ import { AR_LOCALE } from "@/lib/format";
 
 const ACTION_LABELS: Record<string, string> = {
   confirm_order: "تأكيد أوردر",
+  stocktake_ledger_review: "قيد جرد يحتاج مراجعة",
   cancel_order: "إلغاء أوردر",
   postpone_order: "تأجيل أوردر",
   assign_orders: "توزيع أوردرات",

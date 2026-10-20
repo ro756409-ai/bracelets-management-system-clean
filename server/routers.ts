@@ -1625,6 +1625,34 @@ async function ledgerHookSafely<T>(fn: () => Promise<T>): Promise<T | { status: 
   try { return await fn(); } catch (e) { return { status: "review", reason: e instanceof Error ? e.message : String(e) }; }
 }
 
+/**
+ * BUG-55: فشل ترحيل فروق الجرد للدفتر بعد اعتماده (المخزون اتحرّك فعلًا). مابيُسقطش الاعتماد ومابيعيدش الترحيل (مفيش retry
+ * ممكن يكرر القيد) — بيرجّع `review` بسبب آمن للعرض (safeErrorText: من غير نص SQL/بيانات) ويسجّل الفشل في اللوج وسجل النشاط
+ * عشان المالك/المحاسب يراجع القيد يدويًا.
+ */
+async function postStocktakeVarianceReported(ctx: any, businessId: number, stocktakeId: number) {
+  try {
+    return await postStocktakeVariance({ businessId, stocktakeId, actor: ledgerActorOf(ctx) });
+  } catch (e) {
+    const reason = safeErrorText(e);
+    console.warn("[stocktake-ledger] variance posting failed after approval", { businessId, stocktakeId, reason });
+    try {
+      await addActivityLog({
+        action: "stocktake_ledger_review",
+        entityType: "stocktake",
+        entityId: stocktakeId,
+        description: `اعتماد الجرد #${stocktakeId} حرّك المخزون، لكن قيد الفروق في دفتر الحسابات لم يُسجَّل — يحتاج مراجعة: ${reason}`,
+        metadata: { ledgerStatus: "review", reason },
+        ...logActor(ctx),
+        businessId,
+      });
+    } catch (logErr) {
+      console.warn("[stocktake-ledger] activity log write failed", { businessId, stocktakeId, error: safeErrorText(logErr) });
+    }
+    return { status: "review" as const, reason };
+  }
+}
+
 export const appRouter = router({
   // المرحلة 4: التسليم لمندوب الشحن بمسح QR — حجز (إن لزم) ثم خروج البضاعة وتثبيت لقطة التكلفة مرة واحدة.
   // فقط لنشاط بتقييم مخزون وشركة دفترها مفعّل؛ الصلاحية inventory.adjust (موظف المخزن) ونطاق الجلسة.
@@ -2829,7 +2857,8 @@ export const appRouter = router({
           allowSelfApproval: isOwnerRole(ctx.employee?.role),
         });
         // Ledger V3 (المرحلة 4): فروق الجرد بعد الاعتماد — فقط لشركة دفترها مفعّل؛ الفشل يُعاد للواجهة ولا يُسقط الاعتماد.
-        const ledger = await ledgerHookSafely(() => postStocktakeVariance({ businessId, stocktakeId: input.stocktakeId, actor: ledgerActorOf(ctx) }));
+        // BUG-55: الفشل يُسجَّل (لوج + سجل النشاط) ويرجع `review` بسبب آمن — بلا إعادة ترحيل.
+        const ledger = await postStocktakeVarianceReported(ctx, businessId, input.stocktakeId);
         return { ...(result as object), ledger };
       }),
 
