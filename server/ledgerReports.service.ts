@@ -4,7 +4,7 @@ import { businessDayRange } from "../shared/businessTime";
 import { LedgerError } from "../shared/ledgerV3Core";
 import { legacyFinanceWritesBetween } from "./legacyFinanceArchive";
 import { missingRequiredEntries, requirementChecks } from "./ledgerCloseRequirements.service";
-import { LEDGER_DAILY_ACCOUNTS, LEDGER_PAYROLL_ACCOUNTS, LEDGER_SUPPLIER_ACCOUNTS } from "../shared/ledgerDailyAccounts";
+import { LEDGER_DAILY_ACCOUNTS, LEDGER_PAYROLL_ACCOUNTS, LEDGER_SUPPLIER_ACCOUNTS, OTHER_INCOME_CODES } from "../shared/ledgerDailyAccounts";
 import { LEDGER_BASE_ACCOUNTS, getLedgerStatus, listLedgerAccountsScoped, listLedgerPeriods, rawRows, reconcileLedgerV3, resolveDb, scopeVisibleTx, type LedgerDb, type LedgerReadScope } from "./ledgerV3.service";
 
 /**
@@ -35,7 +35,10 @@ type Line = { code: string; name: string; amount: string };
 export type IncomeStatement = {
   from: string; to: string;
   revenue: { total: string; lines: Line[] }; cogs: string; grossProfit: string;
-  expenses: { total: string; lines: Line[] }; netProfit: string;
+  expenses: { total: string; lines: Line[] };
+  /** BUG-89A: إيرادات أخرى (أرباح فروقات الجرد) — خارج إيراد المبيعات ومجمل الربح، داخل صافي الربح. */
+  otherIncome: { total: string; lines: Line[] };
+  netProfit: string;
 };
 
 function statementFrom(rows: any[], from: string, to: string): IncomeStatement {
@@ -47,11 +50,14 @@ function statementFrom(rows: any[], from: string, to: string): IncomeStatement {
     acc.set(r.code, cur);
   }
   const all = [...acc.values()].filter(x => x.net !== 0n).sort((a, b) => a.code.localeCompare(b.code));
-  const sum = (k: string) => all.filter(x => x.kind === k).reduce((s, x) => s + x.net, 0n);
-  const revenue = sum("revenue"), cogs = sum("cogs"), expenses = sum("expense");
-  const lines = (k: string) => all.filter(x => x.kind === k).map(x => ({ code: x.code, name: x.name, amount: fmt(x.net) }));
+  const other = new Set(OTHER_INCOME_CODES);
+  const group = (k: string) => (x: { kind: string; code: string }) => k === "other" ? x.kind === "revenue" && other.has(x.code) : x.kind === k && !(k === "revenue" && other.has(x.code));
+  const sum = (k: string) => all.filter(group(k)).reduce((s, x) => s + x.net, 0n);
+  const revenue = sum("revenue"), cogs = sum("cogs"), expenses = sum("expense"), otherIncome = sum("other");
+  const lines = (k: string) => all.filter(group(k)).map(x => ({ code: x.code, name: x.name, amount: fmt(x.net) }));
   return { from, to, revenue: { total: fmt(revenue), lines: lines("revenue") }, cogs: fmt(cogs), grossProfit: fmt(revenue - cogs),
-    expenses: { total: fmt(expenses), lines: lines("expense") }, netProfit: fmt(revenue - cogs - expenses) };
+    expenses: { total: fmt(expenses), lines: lines("expense") }, otherIncome: { total: fmt(otherIncome), lines: lines("other") },
+    netProfit: fmt(revenue - cogs - expenses + otherIncome) };
 }
 
 /** دفتر غير مفعّل = «غير متاح» صريح (PRECONDITION) — لا تقرير بأصفار عن بيانات غير موجودة. */

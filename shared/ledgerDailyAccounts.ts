@@ -27,6 +27,9 @@ export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "REFUND_PAYABLE", name: "مبالغ مستحقة للعملاء (مرتجعات)", kind: "customer_advance", normalSide: "credit", group: "liability", systemPosted: true },
   { code: "REV_RETURN_RETAINED", name: "مبالغ محتجزة من مرتجعات (بسبب معلن)", kind: "revenue", normalSide: "credit", group: "revenue", systemPosted: true },
   { code: "INV_VARIANCE", name: "فروقات الجرد", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
+  // BUG-89A: زيادة الجرد ربح مستقل (إيرادات أخرى) — لا تخصم من «فروقات الجرد» ولا تشترط رصيدًا سابقًا فيه. الاسم والقيود
+  // التاريخية لـ«فروقات الجرد» كما هي (يبقى للعجز فقط من الآن).
+  { code: "INV_GAIN", name: "أرباح فروقات الجرد", kind: "revenue", normalSide: "credit", group: "revenue", systemPosted: true },
   // المرحلة 3: رسوم شركة الشحن الفعلية من كشف التسوية (لا تقدير)، و«مستحقات بوسطة قيد الصرف» بين التسوية والتحويل الفعلي
   // (حساب تسوية مؤقت يُسمح بسالبه حين تزيد رسوم المرتجعات في الكشف عن الصافي)
   { code: "EXP_CARRIER_FEES", name: "رسوم شركة الشحن", kind: "expense", normalSide: "debit", group: "expense", systemPosted: true },
@@ -36,6 +39,9 @@ export const LEDGER_DAILY_ACCOUNTS: readonly DailyAccountSpec[] = [
   { code: "INV_PACKAGING", name: "مخزون مواد التغليف", kind: "inventory", normalSide: "debit", group: "stock" },
   { code: "COGS_PACKAGING", name: "تكلفة تغليف الأوردرات", kind: "cogs", normalSide: "debit", group: "stock", systemPosted: true },
 ] as const;
+
+/** حسابات إيراد تُعرض في «إيرادات أخرى» بقائمة الدخل — خارج إيراد المبيعات ومجمل الربح، وداخل صافي الربح. */
+export const OTHER_INCOME_CODES: readonly string[] = ["INV_GAIN"];
 
 /**
  * المرحلة 5 — حسابات المرتبات والسلف، تُنشأ منفصلة بعد 0046 (نوع payroll_payable). كلها آلية: المرتبات والعمولات من

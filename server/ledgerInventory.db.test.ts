@@ -121,14 +121,21 @@ describe.runIf(CAN)("📦 المرحلة 4 — المخزون وتكلفة ال�
     expect((await q("SELECT COUNT(*) n FROM inventory_reservations WHERE orderId = ?", [bOrder]))[0].n).toBe(0);
   });
 
-  it("فروق جرد لاحق: صافي العجز على «فروقات الجرد» مرة واحدة؛ جرد افتتاحي بلا فروق", async () => {
+  it("فروق جرد لاحق (BUG-89A): القيمة من حركة V2 الفعلية للاعتماد لا من أسطر الجرد، مرة واحدة؛ جرد افتتاحي بلا فروق", async () => {
     const st = insId(await q("INSERT INTO stocktakes (businessId, warehouseId, status, createdBy, createdByName, approvedAt) VALUES (?, ?, 'approved', ?, 'مالك', ?)", [A.businessId, wh, e.ownerA, new Date("2026-10-12T09:00:00Z")]));
     await q("INSERT INTO stocktake_lines (stocktakeId, businessId, warehouseId, productId, inventoryKey, systemQuantity, countedQuantity, differenceQuantity, unitCostSnapshot, differenceValue) VALUES (?, ?, ?, ?, ?, 7, 6, -1, '40.0000', '-40.0000'), (?, ?, ?, ?, ?, 0, 0, 0, '10.0000', '10.0000')",
       [st, A.businessId, wh, product, makeInventoryKey(product), st, A.businessId, wh, product, `${makeInventoryKey(product)}-x`]);
+    // حركة V2 الفعلية لاعتماد هذا الجرد (كما يكتبها approveStocktake): السطر الأول فقط له فرق؛ سطر الفرق صفر بلا حركة
+    const event = 900_000 + st;
+    await q("UPDATE stocktakes SET businessEventId = ? WHERE id = ?", [event, st]);
+    const [firstLine] = await q("SELECT id FROM stocktake_lines WHERE stocktakeId = ? AND differenceQuantity <> 0", [st]);
+    const [bal] = await q("SELECT id FROM inventory_balances WHERE warehouseId = ? AND inventoryKey = ?", [wh, makeInventoryKey(product)]);
+    await q(`INSERT INTO inventory_transactions (businessId, businessEventId, inventoryBalanceId, transactionType, quantityDelta, unitCost, valueDelta, quantityAfter, valueAfter, averageCostAfter, sourceType, sourceId, occurredAt, createdBy, createdByName)
+      VALUES (?, ?, ?, 'stocktake_loss', -1, '40.0000', '-40.0000', 6, '240.0000', '40.0000', 'stocktake_line', ?, ?, ?, 'مالك')`, [A.businessId, event, bal.id, firstLine.id, new Date("2026-10-12T09:00:00Z"), e.ownerA]);
     const r1 = await postStocktakeVariance({ businessId: A.businessId, stocktakeId: st, actor: { type: "employee", employeeId: e.ownerA } });
     const r2 = await postStocktakeVariance({ businessId: A.businessId, stocktakeId: st, actor: { type: "employee", employeeId: e.ownerA } });
     expect([r1.status, r2.status]).toEqual(["posted", "replay"]);
-    expect(await lines(`stocktake:${st}:variance`)).toEqual([["INV_VARIANCE", "debit", "30.0000"], ["INV_GOODS", "credit", "30.0000"]]);
+    expect(await lines(`stocktake:${st}:variance`)).toEqual([["INV_VARIANCE", "debit", "40.0000"], ["INV_GOODS", "credit", "40.0000"]]);
     const opening = (await q("SELECT sourceReference s FROM ledger_transactions WHERE idempotencyKey = ?", [`inventory-opening:warehouse:${wh}`]))[0].s;
     expect((await postStocktakeVariance({ businessId: A.businessId, stocktakeId: Number(opening), actor: { type: "system" } })).status).toBe("skipped");
   });

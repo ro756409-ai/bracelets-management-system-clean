@@ -1,6 +1,6 @@
 import { ClientSafeError } from "./logSafety";
 import { and, asc, eq, sql } from "drizzle-orm";
-import { businesses, inventoryBalances, inventoryReservations, orderItems, orders, returnInspectionItems, returnInspections, stocktakeLines, stocktakes, warehouses } from "../drizzle/schema";
+import { businesses, inventoryBalances, inventoryReservations, inventoryTransactions, orderItems, orders, returnInspectionItems, returnInspections, stocktakeLines, stocktakes, warehouses } from "../drizzle/schema";
 import { ledgerAccounts, ledgerTransactions } from "../drizzle/ledgerV3.schema";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import { businessDateKey } from "../shared/businessTime";
@@ -243,7 +243,28 @@ export async function postInventoryOpeningFromStocktake(input: { tenantId: numbe
   }
 }
 
-/** فروق جرد معتمد بعد Go-live → V3 (ربح/عجز على «فروقات الجرد»)؛ جرد استُخدم كافتتاحي = لا فروق. */
+/**
+ * BUG-89A — قيمة فروق الجرد من حركات V2 الفعلية المثبتة لنفس اعتماد الجرد (inventory_transactions بنفس حدث الاعتماد،
+ * سطر لكل بند): العجز = |valueDelta| لحركات stocktake_loss (بالمتوسط وقت الاعتماد)، والزيادة = valueDelta لحركات
+ * stocktake_gain (بتكلفة اللقطة). أي حركة غير متسقة (نوع/إشارة) = رفض بلا قيمة مخمّنة.
+ */
+export function stocktakeVarianceFromMovements(rows: { transactionType: string; valueDelta: string | number; quantityDelta: number }[]) {
+  let gain = 0n, loss = 0n;
+  for (const r of rows) {
+    const v = toMinorUnits(String(r.valueDelta));
+    if (r.transactionType === "stocktake_gain" && r.quantityDelta > 0 && v >= 0n) gain += v;
+    else if (r.transactionType === "stocktake_loss" && r.quantityDelta < 0 && v <= 0n) loss += -v;
+    else throw new InventoryLedgerError(`حركة جرد غير متسقة (${r.transactionType}) — لا قيد بقيمة مخمّنة`);
+  }
+  return { gain, loss };
+}
+
+/**
+ * فروق جرد معتمد بعد Go-live → V3 **إجماليًا** (BUG-89A): العجز خسارة على «فروقات الجرد» والزيادة ربح على «أرباح فروقات
+ * الجرد» (إيرادات أخرى) — في قيد متوازن واحد بالمفتاح الدائم `stocktake:<id>:variance`، والمخزون يتحرك بصافي تغيّر قيمة V2
+ * نفسه. الزيادة لا تشترط رصيدًا سابقًا في «فروقات الجرد». جرد استُخدم كافتتاحي = لا فروق.
+ * لا أثر رجعي: قيد موجود بالمفتاح (حتى بالصيغة الصافية القديمة) = replay كما هو، بلا إعادة حساب ولا قيد ثانٍ.
+ */
 export async function postStocktakeVariance(input: { businessId: number; stocktakeId: number; actor: LedgerActor }) {
   const d = await resolveDb();
   const ctx = await activeContext(d, input.businessId);
@@ -254,17 +275,27 @@ export async function postStocktakeVariance(input: { businessId: number; stockta
   if (opening) return { status: "skipped" as const, reason: "جرد افتتاحي — بلا فروق" };
   const date = businessDateKey(st.approvedAt, ctx.timezone);
   if (date < ctx.ledgerGoLive) return { status: "skipped" as const, reason: "قبل بداية الدفتر" };
-  const lines = await d.select({ differenceValue: stocktakeLines.differenceValue }).from(stocktakeLines).where(eq(stocktakeLines.stocktakeId, st.id));
-  const net = lines.reduce((s, l) => s + toMinorUnits(String(l.differenceValue ?? "0")), 0n);
-  if (net === 0n) return { status: "skipped" as const, reason: "لا فروق" };
-  const acc = await accountIds(d, ctx.tenantId, ["INV_GOODS", "INV_VARIANCE"]);
-  const amount = fromMinorUnits(net < 0n ? -net : net);
-  const entries = net > 0n
-    ? [{ accountId: acc.INV_GOODS, side: "debit" as const, amount, businessId: input.businessId }, { accountId: acc.INV_VARIANCE, side: "credit" as const, amount, businessId: input.businessId }]
-    : [{ accountId: acc.INV_VARIANCE, side: "debit" as const, amount, businessId: input.businessId }, { accountId: acc.INV_GOODS, side: "credit" as const, amount, businessId: input.businessId }];
-  const r = await postLedgerTransaction({ tenantId: ctx.tenantId, sourceBusinessId: input.businessId, kind: "adjustment", idempotencyKey: `stocktake:${st.id}:variance`, effectiveDate: date, currency: "EGP", actor: input.actor,
-    description: `فروق الجرد #${st.id} (${net > 0n ? "زيادة" : "عجز"})`, sourceType: "stocktake", sourceReference: String(st.id), entries } as any);
-  return { status: r.replay ? "replay" as const : "posted" as const, transactionId: r.transactionId, amount, direction: net > 0n ? "gain" : "loss" };
+  const key = `stocktake:${st.id}:variance`;
+  const [existing] = await d.select({ id: ledgerTransactions.id }).from(ledgerTransactions).where(and(eq(ledgerTransactions.tenantId, ctx.tenantId), eq(ledgerTransactions.idempotencyKey, key))).limit(1);
+  if (existing) return { status: "replay" as const, transactionId: existing.id };
+  if (st.businessEventId == null) throw new InventoryLedgerError("حركات مخزون الجرد غير مثبتة — لا قيد بقيمة مخمّنة");
+  const moves = await d.select({ transactionType: inventoryTransactions.transactionType, valueDelta: inventoryTransactions.valueDelta, quantityDelta: inventoryTransactions.quantityDelta, sourceId: inventoryTransactions.sourceId })
+    .from(inventoryTransactions).where(and(eq(inventoryTransactions.businessId, input.businessId), eq(inventoryTransactions.businessEventId, st.businessEventId), eq(inventoryTransactions.sourceType, "stocktake_line")));
+  const lineIds = new Set((await d.select({ id: stocktakeLines.id }).from(stocktakeLines).where(eq(stocktakeLines.stocktakeId, st.id))).map(r => r.id));
+  if (moves.some(m => m.sourceId == null || !lineIds.has(m.sourceId))) throw new InventoryLedgerError("حركة مخزون لا تخص هذا الجرد — لا قيد بقيمة مخمّنة");
+  const { gain, loss } = stocktakeVarianceFromMovements(moves);
+  if (gain === 0n && loss === 0n) return { status: "skipped" as const, reason: "لا فروق" };
+  const acc = await accountIds(d, ctx.tenantId, ["INV_GOODS", ...(loss > 0n ? ["INV_VARIANCE"] : []), ...(gain > 0n ? ["INV_GAIN"] : [])]);
+  const net = gain - loss;
+  const entries = [
+    ...(loss > 0n ? [{ accountId: acc.INV_VARIANCE, side: "debit" as const, amount: fromMinorUnits(loss), businessId: input.businessId }] : []),
+    ...(gain > 0n ? [{ accountId: acc.INV_GAIN, side: "credit" as const, amount: fromMinorUnits(gain), businessId: input.businessId }] : []),
+    ...(net !== 0n ? [{ accountId: acc.INV_GOODS, side: net > 0n ? "debit" as const : "credit" as const, amount: fromMinorUnits(net > 0n ? net : -net), businessId: input.businessId }] : []),
+  ];
+  const r = await postLedgerTransaction({ tenantId: ctx.tenantId, sourceBusinessId: input.businessId, kind: "adjustment", idempotencyKey: key, effectiveDate: date, currency: "EGP", actor: input.actor,
+    description: `فروق الجرد #${st.id} (عجز ${fromMinorUnits(loss)} · زيادة ${fromMinorUnits(gain)})`, sourceType: "stocktake", sourceReference: String(st.id), entries } as any);
+  return { status: r.replay ? "replay" as const : "posted" as const, transactionId: r.transactionId, gain: fromMinorUnits(gain), loss: fromMinorUnits(loss),
+    amount: fromMinorUnits(net > 0n ? net : -net), direction: net > 0n ? "gain" : net < 0n ? "loss" : "balanced" };
 }
 
 /**

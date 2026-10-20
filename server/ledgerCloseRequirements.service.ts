@@ -9,7 +9,8 @@ import { rawRows, type LedgerDb } from "./ledgerV3.service";
  * BUG-88 — قيود مطلوبة فعلًا لشهر ولم تُسجَّل، **من البيانات المصدرية** (لا من أعلام المراجعة التي قد تُمسح ولا من سجل النشاط).
  * كل قاعدة تطابق شروط دالة الترحيل نفسها (الحالة، تاريخ بداية الدفتر، تفعيل تقييم المخزون للنشاط، القيمة) — فالغياب يُحسب مشكلة
  * فقط حين كانت الدالة ستُرحّل قيدًا:
- *  • فرق جرد (postStocktakeVariance): نشاط بتقييم مخزون، جرد معتمد في الشهر بعد Go-live، ليس جردًا افتتاحيًا، صافي فرق ≠ 0.
+ *  • فرق جرد (postStocktakeVariance): نشاط بتقييم مخزون، جرد معتمد في الشهر بعد Go-live، ليس جردًا افتتاحيًا، ولحركات V2 الفعلية
+ *    للاعتماد قيمة غير صفرية (زيادة أو عجز — BUG-89A إجمالي)، أو فروق بلا حركات مثبتة.
  *  • فحص مرتجع (postReturnInspection): نفس الشرطين؛ بعد التسليم = سليم + تالف > 0، قبل التسليم = تالف/فاقد > 0.
  *  • تكلفة أوردر (postOrderDelivered): إيراد تسليم بتاريخ الشهر بلا قيد تكلفة، وتكلفته من اللقطة ليست صفرًا (غير المثبتة = ناقصة).
  *  • مرتجع بعد التسليم (postOrderReturned): حدث إرجاع 46/60 في الشهر لأوردر له إيراد تسليم ⇒ قيد المرتجع، وقيد نقل التكلفة إن
@@ -51,12 +52,17 @@ export async function missingRequiredEntries(d: LedgerDb, input: { tenantId: num
   const w = periodWindow(period);
 
   // 1) فروق الجرد
-  const stRows = rawRows(await d.execute(sql`SELECT s.id, s.approvedAt, b.timezone,
-      (SELECT COALESCE(SUM(l.differenceValue), 0) FROM stocktake_lines l WHERE l.stocktakeId = s.id) AS net
+  // BUG-89A: القيد مطلوب لو لحركات V2 الفعلية للاعتماد قيمة غير صفرية (زيادة أو عجز — إجمالي لا صافي)؛ وجرد بفروق بلا حركات
+  // مثبتة لا يمكن ترحيله بقيمة صحيحة ⇒ يُعدّ ناقصًا (لا تخمين).
+  const stRows = rawRows(await d.execute(sql`SELECT s.id, s.approvedAt, s.businessEventId, b.timezone,
+      (SELECT COUNT(*) FROM inventory_transactions it WHERE it.businessId = s.businessId AND it.businessEventId = s.businessEventId
+        AND it.sourceType = 'stocktake_line' AND it.valueDelta <> 0) AS valuedMoves,
+      (SELECT COUNT(*) FROM stocktake_lines l WHERE l.stocktakeId = s.id AND l.differenceQuantity <> 0) AS movingLines
     FROM stocktakes s JOIN businesses b ON b.id = s.businessId
     WHERE b.tenantId = ${tenantId} AND b.accountingGoLiveAt IS NOT NULL AND s.status = 'approved' AND s.approvedAt IS NOT NULL
       AND s.approvedAt >= ${w.from} AND s.approvedAt < ${w.to}`))
-    .filter((r: any) => inPeriod(r.approvedAt, r.timezone, period, goLiveDate) && toMinorUnits(String(r.net ?? "0")) !== 0n);
+    .filter((r: any) => inPeriod(r.approvedAt, r.timezone, period, goLiveDate)
+      && (Number(r.valuedMoves) > 0 || (r.businessEventId == null && Number(r.movingLines) > 0)));
   let stocktakes: number[] = [];
   if (stRows.length) {
     const ids = stRows.map((r: any) => Number(r.id));

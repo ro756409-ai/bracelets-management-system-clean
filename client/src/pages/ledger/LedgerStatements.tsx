@@ -51,6 +51,8 @@ export default function LedgerStatements() {
                 <li className="flex justify-between gap-2 py-1.5 font-medium"><span>تكلفة المبيعات</span><span className="tabular-nums">({money(s.cogs)})</span></li>
                 <li className="flex justify-between gap-2 py-1.5 font-semibold"><span>مجمل الربح</span><span className="tabular-nums">{money(s.grossProfit)}</span></li>
                 {s.expenses.lines.map(l => <li key={l.code} className="flex justify-between gap-2 py-1.5" data-testid={`statements-expense-${l.code}`}><span>{l.name}</span><span className="tabular-nums">({money(l.amount)})</span></li>)}
+                {(s.otherIncome?.lines ?? []).length > 0 && <li className="flex justify-between gap-2 py-1.5 font-semibold" data-testid="statements-other-income"><span>إيرادات أخرى</span><span className="tabular-nums">{money(s.otherIncome.total)}</span></li>}
+                {(s.otherIncome?.lines ?? []).map(l => <li key={l.code} className="flex justify-between gap-2 py-1.5" data-testid={`statements-other-${l.code}`}><span>{l.name}</span><span className="tabular-nums">{money(l.amount)}</span></li>)}
                 <li className="flex justify-between gap-2 py-1.5 font-bold"><span>صافي الربح</span><span className="tabular-nums">{money(s.netProfit)}</span></li>
               </ul>
             </SectionCard>

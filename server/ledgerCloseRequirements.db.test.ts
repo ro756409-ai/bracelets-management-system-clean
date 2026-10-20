@@ -13,6 +13,7 @@ import { ensureDailyAccounts } from "./ledgerDaily.service";
 import { postOrderDelivered, postOrderReturned } from "./ledgerOrders.service";
 import { postInventoryOpeningFromStocktake, postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
 import { makeInventoryKey } from "./inventoryV2.service";
+import { approveStocktake, createStocktake, getStocktake, submitStocktake, updateStocktakeLine } from "./stocktake.service";
 import { createTempSchema, type TempSchema } from "./testTempSchema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 import { splitMigrationStatements } from "../shared/ledgerV3Spec";
@@ -89,6 +90,8 @@ describe.runIf(CAN)("🔒 BUG-88 — لا إقفال لشهر فيه قيد مط
     // مخزون افتتاحي موثّق من جرد يوم Go-live (10 × 40 = 400) — الجرد نفسه لا يُعدّ فرقًا ناقصًا
     const opening = await stocktake(A.businessId, "2026-10-01T09:00:00Z", [{ counted: 10, system: 10, cost: "40.0000" }]);
     await postInventoryOpeningFromStocktake({ tenantId: A.tenantId, stocktakeId: opening, actor: { type: "employee", employeeId: e.ownerA } });
+    // رصيد V2 للمنتج (10 × 40) — الجرد الحقيقي يُعتمد عليه فتُكتب حركاته الفعلية (BUG-89A: القيمة من V2)
+    await q("INSERT INTO inventory_balances (businessId, warehouseId, productId, inventoryKey, onHandQuantity, inventoryValue, movingAverageCost) VALUES (?, ?, ?, ?, 10, '400.0000', '40.0000')", [A.businessId, wh, A.productId, makeInventoryKey(A.productId)]);
   }, 300_000);
   afterAll(async () => { __setDbForTests(null); await tmp?.drop(); }, 120_000);
 
@@ -99,7 +102,12 @@ describe.runIf(CAN)("🔒 BUG-88 — لا إقفال لشهر فيه قيد مط
   });
 
   it("فرق جرد بلا قيد يمنع الإقفال من الـAPI؛ والاستثناءات الصحيحة لا تمنع؛ وبعد الترحيل يزول", async () => {
-    const missing = await stocktake(A.businessId, "2026-10-10T09:00:00Z", [{ counted: 9, system: 10, cost: "40.0000" }]);
+    // جرد حقيقي بعجز 1 (اعتماد فعلي يكتب حركة V2) — بلا قيد في الدفتر
+    const { stocktakeId: missing } = await createStocktake({ businessId: A.businessId, warehouseId: wh, actor: { id: e.amA, name: "عادّ" } } as any);
+    const line = (await getStocktake({ businessId: A.businessId, stocktakeId: missing }))!.lines.find((l: any) => l.productId === A.productId)!;
+    await updateStocktakeLine({ businessId: A.businessId, stocktakeId: missing, lineId: line.id, countedQuantity: 9, actor: { id: e.amA, name: "عادّ" } } as any);
+    await submitStocktake({ businessId: A.businessId, stocktakeId: missing });
+    await approveStocktake({ businessId: A.businessId, stocktakeId: missing, actor: { id: e.ownerA, name: "مالك" } });
     // استثناءات: بلا فروق، قبل Go-live، نشاط بلا تقييم مخزون، شركة أخرى
     await stocktake(A.businessId, "2026-10-11T09:00:00Z", [{ counted: 5, system: 5, cost: "40.0000" }]);
     await stocktake(A.businessId, "2026-09-25T09:00:00Z", [{ counted: 1, system: 3, cost: "40.0000" }]);
