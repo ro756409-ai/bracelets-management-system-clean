@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { employeeLogout } from "@/lib/employeeScope";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -68,8 +69,8 @@ export default function TodayShipments() {
     window.print();
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("employee_session");
+  const handleLogout = async () => {
+    await employeeLogout();
     setLocation("/employee-login");
   };
 
