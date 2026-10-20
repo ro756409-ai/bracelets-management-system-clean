@@ -48,7 +48,9 @@ describe("🔌 Queries/Mutations قبل ⊆ بعد، والإضافات معلن
   it("قواعد الإدخال كما في صفحة الأوردرات: سبب الإلغاء إلزامي، تاريخ التأجيل إلزامي، محاولات «لم يرد» اختيارية 1–20", () => {
     expect(dialogs).toContain("disabled={!reason || pending}");
     expect(dialogs).toContain("disabled={!date || pending}");
-    expect(dialogs).toContain('useOperationalOptions("cancellation_reason")');
+    // BUG-28: الأسباب من إعدادات النشاط (`cancellation_reason`) مع قائمة افتراضية لما تكون فاضية.
+    expect(dialogs).toContain("useCancelReasonOptions().options");
+    expect(readFileSync(path.resolve(__dirname, "../hooks/useCancelReasonOptions.ts"), "utf8")).toContain('useOperationalOptions("cancellation_reason")');
     expect(dialogs).toContain("callAttempts: attempts ? Number(attempts) : undefined");
     expect(dialogs).toContain("min={1} max={20}");
     expect(page).toContain("cancelMutation.mutate({ orderId, cancelReason: v.cancelReason, notes: v.notes, operationId: operationIdFor(`cancel:${orderId}`) }");

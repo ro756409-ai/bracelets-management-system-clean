@@ -25,6 +25,7 @@ import {
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { toast } from "sonner";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useCancelReasonOptions } from "@/hooks/useCancelReasonOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import {
   LayoutDashboard, ShoppingCart, Package, BarChart3, Users,
@@ -482,7 +483,7 @@ function ManagerOrdersTab() {
   const canAssign = can("orders.update") && can("employees.view");
   const { values: GOVERNORATES } = useGovernorateOptions();
   const statusOptions = useOperationalOptions("order_status").options;
-  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
+  const cancelReasonOptions = useCancelReasonOptions().options;
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [govFilter, setGovFilter] = useState<string>("all");

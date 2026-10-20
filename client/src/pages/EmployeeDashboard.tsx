@@ -6,6 +6,7 @@ import { MessagesEntryButton } from "@/components/messaging/MessagesEntryButton"
 import { PortalHeaderActions } from "@/components/shell/PortalHeaderActions";
 import { operationIdFor } from "@/lib/operationId";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { withDefaultCancelReasons } from "@/hooks/useCancelReasonOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { usePermission } from "@/hooks/usePermission";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
@@ -83,21 +84,6 @@ type Order = {
   reviewReason?: string | null;
 };
 
-/**
- * Standard cancellation reasons, used when the business has not configured its own.
- * Kept short and mutually exclusive — a reason list people scroll is a reason list people
- * stop reading, and the whole point is that the number in the cancelled column means something.
- */
-const DEFAULT_CANCEL_REASONS = [
-  "العميل غيّر رأيه",
-  "السعر غالي",
-  "طلب بالخطأ",
-  "مش متاح للتوصيل في منطقته",
-  "المنتج مش متوفر",
-  "أوردر مكرر",
-  "رقم غلط أو مش موجود",
-  "العميل مش بيرد",
-] as const;
 
 /** Sentinel for the free-text option. Not a stored value — the typed text is what's saved. */
 const OTHER_CANCEL_REASON = "__other__";
@@ -716,12 +702,7 @@ export default function EmployeeDashboard() {
   // Reasons the business configured, falling back to the standard set. Same failure the
   // governorate dropdown had: the configuration table was empty, so the list rendered with
   // no options and — because a reason is mandatory — cancelling was impossible.
-  const cancelReasons = useMemo(() => {
-    const configured = cancelReasonOptions.filter(o => o.value && o.label);
-    return configured.length > 0
-      ? configured
-      : DEFAULT_CANCEL_REASONS.map(r => ({ value: r, label: r }));
-  }, [cancelReasonOptions]);
+  const cancelReasons = useMemo(() => withDefaultCancelReasons(cancelReasonOptions), [cancelReasonOptions]);
 
   const cancelReasonIsOther = cancelReason === OTHER_CANCEL_REASON;
   const cancelReasonResolved = cancelReasonIsOther

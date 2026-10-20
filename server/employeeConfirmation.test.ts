@@ -320,8 +320,11 @@ describe("واجهة الشاشة", () => {
   const page = fs.readFileSync("client/src/pages/EmployeeDashboard.tsx", "utf-8");
 
   it("🔑 أسباب إلغاء جاهزة موجودة في الكود — القائمة كانت بتفضى لو الإعدادات فاضية", () => {
-    expect(page).toContain("const DEFAULT_CANCEL_REASONS");
-    expect(page).toContain("configured.length > 0");
+    // BUG-28: القائمة الافتراضية اتنقلت لمصدر مشترك لكل نوافذ الإلغاء — نفس السلوك.
+    const hook = fs.readFileSync("client/src/hooks/useCancelReasonOptions.ts", "utf-8");
+    expect(hook).toContain("export const DEFAULT_CANCEL_REASONS");
+    expect(hook).toContain("usable.length > 0 ? usable : DEFAULT_CANCEL_REASONS");
+    expect(page).toContain("withDefaultCancelReasons(cancelReasonOptions)");
   });
 
   it("🔑 «سبب آخر» ليه خانة كتابة إجبارية", () => {

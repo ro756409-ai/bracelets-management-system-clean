@@ -2,7 +2,7 @@ import { useState, useMemo, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import { operationIdFor } from "@/lib/operationId";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useCancelReasonOptions } from "@/hooks/useCancelReasonOptions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,7 +36,7 @@ const TOUCH = "min-h-11 md:min-h-9";
  * الحالة المشتركة، أزرار 44px، حارس ضغط مكرر على التأكيد، وحالات Loading/Empty/Offline.
  */
 export default function AgentWorkspace() {
-  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
+  const cancelReasonOptions = useCancelReasonOptions().options;
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const online = useOnlineStatus();

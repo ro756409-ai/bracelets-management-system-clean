@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useCancelReasonOptions } from "@/hooks/useCancelReasonOptions";
 
 /**
  * نوافذ إجراءات الأوردر لصفحة التفاصيل (المرحلة 7B) — **نفس قواعد صفحة الأوردرات**:
@@ -15,7 +15,7 @@ import { useOperationalOptions } from "@/hooks/useOperationalOptions";
  * عرض فقط: الصفحة تمرّر `pending` وتستقبل القيم وتستدعي الـmutation؛ الأزرار تتعطّل أثناء الطلب.
  */
 export function CancelOrderDialog({ open, onOpenChange, pending, onConfirm }: { open: boolean; onOpenChange: (o: boolean) => void; pending: boolean; onConfirm: (v: { cancelReason: string; notes?: string }) => void }) {
-  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
+  const cancelReasonOptions = useCancelReasonOptions().options;
   const [reason, setReason] = useState("");
   const [notes, setNotes] = useState("");
   return (
