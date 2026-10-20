@@ -74,7 +74,8 @@ describe("👥 القائمة والإجراءات", () => {
     const save = screen.getByTestId("emp-save");
     fireEvent.click(save); fireEvent.click(save);
     expect(st.mut.create).toHaveBeenCalledTimes(1);
-    expect(st.mut.create.mock.calls[0][0]).toEqual({ name: "أحمد", phone: "", email: "", role: "agent", businessId: 1 });
+    // BUG-41: خانة البريد الفارغة لا تُرسل "" (كانت ترفضها zod فيستحيل الحفظ).
+    expect(st.mut.create.mock.calls[0][0]).toEqual({ name: "أحمد", phone: "", email: undefined, role: "agent", businessId: 1 });
   });
   it("تعديل يرسل update بالمعرّف؛ تعطيل يرسل update بـisActive المعكوسة", () => {
     setup();

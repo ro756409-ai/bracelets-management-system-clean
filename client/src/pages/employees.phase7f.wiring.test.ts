@@ -48,7 +48,7 @@ describe("👥 الأدوار والتحقق كما هي", () => {
     for (const s of [
       'if (!form.name.trim()) { toast.error("اسم الموظف مطلوب"); return; }',
       'toast.error("اختر النشاط اللي هيتبعله الموظف");',
-      "name: form.name, phone: form.phone, email: form.email, role: form.role,",
+      "name: form.name, phone: form.phone, email: form.email.trim() || undefined, role: form.role,", // BUG-41
       "businessId: resolvedBusinessId ?? undefined,",
       'if (!credUsername.trim()) { toast.error("اسم المستخدم مطلوب"); return; }',
       'if (credPassword.length < 6) { toast.error("كلمة المرور يجب أن تكون 6 أحرف على الأقل"); return; }',

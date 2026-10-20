@@ -1,4 +1,5 @@
 import { safeErrorText } from "./logSafety";
+import { optionalEmployeeEmail } from "./employeeInput";
 import { omitCostFields, carriesCostValue } from "./costVisibility";
 import { isLocalDeployEnv } from "./deployEnv";
 import { z } from "zod";
@@ -3373,7 +3374,7 @@ export const appRouter = router({
         z.object({
           name: z.string().min(2),
           phone: z.string().optional(),
-          email: z.string().email().optional(),
+          email: optionalEmployeeEmail,
           role: z.enum(EMPLOYEE_ROLE_VALUES).default("agent"),
           businessId: z.number().optional(),
         })
@@ -3399,7 +3400,7 @@ export const appRouter = router({
           id: z.number(),
           name: z.string().min(2).optional(),
           phone: z.string().optional(),
-          email: z.string().email().optional(),
+          email: optionalEmployeeEmail,
           role: z.enum(EMPLOYEE_ROLE_VALUES).optional(),
           isActive: z.boolean().optional(),
           businessId: z.number().optional(),
@@ -6297,7 +6298,7 @@ export const appRouter = router({
         z.object({
           name: z.string().min(2),
           phone: z.string().optional(),
-          email: z.string().email().optional(),
+          email: optionalEmployeeEmail,
           role: z
             .enum([
               "agent",
@@ -6334,7 +6335,7 @@ export const appRouter = router({
           id: z.number(),
           name: z.string().min(2).optional(),
           phone: z.string().optional(),
-          email: z.string().email().optional(),
+          email: optionalEmployeeEmail,
           role: z
             .enum([
               "agent",
