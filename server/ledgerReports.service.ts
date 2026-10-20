@@ -3,6 +3,7 @@ import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
 import { businessDayRange } from "../shared/businessTime";
 import { LedgerError } from "../shared/ledgerV3Core";
 import { legacyFinanceWritesBetween } from "./legacyFinanceArchive";
+import { missingRequiredEntries, requirementChecks } from "./ledgerCloseRequirements.service";
 import { LEDGER_DAILY_ACCOUNTS, LEDGER_PAYROLL_ACCOUNTS, LEDGER_SUPPLIER_ACCOUNTS } from "../shared/ledgerDailyAccounts";
 import { LEDGER_BASE_ACCOUNTS, getLedgerStatus, listLedgerAccountsScoped, listLedgerPeriods, rawRows, reconcileLedgerV3, resolveDb, scopeVisibleTx, type LedgerDb, type LedgerReadScope } from "./ledgerV3.service";
 
@@ -179,7 +180,10 @@ export async function positionSummary(input: { tenantId: number; scope: LedgerRe
   return { cash: pick(CASH), receivables: pick(OURS), payables: pick(THEIRS), inventory: pick(new Set(["inventory"])) };
 }
 
-/** قائمة فحص الإقفال لشهر (قراءة فقط) — لا تُقفل شيئًا؛ القفل يبقى بملاحظة مراجعة إلزامية. */
+/**
+ * قائمة فحص الإقفال لشهر (قراءة فقط) — لا تُقفل شيئًا؛ القفل يبقى بملاحظة مراجعة إلزامية. closeLedgerPeriod يشغّلها داخل
+ * transaction القفل بعد قفل صف الفترة FOR UPDATE ويرفض لو أي بند ok=false (BUG-88: لا تجاوز، ولا إقفال بقيد مطلوب ناقص).
+ */
 export async function closeChecklist(input: { tenantId: number; period: string }, db?: LedgerDb) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period)) throw new LedgerError("periodNotFound", input.period);
   const d = await resolveDb(db);
@@ -214,10 +218,13 @@ export async function closeChecklist(input: { tenantId: number; period: string }
       AND kind IN ('supplier_payable','supplier_advance','payroll_payable','employee_receivable','customer_advance','inventory','cogs')`)).map((r: any) => String(r.code)).filter(c => !systemCodes.has(c));
   let reconciliationOk: boolean | null = null;
   try { reconciliationOk = (await reconcileLedgerV3(input.tenantId, d)).ok; } catch { reconciliationOk = null; }
+  // BUG-88: قيود مطلوبة فعلًا للشهر ولم تُسجَّل — من البيانات المصدرية (جرد، فحص مرتجع، تكلفة، مرتجع) وطابور المراجعة
+  const gaps = await missingRequiredEntries(d, { tenantId: input.tenantId, period: input.period, goLiveDate: status.goLiveDate ?? "0000-00-00", startMs, endMs });
   const checks = [
     { key: "previous_locked", ok: prevLocked, label: prevLocked ? "الشهر السابق مقفل (ترتيب الشهور سليم)" : `الشهر السابق ${prev} غير مقفل — اقفله أولًا` },
     { key: "deliveries_posted", ok: missingCount === 0, label: missingCount < 0 ? "تعذر فحص التسليمات (صندوق وارد شركة الشحن غير متاح)" : missingCount === 0 ? "كل تسليمات الشهر لها قيد" : `${missingCount} أوردر مُسلَّم في الشهر بلا قيد في الدفتر` },
     { key: "ledger_reviews", ok: Number(reviews?.n ?? 0) === 0, label: Number(reviews?.n ?? 0) === 0 ? "لا مراجعات دفتر مفتوحة" : `${reviews.n} أوردر عليه مراجعة دفتر مفتوحة` },
+    ...requirementChecks(gaps),
     { key: "legacy_writes", ok: legacy.length === 0, label: legacy.length === 0 ? "لا كتابات مالية في الحسابات القديمة خلال الشهر" : `كتابات في الحسابات القديمة خلال الشهر: ${legacy.map(l => `${l.label} ${l.count}`).join("، ")} — يجب تسجيلها في الدفتر الجديد` },
     { key: "managed_accounts", ok: manualManaged.length === 0, label: manualManaged.length === 0 ? "لا حسابات يدوية من الأنواع المُدارة آليًا" : `حسابات يدوية من نوع مُدار آليًا: ${manualManaged.join("، ")} — أوقفها أو انقل رصيدها لمساره` },
     { key: "reconciliation", ok: reconciliationOk === true, label: reconciliationOk == null ? "تعذر تشغيل مطابقة الأرصدة" : reconciliationOk ? "الأرصدة مطابقة لمجموع القيود" : "فرق في مطابقة الأرصدة — راجع قبل الإقفال" },

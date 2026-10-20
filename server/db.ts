@@ -1,6 +1,7 @@
 import { ClientSafeError } from "./logSafety";
 import { assertLegacyFinanceWritable } from "./legacyFinanceArchive";
 import { NEEDS_COMPLETION_LABEL, shippingIssuesText, shippingReadiness, withoutAddressConflictReason } from "../shared/shippingReadiness";
+import { ledgerReviewReasons } from "../shared/ledgerReview";
 import {
   eq,
   desc,
@@ -5338,8 +5339,9 @@ export async function resolveOrderReviewProduct(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.transaction(async tx => {
-    const [target] = await tx.select({ businessId: orders.businessId }).from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
+    const [target] = await tx.select({ businessId: orders.businessId, reviewReason: orders.reviewReason }).from(orders).where(eq(orders.id, orderId)).limit(1).for("update");
     if (!target) throw new Error("الأوردر غير موجود");
+    const keptLedgerReasons = ledgerReviewReasons(target.reviewReason);
     await assertOrderLinesInBusiness(tx, target.businessId, [{ productId: input.productId, variantId: input.variantId ?? null }]);
     await tx
       .update(orders)
@@ -5347,8 +5349,8 @@ export async function resolveOrderReviewProduct(
         productId: input.productId,
         variantId: input.variantId ?? null,
         ...(input.productName ? { productName: input.productName } : {}),
-        needsReview: false,
-        reviewReason: null,
+        // BUG-88: حل المنتج لا يرفع المراجعة المالية — أسباب «دفتر:» تبقى ومعها العلم (فحص الإقفال يعدّها)
+        ...(keptLedgerReasons.length ? { needsReview: true, reviewReason: keptLedgerReasons.join(" | ") } : { needsReview: false, reviewReason: null }),
       })
       .where(eq(orders.id, orderId));
 

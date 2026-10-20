@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { LEDGER_REVIEW_PREFIX } from "../shared/ledgerReview";
 import { businesses, orderItems, orders } from "../drizzle/schema";
 import { ledgerAccounts, ledgerEntries, ledgerTransactions } from "../drizzle/ledgerV3.schema";
 import { fromMinorUnits, toMinorUnits } from "../shared/accountingMoney";
@@ -24,7 +25,7 @@ export type OrderLedgerOutcome =
   | { status: "skipped"; reason: string }
   | { status: "review"; reason: string; transactionIds?: number[] };
 
-const REVIEW_PREFIX = "دفتر:";
+const REVIEW_PREFIX = LEDGER_REVIEW_PREFIX;
 
 async function orderContext(d: LedgerDb, businessId: number) {
   const [b] = await d.select({ tenantId: businesses.tenantId, timezone: businesses.timezone }).from(businesses).where(eq(businesses.id, businessId)).limit(1);

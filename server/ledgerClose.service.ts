@@ -45,7 +45,10 @@ export async function closeLedgerPeriod(input: { tenantId: number; period: strin
   let snapshot: { version: number; figuresHash: string } | null = null;
   let checklist: Awaited<ReturnType<typeof closeChecklist>> | null = null;
   const r = await lockLedgerPeriod({ tenantId: input.tenantId, period: input.period, reason: input.reason, actor: input.actor,
-    // بعد رفض الشهر المستقبلي/replay للمقفل/الملاحظة: قائمة الفحص كاملة وإلا لا إقفال
+    // بعد رفض الشهر المستقبلي/replay للمقفل/الملاحظة: قائمة الفحص كاملة وإلا لا إقفال (BUG-88: لا تجاوز).
+    // السباق: القائمة تُقرأ بعد قفل صف الفترة FOR UPDATE ⇒ أي ترحيل جارٍ للشهر (FOR SHARE) انتهى قبلها، وأي ترحيل بعدها يُرفض
+    // «مقفل». ما لا يضمنه القفل: عملية تشغيلية (اعتماد جرد/فحص مرتجع/حدث شركة شحن) تُعتمد بين قراءة القائمة والـcommit، أو حدث
+    // متأخر بتاريخ داخل الشهر بعد الإقفال — ترحيلها يفشل «مقفل» ويظهر كمراجعة، والتصحيح بإعادة فتح المالك.
     beforeLock: async () => {
       checklist = await closeChecklist({ tenantId: input.tenantId, period: input.period }, d);
       if (!checklist.ready) throw new LedgerError("conflict", `قائمة فحص الإقفال غير مكتملة: ${checklist.checks.filter(c => !c.ok).map(c => c.label).join("؛ ")}`);

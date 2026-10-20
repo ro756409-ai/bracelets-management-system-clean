@@ -133,7 +133,7 @@ describe.runIf(CAN)("📈 المرحلة 7 — التقارير والإقفال
     await q("UPDATE orders SET needsReview = 1, reviewReason = 'دفتر: اختبار' WHERE id = ?", [lost]);
     const c = await (await call(e.amA)).period.checklist({ period: "2026-10" });
     expect(c.ready).toBe(false);
-    expect(Object.fromEntries(c.checks.map((x: any) => [x.key, x.ok]))).toEqual({ previous_locked: true, deliveries_posted: false, ledger_reviews: false, legacy_writes: true, managed_accounts: true, reconciliation: true });
+    expect(Object.fromEntries(c.checks.map((x: any) => [x.key, x.ok]))).toEqual({ previous_locked: true, deliveries_posted: false, ledger_reviews: false, stocktake_variances: true, return_inspections: true, order_costs: true, order_returns: true, review_queue: true, legacy_writes: true, managed_accounts: true, reconciliation: true });
     expect(c.checks.find((x: any) => x.key === "deliveries_posted").label).toMatch(/^1 أوردر/);
     // نوفمبر: أكتوبر غير مقفل بعد → ترتيب الشهور غير سليم
     expect((await (await call(e.ownerA)).period.checklist({ period: "2026-11" })).checks.find((x: any) => x.key === "previous_locked").ok).toBe(false);
