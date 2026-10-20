@@ -55,7 +55,9 @@ describe("🔐 البوابة — حارس موحّد", () => {
     const got = Object.fromEntries(procs(portal).map(p => [p.name, p.arg?.replace(/"/g, "")]));
     for (const [name, perm] of Object.entries(want)) expect(got[name], name).toBe(perm);
     for (const name of ["productsList", "lowStockProducts", "stockLevels", "stockVariants"]) expect(block(`    ${name}: `, "}),"), name).toContain("stripCostUnlessAllowed(ctx,");
-    expect(code).toContain('hasTenantPermission(requireTenantId(emp), emp.role, "inventory_costing.view")');
+    // BUG-01: الفحص بتجاوزات الشركة لدور الجلسة الحقيقي (مش جلسة الـadmin الصناعية).
+    expect(code).toContain("return hasTenantPermission(tenantId, emp.role, permission);");
+    expect(code).toContain('if (await hasInventoryCostPermission(ctx, "inventory_costing.view")) return value;');
   });
   it("مهام الويب (لوحة المدير): القراءة employees.view والكتابة employees.manage", () => {
     const t = block("\n  tasks: router({", "سجل الطباعات");

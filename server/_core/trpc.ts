@@ -93,6 +93,13 @@ export function permissionProcedure(permission: Permission) {
         throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
       return next({ ctx });
     }
+    // BUG-01: تكلفة المخزون للمدير تتبع تجاوزات الشركة — جلسة الـadmin الصناعية ماكانتش بتسمح
+    // بسحبها. الافتراضي للمدير يشمل inventory_costing.* (نفس السلوك)، والسحب يمنع فورًا.
+    if (ctx.employee?.role === "manager" && permission.startsWith("inventory_costing.")) {
+      if (!(await hasTenantPermission(ctx.tenantId, "manager", permission)))
+        throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+      return next({ ctx });
+    }
     const ownerOrAdmin = ctx.user?.role === "admin";
     if (!ownerOrAdmin && !await hasTenantPermission(ctx.tenantId, ctx.employee?.role, permission)) {
       throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });

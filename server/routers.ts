@@ -1,4 +1,5 @@
 import { safeErrorText } from "./logSafety";
+import { omitCostFields, carriesCostValue } from "./costVisibility";
 import { isLocalDeployEnv } from "./deployEnv";
 import { z } from "zod";
 import { assertNoMovementDuringStocktake, handoverOrder, InventoryLedgerError, isInventoryLedgerActive, postReturnInspection, postStocktakeVariance } from "./ledgerInventory.service";
@@ -350,11 +351,33 @@ function requireManagerPortalPermission(permission: Permission) {
   });
 }
 
-/** التكلفة لا تظهر في البوابة إلا بصلاحية التكلفة — المخزون التشغيلي (view/adjust) لا يعني رؤيتها. */
-async function stripCostUnlessAllowed<T extends Record<string, any>>(ctx: any, rows: T[]): Promise<T[]> {
+/**
+ * BUG-01 — صلاحية تكلفة المخزون للجلسة الحالية **بتجاوزات الشركة** (مش بجلسة الـadmin الصناعية):
+ * المدير المسحوب منه `inventory_costing.*` ممنوع زي أي دور. بلا هوية موظف = لا.
+ */
+async function hasInventoryCostPermission(ctx: any, permission: "inventory_costing.view" | "inventory_costing.manage"): Promise<boolean> {
   const emp = (ctx as any).employee;
-  if (await hasTenantPermission(requireTenantId(emp), emp.role, "inventory_costing.view")) return rows;
-  return rows.map(r => { if (!("costPrice" in r)) return r; const { costPrice: _cost, ...rest } = r; return rest as T; });
+  const tenantId = (ctx as any).tenantId ?? emp?.tenantId;
+  if (!emp || tenantId == null) return false;
+  return hasTenantPermission(tenantId, emp.role, permission);
+}
+
+/** التكلفة لا تظهر إلا بصلاحية التكلفة — المخزون التشغيلي (view/adjust) لا يعني رؤيتها. */
+async function stripCostUnlessAllowed<T>(ctx: any, value: T): Promise<T> {
+  if (await hasInventoryCostPermission(ctx, "inventory_costing.view")) return value;
+  return omitCostFields(value);
+}
+
+/** يغلّف resolver استعلام: الناتج كله يمر على `stripCostUnlessAllowed` (كل نقاط الـreturn). */
+function costSafe<A extends { ctx: any }, R>(fn: (opts: A) => Promise<R>): (opts: A) => Promise<R> {
+  return async (opts: A) => stripCostUnlessAllowed(opts.ctx, await fn(opts));
+}
+
+/** كتابة تكلفة (تركيبة) تحتاج `inventory_costing.manage` — الإدخال بلا تكلفة يعدّي عادي. */
+async function assertCanWriteCost(ctx: any, input: unknown): Promise<void> {
+  if (!carriesCostValue(input)) return;
+  if (await hasInventoryCostPermission(ctx, "inventory_costing.manage")) return;
+  throw new TRPCError({ code: "FORBIDDEN", message: "تعديل التكلفة يحتاج صلاحية «إدارة تكلفة المخزون»" });
 }
 
 /**
@@ -3680,6 +3703,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await assertCanWriteCost(ctx, input);
         // 1) العزل: نشاط واحد محدّد تابع للجلسة (نفس حارس products.create).
         const scopedBusinessIds = await scopeBusinessIds(ctx, {
           businessId: input.businessId,
@@ -3946,7 +3970,7 @@ export const appRouter = router({
         // كده الأوردر بيبان مظبوط جوّه، وبوسطة عندها حاجة تانية، ومحدش يعرف.
         const contentChangedAfterShipment =
           await orderContentChangedAfterShipmentCreation(input.id);
-        return { ...order, items, contentChangedAfterShipment };
+        return stripCostUnlessAllowed(ctx, { ...order, items, contentChangedAfterShipment });
       }),
 
     /** Header stat cards on the Orders page — same business-group scope as `orders.list`. */
@@ -4542,7 +4566,7 @@ export const appRouter = router({
     // there — so sharing the UI does not share the authorization.
     orderItems: adminProcedure
       .input(z.object({ orderId: z.number() }))
-      .query(async ({ ctx, input }) => {
+      .query(costSafe(async ({ ctx, input }) => {
         const order = await getOrderById(input.orderId);
         if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "الأوردر غير موجود" });
         await requireScopedBusinessId(ctx, order.businessId);
@@ -4588,7 +4612,7 @@ export const appRouter = router({
           shippingFees: order.shippingFees ?? "0",
           totalAmount: order.totalAmount,
         };
-      }),
+      })),
 
     /*
       محتوى الأوردر ورا صلاحية واحدة: `orders.edit_items`.
@@ -5740,7 +5764,7 @@ export const appRouter = router({
     // only place the employee sees what the customer actually ordered.
     orderItems: requireEmployeeTenantPermission("orders.view")
       .input(z.object({ orderId: z.number() }))
-      .query(async ({ ctx, input }) => {
+      .query(costSafe(async ({ ctx, input }) => {
         const emp = (ctx as any).employee;
         const order = await assertEmployeeOwnsOrder(
           emp,
@@ -5789,7 +5813,7 @@ export const appRouter = router({
           shippingFees: order.shippingFees ?? "0",
           totalAmount: order.totalAmount,
         };
-      }),
+      })),
 
     /* نفس الصلاحية بالظبط اللي على مسار المالك — لكن بهوية البوابة (كانت permissionProcedure = جلسة المالك). */
     editOrderItems: requireEmployeeTenantPermission("orders.edit_items")
@@ -6868,7 +6892,7 @@ export const appRouter = router({
           dateTo: z.string().optional(),
         })
       )
-      .query(async ({ ctx, input }) => {
+      .query(costSafe(async ({ ctx, input }) => {
         const db = await getDb();
         if (!db) return [];
         const { orders } = await import("../drizzle/schema");
@@ -6900,7 +6924,7 @@ export const appRouter = router({
         // إرفاق بنود كل أوردر
         const itemsMap = await getOrderItemsForOrders(rows.map(o => o.id));
         return rows.map(o => ({ ...o, items: itemsMap.get(o.id) ?? [] }));
-      }),
+      })),
 
     // حذف أوردر (الموظف يحذف أوردر دخله هو فقط)
     deleteOrder: requireEmployeeTenantPermission("orders.create")
@@ -7141,12 +7165,12 @@ export const appRouter = router({
      * Active catalog (products + their variants) for the item picker — SCOPED to the
      * employee's own business (تركيبات المخزون بتاعت نشاطه بس، مش كل التينانتات).
      */
-    catalog: requireEmployeeTenantPermission("orders.view").query(async ({ ctx }) => {
+    catalog: requireEmployeeTenantPermission("orders.view").query(costSafe(async ({ ctx }) => {
       // نطاق نشاط الموظف الواحد فقط — معزول عن أي نشاط تاني (الأسورة) حتى داخل نفس الـtenant.
       const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
       if (businessIds.length === 0) return { products: [], variants: [] };
       return getMatchCatalog(undefined, businessIds);
-    }),
+    })),
 
     /**
      * يحلّل رسالة العميل الملصوقة ويطابق المنتج/التركيبة **داخل نشاط الموظف فقط**. read-only:
@@ -7169,7 +7193,7 @@ export const appRouter = router({
 
     parsePaste: requireEmployeeTenantPermission("orders.view")
       .input(z.object({ text: z.string().min(1) }))
-      .query(async ({ ctx, input }) => {
+      .query(costSafe(async ({ ctx, input }) => {
         // نطاق نشاط الموظف الواحد فقط — نفس كتالوج شاشة الإدخال، معزول عن أي نشاط تاني.
         const businessIds = await employeeCatalogBusinessIds(empScope(ctx));
         const catalog = businessIds.length
@@ -7195,7 +7219,7 @@ export const appRouter = router({
             ? signParseToken({ employeeId: ctx.employee.id, businessId: businessIds[0], rawHash: rawTextHashOf(input.text), fp: canonicalFingerprint(v2) })
             : null;
         return { ...legacy, v2, parseToken };
-      }),
+      })),
 
     // جلب variants منتج معين (للكفر ووتر بروف)
     productVariants: requireEmployeeTenantPermission("orders.view")
@@ -7204,7 +7228,7 @@ export const appRouter = router({
           productId: z.number().int().min(1),
         })
       )
-      .query(async ({ ctx, input }) => {
+      .query(costSafe(async ({ ctx, input }) => {
         await requireOwned(
           empScope(ctx),
           "product",
@@ -7218,7 +7242,7 @@ export const appRouter = router({
           .from(productVariants)
           .where(eq(productVariants.productId, input.productId))
           .orderBy(productVariants.size, productVariants.color);
-      }),
+      })),
 
     // جلب سجل المسحات للموظف الحالي
     scanLogs: requireEmployeeTenantPermission("orders.view")
@@ -8590,9 +8614,9 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         await requireOwned(ctx, "product", input.productId);
-        return getVariantsByProduct(input.productId, {
+        return stripCostUnlessAllowed(ctx, await getVariantsByProduct(input.productId, {
           includeInactive: input.includeInactive,
-        });
+        }));
       }),
     // قراءة مقصورة على النطاق — متاحة للمحاسب (dropdown أنواع الحفر في استلام البضاعة).
     all: authenticatedProcedure
@@ -8607,15 +8631,15 @@ export const appRouter = router({
       )
       .query(async ({ ctx, input }) => {
         const businessIds = await scopeBusinessIds(ctx, input);
-        return getAllVariantsWithProduct(undefined, businessIds, {
+        return stripCostUnlessAllowed(ctx, await getAllVariantsWithProduct(undefined, businessIds, {
           includeInactive: input?.includeInactive,
-        });
+        }));
       }),
     get: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ ctx, input }) => {
         await requireOwned(ctx, "variant", input.id);
-        return getVariantById(input.id);
+        return stripCostUnlessAllowed(ctx, await getVariantById(input.id));
       }),
     create: adminProcedure
       .input(
@@ -8634,6 +8658,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await assertCanWriteCost(ctx, input);
         const { price, costPrice, ...rest } = input;
         const product = await getProductById(rest.productId);
         if (!product)
@@ -8692,6 +8717,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await assertCanWriteCost(ctx, input);
         // 1) العزل: المنتج لازم يكون تابع للجلسة.
         const product = await getProductById(input.productId);
         if (!product)
@@ -8777,6 +8803,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await assertCanWriteCost(ctx, input);
         const { id, price, costPrice, ...rest } = input;
         await requireOwned(ctx, "variant", id);
         if (rest.name?.trim()) {
