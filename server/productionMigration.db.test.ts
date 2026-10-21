@@ -30,7 +30,7 @@ describe.runIf(CAN)("🛡️ B1 — المسار المحمي على قاعدة 
   const env = { [PRODUCTION_MIGRATION_ENABLE_ENV]: "1", DEPLOY_ENV: "production" };
   const auth = (id: ProductionMigrationId, t: MigrationTarget = target) => authorizeProductionMigration({
     env, databaseUrl: tmp.url, migrationId: id, mode: "apply", backupSha256: SHA,
-    confirm: productionConfirmPhrase(id, "apply", t.database, t.serverUuid), targets: { version: 1, targets: [t] },
+    confirm: productionConfirmPhrase(id, "apply", t.database, t.approvalRef), targets: { version: 1, targets: [t] },
   });
   const outcome = (r: { ok: boolean; state: string | null; refused: string | null; lines: string[] }) => ({ ok: r.ok, state: r.state, refused: r.refused, lines: r.lines });
   const hand = (a: ReturnType<typeof auth>) => ({
@@ -91,6 +91,8 @@ describe.runIf(CAN)("🛡️ B1 — المسار المحمي على قاعدة 
     expect(first.ok).toBe(true);
     expect(first.audit).toMatchObject({ before: "not_applied", after: "applied", approvalRef: "B1-LOCAL", ok: true });
     expect(JSON.stringify(first.audit)).not.toMatch(/mysql:\/\/|password|root@/);
+    expect(JSON.stringify(first)).not.toContain(target.serverUuid);
+    expect(JSON.stringify(first)).not.toContain(target.serverUuid.slice(0, 8));
     expect(await checksums()).toBe(data0);
     const shape = await schemaShape();
     const a2 = auth("0041");

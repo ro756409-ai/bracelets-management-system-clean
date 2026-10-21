@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import fs from "fs";
+import os from "os";
+import path from "path";
 import {
   authorizeProductionMigration,
+  readApprovalFile,
   isProductionAuthorization,
   productionConfirmPhrase,
   productionGate,
@@ -24,13 +27,14 @@ const target: MigrationTarget = {
 };
 const targets = (t: Partial<MigrationTarget> = {}): MigrationTargets => ({ version: 1, targets: [{ ...target, ...t }] });
 const env = { [PRODUCTION_MIGRATION_ENABLE_ENV]: "1", DEPLOY_ENV: "production" };
-const ok = { env, databaseUrl: URL_OK, migrationId: "0041" as const, mode: "apply" as const, confirm: productionConfirmPhrase("0041", "apply", "default", UUID), backupSha256: SHA, targets: targets(), now: NOW };
+const ok = { env, databaseUrl: URL_OK, migrationId: "0041" as const, mode: "apply" as const, confirm: productionConfirmPhrase("0041", "apply", "default", "REL-UNIFIED-1"), backupSha256: SHA, targets: targets(), now: NOW };
 
 describe("بوابات قبل أي اتصال", () => {
   it("المسار السليم يصدر إذنًا للهدف الموثّق", () => {
     const a = authorizeProductionMigration(ok);
     expect(isProductionAuthorization(a)).toBe(true);
-    expect(a.confirm).toBe("APPLY 0041 TO default ON PRODUCTION 0d9c2f3e");
+    expect(a.confirm).toBe("APPLY 0041 TO default ON PRODUCTION REL-UNIFIED-1");
+    expect(a.confirm).not.toContain(UUID.slice(0, 8));
     expect(Object.isFrozen(a)).toBe(true);
   });
   it.each([
@@ -41,7 +45,7 @@ describe("بوابات قبل أي اتصال", () => {
     ["مضيف مختلف", { databaseUrl: "mysql://m:x@db2.prod.internal:3306/default" }, /غير موثّق/],
     ["منفذ مختلف", { databaseUrl: "mysql://m:x@db.prod.internal:3307/default" }, /غير موثّق/],
     ["قاعدة مختلفة", { databaseUrl: "mysql://m:x@db.prod.internal:3306/default2" }, /غير موثّق/],
-    ["migration خارج الموافقة", { migrationId: "0055" as const, confirm: productionConfirmPhrase("0055", "apply", "default", UUID) }, /لا تشمل 0055/],
+    ["migration خارج الموافقة", { migrationId: "0055" as const, confirm: productionConfirmPhrase("0055", "apply", "default", "REL-UNIFIED-1") }, /لا تشمل 0055/],
     ["موافقة بلا مرجع", { targets: targets({ approvalRef: "" }) }, /approvalRef/],
     ["موافقة بلا serverUuid صالح", { targets: targets({ serverUuid: "default" }) }, /serverUuid/],
     ["موافقة منتهية", { now: new Date("2026-10-22T21:00:00Z") }, /منتهية/],
@@ -53,11 +57,12 @@ describe("بوابات قبل أي اتصال", () => {
     ["اختبار الاستعادة غير مسجّل", { targets: targets({ backupRestoreVerifiedAt: "" }) }, /اختبار استعادة/],
     ["اختبار الاستعادة أقدم من 24 ساعة", { targets: targets({ backupRestoreVerifiedAt: "2026-10-20T08:00:00Z" }) }, /اختبار استعادة/],
     ["عبارة تأكيد بلا ON PRODUCTION", { confirm: "APPLY 0041 TO default" }, /عبارة التأكيد/],
-    ["عبارة تأكيد ببادئة uuid خاطئة", { confirm: "APPLY 0041 TO default ON PRODUCTION ffffffff" }, /عبارة التأكيد/],
-    ["rollback بلا allowRollback", { mode: "rollback" as const, confirm: productionConfirmPhrase("0041", "rollback", "default", UUID) }, /rollback على Production غير مسموح/],
+    ["عبارة تأكيد بمرجع موافقة آخر", { confirm: "APPLY 0041 TO default ON PRODUCTION REL-OTHER" }, /عبارة التأكيد/],
+    ["approvalRef بصيغة غير صالحة", { targets: targets({ approvalRef: "a b" }) }, /approvalRef صالح/],
+    ["rollback بلا allowRollback", { mode: "rollback" as const, confirm: productionConfirmPhrase("0041", "rollback", "default", "REL-UNIFIED-1") }, /rollback على Production غير مسموح/],
   ])("يرفض: %s", (_n, over, re) => { expect(() => authorizeProductionMigration({ ...ok, ...(over as any) })).toThrow(re as RegExp); });
   it("rollback مسموح فقط لو الموافقة تنص عليه", () => {
-    const a = authorizeProductionMigration({ ...ok, mode: "rollback", confirm: productionConfirmPhrase("0041", "rollback", "default", UUID), targets: targets({ allowRollback: true }) });
+    const a = authorizeProductionMigration({ ...ok, mode: "rollback", confirm: productionConfirmPhrase("0041", "rollback", "default", "REL-UNIFIED-1"), targets: targets({ allowRollback: true }) });
     expect(a.mode).toBe("rollback");
   });
 });
@@ -96,7 +101,8 @@ describe("المسار الكامل بمنفّذ وهمي (الهوية ← ال
     const e = exec(); const r = runner();
     const res = await runProductionMigration({ auth, databaseUrl: URL_OK, check: r.check, run: r.run, rollbackHint: "x", openExecutor: e.open as any });
     expect(res.ok).toBe(true); expect(r.runs).toBe(1);
-    expect(res.audit).toMatchObject({ migration: "0041", before: "not_applied", after: "applied", ok: true, serverUuidPrefix: "0d9c2f3e", backupSha256Prefix: SHA.slice(0, 16) });
+    expect(res.audit).toMatchObject({ migration: "0041", before: "not_applied", after: "applied", ok: true, approvalRef: "REL-UNIFIED-1", backupVerified: true });
+    for (const secret of [UUID, UUID.slice(0, 8), SHA, SHA.slice(0, 16), "db.prod.internal"]) expect(JSON.stringify(res), secret).not.toContain(secret);
     expect(e.log.some(q => q.startsWith("SELECT RELEASE_LOCK"))).toBe(true);
     expect(JSON.stringify(res)).not.toMatch(/S3cret|migrator|mysql:\/\//);
   });
@@ -104,6 +110,7 @@ describe("المسار الكامل بمنفّذ وهمي (الهوية ← ال
     const e = exec({ uuid: "11111111-2222-3333-4444-555555555555" }); const r = runner();
     const res = await runProductionMigration({ auth, databaseUrl: URL_OK, check: r.check, run: r.run, rollbackHint: "x", openExecutor: e.open as any });
     expect(res.ok).toBe(false); expect(res.refused).toMatch(/server_uuid/); expect(r.runs).toBe(0);
+    expect(JSON.stringify(res)).not.toMatch(/11111111|0d9c2f3e/);
     expect(e.log.some(q => q.startsWith("SELECT GET_LOCK"))).toBe(false);
   });
   it("قاعدة مختلفة على نفس الخادم = توقف", async () => {
@@ -128,7 +135,53 @@ describe("المسار الكامل بمنفّذ وهمي (الهوية ← ال
   });
 });
 
+describe("ملف الموافقة وقت التشغيل (خارج المستودع، 600)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b1-approval-"));
+  const write = (name: string, body: unknown, mode = 0o600) => { const f = path.join(dir, name); fs.writeFileSync(f, typeof body === "string" ? body : JSON.stringify(body)); fs.chmodSync(f, mode); return f; };
+  const repoRoot = process.cwd();
+  it("مقبول: مسار مطلق خارج المستودع، 600، موافقة واحدة — ويرجع بصمة الملف لا محتواه", () => {
+    const f = write("ok.json", targets());
+    const r = readApprovalFile(f, { repoRoot });
+    expect(r.targets.targets[0].approvalRef).toBe("REL-UNIFIED-1");
+    expect(r.sha256).toMatch(/^[0-9a-f]{64}$/);
+    const a = authorizeProductionMigration({ ...ok, targets: r.targets, approvalFileSha256: r.sha256 });
+    expect(a.approvalFileSha256).toBe(r.sha256);
+  });
+  it.each([
+    ["مفقود (بلا --approval-file)", () => readApprovalFile(undefined, { repoRoot }), /ملف الموافقة مطلوب/],
+    ["مسار نسبي", () => readApprovalFile("approval.json", { repoRoot }), /مطلقًا/],
+    ["ملف غير موجود", () => readApprovalFile(path.join(dir, "missing.json"), { repoRoot }), /غير موجود/],
+    ["داخل المستودع", () => readApprovalFile(path.join(repoRoot, "scripts", "migration-targets.json"), { repoRoot }), /خارج المستودع/],
+    ["داخل دليل التشغيل", () => readApprovalFile(write("in-cwd.json", targets()), { repoRoot, cwd: dir }), /خارج المستودع/],
+    ["صلاحيات 644", () => readApprovalFile(write("p644.json", targets(), 0o644), { repoRoot }), /صلاحيات ملف الموافقة غير آمنة/],
+    ["صلاحيات 640", () => readApprovalFile(write("p640.json", targets(), 0o640), { repoRoot }), /صلاحيات ملف الموافقة غير آمنة/],
+    ["صلاحيات 400", () => readApprovalFile(write("p400.json", targets(), 0o400), { repoRoot }), /المطلوب 600/],
+    ["symlink لملف 600", () => { const real = write("real.json", targets()); const l = path.join(dir, "link.json"); fs.symlinkSync(real, l); return readApprovalFile(l, { repoRoot }); }, /لا symlink/],
+    ["مالك مختلف", () => readApprovalFile(write("owner.json", targets()), { repoRoot, uid: 999_999 }), /غير مملوك/],
+    ["JSON غير صالح", () => readApprovalFile(write("bad.json", "{not json"), { repoRoot }), /ليس JSON صالحًا/],
+    ["أكثر من موافقة", () => readApprovalFile(write("two.json", { version: 1, targets: [target, target] }), { repoRoot }), /موافقة واحدة/],
+  ])("يرفض: %s", (_n, f, re) => { expect(f).toThrow(re as RegExp); });
+  it("رسائل الرفض لا تعرض أي جزء من محتوى الملف", () => {
+    const secretish = { version: 1, targets: [{ ...target, approvalRef: "SECRET-REF-123", host: "secret-host.internal" }] };
+    for (const mode of [0o644, 0o600]) {
+      const f = write(`leak-${mode}.json`, mode === 0o600 ? JSON.stringify(secretish).slice(0, -3) : secretish, mode);
+      let msg = ""; try { readApprovalFile(f, { repoRoot }); } catch (e) { msg = (e as Error).message; }
+      expect(msg).not.toMatch(/SECRET-REF-123|secret-host|0d9c2f3e|16b8551f/);
+    }
+  });
+  it("موافقة منتهية من ملف صالح = رفض", () => {
+    const r = readApprovalFile(write("expired.json", targets({ approvedAt: "2026-10-20T06:00:00Z", expiresAt: "2026-10-20T20:00:00Z" })), { repoRoot });
+    expect(() => authorizeProductionMigration({ ...ok, targets: r.targets })).toThrow(/منتهية/);
+  });
+});
+
 describe("فحوص ثابتة", () => {
+  it("الـCLI يأخذ الموافقة من --approval-file فقط ويفحص التفعيل قبل قراءة الملف", () => {
+    const s = fs.readFileSync("scripts/_productionMigrationCli.ts", "utf-8");
+    expect(s).toContain('readApprovalFile(opt("--approval-file")');
+    expect(s.indexOf("assertProductionEnabled(process.env)")).toBeLessThan(s.indexOf("readApprovalFile(opt("));
+    expect(fs.readFileSync("server/productionMigration.ts", "utf-8")).not.toMatch(/serverUuid\.slice|serverUuidPrefix/);
+  });
   it("ملف الأهداف المعتمدة الملتزَم فارغ", () => {
     expect(JSON.parse(fs.readFileSync("scripts/migration-targets.json", "utf-8"))).toEqual({ version: 1, targets: [] });
   });
@@ -150,7 +203,7 @@ describe("فحوص ثابتة", () => {
   it("السكربتات لا تقبل ملف أهداف بديلًا ولا تطبع الرابط", () => {
     for (const f of ["scripts/_productionMigrationCli.ts", "scripts/_handMigrationCli.ts", "scripts/migrate-0040-ledger-v3.ts", "scripts/migrate-0045-roles.ts"]) {
       const s = fs.readFileSync(f, "utf-8");
-      expect(s, f).not.toMatch(/--targets-file|MIGRATION_TARGETS_PATH/);
+      expect(s, f).not.toMatch(/--targets-file|MIGRATION_TARGETS_PATH|readMigrationTargets/);
       expect(s, f).not.toMatch(/console\.(log|error)\([^)]*\burl\b/);
     }
   });

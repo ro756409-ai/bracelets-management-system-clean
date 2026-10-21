@@ -1,4 +1,6 @@
 import fs from "fs";
+import path from "path";
+import { createHash } from "crypto";
 import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconciliation.service";
 
 /**
@@ -11,15 +13,16 @@ import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconcilia
  * بوابات قبل أي اتصال (نقية):
  *  1. `MIGRATION_PRODUCTION_ENABLED=1` لهذا التشغيل فقط (الافتراضي: غير مضبوط).
  *  2. `DEPLOY_ENV=production`.
- *  3. الهدف موثّق في `scripts/migration-targets.json` (فارغ افتراضيًا، يُراجع في Git): المضيف/المنفذ/القاعدة مطابقة
- *     حرفيًا للرابط، و`serverUuid`، و`approvedBy`/`approvalRef`، ونافذة صلاحية ≤ 24 ساعة، وقائمة الـmigrations المسموحة.
- *     اسم قاعدة وحده لا يكفي أبدًا.
+ *  3. الموافقة تُقدَّم وقت التشغيل فقط من ملف محلي مؤقت `--approval-file` **خارج المستودع**: مسار مطلق، ملف عادي (لا
+ *     symlink)، مملوك لنفس المستخدم، وصلاحياته 600 بالضبط — وإلا رفض آمن بلا عرض محتواه. `scripts/migration-targets.json`
+ *     يبقى فارغًا في Git ولا يُقرأ للإنتاج. داخل الموافقة: المضيف/المنفذ/القاعدة مطابقة حرفيًا للرابط، و`serverUuid`،
+ *     و`approvedBy`/`approvalRef`، ونافذة صلاحية ≤ 24 ساعة، وقائمة الـmigrations المسموحة. اسم قاعدة وحده لا يكفي أبدًا.
  *  4. بصمة النسخة الاحتياطية `--backup-sha256` = المسجلة في الموافقة، مع `backupRestoreVerifiedAt` خلال 24 ساعة.
- *  5. عبارة تأكيد حرفية: `APPLY 00XX TO <database> ON PRODUCTION <أول 8 من server_uuid>`.
+ *  5. عبارة تأكيد حرفية: `APPLY 00XX TO <database> ON PRODUCTION <approvalRef>`.
  *  6. rollback على Production مرفوض إلا لو الموافقة تنص عليه صراحة (`allowRollback: true`).
  * بعد الاتصال (`runProductionMigration`): @@server_uuid وDATABASE() = الموثّق، ثم قفل واحد
  * `GET_LOCK('matjarak_hand_migrations', 0)`، ثم check قبل → التنفيذ → check بعد (لازم `applied`)، ثم سطر تدقيق JSON
- * بلا رابط ولا مستخدم ولا كلمة سر.
+ * بلا رابط ولا مستخدم ولا كلمة سر ولا server_uuid ولا محتوى ملف الموافقة (بصمة الملف فقط).
  */
 
 export const PRODUCTION_MIGRATION_ENABLE_ENV = "MIGRATION_PRODUCTION_ENABLED";
@@ -42,7 +45,7 @@ export type MigrationTargets = { version: 1; targets: MigrationTarget[] };
 
 export type ProductionAuthorization = Readonly<{
   migrationId: ProductionMigrationId; mode: ProductionMode;
-  target: Readonly<MigrationTarget>; backupSha256: string; confirm: string;
+  target: Readonly<MigrationTarget>; backupSha256: string; confirm: string; approvalFileSha256: string | null;
 }>;
 
 const ISSUED = new WeakSet<object>();
@@ -51,8 +54,8 @@ export function isProductionAuthorization(x: unknown): x is ProductionAuthorizat
   return typeof x === "object" && x !== null && ISSUED.has(x);
 }
 
-export const productionConfirmPhrase = (id: ProductionMigrationId, mode: ProductionMode, database: string, serverUuid: string) =>
-  `${mode === "apply" ? "APPLY" : "ROLLBACK"} ${id} TO ${database} ON PRODUCTION ${serverUuid.slice(0, 8)}`;
+export const productionConfirmPhrase = (id: ProductionMigrationId, mode: ProductionMode, database: string, approvalRef: string) =>
+  `${mode === "apply" ? "APPLY" : "ROLLBACK"} ${id} TO ${database} ON PRODUCTION ${approvalRef}`;
 
 export class ProductionMigrationRefused extends Error {}
 const refuse = (why: string): never => { throw new ProductionMigrationRefused(why); };
@@ -63,20 +66,26 @@ function urlIdentity(databaseUrl: string): { host: string; port: number; databas
   return { host: u.hostname, port: Number(u.port || 3306), database: u.pathname.replace(/^\//, "") };
 }
 
+/** البوابة 1 وحدها: المسار مغلق ما لم يُفعَّل صراحة لهذا التشغيل (تُفحص قبل قراءة أي ملف). */
+export function assertProductionEnabled(env: NodeJS.ProcessEnv): void {
+  if (env[PRODUCTION_MIGRATION_ENABLE_ENV] !== "1") refuse(`تطبيق الـmigrations على Production معطّل افتراضيًا — يحتاج ${PRODUCTION_MIGRATION_ENABLE_ENV}=1 لهذا التشغيل`);
+}
+
 /** البوابات 1–6 (بلا اتصال). ترجع إذنًا لا يُزوَّر أو ترمي سببًا واضحًا. */
 export function authorizeProductionMigration(input: {
   env: NodeJS.ProcessEnv; databaseUrl: string; migrationId: ProductionMigrationId; mode: ProductionMode;
   confirm: string | null | undefined; backupSha256: string | null | undefined; targets: MigrationTargets; now?: Date;
+  /** بصمة ملف الموافقة (للتدقيق فقط — لا محتواه) */ approvalFileSha256?: string | null;
 }): ProductionAuthorization {
   const now = (input.now ?? new Date()).getTime();
-  if (input.env[PRODUCTION_MIGRATION_ENABLE_ENV] !== "1") refuse(`تطبيق الـmigrations على Production معطّل افتراضيًا — يحتاج ${PRODUCTION_MIGRATION_ENABLE_ENV}=1 لهذا التشغيل`);
+  assertProductionEnabled(input.env);
   if (input.env.DEPLOY_ENV !== "production") refuse(`DEPLOY_ENV يجب أن يكون production (الحالي: ${input.env.DEPLOY_ENV || "غير مضبوط"})`);
   const id = urlIdentity(input.databaseUrl);
   if (!input.targets || input.targets.version !== 1 || !Array.isArray(input.targets.targets)) refuse("ملف الأهداف المعتمدة غير صالح");
   const t = input.targets.targets.find(x => x.host === id.host && Number(x.port) === id.port && x.database === id.database);
   if (!t) refuse("الهدف غير موثّق في الأهداف المعتمدة (المضيف/المنفذ/القاعدة يجب أن تطابق حرفيًا)");
   const target = t!;
-  if (!target.approvedBy || !target.approvalRef) refuse("الموافقة بلا approvedBy أو approvalRef");
+  if (!target.approvedBy || !/^[A-Za-z0-9._-]{3,64}$/.test(target.approvalRef ?? "")) refuse("الموافقة بلا approvedBy أو approvalRef صالح (حروف/أرقام . _ - من 3 إلى 64)");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target.serverUuid ?? "")) refuse("الموافقة بلا serverUuid صالح");
   if (!target.migrations?.includes(input.migrationId)) refuse(`الموافقة لا تشمل ${input.migrationId}`);
   const from = Date.parse(target.approvedAt), to = Date.parse(target.expiresAt);
@@ -88,9 +97,9 @@ export function authorizeProductionMigration(input: {
   const verified = Date.parse(target.backupRestoreVerifiedAt);
   if (!Number.isFinite(verified) || verified > now || now - verified > MAX_BACKUP_AGE_MS) refuse("اختبار استعادة النسخة الاحتياطية غير مسجّل أو أقدم من 24 ساعة");
   if (input.mode === "rollback" && target.allowRollback !== true) refuse("rollback على Production غير مسموح في هذه الموافقة");
-  const expected = productionConfirmPhrase(input.migrationId, input.mode, target.database, target.serverUuid);
-  if ((input.confirm ?? "") !== expected) refuse(`عبارة التأكيد غير مطابقة — المطلوب حرفيًا: ${expected}`);
-  const auth: ProductionAuthorization = Object.freeze({ migrationId: input.migrationId, mode: input.mode, target: Object.freeze({ ...target }), backupSha256: target.backupSha256, confirm: expected });
+  const expected = productionConfirmPhrase(input.migrationId, input.mode, target.database, target.approvalRef);
+  if ((input.confirm ?? "") !== expected) refuse(`عبارة التأكيد غير مطابقة — الصيغة: ${input.mode === "apply" ? "APPLY" : "ROLLBACK"} ${input.migrationId} TO <القاعدة> ON PRODUCTION <approvalRef>`);
+  const auth: ProductionAuthorization = Object.freeze({ migrationId: input.migrationId, mode: input.mode, target: Object.freeze({ ...target }), backupSha256: target.backupSha256, confirm: expected, approvalFileSha256: input.approvalFileSha256 ?? null });
   ISSUED.add(auth);
   return auth;
 }
@@ -108,19 +117,36 @@ export function productionGate(production: unknown, migrationId: ProductionMigra
   return null;
 }
 
-/** يقرأ ملف الأهداف المعتمدة الملتزَم في المستودع (لا خيار لمسار بديل — الموافقة تمر بمراجعة Git). */
-export function readMigrationTargets(scriptPath: string): MigrationTargets {
-  const dir = scriptPath ? scriptPath.replace(/[^/]+$/, "") : "";
-  const candidates = [MIGRATION_TARGETS_FILE, `${dir}../${MIGRATION_TARGETS_FILE}`, `${dir}../../${MIGRATION_TARGETS_FILE}`];
-  const file = candidates.find(c => fs.existsSync(c));
-  if (!file) return refuse(`ملف ${MIGRATION_TARGETS_FILE} غير موجود`);
-  return JSON.parse(fs.readFileSync(file, "utf-8")) as MigrationTargets;
+/**
+ * ملف الموافقة وقت التشغيل (B1): مسار مطلق خارج المستودع ودليل العمل، ملف عادي غير symlink، مملوك لنفس المستخدم،
+ * وصلاحياته 600 بالضبط، وفيه موافقة واحدة. أي خلل = رفض آمن برسالة لا تعرض أي جزء من المحتوى.
+ * يرجع الموافقة + بصمة sha256 للملف (للتدقيق).
+ */
+export function readApprovalFile(file: string | null | undefined, opts: { repoRoot: string; cwd?: string; uid?: number | null } = { repoRoot: process.cwd() }): { targets: MigrationTargets; sha256: string } {
+  if (!file) return refuse("ملف الموافقة مطلوب: --approval-file <مسار مطلق لملف خارج المستودع بصلاحيات 600>");
+  if (!path.isAbsolute(file)) return refuse("مسار ملف الموافقة يجب أن يكون مطلقًا");
+  const abs = path.resolve(file);
+  const inside = (root: string) => { const r = path.resolve(root); return abs === r || abs.startsWith(r + path.sep); };
+  if (inside(opts.repoRoot) || (opts.cwd && inside(opts.cwd))) return refuse("ملف الموافقة يجب أن يكون خارج المستودع ودليل التشغيل");
+  let st: fs.Stats;
+  try { st = fs.lstatSync(abs); } catch { return refuse("ملف الموافقة غير موجود أو لا يمكن قراءته"); }
+  if (st.isSymbolicLink() || !st.isFile()) return refuse("ملف الموافقة يجب أن يكون ملفًا عاديًا (لا symlink)");
+  if ((st.mode & 0o777) !== 0o600) return refuse("صلاحيات ملف الموافقة غير آمنة — المطلوب 600 بالضبط");
+  const uid = opts.uid === undefined ? (typeof process.getuid === "function" ? process.getuid() : null) : opts.uid;
+  if (uid !== null && st.uid !== uid) return refuse("ملف الموافقة غير مملوك لمستخدم التشغيل");
+  let bytes: Buffer;
+  try { bytes = fs.readFileSync(abs); } catch { return refuse("ملف الموافقة لا يمكن قراءته"); }
+  let parsed: unknown;
+  try { parsed = JSON.parse(bytes.toString("utf-8")); } catch { return refuse("ملف الموافقة ليس JSON صالحًا"); }
+  const t = parsed as MigrationTargets;
+  if (!t || t.version !== 1 || !Array.isArray(t.targets) || t.targets.length !== 1) return refuse("ملف الموافقة يجب أن يحوي موافقة واحدة بصيغة {version:1, targets:[…]}");
+  return { targets: t, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
 export type RunnerOutcome = { ok: boolean; state: string | null; refused: string | null; lines: string[] };
 export type AuditRecord = {
-  at: string; migration: ProductionMigrationId; mode: ProductionMode; serverUuidPrefix: string; approvalRef: string;
-  backupSha256Prefix: string; before: string | null; after: string | null; ok: boolean; refused: string | null; durationMs: number;
+  at: string; migration: ProductionMigrationId; mode: ProductionMode; approvalRef: string; approvalFileSha256Prefix: string | null;
+  backupVerified: boolean; before: string | null; after: string | null; ok: boolean; refused: string | null; durationMs: number;
 };
 
 /**
@@ -134,10 +160,10 @@ export async function runProductionMigration(opts: {
 }): Promise<{ ok: boolean; refused: string | null; lines: string[]; audit: AuditRecord }> {
   const started = Date.now();
   const { auth } = opts;
-  const lines: string[] = [`Production · ${auth.migrationId} · ${auth.mode} · الهدف: ${auth.target.host}:${auth.target.port} / ${auth.target.database} · server_uuid ${auth.target.serverUuid.slice(0, 8)}… · ${auth.target.approvalRef}`];
+  const lines: string[] = [`Production · ${auth.migrationId} · ${auth.mode} · موافقة ${auth.target.approvalRef}`];
   let before: string | null = null, after: string | null = null, refused: string | null = null, ok = false;
   const finish = () => {
-    const rec: AuditRecord = { at: new Date().toISOString(), migration: auth.migrationId, mode: auth.mode, serverUuidPrefix: auth.target.serverUuid.slice(0, 8), approvalRef: auth.target.approvalRef, backupSha256Prefix: auth.backupSha256.slice(0, 16), before, after, ok, refused, durationMs: Date.now() - started };
+    const rec: AuditRecord = { at: new Date().toISOString(), migration: auth.migrationId, mode: auth.mode, approvalRef: auth.target.approvalRef, approvalFileSha256Prefix: auth.approvalFileSha256 ? auth.approvalFileSha256.slice(0, 12) : null, backupVerified: true, before, after, ok, refused, durationMs: Date.now() - started };
     lines.push(`AUDIT ${JSON.stringify(rec)}`);
     opts.audit?.(rec);
     return { ok, refused, lines, audit: rec };
