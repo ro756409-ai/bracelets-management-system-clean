@@ -147,10 +147,13 @@ export function VariantMatrixBuilder({
   value,
   onChange,
   skuBase,
+  costEditable = true,
 }: {
   value: VariantMatrixValue;
   onChange: (next: VariantMatrixValue) => void;
   skuBase: string;
+  /** BUG-01: بلا صلاحية إدارة التكلفة خانة التكلفة مقفولة (والصفحة ماتبعتهاش). الافتراضي: مفتوحة. */
+  costEditable?: boolean;
 }) {
   function setColors(colors: string[]) {
     onChange({ ...value, colors, rows: rebuildRows(colors, value.sizes, value.rows, skuBase) });
@@ -241,7 +244,8 @@ export function VariantMatrixBuilder({
                         value={r.costPrice}
                         onChange={e => patchRow(key, { costPrice: e.target.value })}
                         className="h-8 w-24"
-                        disabled={!r.enabled}
+                        disabled={!r.enabled || !costEditable}
+                        title={costEditable ? undefined : "تعديل التكلفة يحتاج صلاحية «إدارة تكلفة المخزون»"}
                       />
                     </td>
                     <td className="p-2">

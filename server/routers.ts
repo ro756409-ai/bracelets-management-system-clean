@@ -2579,8 +2579,17 @@ export const appRouter = router({
         // المدير جلسته admin صناعية عشان تشغيله يفضل شغّال، لكنه **غير مالي** — فبنشيل
         // الصلاحيات المالية من قايمته عشان الواجهة تخفي أقسام الحسابات عنه (زي ما البوابة
         // بترفضها على السيرفر بالظبط).
-        if (role === "manager")
-          return ALL_PERMISSIONS.filter(p => !isFinancialPermission(p));
+        if (role === "manager") {
+          // BUG-01: نفس قاعدة permissionProcedure — تكلفة المخزون للمدير تتبع تجاوزات الشركة، عشان
+          // الواجهة ماتبعتش تكلفة مسحوبة صلاحيتها (والسيرفر يفضل هو الحارس).
+          const granted: (typeof ALL_PERMISSIONS)[number][] = [];
+          for (const p of ALL_PERMISSIONS) {
+            if (isFinancialPermission(p)) continue;
+            if (p.startsWith("inventory_costing.") && (ctx.tenantId == null || !(await hasTenantPermission(ctx.tenantId, "manager", p)))) continue;
+            granted.push(p);
+          }
+          return granted;
+        }
         return [...ALL_PERMISSIONS];
       }
       if (!role || ctx.tenantId == null) return [];
