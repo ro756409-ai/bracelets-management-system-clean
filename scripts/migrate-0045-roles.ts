@@ -8,6 +8,7 @@
  */
 import "dotenv/config";
 import { runRoleEnumMigration } from "../server/roleEnumMigration.service";
+import { runProductionCli } from "./_productionMigrationCli";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -17,6 +18,15 @@ async function main() {
   const mode = modes[0] === "--apply" ? "apply" : modes[0] === "--rollback" ? "rollback" : "check";
   const url = process.env.DATABASE_URL;
   if (!url) { console.error("DATABASE_URL غير مضبوط — إيقاف."); process.exit(2); }
+  if (args.includes("--production") && mode !== "check") {
+    // B1: المسار المحمي فقط.
+    const asOutcome = (r: Awaited<ReturnType<typeof runRoleEnumMigration>>) => ({ ok: r.ok, state: r.state, refused: r.refused, lines: r.lines });
+    return runProductionCli({
+      migrationId: "0045", mode, args, databaseUrl: url,
+      check: async () => asOutcome(await runRoleEnumMigration({ databaseUrl: url, mode: "check" })),
+      run: async auth => asOutcome(await runRoleEnumMigration({ databaseUrl: url, mode, confirm: auth.confirm, production: auth })),
+    });
+  }
   const r = await runRoleEnumMigration({ databaseUrl: url, mode, confirm: opt("--confirm") ?? null, deployEnv: process.env.DEPLOY_ENV ?? null });
   if (args.includes("--json")) console.log(JSON.stringify({ ...r, lines: undefined }, null, 2));
   else for (const l of r.lines) console.log(l);

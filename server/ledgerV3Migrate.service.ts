@@ -2,6 +2,7 @@ import mysql from "mysql2/promise";
 import { looksLikeProductionTarget } from "../shared/balanceReconciliation";
 import { LEDGER_V3_OLD_TABLE_INDEXES, splitMigrationStatements, type ApplicationState, type VerifyIssue } from "../shared/ledgerV3Spec";
 import { openReadOnlyExecutor } from "./balanceReconciliation.service";
+import { productionGate } from "./productionMigration";
 import { verifyLedgerV3OnDatabase } from "./ledgerV3Verify.service";
 
 /**
@@ -69,13 +70,16 @@ const fmt = (s: StatementStatus) => `  ${s.present ? "✓" : "✗"} [${s.n}/9] $
 
 const looksLikeStaging = (database: string) => /staging|stage|test/i.test(database);
 
-export async function runMigrate0040(opts: { databaseUrl: string; mode: MigrateMode; sqlText: string; confirm?: string | null; deployEnv?: string | null }): Promise<MigrateResult> {
+export async function runMigrate0040(opts: { databaseUrl: string; mode: MigrateMode; sqlText: string; confirm?: string | null; deployEnv?: string | null; /** B1: إذن Production من المسار المحمي فقط */ production?: unknown }): Promise<MigrateResult> {
   const target = looksLikeProductionTarget(opts.databaseUrl);
   const lines: string[] = [`الهدف: ${target.host} / ${target.database}${target.production ? "  ⚠️ يبدو إنتاجًا" : ""} · الوضع: ${opts.mode === "apply" ? "APPLY" : "check (قراءة فقط)"}`];
   const base: MigrateResult = { ok: false, mode: opts.mode, target: { host: target.host, database: target.database }, state: null, statements: [], issues: [], replay: false, applied: 0, refused: null, lines };
   const refuse = (why: string): MigrateResult => { lines.push(`✗ مرفوض قبل أي DDL: ${why}`); return { ...base, refused: why, lines }; };
 
-  if (opts.mode === "apply") {
+  if (opts.mode === "apply" && opts.production !== undefined) {
+    const why = productionGate(opts.production, "0040", "apply", opts.databaseUrl, opts.confirm);
+    if (why) return refuse(why);
+  } else if (opts.mode === "apply") {
     if (opts.deployEnv !== "staging") return refuse(`DEPLOY_ENV يجب أن يكون staging (الحالي: ${opts.deployEnv || "غير مضبوط"})`);
     if (target.production) return refuse("القاعدة تبدو إنتاجًا (مضيف غير محلي واسم بلا staging/test)");
     if (!looksLikeStaging(target.database)) return refuse(`اسم القاعدة «${target.database}» لا يدل على Staging (يجب أن يحوي staging أو stage أو test)`);

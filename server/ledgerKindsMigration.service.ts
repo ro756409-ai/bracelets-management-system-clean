@@ -3,6 +3,7 @@ import { looksLikeProductionTarget } from "../shared/balanceReconciliation";
 import { enumColumnType } from "../shared/employeeRoleEnumSpec";
 import { LEDGER_ACCOUNT_KINDS_AFTER_0046, LEDGER_ACCOUNT_KINDS_BEFORE_0046, LEDGER_ACCOUNT_KINDS_NEW_0046 } from "../shared/ledgerAccountKindsSpec";
 import { migrationGate } from "./handMigration.service";
+import { productionGate } from "./productionMigration";
 
 /**
  * Migration 0046 (نوعا حساب ledger_accounts.kind) — نفس انضباط 0045 لعبارة «تعديل ENUM» واحدة:
@@ -49,12 +50,14 @@ export function alterKindSql(type: string, c: Pick<KindsColumn, "charset" | "col
   return `ALTER TABLE \`ledger_accounts\` MODIFY COLUMN \`kind\` ${type}${cs} NOT NULL`;
 }
 
-export async function runLedgerKindsMigration(opts: { databaseUrl: string; mode: "check" | "apply" | "rollback"; confirm?: string | null; deployEnv?: string | null }): Promise<KindsResult> {
+export async function runLedgerKindsMigration(opts: { databaseUrl: string; mode: "check" | "apply" | "rollback"; confirm?: string | null; deployEnv?: string | null; /** B1: إذن Production من المسار المحمي فقط */ production?: unknown }): Promise<KindsResult> {
   const target = looksLikeProductionTarget(opts.databaseUrl);
   const lines: string[] = [`0046 ledger account kinds · الهدف: ${target.host} / ${target.database}${target.production ? "  ⚠️ يبدو إنتاجًا" : ""} · الوضع: ${opts.mode}`];
   const base: KindsResult = { ok: false, mode: opts.mode, target: { host: target.host, database: target.database }, state: null, column: null, issues: [], replay: false, applied: false, refused: null, lines };
   if (opts.mode !== "check") {
-    const why = migrationGate("0046", opts.mode, target, opts.deployEnv, opts.confirm);
+    const why = opts.production !== undefined
+      ? productionGate(opts.production, "0046", opts.mode, opts.databaseUrl, opts.confirm)
+      : migrationGate("0046", opts.mode, target, opts.deployEnv, opts.confirm);
     if (why) { lines.push(`✗ مرفوض قبل أي DDL: ${why}`); return { ...base, refused: why }; }
   }
   const conn = await mysql.createConnection(opts.databaseUrl);

@@ -12,6 +12,7 @@ import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import { runMigrate0040 } from "../server/ledgerV3Migrate.service";
+import { runProductionCli } from "./_productionMigrationCli";
 
 const args = process.argv.slice(2);
 const opt = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : args.find(a => a.startsWith(`${name}=`))?.slice(name.length + 1); };
@@ -29,7 +30,17 @@ async function main() {
   if (apply && args.includes("--check")) { console.error("--apply و--check معًا غير مسموح."); process.exit(2); }
   const url = process.env.DATABASE_URL;
   if (!url) { console.error("DATABASE_URL غير مضبوط — إيقاف."); process.exit(2); }
-  const r = await runMigrate0040({ databaseUrl: url, mode: apply ? "apply" : "check", sqlText: readMigrationSql(), confirm: opt("--confirm") ?? null, deployEnv: process.env.DEPLOY_ENV ?? null });
+  const sqlText = readMigrationSql();
+  if (apply && args.includes("--production")) {
+    // B1: المسار المحمي فقط (0040 بلا rollback على أي بيئة).
+    const asOutcome = (r: Awaited<ReturnType<typeof runMigrate0040>>) => ({ ok: r.ok, state: r.state, refused: r.refused, lines: r.lines });
+    return runProductionCli({
+      migrationId: "0040", mode: "apply", args, databaseUrl: url,
+      check: async () => asOutcome(await runMigrate0040({ databaseUrl: url, mode: "check", sqlText })),
+      run: async auth => asOutcome(await runMigrate0040({ databaseUrl: url, mode: "apply", sqlText, confirm: auth.confirm, production: auth })),
+    });
+  }
+  const r = await runMigrate0040({ databaseUrl: url, mode: apply ? "apply" : "check", sqlText, confirm: opt("--confirm") ?? null, deployEnv: process.env.DEPLOY_ENV ?? null });
   if (args.includes("--json")) console.log(JSON.stringify({ ...r, lines: undefined }, null, 2));
   else for (const l of r.lines) console.log(l);
   process.exit(r.ok ? 0 : r.refused ? 3 : 1);

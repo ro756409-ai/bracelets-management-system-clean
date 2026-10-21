@@ -11,6 +11,7 @@ import {
   type TableSpec,
 } from "../shared/schemaSpec";
 import { openReadOnlyExecutor, type ReadOnlyExecutor } from "./balanceReconciliation.service";
+import { productionGate } from "./productionMigration";
 
 /**
  * محرّك الـMigrations المكتوبة يدويًا 0041 / 0042 / 0043 / 0044 — نفس انضباط 0040 (ledgerV3Migrate.service) بشكل عام:
@@ -222,12 +223,19 @@ export async function runHandMigration(def: HandMigrationDef, opts: {
   deployEnv?: string | null;
   /** rollback فقط: حذف الفهرسين المركّبين إن لم يعتمد عليهما أي FK آخر (افتراضيًا يُبقيان) */
   dropCompositeIndexes?: boolean;
+  /** B1: إذن Production صادر من المسار المحمي فقط (productionMigration) — بدونه الإنتاج مرفوض دائمًا كما كان. */
+  production?: unknown;
 }): Promise<HandMigrationResult> {
   const target = looksLikeProductionTarget(opts.databaseUrl);
   const lines: string[] = [`${def.title} · الهدف: ${target.host} / ${target.database}${target.production ? "  ⚠️ يبدو إنتاجًا" : ""} · الوضع: ${opts.mode}`];
   const base: HandMigrationResult = { ok: false, mode: opts.mode, target: { host: target.host, database: target.database }, state: null, compositeIndexes: null, statements: [], issues: [], preflight: [], replay: false, applied: 0, skipped: 0, refused: null, lines };
   const refuse = (why: string): HandMigrationResult => { lines.push(`✗ مرفوض قبل أي DDL: ${why}`); return { ...base, refused: why, lines }; };
-  if (opts.mode !== "check") { const why = gate(def, opts.mode, target, opts.deployEnv, opts.confirm); if (why) return refuse(why); }
+  if (opts.mode !== "check") {
+    const why = opts.production !== undefined
+      ? productionGate(opts.production, def.id, opts.mode, opts.databaseUrl, opts.confirm)
+      : gate(def, opts.mode, target, opts.deployEnv, opts.confirm);
+    if (why) return refuse(why);
+  }
 
   const described = describeStatements(opts.sqlText);
   const exec = await openReadOnlyExecutor(opts.databaseUrl);

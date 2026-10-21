@@ -5,6 +5,7 @@ import {
   ROLE_REFERENCE_COLUMNS, enumColumnType,
 } from "../shared/employeeRoleEnumSpec";
 import { migrationGate } from "./handMigration.service";
+import { productionGate } from "./productionMigration";
 
 /**
  * Migration 0045 (دور accounts_manager) — نفس انضباط المحرّك اليدوي، لعبارة «تعديل ENUM» واحدة:
@@ -66,12 +67,14 @@ async function tableExists(conn: mysql.Connection, table: string): Promise<boole
   return Number((r as any)[0]?.n ?? 0) > 0;
 }
 
-export async function runRoleEnumMigration(opts: { databaseUrl: string; mode: "check" | "apply" | "rollback"; confirm?: string | null; deployEnv?: string | null }): Promise<RoleEnumResult> {
+export async function runRoleEnumMigration(opts: { databaseUrl: string; mode: "check" | "apply" | "rollback"; confirm?: string | null; deployEnv?: string | null; /** B1: إذن Production من المسار المحمي فقط */ production?: unknown }): Promise<RoleEnumResult> {
   const target = looksLikeProductionTarget(opts.databaseUrl);
   const lines: string[] = [`0045 accounts_manager role · الهدف: ${target.host} / ${target.database}${target.production ? "  ⚠️ يبدو إنتاجًا" : ""} · الوضع: ${opts.mode}`];
   const base: RoleEnumResult = { ok: false, mode: opts.mode, target: { host: target.host, database: target.database }, state: null, column: null, issues: [], replay: false, applied: false, refused: null, lines };
   if (opts.mode !== "check") {
-    const why = migrationGate("0045", opts.mode, target, opts.deployEnv, opts.confirm);
+    const why = opts.production !== undefined
+      ? productionGate(opts.production, "0045", opts.mode, opts.databaseUrl, opts.confirm)
+      : migrationGate("0045", opts.mode, target, opts.deployEnv, opts.confirm);
     if (why) { lines.push(`✗ مرفوض قبل أي DDL: ${why}`); return { ...base, refused: why }; }
   }
   const conn = await mysql.createConnection(opts.databaseUrl);
