@@ -13,6 +13,7 @@ import { trpc } from "@/lib/trpc";
 export function usePermissions(): {
   permissions: string[];
   isLoading: boolean;
+  isSuccess: boolean;
   has: (permission: string) => boolean;
 } {
   const query = trpc.auth.myPermissions.useQuery(undefined, {
@@ -23,6 +24,7 @@ export function usePermissions(): {
   return {
     permissions,
     isLoading: query.isLoading,
+    isSuccess: query.isSuccess,
     has: (permission: string) => permissions.includes(permission as never),
   };
 }

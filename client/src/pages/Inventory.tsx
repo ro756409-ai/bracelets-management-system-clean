@@ -47,6 +47,7 @@ import {
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { usePermissions } from "@/hooks/usePermission";
+import { canWriteCost, costForSubmit } from "@/lib/costWrite";
 import {
   PageHeader, ScopeBar, StatCard, SectionCard, ResponsiveDataTable, StatusBadge, OfflineState, UNAVAILABLE_LABEL, type Column,
 } from "@/components/shared";
@@ -84,7 +85,10 @@ export default function Inventory() {
   // المصدر الواحد لاختيار النشاط (يعالج: واحد→تلقائي، صفر→isEmpty، أكتر→اختيار).
   const brandOptions = useBrandOptions();
   const { user } = useAuth();
-  const { permissions } = usePermissions();
+  const permState = usePermissions();
+  const { permissions } = permState;
+  // BUG-01: بلا inventory_costing.manage لا يُرسل أي حقل تكلفة (السيرفر يرفض الطلب كله لو اتبعتت).
+  const costWritable = canWriteCost(permState);
   const isAdmin = user?.role === "admin";
   // تبويبات Workspace المخزون (المخزون/الاستلام/الجرد/مرتجعات الورشة) يرسمها DashboardLayout مرة واحدة
   // من نفس NavConfig للوجهة النشطة — الصفحة لا ترسم نسخة ثانية (كانت تظهر مكررة على الهاتف).
@@ -457,7 +461,7 @@ export default function Inventory() {
         size: r.size.trim() || undefined,
         sku: r.sku.trim() || undefined,
         price: priceN,
-        costPrice: costN,
+        costPrice: costForSubmit(costWritable, costN),
         currentStock: stockN,
         minStockLevel: minN,
       });
@@ -505,7 +509,7 @@ export default function Inventory() {
         name: vfName.trim(),
         sku: vfSku.trim() || undefined,
         price: priceNum,
-        costPrice: costPriceNum,
+        costPrice: costForSubmit(costWritable, costPriceNum),
         currentStock: stockNum,
         minStockLevel: minNum,
         isActive: vfIsActive,
@@ -518,7 +522,7 @@ export default function Inventory() {
         name: vfName.trim(),
         sku: vfSku.trim() || undefined,
         price: priceNum,
-        costPrice: costPriceNum,
+        costPrice: costForSubmit(costWritable, costPriceNum),
         minStockLevel: minNum,
         isActive: vfIsActive,
       });
@@ -604,7 +608,7 @@ export default function Inventory() {
           size: r.size.trim() || undefined,
           sku: r.sku.trim() || undefined,
           price: priceN,
-          costPrice: costN,
+          costPrice: costForSubmit(costWritable, costN),
           currentStock: stockN,
           minStockLevel: minN,
         });
@@ -1831,7 +1835,13 @@ export default function Inventory() {
                   onChange={e => setVfCostPrice(e.target.value)}
                   className="mt-1"
                   placeholder="ج.م"
+                  disabled={!costWritable}
                 />
+                {!costWritable && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    تعديل التكلفة يحتاج صلاحية «إدارة تكلفة المخزون» — باقي الحقول بتتحفظ عادي.
+                  </p>
+                )}
               </div>
             </div>
             {variantFormMode === "create" ? (
@@ -2097,6 +2107,7 @@ export default function Inventory() {
                 value={pfMatrix}
                 onChange={setPfMatrix}
                 skuBase={pfSku}
+                costEditable={costWritable}
               />
             ) : (
               <>
@@ -2201,6 +2212,7 @@ export default function Inventory() {
               value={addMatrix}
               onChange={setAddMatrix}
               skuBase=""
+              costEditable={costWritable}
             />
           </div>
           <DialogFooter>
