@@ -5424,8 +5424,8 @@ export const appRouter = router({
       }),
 
     // حذف جميع المكررات
-    // Security (backport من v2): «حذف كل المكررات» كان بيمسح مكررات كل التجار — دلوقتي بنطاق أنشطة المالك
-    // (نطاق فاضي = [-1] = صفر صفوف). سلوك الحذف نفسه (deleteOrders) بدون تغيير.
+    // Security (backport من v2): «حذف كل المكررات» كان بيمسح مكررات كل التجار — دلوقتي بنطاق أنشطة المالك بس
+    // (نطاق فاضي = [-1] = صفر صفوف). حماية المخزون في deleteOrders (Rollback-Safe) زي ما هي: الدفعة كلها أو لا شيء.
     deleteAll: ownerProcedure.mutation(async ({ ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

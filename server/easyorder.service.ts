@@ -25,6 +25,7 @@
  * none of this and works today.
  */
 import { normalizeEgyptianPhone } from "../shared/phone";
+import { isRollbackSafeBlocked, orderWriteFingerprint } from "./rollbackSafe";
 import {
   getDb,
   createOrderWithItems,
@@ -295,7 +296,11 @@ export function normalizeEasyOrderPayload(payload: EasyOrderPayload): Normalized
 }
 
 // ==================== Upsert pipeline ====================
-export type UpsertOutcome = "created" | "updated" | "duplicate_unchanged" | "failed";
+/**
+ * «blocked_rollback_safe»: نسخة الرجوع الآمن رفضت التحديث عمدًا (أوردر ماسك مخزون وأصنافه/كمياته
+ * هتتغيّر من غير تسوية) **ومفيش أي حاجة اتغيّرت** — مش فشل حفظ. الويبهوك بيرد عليه 200 ويسجّله للمراجعة.
+ */
+export type UpsertOutcome = "created" | "updated" | "duplicate_unchanged" | "failed" | "blocked_rollback_safe";
 
 export interface UpsertResult {
   outcome: UpsertOutcome;
@@ -402,6 +407,9 @@ export async function upsertEasyOrder(
     unitPrice: r.item.unitPrice,
   }));
 
+  // Rollback-Safe: الأوردر الموجود وبصمته قبل التحديث — عشان الرفض المقصود يتفرّق عن فشل الحفظ الحقيقي.
+  let rsExisting: { id: number; orderNumber: string } | undefined;
+  let rsBefore: string | undefined;
   try {
     const existing = await getOrderByExternalId(normalized.externalOrderId, opts.businessId);
 
@@ -430,6 +438,8 @@ export async function upsertEasyOrder(
       // الهيدر والبنود في transaction واحدة (صف الأوردر مقفول أولًا). قبل كده كانوا
       // خطوتين منفصلتين، ففشل البنود كان بيسيب هيدر متحدّث وبنود قديمة. التطبيع
       // والتحقق من انتقال الحالة زي `updateOrder` بالظبط.
+      rsExisting = { id: existing.id, orderNumber: existing.orderNumber };
+      rsBefore = await orderWriteFingerprint(await getDb(), existing.id);
       await updateOrderWithItems(existing.id, orderFields as any, itemRows, {
         normalizePhones: true,
       });
@@ -458,6 +468,20 @@ export async function upsertEasyOrder(
 
     return { outcome: "created", orderId, orderNumber, needsReview, reviewReason };
   } catch (err: any) {
+    // Rollback-Safe: الرفض المقصود بيتعرف بنوع الخطأ (مش نص الرسالة)، وبيتأكد إن الأوردر وبنوده
+    // وحركاته والمخزون زي ما هم بالظبط. أي خطأ تاني — أو رفض مع تغيير غير متوقع — يفضل «failed».
+    if (isRollbackSafeBlocked(err) && rsExisting && rsBefore !== undefined) {
+      const after = await orderWriteFingerprint(await getDb(), rsExisting.id);
+      if (after === rsBefore)
+        return {
+          outcome: "blocked_rollback_safe",
+          orderId: rsExisting.id,
+          orderNumber: rsExisting.orderNumber,
+          needsReview,
+          error: String(err.message),
+        };
+      return { outcome: "failed", needsReview, error: `رفض الرجوع الآمن مع تغيير غير متوقع في الأوردر #${rsExisting.orderNumber}` };
+    }
     return { outcome: "failed", needsReview, error: String(err?.message ?? err) };
   }
 }
@@ -728,6 +752,11 @@ export async function syncOrdersByDateRange(opts: {
       case "failed":
         failed++;
         failures.push(`${payload.id}: ${result.error ?? "خطأ غير معروف"}`);
+        break;
+      case "blocked_rollback_safe":
+        // مرفوض عمدًا بلا أي تغيير — بيظهر في ملخص المزامنة للمراجعة اليدوية.
+        failed++;
+        failures.push(`${payload.id}: [مرفوض — نسخة الرجوع الآمن] ${result.error ?? ""}`);
         break;
     }
     if (result.needsReview && result.outcome !== "failed") needsReview++;

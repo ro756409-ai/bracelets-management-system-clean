@@ -4,15 +4,15 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { appRouter } from "./routers";
 import { createContext } from "./_core/context";
 import { COOKIE_NAME } from "@shared/const";
-import { getDb, createEmployee, createProductWithVariants, insertOrderWithItems } from "./db";
+import { getDb, createEmployee, createProductWithVariants, insertOrderWithItems, confirmOrder, postponeOrder } from "./db";
 import { orders, orderItems, inventoryMovements, products, productVariants, employees, tenants } from "../drizzle/schema";
 import { createCoreTestFixture, type CoreTestFixture } from "./testFixtures";
 
 /**
  * Security blocker — duplicates.list / duplicates.deleteAll في 620a5ae (والإنتاج) كانوا بلا نطاق تاجر:
  * القائمة بتعرض مكررات كل التجار، و«حذف الكل» بيمسحها. على قاعدة اختبار منفصلة ببيانات مصطنعة بس.
- * بيثبت: نطاق التاجر بس، تاجر B مايتلمسش (لقطة كاملة)، الأدوار غير المصرّح بها مرفوضة، والنطاق الفاضي
- * مابيمسحش. (Release 1: نطاق التاجر فقط — حواجز مخزون Rollback-Safe من 622852d خارج النطاق ولم تُنقل.)
+ * بيثبت: نطاق التاجر بس، تاجر B مايتلمسش (لقطة كاملة)، الأدوار غير المصرّح بها مرفوضة، النطاق الفاضي
+ * مابيمسحش، والأوردر الماسك مخزون (مؤكد، أو مؤجل لسه ماسك خصم) يرفض الدفعة كلها.
  */
 const CAN = Boolean(process.env.TEST_DATABASE_URL && process.env.JWT_SECRET);
 const sign = (employeeId: number) => jwt.sign({ employeeId }, process.env.JWT_SECRET as string);
@@ -24,7 +24,7 @@ async function outcome(fn: () => Promise<any>): Promise<{ code: string; value?: 
   try { return { code: "ok", value: await fn() }; } catch (e: any) { return { code: e?.code ?? e?.name ?? "ERR" }; }
 }
 
-describe.runIf(CAN)("🔐 duplicates.list/deleteAll — نطاق التاجر", { timeout: 120_000 }, () => {
+describe.runIf(CAN)("🔐 duplicates.list/deleteAll — نطاق التاجر (Rollback-Safe)", { timeout: 120_000 }, () => {
   let A: CoreTestFixture; let B: CoreTestFixture;
   const e: Record<string, number> = {};
   const ids = { orders: [] as number[], products: [] as number[], tenantC: 0 };
@@ -131,6 +131,23 @@ describe.runIf(CAN)("🔐 duplicates.list/deleteAll — نطاق التاجر", 
     expect([r.code, r.value?.deleted]).toEqual(["ok", 0]);
     expect(await snapBusiness(A.businessId)).toBe(beforeA); expect(await snapBusiness(B.businessId)).toBe(beforeB);
     await unmarkBiz(A.businessId); await unmarkBiz(B.businessId);
+  });
+
+  it("حماية المخزون: مكرر مؤكد، أو مؤجل لسه ماسك خصم = رفض الدفعة كلها (412) بلا أي حذف", async () => {
+    const PA = await product(A.businessId);
+    const free = await order(A.businessId, PA);
+    const confirmed = await order(A.businessId, PA); await confirmOrder(confirmed, e.ownerA);
+    const held = await order(A.businessId, PA); await confirmOrder(held, e.ownerA);
+    await postponeOrder(held, new Date(Date.now() + 86_400_000), undefined, e.ownerA);
+    for (const set of [[free, confirmed], [free, held]]) {
+      await unmarkBiz(A.businessId); await markDup(set);
+      const beforeA = await snapBusiness(A.businessId);
+      const r = await outcome(async () => (await web(e.ownerA)).duplicates.deleteAll());
+      expect(r.code, JSON.stringify(set)).toBe("PRECONDITION_FAILED");
+      expect(await snapBusiness(A.businessId)).toBe(beforeA);
+      expect(await exists(free)).toBe(true);
+    }
+    await unmarkBiz(A.businessId);
   });
 
   it("delete (فردي): مالك B مايقدرش يحذف مكرر A بالمعرّف", async () => {

@@ -140,6 +140,11 @@ import {
   orderContentChangedAfterShipment,
 } from "../shared/orderContent";
 import { captureExpectedShippingSnapshotInTransaction } from "./shippingSnapshotV2.service";
+import {
+  readOrderStockState, currentStockLines, assertConfirmAllowed, assertCancelAllowed, assertStatusChangeAllowed,
+  assertStockNeutralChange, assertDeleteAllowed, assertReturnRestoreAllowed, assertProductReassignAllowed,
+  RollbackSafeBlockedError, assertHeaderEditStockNeutral,
+} from "./rollbackSafe";
 
 // ==================== CAIRO TIMEZONE HELPERS ====================
 const CAIRO_TIMEZONE = "Africa/Cairo";
@@ -1782,7 +1787,7 @@ export async function updateOrderWithItems(
 ): Promise<void> {
   await runOrderTransaction(async tx => {
     const [current] = await tx
-      .select({ id: orders.id, status: orders.status })
+      .select({ id: orders.id, status: orders.status, productId: orders.productId, variantId: orders.variantId, quantity: orders.quantity })
       .from(orders)
       .where(eq(orders.id, id))
       .limit(1)
@@ -1793,6 +1798,15 @@ export async function updateOrderWithItems(
         `لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${patch.status}" مباشرة`
       );
     }
+    // Rollback-Safe: استبدال البنود هنا مابيحرّكش مخزون — مرفوض لو بيغيّر أصناف/كميات أوردر ماسك مخزون.
+    const rsState = await readOrderStockState(tx, current);
+    const rsBefore = await currentStockLines(tx, current);
+    if (patch.status) assertStatusChangeAllowed(rsState, patch.status, rsBefore);
+    assertStockNeutralChange(
+      rsState,
+      rsBefore,
+      items.map(i => ({ productId: i.productId ?? null, variantId: i.variantId ?? null, qty: i.quantity }))
+    );
     await tx
       .update(orders)
       .set(opts.normalizePhones ? withNormalizedPhoneFields(patch) : patch)
@@ -1972,21 +1986,34 @@ export async function updateOrder(id: number, data: Partial<InsertOrder>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (data.status) {
-    const [current] = await db
-      .select({ status: orders.status })
-      .from(orders)
-      .where(eq(orders.id, id))
-      .limit(1);
-    if (current && !isValidOrderStatusTransition(current.status, data.status)) {
-      throw new Error(
-        `لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${data.status}" مباشرة`
-      );
-    }
+    // Rollback-Safe: تغيير الحالة المباشر مابيخصمش ولا بيرجّع — فحص الانتقال + حارس المخزون
+    // + الكتابة تحت قفل صف الأوردر في معاملة واحدة.
+    const to = data.status;
+    await runOrderTransaction(async tx => {
+      const [current] = await tx
+        .select({ id: orders.id, status: orders.status, productId: orders.productId, variantId: orders.variantId, quantity: orders.quantity })
+        .from(orders)
+        .where(eq(orders.id, id))
+        .limit(1)
+        .for("update");
+      if (current && !isValidOrderStatusTransition(current.status, to)) {
+        throw new Error(
+          `لا يمكن تغيير حالة الأوردر من "${current.status}" إلى "${to}" مباشرة`
+        );
+      }
+      if (current)
+        assertStatusChangeAllowed(await readOrderStockState(tx, current), to, await currentStockLines(tx, current));
+      await tx
+        .update(orders)
+        .set(withNormalizedPhoneFields(data))
+        .where(eq(orders.id, id));
+    });
+  } else {
+    await db
+      .update(orders)
+      .set(withNormalizedPhoneFields(data))
+      .where(eq(orders.id, id));
   }
-  await db
-    .update(orders)
-    .set(withNormalizedPhoneFields(data))
-    .where(eq(orders.id, id));
   // تصحيح الهاتف/المحافظة بيشيل سبب المراجعة الخاص بالحقل المصحَّح بس.
   if (data.customerPhone !== undefined || data.governorate !== undefined || data.reviewReason === undefined)
     await recomputeImportReviewReasons(id);
@@ -2035,6 +2062,14 @@ export async function deleteOrder(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.transaction(async tx => {
+    // Rollback-Safe: حذف أوردر ماسك مخزون بيسيب الخصم من غير أوردر — مرفوض.
+    const [locked] = await tx
+      .select({ id: orders.id, status: orders.status, orderNumber: orders.orderNumber })
+      .from(orders)
+      .where(eq(orders.id, id))
+      .limit(1)
+      .for("update");
+    if (locked) assertDeleteAllowed(await readOrderStockState(tx, locked), locked.orderNumber);
     await tx.delete(orderItems).where(eq(orderItems.orderId, id));
     await tx.delete(orders).where(eq(orders.id, id));
   });
@@ -2252,6 +2287,14 @@ export async function deleteOrders(ids: number[]) {
   if (!db) throw new Error("Database not available");
   if (ids.length === 0) return;
   await db.transaction(async tx => {
+    // Rollback-Safe: الدفعة كلها أو لا شيء — أي أوردر ماسك مخزون يرفض الحذف كله.
+    const locked = await tx
+      .select({ id: orders.id, status: orders.status, orderNumber: orders.orderNumber })
+      .from(orders)
+      .where(inArray(orders.id, ids))
+      .orderBy(orders.id)
+      .for("update");
+    for (const o of locked) assertDeleteAllowed(await readOrderStockState(tx, o), o.orderNumber);
     await tx.delete(orderItems).where(inArray(orderItems.orderId, ids));
     await tx.delete(orders).where(inArray(orders.id, ids));
   });
@@ -2392,6 +2435,9 @@ export async function confirmOrder(
       console.error(`[confirmOrder] INCONSISTENCY: order ${orderId} (${order.orderNumber}) has an "out" movement #${priorOut.id} while status=${order.status}`);
       throw new OrderStockInconsistencyError(orderId, String(order.status));
     }
+    // Rollback-Safe: بعد فحص 620a5ae (حركة out سابقة = CONFLICT كما هو): لا إعادة تأكيد لملغي/مرتجع حتى
+    // بلا حركات، ولا تأكيد بحركات مش مفهومة. بعد القفل وقبل أي خصم.
+    assertConfirmAllowed(await readOrderStockState(tx, order));
 
     const missingFields: string[] = [];
     if (!order.governorate || order.governorate.trim() === "" || order.governorate.trim() === "غير محدد")
@@ -2532,17 +2578,27 @@ export async function postponeOrder(
   notes: string | undefined,
   updatedBy: number
 ) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  await db
-    .update(orders)
-    .set({
-      status: "postponed",
-      postponedTo,
-      notes,
-      lastUpdatedBy: updatedBy,
-    })
-    .where(eq(orders.id, orderId));
+  // Rollback-Safe: التأجيل هنا مالوش فحص انتقال — فكان بيفتح أوردر ملغي (ملغي → مؤجل → تأكيد).
+  // نفس حارس تغيير الحالة تحت قفل صف الأوردر. تأجيل أوردر مؤكد مسموح (الخصم بيفضل محجوز).
+  await runOrderTransaction(async tx => {
+    const [current] = await tx
+      .select({ id: orders.id, status: orders.status, productId: orders.productId, variantId: orders.variantId, quantity: orders.quantity })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!current) throw new Error("الأوردر غير موجود");
+    assertStatusChangeAllowed(await readOrderStockState(tx, current), "postponed", await currentStockLines(tx, current));
+    await tx
+      .update(orders)
+      .set({
+        status: "postponed",
+        postponedTo,
+        notes,
+        lastUpdatedBy: updatedBy,
+      })
+      .where(eq(orders.id, orderId));
+  });
 }
 
 export async function cancelOrder(
@@ -2551,18 +2607,28 @@ export async function cancelOrder(
   notes: string | undefined,
   updatedBy: number
 ) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  await db
-    .update(orders)
-    .set({
-      status: "cancelled",
-      cancelReason: cancelReason as any,
-      cancelledAt: new Date(),
-      notes,
-      lastUpdatedBy: updatedBy,
-    })
-    .where(eq(orders.id, orderId));
+  // Rollback-Safe: الإلغاء هنا بيغيّر الحالة بس (مابيرجّعش المخزون) — فمرفوض لأوردر ماسك مخزون.
+  // القفل + الفحص + الكتابة في معاملة واحدة، فمفيش تأكيد متزامن يعدّي بين الفحص والإلغاء.
+  await runOrderTransaction(async tx => {
+    const [order] = await tx
+      .select({ id: orders.id, status: orders.status })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (!order) throw new Error("الأوردر غير موجود");
+    assertCancelAllowed(await readOrderStockState(tx, order));
+    await tx
+      .update(orders)
+      .set({
+        status: "cancelled",
+        cancelReason: cancelReason as any,
+        cancelledAt: new Date(),
+        notes,
+        lastUpdatedBy: updatedBy,
+      })
+      .where(eq(orders.id, orderId));
+  });
 }
 
 // ==================== DASHBOARD STATS ====================
@@ -2855,6 +2921,14 @@ export async function editOrderWithInventory(
     .where(eq(orders.id, orderId))
     .limit(1);
   if (!order) throw new Error("الأوردر غير موجود");
+  // Rollback-Safe (دفاع عميق — الدالة مالهاش مستدعين حاليًا): تسويتها على المنتج الأب بلا تركيبة
+  // وخارج أي معاملة، فأي تغيير منتج/كمية لأوردر ماسك مخزون مرفوض.
+  if (updates.productId !== undefined || updates.quantity !== undefined) {
+    const rsState = await runOrderTransaction(async tx => readOrderStockState(tx, order));
+    const before = [{ productId: order.productId, variantId: order.variantId ?? null, qty: order.quantity ?? 0 }];
+    const after = [{ productId: updates.productId ?? order.productId, variantId: updates.productId !== undefined ? null : (order.variantId ?? null), qty: updates.quantity ?? order.quantity ?? 0 }];
+    assertStockNeutralChange(rsState, before, after);
+  }
 
   const isConfirmed = order.status === "confirmed";
   const oldProductId = order.productId;
@@ -3216,6 +3290,8 @@ export async function markOrderAsReturned(
     if (!allowedStatuses.includes(order.status)) {
       throw new Error(`لا يمكن إرجاع أوردر بحالة: ${order.status}`);
     }
+    // Rollback-Safe: الاسترجاع هنا على المنتج الأب بكمية الهيدر — مسموح بس لو ده يطابق الخصم بالظبط.
+    if (restoreStock) assertReturnRestoreAllowed(await readOrderStockState(tx, order), order);
 
     await tx
       .update(orders)
@@ -4535,6 +4611,14 @@ export async function resolveOrderReviewProduct(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.transaction(async tx => {
+    // Rollback-Safe: تعيين منتج/تركيبة لأوردر ماسك مخزون بيغيّر مصدر المخزون من غير ما يحرّكه — مرفوض.
+    const [locked] = await tx
+      .select({ id: orders.id, status: orders.status })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (locked) assertProductReassignAllowed(await readOrderStockState(tx, locked));
     await tx
       .update(orders)
       .set({
@@ -4640,82 +4724,86 @@ export async function editOrderFull(
   //
   // النسخة دي بتقفل الاحتمال ده تمامًا: يا إما التغيير يتطبّق على البنود كمان، يا إما
   // يترفض. مفيش حالة تالتة بينجح فيها تعديل ويسيب الهيدر مختلف عن البنود.
-  const contentChanges = ORDER_CONTENT_HEADER_FIELDS.filter(
-    field => field in orderUpdates
-  );
-  if (contentChanges.length > 0) {
-    const existingItems = await db
-      .select()
-      .from(orderItems)
-      .where(eq(orderItems.orderId, orderId));
+  // Rollback-Safe: البنود + الهيدر تحت قفل صف الأوردر في معاملة واحدة، والحارس على الحالة الطازة بعد القفل.
+  await runOrderTransaction(async tx => {
+    await assertHeaderEditStockNeutral(tx, orderId, orderUpdates);
+    const contentChanges = ORDER_CONTENT_HEADER_FIELDS.filter(
+      field => field in orderUpdates
+    );
+    if (contentChanges.length > 0) {
+      const existingItems = await tx
+        .select()
+        .from(orderItems)
+        .where(eq(orderItems.orderId, orderId));
 
-    if (existingItems.length > 1) {
-      // سلة فيها أكتر من صنف مالهاش «اسم منتج» واحد ولا «كمية» واحدة، فالتعديل من
-      // الهيدر مبهم أصلاً: تغيير الاسم لـ«آية الكرسي» يقصد أنهي بند؟ محرر البنود هو
-      // اللي بيعرف يجاوب. الرفض هنا هو خط الدفاع الأخير — الشاشات كلها بتوجّه لمحرر
-      // البنود قبل ما توصل لهنا، فالرسالة دي المفروض ما تظهرش لموظف في الاستخدام
-      // العادي؛ بتظهر لو نسخة قديمة من الواجهة لسه شغالة عند حد.
-      throw new Error(
-        "الأوردر ده فيه أكتر من صنف — عدّل الأصناف من محرر بنود الأوردر"
-      );
-    }
-
-    if (existingItems.length === 1) {
-      const item = existingItems[0];
-      // نفس الحارس اللي في محرر البنود: بعد ما المخزون يخرج أو التكلفة تتسجّل، البنود
-      // بقت سجل محاسبي مش بيانات تشغيل.
-      if (item.stockOutQuantity > 0 || item.costCapturedAt != null) {
+      if (existingItems.length > 1) {
+        // سلة فيها أكتر من صنف مالهاش «اسم منتج» واحد ولا «كمية» واحدة، فالتعديل من
+        // الهيدر مبهم أصلاً: تغيير الاسم لـ«آية الكرسي» يقصد أنهي بند؟ محرر البنود هو
+        // اللي بيعرف يجاوب. الرفض هنا هو خط الدفاع الأخير — الشاشات كلها بتوجّه لمحرر
+        // البنود قبل ما توصل لهنا، فالرسالة دي المفروض ما تظهرش لموظف في الاستخدام
+        // العادي؛ بتظهر لو نسخة قديمة من الواجهة لسه شغالة عند حد.
         throw new Error(
-          "لا يمكن تعديل محتوى الأوردر بعد خروج المخزون؛ استخدم Reversal موثق"
+          "الأوردر ده فيه أكتر من صنف — عدّل الأصناف من محرر بنود الأوردر"
         );
       }
-      const itemUpdates: Record<string, any> = {};
-      if ("productId" in orderUpdates) itemUpdates.productId = orderUpdates.productId ?? null;
-      if ("productName" in orderUpdates) itemUpdates.productName = orderUpdates.productName;
-      if ("variantId" in orderUpdates) itemUpdates.variantId = orderUpdates.variantId ?? null;
-      if ("quantity" in orderUpdates) itemUpdates.quantity = orderUpdates.quantity;
-      if ("size" in orderUpdates) itemUpdates.size = orderUpdates.size ?? null;
-      if ("color" in orderUpdates) itemUpdates.color = orderUpdates.color ?? null;
-      await db
-        .update(orderItems)
-        .set(itemUpdates)
-        .where(eq(orderItems.id, item.id));
-    }
-    // `existingItems.length === 0`: أوردر قديم (استيراد أو تكرار) مالوش بنود أصلاً.
-    // الهيدر هو مصدره الوحيد — الشاشة بتشتق منه بند واحد، وبوسطة بترجع له كـfallback —
-    // فالكتابة عليه لوحدها هنا مابتخلقش اختلاف.
-  }
 
-  // Handle inventory changes if quantity changed. Skipped for orders with no resolved
-  // product (needsReview) — they have never deducted stock, so there is nothing to adjust.
-  if (
-    "quantity" in orderUpdates &&
-    currentOrder.status === "confirmed" &&
-    currentOrder.productId != null
-  ) {
-    const productId = currentOrder.productId;
-    const oldQty = currentOrder.quantity;
-    const newQty = orderUpdates.quantity;
-    const diff = newQty - oldQty;
-    if (diff !== 0) {
-      // خصم الفرق (زيادة) أو رده (نقص). `addInventoryMovement` بيحرّك الرصيد بنفسه،
-      // فالنداء المنفصل لـ`updateProductStock` كان بيطبّق الفرق **مرتين** — drift على
-      // كل تعديل كمية. اتشال؛ الحركة الذرّية هي اللي بتحرّك الرصيد.
-      await addInventoryMovement({
-        businessId: currentOrder.businessId,
-        productId,
-        type: diff > 0 ? "out" : "in",
-        quantity: Math.abs(diff),
-        reason: `تعديل كمية أوردر #${currentOrder.orderNumber}`,
-        orderId: currentOrder.id,
-        performedBy: editor.id,
-      });
+      if (existingItems.length === 1) {
+        const item = existingItems[0];
+        // نفس الحارس اللي في محرر البنود: بعد ما المخزون يخرج أو التكلفة تتسجّل، البنود
+        // بقت سجل محاسبي مش بيانات تشغيل.
+        if (item.stockOutQuantity > 0 || item.costCapturedAt != null) {
+          throw new Error(
+            "لا يمكن تعديل محتوى الأوردر بعد خروج المخزون؛ استخدم Reversal موثق"
+          );
+        }
+        const itemUpdates: Record<string, any> = {};
+        if ("productId" in orderUpdates) itemUpdates.productId = orderUpdates.productId ?? null;
+        if ("productName" in orderUpdates) itemUpdates.productName = orderUpdates.productName;
+        if ("variantId" in orderUpdates) itemUpdates.variantId = orderUpdates.variantId ?? null;
+        if ("quantity" in orderUpdates) itemUpdates.quantity = orderUpdates.quantity;
+        if ("size" in orderUpdates) itemUpdates.size = orderUpdates.size ?? null;
+        if ("color" in orderUpdates) itemUpdates.color = orderUpdates.color ?? null;
+        await tx
+          .update(orderItems)
+          .set(itemUpdates)
+          .where(eq(orderItems.id, item.id));
+      }
+      // `existingItems.length === 0`: أوردر قديم (استيراد أو تكرار) مالوش بنود أصلاً.
+      // الهيدر هو مصدره الوحيد — الشاشة بتشتق منه بند واحد، وبوسطة بترجع له كـfallback —
+      // فالكتابة عليه لوحدها هنا مابتخلقش اختلاف.
     }
-  }
 
-  // Apply updates
-  orderUpdates.lastUpdatedBy = editor.id;
-  await db.update(orders).set(orderUpdates).where(eq(orders.id, orderId));
+    // Handle inventory changes if quantity changed. Skipped for orders with no resolved
+    // product (needsReview) — they have never deducted stock, so there is nothing to adjust.
+    // Handle inventory changes if quantity changed. Skipped for orders with no resolved
+    // product (needsReview) — they have never deducted stock, so there is nothing to adjust.
+    // Rollback-Safe: الفرع ده (تسوية على المنتج الأب) مايتنفذش هنا — الحارس فوق بيرفض أي تغيير
+    // كمية لأوردر مؤكد/ماسك مخزون قبل أي كتابة. متساب زي ما هو في 620a5ae عمدًا (أقل فرق).
+    if (
+      "quantity" in orderUpdates &&
+      currentOrder.status === "confirmed" &&
+      currentOrder.productId != null
+    ) {
+      const productId = currentOrder.productId;
+      const oldQty = currentOrder.quantity;
+      const newQty = orderUpdates.quantity;
+      const diff = newQty - oldQty;
+      if (diff !== 0) {
+        await addInventoryMovement({
+          businessId: currentOrder.businessId,
+          productId,
+          type: diff > 0 ? "out" : "in",
+          quantity: Math.abs(diff),
+          reason: `تعديل كمية أوردر #${currentOrder.orderNumber}`,
+          orderId: currentOrder.id,
+          performedBy: editor.id,
+        });
+      }
+    }
+
+    orderUpdates.lastUpdatedBy = editor.id;
+    await tx.update(orders).set(orderUpdates).where(eq(orders.id, orderId));
+  });
 
   // Log edits
   if (editLogEntries.length > 0) {
@@ -5217,6 +5305,13 @@ export async function replaceOrderItemsFromEditor(
         "لا يمكن تعديل بنود الأوردر بعد خروج المخزون؛ استخدم Reversal موثق"
       );
     }
+    // Rollback-Safe: التسوية تحت بتحرّك المنتج الأب مش التركيبة — فأي تغيير أصناف/كميات لأوردر ماسك
+    // مخزون مرفوض. تعديل الأسعار/الخصم/الشحن بنفس الأصناف والكميات مسموح (مافيهوش حركة مخزون).
+    assertStockNeutralChange(
+      await readOrderStockState(tx, order),
+      await currentStockLines(tx, order),
+      lines.map(l => ({ productId: l.productId, variantId: l.variantId, qty: l.quantity }))
+    );
 
     const grossPerLine = lines.map(l => multiplyMoney(l.quantity, l.unitPrice));
     const discountPerLine = lines.map(l => toMinorUnits(l.discount));
@@ -5321,6 +5416,10 @@ export async function replaceOrderItemsFromEditor(
         if (head.productId != null && totalQuantity > 0)
           moves.push({ productId: head.productId, delta: -totalQuantity });
       }
+      // Rollback-Safe (حاجز تاني): أي تسوية هنا على المنتج الأب = فرق مع التركيبات — حتى لو نفس
+      // الأصناف والكميات بترتيب مختلف (الهيدر = أول سطر). جوه المعاملة، فالبنود المكتوبة فوق بترجع.
+      if (moves.length > 0)
+        throw new RollbackSafeBlockedError("لا يمكن تعديل بنود أوردر اتخصم مخزونه بطريقة تحرّك المخزون (حتى تغيير ترتيب الأصناف)");
 
       for (const move of moves) {
         const [product] = await tx
@@ -5396,9 +5495,22 @@ export async function replaceOrderItems(
   orderId: number,
   items: OrderItemWrite[]
 ): Promise<void> {
-  await runOrderTransaction(tx =>
-    replaceOrderItemsInTransaction(tx, orderId, items)
-  );
+  // Rollback-Safe (دفاع عميق — مالهاش مستدعين حاليًا): استبدال البنود مابيحرّكش مخزون.
+  await runOrderTransaction(async tx => {
+    const [current] = await tx
+      .select({ id: orders.id, status: orders.status, productId: orders.productId, variantId: orders.variantId, quantity: orders.quantity })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1)
+      .for("update");
+    if (current)
+      assertStockNeutralChange(
+        await readOrderStockState(tx, current),
+        await currentStockLines(tx, current),
+        items.map(i => ({ productId: i.productId ?? null, variantId: i.variantId ?? null, qty: i.quantity }))
+      );
+    await replaceOrderItemsInTransaction(tx, orderId, items);
+  });
 }
 
 /**

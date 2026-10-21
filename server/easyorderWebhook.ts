@@ -41,6 +41,7 @@ import { webhookLogs } from "../drizzle/schema";
 import { desc, inArray } from "drizzle-orm";
 import { upsertEasyOrder, fetchEasyOrderById, type EasyOrderPayload } from "./easyorder.service";
 import { recordIntegrationOrderEvent } from "./shippingV2.service";
+import { isRollbackSafeBlocked } from "./rollbackSafe";
 
 type EnforcementMode = "log_only" | "enforce";
 
@@ -209,7 +210,20 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
           providerEventId: payload.payment_ref_id,
         });
         if ((accountingEvent as any).reason === "accounting_not_active") {
-          await updateOrder(existing.id, { status: mapped as any });
+          try {
+            await updateOrder(existing.id, { status: mapped as any });
+          } catch (err) {
+            // Rollback-Safe: الحالة الخارجية دي كانت هتعدّي حدود الخصم من غير خصم/إرجاع — تتسجّل
+            // وتترد 200 (مش 500 فيعيد المحاولة للأبد)، والأوردر يفضل على حالته للمراجعة اليدوية.
+            if (!isRollbackSafeBlocked(err)) throw err;
+            await logWebhook({
+              eventType: "order-status-update",
+              status: "error",
+              externalOrderId: payload.order_id,
+              message: `لم يتم تغيير حالة الأوردر #${existing.orderNumber} إلى ${mapped}: ${(err as Error).message}`,
+            });
+            return res.json({ received: true, action: "status_blocked_rollback_safe" });
+          }
         }
         await logWebhook({
           eventType: "order-status-update",
@@ -256,7 +270,7 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
         source: sourceLabelFor(channel),
       });
 
-      if (backfilled.outcome === "failed") {
+      if (backfilled.outcome === "failed" || backfilled.outcome === "blocked_rollback_safe") {
         await logWebhook({
           eventType: "order-status-update",
           status: "error",
@@ -278,7 +292,20 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
           payload,
           providerEventId: payload.payment_ref_id,
         });
-        if ((accountingEvent as any).reason === "accounting_not_active") await updateOrder(restored.id, { status: mapped as any });
+        if ((accountingEvent as any).reason === "accounting_not_active") {
+          // Rollback-Safe: أوردر مُستعاد (جديد بلا خصم) — حالة خصم خارجية تتسجّل وماتتطبّقش.
+          try {
+            await updateOrder(restored.id, { status: mapped as any });
+          } catch (err) {
+            if (!isRollbackSafeBlocked(err)) throw err;
+            await logWebhook({
+              eventType: "order-status-update",
+              status: "error",
+              externalOrderId: payload.order_id,
+              message: `أوردر مُستعاد #${restored.orderNumber}: لم تُضبط حالته إلى ${mapped}: ${(err as Error).message}`,
+            });
+          }
+        }
       }
 
       await logWebhook({
@@ -336,6 +363,19 @@ async function handleEasyOrderWebhook(req: Request, res: Response) {
       channelId: channel.id,
       source: sourceLabelFor(channel),
     });
+
+    // Rollback-Safe: تحديث مرفوض عمدًا وماغيّرش أي حاجة (اتأكدنا بالبصمة في upsertEasyOrder) — 200 عشان
+    // Easy Order مايعيدش المحاولة للأبد، وسجل للمراجعة اليدوية (بلا payload خام ولا أسرار).
+    if (result.outcome === "blocked_rollback_safe") {
+      await logWebhook({
+        eventType: "order",
+        status: "error",
+        externalOrderId: payload.id,
+        customerName: payload.full_name,
+        message: `تحديث مرفوض (نسخة الرجوع الآمن) للأوردر #${result.orderNumber} — الطلب الخارجي ${payload.id} — بدون أي تغيير؛ يحتاج مراجعة يدوية: ${result.error}`,
+      });
+      return res.json({ received: true, action: "blocked_rollback_safe", orderNumber: result.orderNumber });
+    }
 
     if (result.outcome === "failed") {
       await logWebhook({
