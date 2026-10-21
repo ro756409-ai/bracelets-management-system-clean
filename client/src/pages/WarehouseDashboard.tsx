@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { employeeLogout } from "@/lib/employeeScope";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -135,10 +136,8 @@ export default function WarehouseDashboard() {
     });
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("employee_session");
-    document.cookie =
-      "employee_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+  const handleLogout = async () => {
+    await employeeLogout();
     setLocation("/employee-login");
   };
 

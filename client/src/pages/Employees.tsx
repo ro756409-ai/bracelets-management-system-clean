@@ -259,7 +259,8 @@ export default function Employees() {
       return;
     }
     const payload = {
-      name: form.name, phone: form.phone, email: form.email, role: form.role,
+      // BUG-41: خانة البريد الفارغة = بلا بريد (والسيرفر يعامل الفراغ «بلا تغيير» في التعديل).
+      name: form.name, phone: form.phone, email: form.email.trim() || undefined, role: form.role,
       businessId: resolvedBusinessId ?? undefined,
     };
     if (editingId) {

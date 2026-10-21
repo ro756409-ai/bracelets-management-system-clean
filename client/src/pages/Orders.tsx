@@ -48,6 +48,7 @@ import {
   type FilterDescriptor,
 } from "@/components/shared";
 import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useCancelReasonOptions } from "@/hooks/useCancelReasonOptions";
 import { useGovernorateOptions } from "@/hooks/useGovernorateOptions";
 import { usePermission, usePermissions } from "@/hooks/usePermission";
 import { WorkspaceTabs, StatusFilterChips, DataToolbar, type StatusChipItem } from "@/components/workspace";
@@ -197,7 +198,7 @@ export default function Orders() {
   const canEditItems = usePermission("orders.edit_items");
   const sourceOptions = useOperationalOptions("order_source").options;
   const returnReasonOptions = useOperationalOptions("return_reason").options;
-  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
+  const cancelReasonOptions = useCancelReasonOptions().options;
 
   const [activeTab, setActiveTab] = useState<'all' | 'today_confirmed'>('all');
   const [search, setSearch] = useState("");

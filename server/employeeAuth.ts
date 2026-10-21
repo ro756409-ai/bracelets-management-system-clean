@@ -11,6 +11,12 @@ if (!JWT_SECRET) {
   throw new Error("[FATAL] JWT_SECRET environment variable is required. Server cannot start without it.");
 }
 const COOKIE_NAME = "employee_token";
+const EMPLOYEE_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  path: "/",
+};
 
 // POST /api/employee/login
 router.post("/login", async (req, res) => {
@@ -60,9 +66,7 @@ router.post("/login", async (req, res) => {
 
     // Set cookie
     res.cookie(COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
+      ...EMPLOYEE_COOKIE_OPTIONS,
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
@@ -92,7 +96,9 @@ router.post("/login", async (req, res) => {
 
 // POST /api/employee/logout
 router.post("/logout", (req, res) => {
-  res.clearCookie(COOKIE_NAME);
+  // نفس خصائص الكوكي وقت الدخول — المتصفح يطابق الكوكي بالاسم والمسار، ونمرّر الباقي عشان
+  // المسح يفضل صحيحًا لو اتغيّرت خصائص الضبط لاحقًا.
+  res.clearCookie(COOKIE_NAME, EMPLOYEE_COOKIE_OPTIONS);
   return res.json({ success: true });
 });
 
@@ -114,7 +120,7 @@ router.get("/me", async (req, res) => {
       .limit(1);
 
     if (!employee || !employee.isActive) {
-      res.clearCookie(COOKIE_NAME);
+      res.clearCookie(COOKIE_NAME, EMPLOYEE_COOKIE_OPTIONS);
       return res.status(401).json({ error: "الجلسة منتهية" });
     }
 
@@ -128,7 +134,7 @@ router.get("/me", async (req, res) => {
       tenantId: employee.tenantId ?? null,
     });
   } catch {
-    res.clearCookie(COOKIE_NAME);
+    res.clearCookie(COOKIE_NAME, EMPLOYEE_COOKIE_OPTIONS);
     return res.status(401).json({ error: "الجلسة منتهية" });
   }
 });

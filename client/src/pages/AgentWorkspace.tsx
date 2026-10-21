@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { useOperationalOptions } from "@/hooks/useOperationalOptions";
+import { useCancelReasonOptions } from "@/hooks/useCancelReasonOptions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -39,7 +39,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export default function AgentWorkspace() {
-  const cancelReasonOptions = useOperationalOptions("cancellation_reason").options;
+  const cancelReasonOptions = useCancelReasonOptions().options;
   const { user } = useAuth();
   const utils = trpc.useUtils();
 

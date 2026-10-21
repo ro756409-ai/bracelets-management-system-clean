@@ -73,6 +73,26 @@ export function purgeForeignDrafts(keep: EmployeeScope | null): void {
 }
 
 /**
+ * خروج موظف البوابة (BUG-19). الكوكي `employee_token` httpOnly — الـJS **مايقدرش** يمسحه، فالخروج
+ * الحقيقي لازم يمر على `POST /api/employee/logout` اللي بيمسحه من السيرفر. بعدها بنشيل الجلسة
+ * المحلية (والمفتاح القديم `employee_token` لو اتساب من نسخة سابقة). فشل الشبكة مايوقفش الخروج:
+ * الموظف لازم يطلع من الشاشة في كل الأحوال.
+ */
+export async function employeeLogout(fetchImpl: typeof fetch = fetch): Promise<void> {
+  try {
+    await fetchImpl("/api/employee/logout", { method: "POST", credentials: "include" });
+  } catch {
+    // بلا اتصال — الكوكي هيفضل لحد ما يرجع الاتصال أو ينتهي؛ الخروج من الشاشة مايتعطلش.
+  }
+  try {
+    localStorage.removeItem(EMPLOYEE_SESSION_KEY);
+    localStorage.removeItem("employee_token");
+  } catch {
+    // localStorage مقفول — مفيش حالة محلية نمسحها.
+  }
+}
+
+/**
  * تغيّرت هوية الجلسة (دخول/خروج) → **امسح كل حالة العميل**: cache الاستعلامات كله
  * ومسودات الحسابات التانية. بنمسح الـcache بالكامل مش استعلامات مختارة، لأن قايمة
  * الاستعلامات اللي بتحمل بيانات نشاط بتكبر مع كل ميزة — والنسيان هو نفسه الثغرة.

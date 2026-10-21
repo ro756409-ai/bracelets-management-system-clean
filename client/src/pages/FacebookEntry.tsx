@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { trpc } from "@/lib/trpc";
-import { draftKey, readEmployeeScope, sanitizeDraftItems } from "@/lib/employeeScope";
+import { draftKey, employeeLogout, readEmployeeScope, sanitizeDraftItems } from "@/lib/employeeScope";
 import { activeDraftKey } from "@/lib/activeBusiness";
 import { useBusinessContext } from "@/contexts/BusinessContext";
 import { summarizeCart, saveBlockers } from "@shared/orderLines";
@@ -426,8 +426,8 @@ export default function FacebookEntry() {
     } as any);
   }
 
-  function handleLogout() {
-    localStorage.removeItem("employee_token");
+  async function handleLogout() {
+    await employeeLogout();
     window.location.href = "/employee-login";
   }
 
