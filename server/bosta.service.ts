@@ -294,6 +294,62 @@ export interface BostaShipmentResult {
   warning?: string;
 }
 
+/** نفس صيغة رقم الشحنة اللي الربط اليدوي بيقبلها (bostaResolution.service.ts). */
+const CREATED_ID_RE = /^[A-Za-z0-9_-]{4,100}$/;
+const CREATED_TRACKING_RE = /^[A-Za-z0-9-]{1,100}$/;
+
+export interface CreatedDelivery {
+  shipmentId: string;
+  trackingNumber?: string;
+  /** v2_data = `{ success, message, data: { _id, trackingNumber } }` (الموثّق في v2) · v0_flat = `{ _id, trackingNumber }` (v0، تاريخ r1). */
+  shape: "v2_data" | "v0_flat";
+}
+
+const idText = (v: unknown, re: RegExp): string | null => {
+  const s = typeof v === "string" ? v.trim() : typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+  return re.test(s) ? s : null;
+};
+
+/**
+ * رقم الشحنة من رد إنشاء بوسطة — بالشكلين المثبتين بس، ومن غير أي تخمين تاني:
+ *   • v2 (`/api/v2/deliveries`): الشحنة جوه `data` — التوثيق الرسمي وإضافة WooCommerce الرسمية بيقروا `data`.
+ *     الكود كان بيدوّر على `_id` في أعلى الرد بس، فكل إنشاء ناجح على v2 كان بيتسجّل «غير مؤكد» (الأوردر 14371).
+ *   • v0 (`/api/v0/deliveries`): الشحنة في أعلى الرد — ده اللي r1 كان بيستقبله وبيحفظه.
+ * أي حاجة غير كده (`success: false`، رقم ناقص أو بصيغة غريبة، أو رقمين مختلفين في المكانين) = null،
+ * والمتصل بيفضل على «غير مؤكد» — مش فشل، لأن الشحنة ممكن تكون اتعملت.
+ */
+export function extractCreatedDelivery(body: unknown): CreatedDelivery | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const b = body as Record<string, unknown>;
+  if (b.success === false) return null;
+  const data = b.data && typeof b.data === "object" && !Array.isArray(b.data) ? (b.data as Record<string, unknown>) : null;
+  const fromData = data ? idText(data._id, CREATED_ID_RE) : null;
+  const fromTop = idText(b._id, CREATED_ID_RE);
+  if (fromData && fromTop && fromData !== fromTop) return null;
+  if (fromData) return { shipmentId: fromData, trackingNumber: idText(data!.trackingNumber, CREATED_TRACKING_RE) ?? undefined, shape: "v2_data" };
+  if (fromTop) return { shipmentId: fromTop, trackingNumber: idText(b.trackingNumber, CREATED_TRACKING_RE) ?? undefined, shape: "v0_flat" };
+  return null;
+}
+
+/** حقول هيكلية معروفة في ردود بوسطة — بس دي اللي اسمها بيظهر في اللوج، والباقي عدد. */
+const SHAPE_KEYS = new Set(["success", "message", "data", "errorCode", "error", "_id", "id", "trackingNumber", "state", "type", "businessReference", "list", "count"]);
+
+/**
+ * شكل الرد للّوج — أسماء الحقول الهيكلية المعروفة بس (أعلى الرد و`data`) + عدد الباقي، من غير أي قيمة:
+ * الرد فيه اسم وهاتف وعنوان المستلم، وبوسطة ممكن ترجّع `webhookCustomHeaders` (السر) — حتى اسمه مايتطبعش.
+ */
+export function describeResponseShape(body: unknown): string {
+  const keys = (o: unknown) => {
+    if (!o || typeof o !== "object") return o === null ? "null" : typeof o;
+    if (Array.isArray(o)) return "[array]";
+    const all = Object.keys(o);
+    const known = all.filter(k => SHAPE_KEYS.has(k));
+    return [...known, ...(all.length > known.length ? [`+${all.length - known.length}`] : [])].join(",");
+  };
+  const data = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>).data : undefined;
+  return `top=[${keys(body)}]${data !== undefined ? ` data=[${keys(data)}]` : ""}`;
+}
+
 /**
  * Validate order data before sending to Bosta
  */
@@ -605,17 +661,20 @@ export async function createBostaShipment(
       ...(deliveriesGuard.init.redirect ? { redirect: deliveriesGuard.init.redirect } : {}),
     });
 
-    const responseBody = await response.json() as Record<string, unknown>;
-    // INT-5: رد بوسطة بيرجّع بيانات المستلم (اسم/هاتف/عنوان) — اللوج فيه الحالة والمعرّفات بس
+    const parsedBody: unknown = await response.json();
+    const responseBody = (parsedBody && typeof parsedBody === "object" ? parsedBody : {}) as Record<string, unknown>;
+    const created = response.ok ? extractCreatedDelivery(parsedBody) : null;
+    // INT-5: رد بوسطة بيرجّع بيانات المستلم (اسم/هاتف/عنوان) — اللوج فيه الحالة والمعرّفات وأسماء الحقول بس
     console.log("[Bosta] Response:", redact(JSON.stringify({
-      orderId, status: response.status, shipmentId: responseBody._id ?? null, trackingNumber: responseBody.trackingNumber ?? null,
-      ...(response.ok ? {} : { message: String((responseBody as any).message ?? "").slice(0, 200) }),
+      orderId, status: response.status, shipmentId: created?.shipmentId ?? null, trackingNumber: created?.trackingNumber ?? null,
+      shape: created?.shape ?? describeResponseShape(parsedBody),
+      ...(response.ok ? {} : { message: String(responseBody.message ?? "").slice(0, 200) }),
     })));
 
-    // نجاح HTTP من غير رقم شحنة واضح في الشكل المتوقع (`_id` على المستوى الأعلى): **مش** فشل مؤكد — الشحنة ممكن
-    // تكون اتعملت بشكل رد مختلف. «failed» كان بيفتح إعادة إرسال ممكن تعمل شحنة مكررة؛ دلوقتي uncertain لحد الحسم
-    // اليدوي (ربط برقم الشحنة من لوحة بوسطة، أو طلب إعادة إرسال باعتماد المالك). مانفترضش أي شكل رد تاني غير موثّق.
-    if (response.ok && !responseBody._id) {
+    // نجاح HTTP من غير رقم شحنة صالح في شكل من الشكلين المثبتين (`data._id` في v2، `_id` في v0): **مش** فشل مؤكد —
+    // الشحنة ممكن تكون اتعملت. «failed» كان بيفتح إعادة إرسال ممكن تعمل شحنة مكررة؛ دلوقتي uncertain لحد الحسم
+    // اليدوي (ربط برقم الشحنة من لوحة بوسطة، أو طلب إعادة إرسال باعتماد المالك). مانفترضش أي شكل رد تالت غير موثّق.
+    if (response.ok && !created) {
       const detail = `HTTP ${response.status} بدون رقم شحنة واضح في الرد`;
       await db!.update(orders).set({
         bostaLastError: `${UNCERTAIN_MESSAGE} — ${detail}`,
@@ -624,9 +683,8 @@ export async function createBostaShipment(
       return { success: false, error: `${UNCERTAIN_MESSAGE} — ${detail}` };
     }
 
-    if (response.ok && responseBody._id) {
-      const shipmentId = String(responseBody._id);
-      const trackingNumber = responseBody.trackingNumber ? String(responseBody.trackingNumber) : undefined;
+    if (response.ok && created) {
+      const { shipmentId, trackingNumber } = created;
 
       await db!.update(orders).set({
         bostaShipmentId: shipmentId,
